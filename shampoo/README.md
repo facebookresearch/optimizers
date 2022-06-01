@@ -1,29 +1,30 @@
 # Distributed Shampoo
 
-An experimental distributed Shampoo implementation in PyTorch. Currently only supports dense parameters.
+An experimental Shampoo implementation in PyTorch as described in [1, 2]. Currently only supports dense parameters.
 
 Key distinctives of this implementation include:
-- Incorporation of learning rate grafting. Our version of grafting only grafts the second moment/diagonal preconditioner. Momentum/first moment updates are performed separate from grafting. Supports the methods:
+- Incorporation of learning rate grafting [3]. Our version of grafting only grafts the second moment/diagonal preconditioner. Momentum/first moment updates are performed separate from grafting. Supports the methods:
     - SGD
     - Adagrad
     - RMSProp
     - Adam
 - Supports both normal and AdamW weight decay.
-- Distribution of the root inverse computation across different GPUs for the distributed data-parallel setting. Does not perform CPU offloading.
+- Incorporates exponential moving averaging (with or without bias correction) to the estimate the first moment (akin to Adam). (To be further investigated.)
+- Distribution of the root inverse computation across different GPUs for the distributed data-parallel setting. Supports multi-node, multi-GPU training using `torch.nn.parallel.DistributedDataParallel`. Does not perform CPU offloading as done in [2].
 - Offers different options to handle large-dimensional tensors, including:
     - Diagonalizing the Shampoo preconditioners.
     - Using standard diagonal Adagrad.
     - Blocking the tensor and applying Shampoo to each block. (Needs to be improved.)
 - Offers multiple approaches for computing the root inverse, including:
     - Using symmetric eigendecomposition (used by default).
-    - Coupled inverse Newton iteration.
+    - Coupled inverse Newton iteration [4].
 - Choice of precision for preconditioner accumulation and root inverse computation.
 - Merging of small dimensions.
 
 ## How to Use
 Given a learning rate schedule for another method, one should simply replace the optimizer with Shampoo and graft from the previous method.
 
-For example,
+For example, if we originally had
 ```
 optimizer = optim.AdamW(nn.parameters(), lr=0.001, betas=(0.9, 0.999), eps=1e-08, weight_decay=0.01)
 ```

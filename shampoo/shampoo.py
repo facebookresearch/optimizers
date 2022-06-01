@@ -199,7 +199,7 @@ class Shampoo(Optimizer):
                     )
 
                 else:
-                    raise ValueError("Large dim method " + LargeDimMethod.BLOCKING + " is not implemented!")
+                    raise ValueError("Large dim method " + self.large_dim_method + " is not implemented!")
 
                 # increase parameter count
                 self.parameter_count += state["preconditioners"].parameter_count
