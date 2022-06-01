@@ -15,7 +15,7 @@ Key distinctives of this implementation include:
     - Using standard diagonal Adagrad.
     - Blocking the tensor and applying Shampoo to each block. (Needs to be improved.)
 - Offers multiple approaches for computing the root inverse, including:
-    - Using symmetric eigendecomposition.
+    - Using symmetric eigendecomposition (used by default).
     - Coupled inverse Newton iteration.
 - Choice of precision for preconditioner accumulation and root inverse computation.
 - Merging of small dimensions.

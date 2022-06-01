@@ -1,9 +1,12 @@
 # Contributing to Optimizers
 We want to make contributing to this project as easy and transparent as
-possible.
+possible. Our goal is to provide a repo that promotes optimizer research
+and development separate from the official PyTorch library. Please only
+create pull requests for improving existing optimizers in the repo; new
+optimizers should be created in a separate public repo.
 
 ## Pull Requests
-We actively welcome your pull requests.
+We actively welcome your pull requests for existing optimizers.
 
 1. Fork the repo and create your branch from `main`.
 2. If you've added code that should be tested, add tests.

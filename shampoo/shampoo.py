@@ -8,18 +8,19 @@ LICENSE file in the root directory of this source tree.
 """
 
 import logging
+from typing import Tuple
 
 import torch
 import torch.distributed as dist
-from hpc.trainer.shampoo_utils import (
+from torch.optim.optimizer import Optimizer
+
+from shampoo_utils import (
     BlockShampooPreconditioner,
     AdagradPreconditioner,
     ShampooPreconditioner,
     LargeDimMethod,
-    RootInvMethod,
     GraftingType,
 )
-from torch.optim.optimizer import Optimizer
 
 logger = logging.getLogger(__name__)
 
@@ -39,50 +40,45 @@ class Shampoo(Optimizer):
     Args:
         params (iterable): iterable of parameters to optimize or dicts defining
             parameter groups
-        lr (float, optional): learning rate (default: 1e-2)
-        betas (Tuple[float, float], optional): coefficients used for computing running averages
-            of gradient and its square (default: (0.9, 1.0))
-        eps (float, optional): term added to the denominator to improve
-            numerical stability (default: 1e-12)
-        bias_correction (bool, optional): flag for using bias correction (default: False)
-        adam_w_mode (bool, optional): Flag for using AdamW-style weight decay (default: True)
-        weight_decay (float, optional): weight decay (L2 penalty) (default: 0)
-        update_freq (int, optional): frequency for updating inverse preconditioner (default: 1)
-        init_delay (int, optional): initial delay before starting to compute root inverse (default: 0)
-        threshold (int, optional): threshold for switching to diagonal preconditioner (default: 1024)
-        preconditioner_dtype (torch.dtype, optional): data type for preconditioner (default: torch.double)
-        large_dim_method (LargeDimMethod, optional): method for handling large scale tensors. (default: LargeDimMethod.ADAGRAD)
-        root_inv_method (RootInvMethod, optional): method for computing root inverse (default: RootInvMethod.EIGEN)
-        root_inv_dist (bool, optional): distributes root inverse computation across multiple GPU workers (default: True)
-        merge_dims (bool, optional): merge dimensions if possible while respecting threshold. (default: True)
-        grafting_type (GraftingType, optional): Selects grafting method. (Default: GraftingType.ADAGRAD)
-        grafting_epsilon (float, optional): Epsilon for grafting method. (Default: 1e-3)
-        grafting_beta2 (float, optional): Exponential moving average factor for grafting method. (Default: 1.0)
-        debug_mode (bool, optional): flag for debug mode (default: True)
+        lr (float): learning rate (Default: 1e-2)
+        betas (Tuple[float, float]): coefficients used for computing running averages
+            of gradient and its square (Default: (0.9, 1.0))
+        epsilon (float): term added to the denominator to improve numerical stability (Default: 1e-12)
+        use_bias_correction (bool): flag for using bias correction (Default: True)
+        adam_w_mode (bool): Flag for using AdamW-style weight decay (Default: True)
+        weight_decay (float): weight decay (L2 penalty) (Default: 0)
+        update_freq (int): frequency for updating inverse preconditioner (Default: 100)
+        init_delay (int): initial delay before starting to compute root inverse (Default: 1000)
+        threshold (int): threshold for switching to diagonal preconditioner (Default: 1024)
+        preconditioner_dtype (torch.dtype): data type for preconditioner (Default: torch.float)
+        large_dim_method (LargeDimMethod): method for handling large scale tensors. (Default: LargeDimMethod.BLOCKING)
+        root_inv_dist (bool): distributes root inverse computation across multiple GPU workers (Default: True)
+        use_merge_dims (bool): merge dimensions if possible while respecting threshold. (Default: True)
+        grafting_type (GraftingType): Selects grafting method. (Default: GraftingType.ADAGRAD)
+        grafting_epsilon (float): Epsilon for grafting method. (Default: 1e-3)
+        grafting_beta2 (float): Exponential moving average factor for grafting method. (Default: 1.0)
 
     """
 
     def __init__(
         self,
         params,
-        lr=1e-2,
-        betas=(0.9, 1.0),
-        epsilon=1e-12,
-        bias_correction=False,
-        adam_w_mode=True,
-        weight_decay=0.0,
-        update_freq=100,
-        init_delay=1000,
-        threshold=1024,
-        preconditioner_dtype=torch.float,
-        large_dim_method=LargeDimMethod.BLOCKING,
-        root_inv_method=RootInvMethod.EIGEN,
-        root_inv_dist=True,
-        merge_dims=True,
-        grafting_type=GraftingType.ADAGRAD,
-        grafting_epsilon=1e-3,
-        grafting_beta2=1.0,
-        debug_mode=False,
+        lr: float = 1e-2,
+        betas: Tuple[float, float] = (0.9, 1.0),
+        epsilon: float = 1e-12,
+        use_bias_correction: bool = True,
+        adam_w_mode: bool = True,
+        weight_decay: float = 0.0,
+        update_freq: int = 100,
+        init_delay: int = 1000,
+        threshold: int = 1024,
+        preconditioner_dtype: torch.dtype = torch.float,
+        large_dim_method: LargeDimMethod = LargeDimMethod.BLOCKING,
+        root_inv_dist: bool = True,
+        use_merge_dims: bool = True,
+        grafting_type: GraftingType = GraftingType.ADAGRAD,
+        grafting_epsilon: float = 1e-3,
+        grafting_beta2: float = 1.0,
     ):
         if lr < 0.0:
             raise ValueError(f"Invalid learning rate: {lr}")
@@ -113,14 +109,12 @@ class Shampoo(Optimizer):
         self.update_freq = update_freq
         self.iter = 0
         self.init_delay = init_delay
-        self.debug_mode = debug_mode
-        self.root_inv_method = root_inv_method
         self.root_inv_dist = root_inv_dist
-        self.merge_dims = merge_dims
+        self.use_merge_dims = use_merge_dims
         self.large_dim_method = large_dim_method
         self.adam_w_mode = adam_w_mode
         self.preconditioner_dtype = preconditioner_dtype
-        self.bias_correction = bias_correction
+        self.use_bias_correction = use_bias_correction
         self.grafting_type = grafting_type
         self.grafting_epsilon = grafting_epsilon
         self.grafting_beta2 = grafting_beta2
@@ -153,7 +147,7 @@ class Shampoo(Optimizer):
                             p,
                             beta2=group["betas"][1],
                             epsilon=group["epsilon"],
-                            bias_correction=self.bias_correction,
+                            use_bias_correction=self.use_bias_correction,
                             idx=idx,
                         )
                     else:
@@ -161,10 +155,9 @@ class Shampoo(Optimizer):
                             p,
                             beta2=group["betas"][1],
                             epsilon=group["epsilon"],
-                            bias_correction=self.bias_correction,
+                            use_bias_correction=self.use_bias_correction,
                             diagonal_threshold=self.threshold,
                             dtype=self.preconditioner_dtype,
-                            root_inv_method=self.root_inv_method,
                             idx=idx,
                             init_delay=self.init_delay,
                             grafting_type=self.grafting_type,
@@ -178,10 +171,9 @@ class Shampoo(Optimizer):
                         p,
                         beta2=group["betas"][1],
                         epsilon=group["epsilon"],
-                        bias_correction=self.bias_correction,
+                        use_bias_correction=self.use_bias_correction,
                         diagonal_threshold=self.threshold,
                         dtype=self.preconditioner_dtype,
-                        root_inv_method=self.root_inv_method,
                         idx=idx,
                         init_delay=self.init_delay,
                         grafting_type=self.grafting_type,
@@ -195,17 +187,19 @@ class Shampoo(Optimizer):
                         p,
                         beta2=group["betas"][1],
                         epsilon=group["epsilon"],
-                        bias_correction=self.bias_correction,
+                        use_bias_correction=self.use_bias_correction,
                         block_size=self.threshold,
                         dtype=self.preconditioner_dtype,
-                        root_inv_method=self.root_inv_method,
                         idx=idx,
-                        merge_dims=self.merge_dims,
+                        use_merge_dims=self.use_merge_dims,
                         init_delay=self.init_delay,
                         grafting_type=self.grafting_type,
                         grafting_beta2=self.grafting_beta2,
                         grafting_epsilon=self.grafting_epsilon,
                     )
+
+                else:
+                    raise ValueError("Large dim method " + LargeDimMethod.BLOCKING + " is not implemented!")
 
                 # increase parameter count
                 self.parameter_count += state["preconditioners"].parameter_count
@@ -217,12 +211,6 @@ class Shampoo(Optimizer):
     def _compute_root_inverse(self):
         """Preprocesses and computes root inverse of each preconditioner. Syncs root inverse across different
         workers."""
-
-        # if debugging, generate metrics to track
-        if self.debug_mode:
-            max_cond_number = torch.tensor(1.0)
-            max_residual = torch.tensor(0.0)
-            min_eigenvalue_gap = torch.tensor(float('inf'))
 
         # loop through parameters
         for group in self.param_groups:
@@ -248,43 +236,9 @@ class Shampoo(Optimizer):
 
                     # compute Shampoo preconditioner
                     if isinstance(
-                        state["preconditioners"], ShampooPreconditioner
-                    ) or isinstance(
-                        state["preconditioners"], BlockShampooPreconditioner
+                        state["preconditioners"], (ShampooPreconditioner, BlockShampooPreconditioner)
                     ):
-                        residuals, cond_numbers, eigenvalue_gaps = state[
-                            "preconditioners"
-                        ].compute_root_inverse(debug=self.debug_mode)
-
-                        # update maximum residual and condition number
-                        if self.debug_mode:
-                            if (
-                                self.root_inv_method == RootInvMethod.EIGEN
-                                and cond_numbers is not None
-                                and cond_numbers.nelement() > 0
-                            ):
-                                max_cond_number = torch.maximum(
-                                    max_cond_number, torch.max(cond_numbers)
-                                )
-                            if (
-                                self.root_inv_method == RootInvMethod.EIGEN
-                                and eigenvalue_gaps is not None
-                                and eigenvalue_gaps.nelement() > 0
-                            ):
-                                min_eigenvalue_gap = torch.minimum(
-                                    min_eigenvalue_gap, torch.min(eigenvalue_gaps)
-                                )
-                            if residuals is not None and residuals.nelement() > 0:
-                                max_residual = torch.maximum(
-                                    max_residual, torch.max(residuals)
-                                )
-
-        if self.debug_mode:
-            # print statistics for debugging
-            logger.info(f"Iteration: {self.iter}")
-            logger.info(f"Max Condition Number: {max_cond_number}")
-            logger.info(f"Min Eigenvalue Gap: {min_eigenvalue_gap}")
-            logger.info(f"Max Residual (|X^-r - A| / max(1, |A|)): {max_residual}")
+                        state["preconditioners"].compute_root_inverse()
 
     @torch.no_grad()
     def _broadcast_inv_preconditioners(self):
@@ -386,7 +340,7 @@ class Shampoo(Optimizer):
                     if beta1 != 0:
                         # compute bias corrections if necessary
                         bias_correction1 = 1.0
-                        if self.bias_correction and beta1 < 1:
+                        if self.use_bias_correction and beta1 < 1:
                             bias_correction1 -= beta1 ** self.iter
 
                         # modify grad with momentum term
