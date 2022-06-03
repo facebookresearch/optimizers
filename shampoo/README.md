@@ -1,6 +1,6 @@
 # Distributed Shampoo
 
-An experimental Shampoo implementation in PyTorch as described in [1, 2]. Currently only supports dense parameters.
+An experimental Shampoo implementation in PyTorch as described in [1, 2]. Under development. Currently only supports dense parameters.
 
 Key distinctives of this implementation include:
 - Incorporation of learning rate grafting [3]. Our version of grafting only grafts the second moment/diagonal preconditioner. Momentum/first moment updates are performed separate from grafting. Supports the methods:
@@ -10,7 +10,7 @@ Key distinctives of this implementation include:
     - Adam
 - Supports both normal and AdamW weight decay.
 - Incorporates exponential moving averaging (with or without bias correction) to the estimate the first moment (akin to Adam). (To be further investigated.)
-- Distribution of the root inverse computation across different GPUs for the distributed data-parallel setting. Supports multi-node, multi-GPU training using `torch.nn.parallel.DistributedDataParallel`. Does not perform CPU offloading as done in [2].
+- Distribution of the root inverse computation across different GPUs for the data-parallel setting. Supports data-parallel multi-node, multi-GPU training using `torch.nn.parallel.DistributedDataParallel`. Broadcasts are performed using `torch.dist`. Does not perform CPU offloading as done in [2].
 - Offers different options to handle large-dimensional tensors, including:
     - Diagonalizing the Shampoo preconditioners.
     - Using standard diagonal Adagrad.
