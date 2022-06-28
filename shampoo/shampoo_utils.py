@@ -9,6 +9,7 @@ LICENSE file in the root directory of this source tree.
 
 import enum
 import logging
+import numpy as np
 from abc import ABC
 from copy import deepcopy
 from typing import List, Union
@@ -56,7 +57,6 @@ def merge_small_dims(
 
     """
     if torch.is_tensor(tensor_shape):
-        # pyre-ignore
         tensor_shape = tensor_shape.numpy()
 
     new_tensor_shape = [tensor_shape[0]]
@@ -149,6 +149,9 @@ class Preconditioner(ABC):
     def broadcast(self, src_rank: int):
         return
 
+    def to(self, device: Union[None, torch.device] = None):
+        pass
+
 
 class AdagradPreconditioner(Preconditioner):
     """Adagrad/Adam/RMSProp preconditioner for a generic layer.
@@ -223,6 +226,12 @@ class AdagradPreconditioner(Preconditioner):
         denom = (self.preconditioner / self.bias_correction2).sqrt().add_(self.epsilon)
         adagrad_nrm = torch.linalg.norm(grad / denom)
         return adagrad_nrm
+
+    def to(self, device: Union[None, torch.device] = None):
+        if device is not None:
+            self.preconditioner = self.preconditioner.to(device=device)
+            self.bias_correction2 = self.bias_correction2.to(device=device)
+            self._parameter_count = self._parameter_count.to(device=device)
 
 
 class ShampooPreconditioner(Preconditioner):
@@ -348,53 +357,33 @@ class ShampooPreconditioner(Preconditioner):
             preconditioner = self.preconditioners[k]
             preconditioner_type = self.preconditioner_types[k]
 
+            if self.beta2 != 1.0:
+                preconditioner.mul_(self.beta2)
+
             # update preconditioners (diagonal case)
             if preconditioner_type == PreconditionerType.DIAGONAL:
-
-                # Adagrad accumulation
-                if self.beta2 == 1.0:
-                    preconditioner.add_(
-                        torch.linalg.norm(
-                            grad.transpose(0, k).contiguous().view(dim, -1),
-                            dim=1,
-                        ).pow(2)
-                    )
-
-                # Exponential moving average
-                else:
-                    preconditioner.mul_(self.beta2).add_(
-                        torch.linalg.norm(
-                            grad.transpose(0, k).contiguous().view(dim, -1),
-                            dim=1,
-                        ).pow(2),
-                        alpha=1 - self.beta2,
-                    )
+                preconditioner.add_(
+                    torch.linalg.norm(
+                        grad.transpose(0, k).contiguous().view(dim, -1),
+                        dim=1,
+                    ).pow(2),
+                    alpha=1 - self.beta2 if self.beta2 != 1.0 else 1.0,
+                )
 
             # update preconditioners (full-matrix case)
             else:
-
-                # Adagrad accumulation
-                if self.beta2 == 1.0:
-                    contract_idx = [*range(k)] + [*range(k + 1, self.order)]
-                    preconditioner.add_(
-                        torch.tensordot(
-                            grad,
-                            grad,
-                            dims=(contract_idx, contract_idx),
-                        ).to(self.dtype)
-                    )
-
-                # Exponential moving average
-                else:
-                    contract_idx = [*range(k)] + [*range(k + 1, self.order)]
-                    preconditioner.mul_(self.beta2).add_(
-                        torch.tensordot(
-                            grad,
-                            grad,
-                            dims=(contract_idx, contract_idx),
-                        ).to(self.dtype),
-                        alpha=1 - self.beta2,
-                    )
+                contract_idx = [*range(k)] + [*range(k + 1, self.order)]
+                outer_product = torch.tensordot(
+                    grad,
+                    grad,
+                    dims=(contract_idx, contract_idx),
+                )
+                if outer_product.dtype != self.dtype:
+                    outer_product = outer_product.to(dtype=self.dtype)
+                preconditioner.add_(
+                    outer_product,
+                    alpha=1 - self.beta2 if self.beta2 != 1.0 else 1.0,
+                )
 
         # update grafting method
         if self.grafting_type != GraftingType.NONE:
@@ -404,7 +393,7 @@ class ShampooPreconditioner(Preconditioner):
         if self.use_bias_correction and self.beta2 < 1.0:
             self.bias_correction2 = 1.0 - self.beta2**self.num_updates
 
-    def precondition(self, grad: Tensor) -> Tensor:
+    def _shampoo_precondition(self, grad: Tensor) -> Tensor:
 
         preconditioned_grad = grad.clone()
 
@@ -439,7 +428,7 @@ class ShampooPreconditioner(Preconditioner):
                         matrix_product_idx,
                     )
 
-            # more efficient but transposes grad continually
+            # more efficient if no diagonal preconditioners; transposes grad continually
             else:
                 preconditioned_grad = torch.tensordot(
                     preconditioned_grad, inv_preconditioner, [[0], [0]]
@@ -456,6 +445,12 @@ class ShampooPreconditioner(Preconditioner):
 
         return preconditioned_grad
 
+    def _graft_precondition(self, grad: Tensor) -> Tensor:
+        return self.grafting.precondition(grad) if self.grafting_type != GraftingType.NONE else grad
+
+    def precondition(self, grad: Tensor) -> Tensor:
+        return self._graft_precondition(grad) if self.num_updates <= self.init_delay else self._shampoo_precondition(grad)
+
     def compute_root_inverse(self) -> None:
 
         # iterate over all dimensions
@@ -470,11 +465,11 @@ class ShampooPreconditioner(Preconditioner):
 
                 # check if nan or inf values
                 if torch.any(torch.isnan(bias_corrected_preconditioner)):
-                    logger.info(
+                    logger.warning(
                         f"Encountered nan values in preconditioner {self.idx}.{k}!"
                     )
                 elif torch.any(torch.isinf(bias_corrected_preconditioner)):
-                    logger.info(
+                    logger.warning(
                         f"Encountered inf values in preconditioner {self.idx}.{k}!"
                     )
 
@@ -486,9 +481,10 @@ class ShampooPreconditioner(Preconditioner):
                     epsilon=self.epsilon,
                 )
 
-                inv_preconditioner = inv_preconditioner.to(
-                    dtype=self.inv_preconditioners[k].dtype
-                )
+                if inv_preconditioner.dtype != self.inv_preconditioners[k].dtype:
+                    inv_preconditioner = inv_preconditioner.to(
+                        dtype=self.inv_preconditioners[k].dtype
+                    )
                 self.inv_preconditioners[k] = inv_preconditioner
 
     def precondition_and_update(
@@ -510,6 +506,13 @@ class ShampooPreconditioner(Preconditioner):
                     self.inv_preconditioners[k],
                     src=src_rank,
                 )
+
+    def to(self, device: Union[None, torch.device] = None):
+        if device is not None:
+            self.bias_correction2 = self.bias_correction2.to(device=device)
+            self._parameter_count = self._parameter_count.to(device=device)
+            self.preconditioners = [preconditioner.to(device) for preconditioner in self.preconditioners]
+            self.inv_preconditioners = [inv_preconditioner.to(device) for inv_preconditioner in self.inv_preconditioners]
 
 
 class BlockShampooPreconditioner(Preconditioner):
@@ -567,21 +570,12 @@ class BlockShampooPreconditioner(Preconditioner):
             else self.original_dims
         )
         self.original_order = param.dim()
-        self.merged_order = (
-            len(self.merged_dims) if use_merge_dims else self.original_order
-        )
+        self.merged_order = len(self.merged_dims) if use_merge_dims else self.original_order
 
         # Construct splits for blocking
-        num_block_size_splits = (
-            torch.floor(torch.tensor(self.merged_dims) / block_size)
-            .to(dtype=torch.int)
-            .numpy()
-        )
-        remainder_block_split = (
-            torch.remainder(torch.tensor(self.merged_dims), block_size)
-            .to(dtype=torch.int)
-            .numpy()
-        )
+        merged_dims_array = np.array(self.merged_dims)
+        num_block_size_splits = merged_dims_array // block_size
+        remainder_block_split = merged_dims_array - num_block_size_splits * block_size
         self.splits = []
         for i in range(len(self.merged_dims)):
             self.splits.append(num_block_size_splits[i] * [block_size])
@@ -656,6 +650,12 @@ class BlockShampooPreconditioner(Preconditioner):
         for preconditioner in self.split_preconditioners:
             preconditioner.broadcast(src_rank)
 
+    def to(self, device: Union[None, torch.device] = None):
+        if device is not None:
+            self._parameter_count = self._parameter_count.to(device=device)
+            for preconditioner in self.split_preconditioners:
+                preconditioner.to(device=device)
+
 
 ###### GRAFTING CLASSES ######
 class Grafting(ABC):
@@ -683,6 +683,9 @@ class Grafting(ABC):
     @property
     def parameter_count(self):
         return self._parameter_count
+
+    def to(self, device: Union[None, torch.device] = None):
+        return
 
 
 class SGDGrafting(Grafting):
@@ -722,6 +725,11 @@ class AdagradGrafting(Grafting):
 
     def precondition_and_update(self, param, grad: Tensor, lr: Union[float, Tensor]):
         self.preconditioner.precondition_and_update(param, grad, lr)
+
+    def to(self, device: Union[None, torch.device] = None):
+        if device is not None:
+            self.preconditioner.to(device=device)
+        return
 
 
 class RMSPropGrafting(AdagradGrafting):

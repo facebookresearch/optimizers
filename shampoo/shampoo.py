@@ -8,19 +8,24 @@ LICENSE file in the root directory of this source tree.
 """
 
 import logging
+from collections import abc as container_abcs, defaultdict
+from copy import deepcopy
+from itertools import chain
 from typing import Tuple
 
 import torch
 import torch.distributed as dist
-from torch.optim.optimizer import Optimizer
 
 from shampoo_utils import (
-    BlockShampooPreconditioner,
     AdagradPreconditioner,
-    ShampooPreconditioner,
-    LargeDimMethod,
+    BlockShampooPreconditioner,
+    Grafting,
     GraftingType,
+    LargeDimMethod,
+    Preconditioner,
+    ShampooPreconditioner,
 )
+from torch.optim.optimizer import Optimizer
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +49,8 @@ class Shampoo(Optimizer):
         betas (Tuple[float, float]): coefficients used for computing running averages
             of gradient and its square (Default: (0.9, 1.0))
         epsilon (float): term added to the denominator to improve numerical stability (Default: 1e-12)
+        momentum (float): momentum parameter (default: 0.9)
+        use_nesterov (bool): uses Nesterov momentum (default: True)
         use_bias_correction (bool): flag for using bias correction (Default: True)
         adam_w_mode (bool): Flag for using AdamW-style weight decay (Default: True)
         weight_decay (float): weight decay (L2 penalty) (Default: 0)
@@ -66,6 +73,8 @@ class Shampoo(Optimizer):
         lr: float = 1e-2,
         betas: Tuple[float, float] = (0.9, 1.0),
         epsilon: float = 1e-12,
+        momentum: float = 0.9,
+        use_nesterov: bool = True,
         use_bias_correction: bool = True,
         adam_w_mode: bool = True,
         weight_decay: float = 0.0,
@@ -98,6 +107,7 @@ class Shampoo(Optimizer):
         defaults = {
             "lr": lr,
             "betas": betas,
+            "momentum": momentum,
             "weight_decay": weight_decay,
             "epsilon": epsilon,
             "grafting_epsilon": grafting_epsilon,
@@ -119,6 +129,7 @@ class Shampoo(Optimizer):
         self.grafting_epsilon = grafting_epsilon
         self.grafting_beta2 = grafting_beta2
         self.parameter_count = 0
+        self.use_nesterov = use_nesterov
 
         for group in self.param_groups:
             for p in group["params"]:
@@ -126,6 +137,8 @@ class Shampoo(Optimizer):
                 beta1, _ = group["betas"]
                 if beta1 != 0:
                     state["exp_avg"] = None
+                if momentum != 0:
+                    state["momentum"] = None
 
         self._initialize_preconditioners()
 
@@ -199,7 +212,11 @@ class Shampoo(Optimizer):
                     )
 
                 else:
-                    raise ValueError("Large dim method " + self.large_dim_method + " is not implemented!")
+                    raise ValueError(
+                        "Large dim method "
+                        + self.large_dim_method
+                        + " is not implemented!"
+                    )
 
                 # increase parameter count
                 self.parameter_count += state["preconditioners"].parameter_count
@@ -236,7 +253,8 @@ class Shampoo(Optimizer):
 
                     # compute Shampoo preconditioner
                     if isinstance(
-                        state["preconditioners"], (ShampooPreconditioner, BlockShampooPreconditioner)
+                        state["preconditioners"],
+                        (ShampooPreconditioner, BlockShampooPreconditioner),
                     ):
                         state["preconditioners"].compute_root_inverse()
 
@@ -324,6 +342,7 @@ class Shampoo(Optimizer):
                 grad = p.grad
                 state = self.state[p]
                 beta1, _ = group["betas"]
+                momentum = group["momentum"]
                 weight_decay = group["weight_decay"]
                 lr = group["lr"]
 
@@ -336,12 +355,12 @@ class Shampoo(Optimizer):
                 # Dense case
                 else:
 
-                    # incorporate momentum
+                    # incorporate first-moment estimation
                     if beta1 != 0:
                         # compute bias corrections if necessary
                         bias_correction1 = 1.0
                         if self.use_bias_correction and beta1 < 1:
-                            bias_correction1 -= beta1 ** self.iter
+                            bias_correction1 -= beta1**self.iter
 
                         # modify grad with momentum term
                         if state["exp_avg"] is None:
@@ -352,11 +371,116 @@ class Shampoo(Optimizer):
                         buf.mul_(beta1).add_(grad, alpha=1 - beta1)
                         grad.copy_(buf / bias_correction1)
 
-                    # perform AdamW weight decay
-                    if self.adam_w_mode and weight_decay != 0:
-                        p.mul_(1 - lr * weight_decay)
-
                     # compute preconditioned gradient and update parameters
-                    state["preconditioners"].precondition_and_update(p, grad, lr)
+                    if momentum == 0.:
+                        # perform AdamW weight decay
+                        if self.adam_w_mode and weight_decay != 0:
+                            p.mul_(1 - lr * weight_decay)
+
+                        state["preconditioners"].precondition_and_update(p, grad, lr)
+
+                    else:
+                        # compute preconditioned gradient
+                        search_direction = state["preconditioners"].precondition(grad)
+
+                        # add AdamW weight decay
+                        if self.adam_w_mode and weight_decay != 0:
+                            search_direction.add_(p, alpha=weight_decay)
+
+                        # initialize momentum term if necessary
+                        if state["momentum"] is None:
+                            state["momentum"] = torch.zeros_like(
+                                grad, memory_format=torch.preserve_format
+                            )
+
+                        # apply momentum / primal iterate averaging
+                        state["momentum"].mul_(group["momentum"]).add_(search_direction)
+
+                        # incorporate Nesterov momentum
+                        if self.use_nesterov:
+                            search_direction.add_(
+                                state["momentum"], alpha=group["momentum"]
+                            )
+                        else:
+                            search_direction = state["momentum"]
+
+                        # update parameters
+                        p.add_(search_direction, alpha=-lr)
 
         return loss
+
+    def load_state_dict(self, state_dict):
+        r"""Loads the optimizer state.
+        Args:
+            state_dict (dict): optimizer state. Should be an object returned
+                from a call to :meth:`state_dict`.
+        """
+        # deepcopy, to be consistent with module API
+        state_dict = deepcopy(state_dict)
+        # Validate the state_dict
+        groups = self.param_groups
+        saved_groups = state_dict["param_groups"]
+
+        if len(groups) != len(saved_groups):
+            raise ValueError(
+                "loaded state dict has a different number of " "parameter groups"
+            )
+        param_lens = (len(g["params"]) for g in groups)
+        saved_lens = (len(g["params"]) for g in saved_groups)
+        if any(p_len != s_len for p_len, s_len in zip(param_lens, saved_lens)):
+            raise ValueError(
+                "loaded state dict contains a parameter group "
+                "that doesn't match the size of optimizer's group"
+            )
+
+        # Update the state
+        id_map = {
+            old_id: p
+            for old_id, p in zip(
+                chain.from_iterable((g["params"] for g in saved_groups)),
+                chain.from_iterable((g["params"] for g in groups)),
+            )
+        }
+
+        def cast(param, value, key=None):
+            r"""Make a deep copy of value, casting all tensors to device of param."""
+            if isinstance(value, torch.Tensor):
+                # Floating-point types are a bit special here. They are the only ones
+                # that are assumed to always match the type of params.
+                # Make sure state['step'] is not casted https://github.com/pytorch/pytorch/issues/74424
+                if key != "step":
+                    if param.is_floating_point():
+                        value = value.to(param.dtype)
+                    value = value.to(param.device)
+                return value
+            elif isinstance(value, dict):
+                return {k: cast(param, v, key=k) for k, v in value.items()}
+            elif isinstance(value, container_abcs.Iterable):
+                return type(value)(cast(param, v) for v in value)
+            elif isinstance(value, Preconditioner):
+                value.to(param.device)
+                return value
+            elif isinstance(value, Grafting):
+                value.to(param.device)
+                return value
+            else:
+                return value
+
+        # Copy state assigned to params (and cast tensors to appropriate types).
+        # State that is not assigned to params is copied as is (needed for
+        # backward compatibility).
+        state = defaultdict(dict)
+        for k, v in state_dict["state"].items():
+            if k in id_map:
+                param = id_map[k]
+                state[param] = cast(param, v)
+            else:
+                state[k] = v
+
+        # Update parameter groups, setting their 'params' value
+        def update_group(group, new_group):
+            new_group["params"] = group["params"]
+            return new_group
+
+        param_groups = [update_group(g, ng) for g, ng in zip(groups, saved_groups)]
+        self.__setstate__({"state": state, "param_groups": param_groups})

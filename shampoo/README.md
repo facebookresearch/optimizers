@@ -9,7 +9,8 @@ Key distinctives of this implementation include:
     - RMSProp
     - Adam
 - Supports both normal and AdamW weight decay.
-- Incorporates exponential moving averaging (with or without bias correction) to the estimate the first moment (akin to Adam). (To be further investigated.)
+- Incorporates exponential moving averaging (with or without bias correction) to the estimate the first moment (akin to Adam).
+- Incorporates momentum and Nesterov acceleration.
 - Distribution of the root inverse computation across different GPUs for the data-parallel setting. Supports data-parallel multi-node, multi-GPU training using `torch.nn.parallel.DistributedDataParallel`. Broadcasts are performed using `torch.dist`. Does not perform CPU offloading as done in [2].
 - Offers different options to handle large-dimensional tensors, including:
     - Diagonalizing the Shampoo preconditioners.

@@ -309,7 +309,7 @@ class ShampooPreconditionerTest(unittest.TestCase):
         loss.backward()
         grad = param.grad
         shampoo = ShampooPreconditioner(
-            param, beta2=1.0, epsilon=1.0, use_bias_correction=False, dtype=torch.float
+            param, beta2=1.0, epsilon=1.0, use_bias_correction=False, dtype=torch.float, init_delay=-1,
         )
         preconditioned_grad = shampoo.precondition(grad)
         self.assertTrue(
