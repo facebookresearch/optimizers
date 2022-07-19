@@ -9,7 +9,7 @@ LICENSE file in the root directory of this source tree.
 
 import enum
 import logging
-import numpy as np
+import math
 from abc import ABC
 from copy import deepcopy
 from typing import List, Union
@@ -42,22 +42,25 @@ class LargeDimMethod(enum.Enum):
     BLOCKING = 2
 
 
+class RootInvStrategy(enum.Enum):
+    NONE = 0
+    PARAM = 1
+    BLOCK = 2
+    PRECOND = 3
+
+
 ###### MERGING AND BLOCKING HELPER FUNCTIONS ######
-def merge_small_dims(
-    tensor_shape: Union[Tensor, List[int]], threshold: int
-) -> List[int]:
+def merge_small_dims(tensor_shape: List[int], threshold: int) -> List[int]:
     """Reshapes tensor by merging small dimensions.
 
     Args:
-        tensor_size (Tensor or List[int]): The shape of the tensor.
+        tensor_shape (List[int]): The shape of the tensor.
         threshold (int): Threshold on the maximum size of each dimension.
 
     Returns:
         new_tensor_shape (List[int]): New tensor shape.
 
     """
-    if torch.is_tensor(tensor_shape):
-        tensor_shape = tensor_shape.numpy()
 
     new_tensor_shape = [tensor_shape[0]]
     for next_tensor_shape in tensor_shape[1:]:
@@ -74,55 +77,54 @@ def merge_small_dims(
     return new_tensor_shape
 
 
-def multi_dim_split(grad: Tensor, splits: List[List[int]]) -> List[Tensor]:
+def multi_dim_split(tensor: Tensor, splits: List[int]) -> List[Tensor]:
     """Chunks tensor across multiple dimensions based on splits.
 
     Args:
-        grad (Tensor): Gradient or tensor to split.
-        splits (List[List[int]]): List of sizes for each chunk.
+        tensor (Tensor): Gradient or tensor to split.
+        splits (List[int]): List of sizes for each block or chunk along each dimension.
 
     Returns:
         split_grad (List[Tensor]): List of tensors.
 
     """
-    split_grad = [grad]
+    split_tensors = [tensor]
     for dim, split in enumerate(splits):
-        temp_grads = split_grad
-        split_grad = []
-        for grad in temp_grads:
-            split_grad.extend(torch.split(grad, split, dim=dim))
-
-    return split_grad
+        split_tensors = [
+            s for t in split_tensors for s in torch.split(t, split, dim=dim)
+        ]
+    return split_tensors
 
 
-def multi_dim_cat(split_grad: List[Tensor], num_splits: List[int]) -> Tensor:
+def multi_dim_cat(split_tensors: List[Tensor], num_splits: List[int]) -> Tensor:
     """Concatenates multiple tensors to form single tensor across multiple dimensions.
 
     Args:
-        split_grad (List[Tensor]): List of gradient chunks.
-        num_splits (List[int]): Number of splits/chunks.
+        split_tensor (List[Tensor]): List of tensor splits or blocks.
+        num_splits (List[int]): Number of splits/blocks.
 
     Returns:
-        merged_grad (Tensor): Merged tensor.
+        merged_tensor (Tensor): Merged tensor.
 
     """
-    merged_grad = split_grad
+    merged_tensor = split_tensors
     for dim, split in reversed(list(enumerate(num_splits))):
         if split > 0:
-            temp_grad = []
-            for i in range(0, len(merged_grad), split):
-                temp_grad.append(torch.cat(merged_grad[i : i + split], dim=dim))
-            merged_grad = temp_grad
-
-    return merged_grad[0]
+            temp_tensor = []
+            for i in range(0, len(merged_tensor), split):
+                temp_tensor.append(torch.cat(merged_tensor[i : i + split], dim=dim))
+            merged_tensor = temp_tensor
+    assert len(merged_tensor) == 1
+    return merged_tensor[0]
 
 
 ###### PRECONDITIONER CLASSES ######
 class Preconditioner(ABC):
-    """Preconditioner class."""
+    """Preconditioner base class."""
 
     def __init__(self):
         self._parameter_count = 0
+        self.preconditioner_idx = {}
         pass
 
     def update_preconditioners(self, grad: Tensor) -> None:
@@ -146,7 +148,7 @@ class Preconditioner(ABC):
     def parameter_count(self) -> int:
         return self._parameter_count
 
-    def broadcast(self, src_rank: int):
+    def broadcast(self):
         return
 
     def to(self, device: Union[None, torch.device] = None):
@@ -169,7 +171,7 @@ class AdagradPreconditioner(Preconditioner):
     Args:
         param (Tensor): Parameter of interest.
         beta2 (float): Exponential moving average factor. If beta2 = 1., will use Adagrad update. (Default: 1.0)
-        epsilon (float): Epsilon term for regularizing preconditioner to ensure positive definiteness. (Default: 1e-3)
+        epsilon (float): Epsilon term for regularizing preconditioner to ensure positive definiteness. (Default: 1e-10)
         use_bias_correction (bool): Flag for using bias correction. (Default: False)
         idx (Union[None, str, int]): Layer index (for logging purposes). (Default: None)
 
@@ -179,7 +181,7 @@ class AdagradPreconditioner(Preconditioner):
         self,
         param,
         beta2: float = 1.0,
-        epsilon: float = 1e-3,
+        epsilon: float = 1e-10,
         use_bias_correction: bool = True,
         idx: Union[None, str, int] = None,
     ):
@@ -194,7 +196,10 @@ class AdagradPreconditioner(Preconditioner):
         self._parameter_count += torch.prod(torch.tensor(self.preconditioner.shape))
 
         if self.idx is not None:
-            logger.info(f"Diagonal Adagrad Preconditioner with Parameter {self.idx}")
+            self.preconditioner_idx = str(self.idx) + "." + str(0)
+            logger.info(
+                f"Diagonal Adagrad Preconditioner {self.preconditioner_idx[0]} with Parameter {self.idx}"
+            )
 
     def update_preconditioners(self, grad: Tensor) -> None:
         if self.beta2 == 1.0:
@@ -246,6 +251,7 @@ class ShampooPreconditioner(Preconditioner):
         use_bias_correction (bool): Flag for using bias correction. (Default: True)
         diagonal_threshold (int): Threshold for using diagonal preconditioners. If None, disabled. (Default: None)
         dtype (torch.dtype): Data type for accumulating and computing root inverse of preconditioners. (Default: torch.float)
+        root_inv_strategy (RootInvStrategy): Strategy for assigning root inverse computations. (Default: RootInvStrategy.PRECOND)
         idx (Union[None, int, str]): Layer index (for logging purposes). (Default: None)
         init_delay (int): initial delay before starting to compute root inverse. Applies grafting method beforehand. (default: 0)
         grafting_type (GraftingType): Selects grafting method. (Default: GraftingType.NONE)
@@ -262,6 +268,7 @@ class ShampooPreconditioner(Preconditioner):
         use_bias_correction: bool = True,
         diagonal_threshold: Union[None, int] = None,
         dtype: torch.dtype = torch.float,
+        root_inv_strategy: RootInvStrategy = RootInvStrategy.PRECOND,
         idx: Union[None, int, str] = None,
         init_delay: int = 0,
         grafting_type: GraftingType = GraftingType.NONE,
@@ -281,16 +288,26 @@ class ShampooPreconditioner(Preconditioner):
         self.bias_correction2 = torch.tensor(1.0)
         self.dims = torch.tensor(param.shape).numpy()
         self.order = param.dim()
+        self.root_inv_strategy = root_inv_strategy
         self.idx = idx
         self.grafting_type = grafting_type
         self.init_delay = init_delay
+        self.rank = (
+            dist.get_rank() if self.root_inv_strategy != RootInvStrategy.NONE else 0
+        )
 
         # initialize lists for each parameter
         self.preconditioners = []
         self.inv_preconditioners = []
         self.preconditioner_types = []
+        self.preconditioner_ranks = []
+        if self.idx is not None:
+            self.preconditioner_idx = [
+                str(self.idx) + "." + str(k) for k in range(self.order)
+            ]
 
         for k, dim in enumerate(self.dims):
+
             if self.diagonal_threshold is not None and dim > self.diagonal_threshold:
                 preconditioner = torch.zeros(
                     dim, dtype=param.dtype, device=param.device
@@ -298,12 +315,12 @@ class ShampooPreconditioner(Preconditioner):
                 inv_preconditioner = None
                 preconditioner_type = PreconditionerType.DIAGONAL
                 num_params = dim
+                preconditioner_rank = None
                 if self.idx is not None:
                     logger.info(
-                        f"Diagonal Preconditioner with Parameter {self.idx}, Order {k}, Dim {dim}, Number of Params {num_params}"
-                        + ", DType "
-                        + str(self.dtype)
+                        f"Diagonal Preconditioner {self.preconditioner_idx[k]} with Parameter {self.idx}, Order {k}, Dim {dim}, Number of Params {num_params}, DType {self.dtype}"
                     )
+
             else:
                 preconditioner = torch.zeros(
                     (dim, dim), dtype=self.dtype, device=param.device
@@ -313,17 +330,17 @@ class ShampooPreconditioner(Preconditioner):
                 )
                 preconditioner_type = PreconditionerType.FULL
                 num_params = dim**2
+                preconditioner_rank = -1
                 if self.idx is not None:
                     logger.info(
-                        f"Full Matrix Preconditioner with Parameter {self.idx}, Order {k}, Dim {dim}, Number of Params {num_params}"
-                        + ", DType "
-                        + str(self.dtype)
+                        f"Full Matrix Preconditioner {self.preconditioner_idx[k]} with Parameter {self.idx}, Order {k}, Dim {dim}, Number of Params {num_params}, DType {self.dtype}"
                     )
 
             self._parameter_count += num_params
             self.preconditioners.append(preconditioner)
             self.inv_preconditioners.append(inv_preconditioner)
             self.preconditioner_types.append(preconditioner_type)
+            self.preconditioner_ranks.append(preconditioner_rank)
 
         # initialize grafting
         if self.grafting_type == GraftingType.NONE:
@@ -335,14 +352,14 @@ class ShampooPreconditioner(Preconditioner):
         elif self.grafting_type == GraftingType.RMSPROP:
             self.grafting = RMSPropGrafting(
                 param,
-                epsilon=grafting_epsilon,
                 beta2=grafting_beta2,
+                epsilon=grafting_epsilon,
             )
         elif self.grafting_type == GraftingType.ADAM:
             self.grafting = AdamGrafting(
                 param,
-                epsilon=grafting_epsilon,
                 beta2=grafting_beta2,
+                epsilon=grafting_epsilon,
             )
         else:
             raise ValueError("Invalid Grafting Type!")
@@ -446,20 +463,30 @@ class ShampooPreconditioner(Preconditioner):
         return preconditioned_grad
 
     def _graft_precondition(self, grad: Tensor) -> Tensor:
-        return self.grafting.precondition(grad) if self.grafting_type != GraftingType.NONE else grad
+        return (
+            self.grafting.precondition(grad)
+            if self.grafting_type != GraftingType.NONE
+            else grad
+        )
 
     def precondition(self, grad: Tensor) -> Tensor:
-        return self._graft_precondition(grad) if self.num_updates <= self.init_delay else self._shampoo_precondition(grad)
+        return (
+            self._graft_precondition(grad)
+            if self.num_updates <= self.init_delay
+            else self._shampoo_precondition(grad)
+        )
 
     def compute_root_inverse(self) -> None:
-
         # iterate over all dimensions
         for k in range(self.order):
             preconditioner = self.preconditioners[k]
             preconditioner_type = self.preconditioner_types[k]
+            preconditioner_rank = self.preconditioner_ranks[k]
 
             # check that this is a full matrix preconditioner
-            if preconditioner_type == PreconditionerType.FULL:
+            if preconditioner_type == PreconditionerType.FULL and (
+                preconditioner_rank == -1 or preconditioner_rank == self.rank
+            ):
                 # add epsilon term and incorporate bias correction
                 bias_corrected_preconditioner = preconditioner / self.bias_correction2
 
@@ -499,20 +526,65 @@ class ShampooPreconditioner(Preconditioner):
     def compute_norm(self, grad: Tensor) -> Tensor:
         return torch.linalg.norm(self.precondition(grad))
 
-    def broadcast(self, src_rank: int) -> None:
+    def broadcast(self):
         for k in range(self.order):
             if self.preconditioner_types[k] == PreconditionerType.FULL:
                 dist.broadcast(
                     self.inv_preconditioners[k],
-                    src=src_rank,
+                    src=self.preconditioner_ranks[k],
                 )
 
     def to(self, device: Union[None, torch.device] = None):
         if device is not None:
             self.bias_correction2 = self.bias_correction2.to(device=device)
             self._parameter_count = self._parameter_count.to(device=device)
-            self.preconditioners = [preconditioner.to(device) for preconditioner in self.preconditioners]
-            self.inv_preconditioners = [inv_preconditioner.to(device) for inv_preconditioner in self.inv_preconditioners]
+            self.preconditioners = [
+                preconditioner.to(device) for preconditioner in self.preconditioners
+            ]
+            self.inv_preconditioners = [
+                inv_preconditioner.to(device)
+                for inv_preconditioner in self.inv_preconditioners
+            ]
+
+    def _assign_preconditioners_round_robin_rank(
+        self, rank: int, world_size: int
+    ) -> int:
+        for k in range(self.order):
+            if self.preconditioner_types[k] == PreconditionerType.FULL:
+                self.preconditioner_ranks[k] = rank % world_size
+                rank += 1
+                if self.idx is not None:
+                    logger.info(
+                        f"Assigned Preconditioner {self.preconditioner_idx[k]} to rank {self.preconditioner_ranks[k]}"
+                    )
+        return rank
+
+    def _assign_preconditioners_parameter_rank(self, rank: int, world_size: int) -> int:
+        for k in range(self.order):
+            if self.preconditioner_types[k] == PreconditionerType.FULL:
+                self.preconditioner_ranks[k] = rank % world_size
+                if self.idx is not None:
+                    logger.info(
+                        f"Assigned Preconditioner {self.preconditioner_idx[k]} to rank {self.preconditioner_ranks[k]}"
+                    )
+        return rank
+
+    def assign_preconditioners_rank(self, rank: int, world_size: int) -> int:
+        if self.root_inv_strategy == RootInvStrategy.NONE:
+            return -1
+        elif (
+            self.root_inv_strategy == RootInvStrategy.PARAM
+            or self.root_inv_strategy == RootInvStrategy.BLOCK
+        ):
+            return self._assign_preconditioners_parameter_rank(rank, world_size)
+        elif self.root_inv_strategy == RootInvStrategy.PRECOND:
+            return self._assign_preconditioners_round_robin_rank(rank, world_size)
+        else:
+            raise NotImplementedError(
+                "Root inverse strategy is not implemented! Specified root inverse strategy is "
+                + str(self.root_inv_strategy)
+                + "."
+            )
 
 
 class BlockShampooPreconditioner(Preconditioner):
@@ -527,6 +599,7 @@ class BlockShampooPreconditioner(Preconditioner):
         use_bias_correction (bool): Flag for using bias correction. (Default: True)
         block_size (int): Block size for blocking large tensors. (Default: 1024)
         dtype (torch.dtype): Data type for accumulating and computing root inverse of preconditioners. (Default: torch.float)
+        root_inv_strategy (RootInvStrategy): Strategy for assigning root inverse computations. (Default: RootInvStrategy.PRECOND)
         idx (Union[None, int, str]): Layer index (for logging purposes). (Default: None)
         use_merge_dims (bool): Denotes whether or not dimensions are merged. (Default: True)
         init_delay (int): initial delay before starting to compute root inverse. Applies grafting method beforehand. (Default: 0)
@@ -544,6 +617,7 @@ class BlockShampooPreconditioner(Preconditioner):
         use_bias_correction: bool = True,
         block_size: int = 1024,
         dtype: torch.dtype = torch.float,
+        root_inv_strategy: RootInvStrategy = RootInvStrategy.NONE,
         idx: Union[None, int, str] = None,
         use_merge_dims: bool = True,
         init_delay: int = 0,
@@ -561,6 +635,7 @@ class BlockShampooPreconditioner(Preconditioner):
         self.dtype = dtype
         self.num_updates = 0
         self.idx = idx
+        self.root_inv_strategy = root_inv_strategy
         self.init_delay = init_delay
         self.use_merge_dims = use_merge_dims
         self.original_dims = [*torch.tensor(param.shape).numpy()]
@@ -570,18 +645,13 @@ class BlockShampooPreconditioner(Preconditioner):
             else self.original_dims
         )
         self.original_order = param.dim()
-        self.merged_order = len(self.merged_dims) if use_merge_dims else self.original_order
+        self.merged_order = (
+            len(self.merged_dims) if use_merge_dims else self.original_order
+        )
 
         # Construct splits for blocking
-        merged_dims_array = np.array(self.merged_dims)
-        num_block_size_splits = merged_dims_array // block_size
-        remainder_block_split = merged_dims_array - num_block_size_splits * block_size
-        self.splits = []
-        for i in range(len(self.merged_dims)):
-            self.splits.append(num_block_size_splits[i] * [block_size])
-            if remainder_block_split[i] > 0:
-                self.splits[i] += [remainder_block_split[i]]
-        self.num_splits = [len(split) for split in self.splits]
+        self.splits = [block_size] * len(self.merged_dims)
+        self.num_splits = [math.ceil(dim / block_size) for dim in self.merged_dims]
 
         # Construct multiple preconditioners for each block
         self.split_preconditioners = []
@@ -600,6 +670,7 @@ class BlockShampooPreconditioner(Preconditioner):
                 epsilon=epsilon,
                 use_bias_correction=use_bias_correction,
                 dtype=dtype,
+                root_inv_strategy=root_inv_strategy,
                 idx=split_idx,
                 init_delay=init_delay,
                 grafting_type=grafting_type,
@@ -646,9 +717,9 @@ class BlockShampooPreconditioner(Preconditioner):
     def compute_norm(self, grad: Tensor) -> Tensor:
         return torch.linalg.norm(self.precondition(grad))
 
-    def broadcast(self, src_rank: int) -> None:
+    def broadcast(self):
         for preconditioner in self.split_preconditioners:
-            preconditioner.broadcast(src_rank)
+            preconditioner.broadcast()
 
     def to(self, device: Union[None, torch.device] = None):
         if device is not None:
@@ -656,9 +727,57 @@ class BlockShampooPreconditioner(Preconditioner):
             for preconditioner in self.split_preconditioners:
                 preconditioner.to(device=device)
 
+    def _assign_preconditioners_round_robin_rank(
+        self, rank: int, world_size: int
+    ) -> int:
+        for preconditioner in self.split_preconditioners:
+            rank = preconditioner._assign_preconditioners_round_robin_rank(
+                rank, world_size
+            )
+        return rank
+
+    def _assign_preconditioners_block_rank(self, rank: int, world_size: int) -> int:
+        for preconditioner in self.split_preconditioners:
+            rank = preconditioner._assign_preconditioners_parameter_rank(
+                rank, world_size
+            )
+            rank += 1
+        return rank
+
+    def _assign_preconditioners_parameter_rank(self, rank: int, world_size: int) -> int:
+        for preconditioner in self.split_preconditioners:
+            rank = preconditioner._assign_preconditioners_parameter_rank(
+                rank, world_size
+            )
+        return rank
+
+    def assign_preconditioners_rank(self, rank: int, world_size: int) -> int:
+        if self.root_inv_strategy == RootInvStrategy.NONE:
+            return -1
+        elif self.root_inv_strategy == RootInvStrategy.PARAM:
+            return self._assign_preconditioners_parameter_rank(rank, world_size)
+        elif self.root_inv_strategy == RootInvStrategy.BLOCK:
+            return self._assign_preconditioners_block_rank(rank, world_size)
+        elif self.root_inv_strategy == RootInvStrategy.PRECOND:
+            return self._assign_preconditioners_round_robin_rank(rank, world_size)
+        else:
+            raise NotImplementedError(
+                "Root inverse strategy is not implemented! Specified root inverse strategy is "
+                + str(self.root_inv_strategy)
+                + "."
+            )
+
 
 ###### GRAFTING CLASSES ######
 class Grafting(ABC):
+    """Grafting base class.
+
+    We graft the method by storing and maintaining the preconditioner for the grafted method.
+    Therefore, any additional modifications including gradient EMA/filtering and momentum are
+    not included in grafting.
+
+    """
+
     def __init__(self, param: Tensor):
         self._parameter_count = 0
         pass
@@ -689,6 +808,15 @@ class Grafting(ABC):
 
 
 class SGDGrafting(Grafting):
+    """SGD grafting.
+
+    Grafts the stochastic gradient method by returning the norm of the gradient.
+
+    Args:
+        param (Tensor): Parameter of interest.
+
+    """
+
     def __init__(self, param: Tensor):
         super(SGDGrafting, self).__init__(param)
 
@@ -703,15 +831,31 @@ class SGDGrafting(Grafting):
 
 
 class AdagradGrafting(Grafting):
+    """Adagrad grafting.
+
+    Supports RMSProp and Adam by determining beta2 and use_bias_correction.
+
+    Note: beta1 is not included since that is shared between both Shampoo and the grafted optimizer.
+
+    Args:
+        param (Tensor): Parameter of interest.
+        beta2 (float): Exponential moving average factor. If beta2 = 1., will use Adagrad update. (Default: 1.0)
+        epsilon (float): Epsilon term for regularizing preconditioner to ensure positive definiteness. (Default: 1e-10)
+        use_bias_correction (bool): Flag for using bias correction. (Default: False)
+
+    """
+
     def __init__(
         self,
         param: Tensor,
-        epsilon: float,
         beta2: float = 1.0,
+        epsilon: float = 1e-10,
         use_bias_correction: bool = True,
     ):
         super(AdagradGrafting, self).__init__(param)
-        self.preconditioner = AdagradPreconditioner(param, epsilon=epsilon)
+        self.preconditioner = AdagradPreconditioner(
+            param, beta2=beta2, epsilon=epsilon, use_bias_correction=use_bias_correction
+        )
         self._parameter_count += self.preconditioner.parameter_count
 
     def update_preconditioners(self, grad: Tensor):
@@ -733,14 +877,32 @@ class AdagradGrafting(Grafting):
 
 
 class RMSPropGrafting(AdagradGrafting):
-    def __init__(self, param, epsilon: float, beta2: float):
+    """RMSProp grafting.
+
+    Args:
+        param (Tensor): Parameter of interest.
+        beta2 (float): Exponential moving average factor. (Default: 0.99)
+        epsilon (float): Epsilon term for regularizing preconditioner to ensure positive definiteness. (Default: 1e-8)
+
+    """
+
+    def __init__(self, param, beta2: float = 0.99, epsilon: float = 1e-8):
         super(RMSPropGrafting, self).__init__(
-            param=param, epsilon=epsilon, beta2=beta2, use_bias_correction=False
+            param=param, beta2=beta2, epsilon=epsilon, use_bias_correction=False
         )
 
 
 class AdamGrafting(AdagradGrafting):
-    def __init__(self, param, epsilon: float, beta2: float):
+    """Adam grafting.
+
+    Args:
+        param (Tensor): Parameter of interest.
+        beta2 (float): Exponential moving average factor. If beta2 = 1., will use Adagrad update. (Default: 0.999)
+        epsilon (float): Epsilon term for regularizing preconditioner to ensure positive definiteness. (Default: 1e-8)
+
+    """
+
+    def __init__(self, param, beta2: float = 0.999, epsilon: float = 1e-8):
         super(AdamGrafting, self).__init__(
-            param=param, epsilon=epsilon, beta2=beta2, use_bias_correction=True
+            param=param, beta2=beta2, epsilon=epsilon, use_bias_correction=True
         )
