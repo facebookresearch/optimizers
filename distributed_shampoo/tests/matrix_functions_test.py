@@ -7,6 +7,7 @@ LICENSE file in the root directory of this source tree.
 
 """
 
+import itertools
 import unittest
 
 import numpy as np
@@ -34,7 +35,7 @@ class EigenRootTest(unittest.TestCase):
         abs_error = torch.dist(torch.linalg.matrix_power(X, root), A, p=torch.inf)
         A_norm = torch.linalg.norm(A, ord=torch.inf)
         rel_error = abs_error / torch.maximum(torch.tensor(1.0), A_norm)
-        self.assertTrue(torch.all(torch.isclose(L, eig_sols)))
+        self.assertTrue(torch.allclose(L, eig_sols))
         self.assertLessEqual(rel_error, tolerance)
 
     def _test_eigen_root_multi_dim(
@@ -47,27 +48,26 @@ class EigenRootTest(unittest.TestCase):
         tolerance,
         eig_sols,
     ) -> None:
-        for n in dims:
-            for root in roots:
-                for epsilon in epsilons:
-                    self._test_eigen_root(
-                        A(n),
-                        root,
-                        perturb,
-                        False,
-                        epsilon,
-                        tolerance,
-                        eig_sols(n),
-                    )
-                    self._test_eigen_root(
-                        A(n),
-                        root,
-                        perturb,
-                        True,
-                        epsilon,
-                        tolerance,
-                        eig_sols(n),
-                    )
+        for n, root, epsilon in itertools.product(dims, roots, epsilons):
+            with self.subTest(f"With dim = {n}, root = {root}, epsilon = {epsilon}"):
+                self._test_eigen_root(
+                    A(n),
+                    root,
+                    perturb,
+                    False,
+                    epsilon,
+                    tolerance,
+                    eig_sols(n),
+                )
+                self._test_eigen_root(
+                    A(n),
+                    root,
+                    perturb,
+                    True,
+                    epsilon,
+                    tolerance,
+                    eig_sols(n),
+                )
 
     def test_eigen_root_identity(self) -> None:
         tolerance = 1e-6
@@ -93,10 +93,13 @@ class EigenRootTest(unittest.TestCase):
         epsilons = [0.0]
         perturb = False
 
-        for alpha in [0.001, 0.01, 0.1, 1.0, 10.0, 100.0]:
-            for beta in [0.001, 0.01, 0.1, 1.0, 10.0, 100.0]:
-                if 2 * beta > alpha:
-                    continue
+        for alpha, beta in itertools.product(
+            [0.001, 0.01, 0.1, 1.0, 10.0, 100.0], repeat=2
+        ):
+            if 2 * beta > alpha:
+                continue
+
+            with self.subTest(f"Test with alpha = {alpha}, beta = {beta}"):
 
                 def eig_sols(n):
                     eigs = alpha * torch.ones(n) + 2 * beta * torch.tensor(
@@ -127,10 +130,13 @@ class EigenRootTest(unittest.TestCase):
         epsilons = [0.0]
         perturb = False
 
-        for alpha in [0.001, 0.01, 0.1, 1.0, 10.0, 100.0]:
-            for beta in [0.001, 0.01, 0.1, 1.0, 10.0, 100.0]:
-                if 2 * beta > alpha:
-                    continue
+        for alpha, beta in itertools.product(
+            [0.001, 0.01, 0.1, 1.0, 10.0, 100.0], repeat=2
+        ):
+            if 2 * beta > alpha:
+                continue
+
+            with self.subTest(f"Test with alpha = {alpha}, beta = {beta}"):
 
                 def eig_sols(n):
                     eigs = alpha * torch.ones(n) + 2 * beta * torch.tensor(
@@ -168,19 +174,18 @@ class NewtonRootInverseTest(unittest.TestCase):
         abs_A_error = torch.dist(torch.linalg.matrix_power(X, -root), A, p=torch.inf)
         A_norm = torch.linalg.norm(A, ord=torch.inf)
         rel_A_error = abs_A_error / torch.maximum(torch.tensor(1.0), A_norm)
-        print(root, M_error, abs_A_error, rel_A_error, A_norm)
         self.assertLessEqual(M_error, M_tol)
         self.assertLessEqual(rel_A_error, A_tol)
 
     def _test_newton_root_inverse_multi_dim(
         self, A, dims, roots, epsilons, max_iterations, A_tol, M_tol
     ) -> None:
-        for n in dims:
-            for root in roots:
-                for epsilon in epsilons:
-                    self._test_newton_root_inverse(
-                        A(n), root, epsilon, max_iterations, A_tol, M_tol
-                    )
+
+        for n, root, epsilon in itertools.product(dims, roots, epsilons):
+            with self.subTest(f"With dim = {n}, root = {root}, epsilon = {epsilon}"):
+                self._test_newton_root_inverse(
+                    A(n), root, epsilon, max_iterations, A_tol, M_tol
+                )
 
     def test_newton_root_inverse_identity(self) -> None:
         A_tol = 1e-6
@@ -205,12 +210,13 @@ class NewtonRootInverseTest(unittest.TestCase):
         roots = [2, 4, 8]
         epsilons = [0.0]
 
-        for alpha in [0.001, 0.01, 0.1, 1.0, 10.0, 100.0]:
-            for beta in [0.001, 0.01, 0.1, 1.0, 10.0, 100.0]:
-                if 2 * beta > alpha:
-                    continue
+        for alpha, beta in itertools.product(
+            [0.001, 0.01, 0.1, 1.0, 10.0, 100.0], repeat=2
+        ):
+            if 2 * beta > alpha:
+                continue
 
-                print(alpha, beta, (alpha + 2 * beta) / (alpha - 2 * beta))
+            with self.subTest(f"Test with alpha = {alpha}, beta = {beta}"):
 
                 def A(n):
                     diag = alpha * torch.ones(n)
@@ -235,10 +241,13 @@ class NewtonRootInverseTest(unittest.TestCase):
         roots = [2, 4, 8]
         epsilons = [0.0]
 
-        for alpha in [0.001, 0.01, 0.1, 1.0, 10.0, 100.0]:
-            for beta in [0.001, 0.01, 0.1, 1.0, 10.0, 100.0]:
-                if 2 * beta > alpha:
-                    continue
+        for alpha, beta in itertools.product(
+            [0.001, 0.01, 0.1, 1.0, 10.0, 100.0], repeat=2
+        ):
+            if 2 * beta > alpha:
+                continue
+
+            with self.subTest(f"Test with alpha = {alpha}, beta = {beta}"):
 
                 def A(n):
                     diag = alpha * torch.ones(n)

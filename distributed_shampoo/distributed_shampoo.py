@@ -44,7 +44,7 @@ WEIGHT_DECAY = "weight_decay"
 
 
 class DistributedShampoo(Optimizer):
-    """Implements Shampoo algorithm.
+    """Implements distributed Shampoo algorithm.
 
     See details in:
     - https://arxiv.org/pdf/1802.09568.pdf
@@ -262,10 +262,10 @@ class DistributedShampoo(Optimizer):
 
         if self.root_inv_strategy == RootInvStrategy.NONE:
             return
-        elif (
-            self.root_inv_strategy == RootInvStrategy.PARAM
-            or self.root_inv_strategy == RootInvStrategy.BLOCK
-            or self.root_inv_strategy == RootInvStrategy.PRECOND
+        elif self.root_inv_strategy in (
+            RootInvStrategy.PARAM,
+            RootInvStrategy.BLOCK,
+            RootInvStrategy.PRECOND,
         ):
             rank = 0
             for group in self.param_groups:

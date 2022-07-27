@@ -110,10 +110,10 @@ def multi_dim_cat(split_tensors: List[Tensor], num_splits: List[int]) -> Tensor:
     merged_tensor = split_tensors
     for dim, split in reversed(list(enumerate(num_splits))):
         if split > 0:
-            temp_tensor = []
-            for i in range(0, len(merged_tensor), split):
-                temp_tensor.append(torch.cat(merged_tensor[i : i + split], dim=dim))
-            merged_tensor = temp_tensor
+            merged_tensor = [
+                torch.cat(merged_tensor[i : i + split], dim=dim)
+                for i in range(0, len(merged_tensor), split)
+            ]
     assert len(merged_tensor) == 1
     return merged_tensor[0]
 
@@ -124,7 +124,6 @@ class Preconditioner(ABC):
 
     def __init__(self):
         self._parameter_count = 0
-        self.preconditioner_idx = {}
         pass
 
     def update_preconditioners(self, grad: Tensor) -> None:
@@ -198,7 +197,7 @@ class AdagradPreconditioner(Preconditioner):
         if self.idx is not None:
             self.preconditioner_idx = str(self.idx) + "." + str(0)
             logger.info(
-                f"Diagonal Adagrad Preconditioner {self.preconditioner_idx[0]} with Parameter {self.idx}"
+                f"Diagonal Adagrad Preconditioner {self.preconditioner_idx} with Parameter {self.idx}"
             )
 
     def update_preconditioners(self, grad: Tensor) -> None:
@@ -362,45 +361,52 @@ class ShampooPreconditioner(Preconditioner):
                 epsilon=grafting_epsilon,
             )
         else:
-            raise ValueError("Invalid Grafting Type!")
+            raise ValueError(f"Invalid Grafting Type {self.grafting_type}!")
 
+        # add number of parameters for grafted method
         if self.grafting_type != GraftingType.NONE:
             self._parameter_count += self.grafting.parameter_count
 
     def update_preconditioners(self, grad: Tensor) -> None:
 
-        # iterate over all dimensions
-        for k, dim in enumerate(self.dims):
-            preconditioner = self.preconditioners[k]
-            preconditioner_type = self.preconditioner_types[k]
+        assert (
+            len(self.dims)
+            == len(self.preconditioners)
+            == len(self.preconditioner_types)
+        ), f"Length of dimensions {len(self.dims)}, preconditioners {len(self.preconditioners)}, and preconditioner types {len(self.preconditioner_types)} are not equal!"
 
+        for k, (dim, preconditioner, preconditioner_type) in enumerate(
+            zip(self.dims, self.preconditioners, self.preconditioner_types)
+        ):
             if self.beta2 != 1.0:
                 preconditioner.mul_(self.beta2)
 
             # update preconditioners (diagonal case)
             if preconditioner_type == PreconditionerType.DIAGONAL:
-                preconditioner.add_(
+                diagonal_or_outer_product = (
                     torch.linalg.norm(
                         grad.transpose(0, k).contiguous().view(dim, -1),
                         dim=1,
                     ).pow(2),
-                    alpha=1 - self.beta2 if self.beta2 != 1.0 else 1.0,
                 )
 
             # update preconditioners (full-matrix case)
             else:
                 contract_idx = [*range(k)] + [*range(k + 1, self.order)]
-                outer_product = torch.tensordot(
+                diagonal_or_outer_product = torch.tensordot(
                     grad,
                     grad,
                     dims=(contract_idx, contract_idx),
                 )
-                if outer_product.dtype != self.dtype:
-                    outer_product = outer_product.to(dtype=self.dtype)
-                preconditioner.add_(
-                    outer_product,
-                    alpha=1 - self.beta2 if self.beta2 != 1.0 else 1.0,
-                )
+                if diagonal_or_outer_product.dtype != self.dtype:
+                    diagonal_or_outer_product = diagonal_or_outer_product.to(
+                        dtype=self.dtype
+                    )
+
+            preconditioner.add_(
+                diagonal_or_outer_product,
+                alpha=1 - self.beta2 if self.beta2 != 1.0 else 1.0,
+            )
 
         # update grafting method
         if self.grafting_type != GraftingType.NONE:
@@ -414,11 +420,19 @@ class ShampooPreconditioner(Preconditioner):
 
         preconditioned_grad = grad.clone()
 
-        # iterate over all dimensions
-        for k, _ in enumerate(self.dims):
-            preconditioner = self.preconditioners[k]
-            inv_preconditioner = self.inv_preconditioners[k]
-            preconditioner_type = self.preconditioner_types[k]
+        assert (
+            len(self.preconditioners)
+            == len(self.inv_preconditioners)
+            == len(self.preconditioner_types)
+        ), f"Length of preconditioners {len(self.preconditioners)}, inverse preconditioners {len(self.inv_preconditioners)}, and preconditioner types {len(self.preconditioner_types)} are not equal!"
+
+        for k, (preconditioner, inv_preconditioner, preconditioner_type) in enumerate(
+            zip(
+                self.preconditioners,
+                self.inv_preconditioners,
+                self.preconditioner_types,
+            )
+        ):
 
             # handle diagonal case while retaining dims
             if self.diagonal_threshold is not None:
@@ -477,11 +491,19 @@ class ShampooPreconditioner(Preconditioner):
         )
 
     def compute_root_inverse(self) -> None:
-        # iterate over all dimensions
-        for k in range(self.order):
-            preconditioner = self.preconditioners[k]
-            preconditioner_type = self.preconditioner_types[k]
-            preconditioner_rank = self.preconditioner_ranks[k]
+        assert (
+            len(self.preconditioners)
+            == len(self.preconditioner_types)
+            == len(self.preconditioner_ranks)
+        ), f"Length of preconditioners {len(self.preconditioners)}, preconditioner types {len(self.preconditioner_types)}, and preconditioner ranks {len(self.preconditioner_ranks)} are not equal!"
+
+        for k, (preconditioner, preconditioner_type, preconditioner_rank) in enumerate(
+            zip(
+                self.preconditioners,
+                self.preconditioner_types,
+                self.preconditioner_ranks,
+            )
+        ):
 
             # check that this is a full matrix preconditioner
             if preconditioner_type == PreconditionerType.FULL and (
@@ -546,23 +568,16 @@ class ShampooPreconditioner(Preconditioner):
                 for inv_preconditioner in self.inv_preconditioners
             ]
 
-    def _assign_preconditioners_round_robin_rank(
-        self, rank: int, world_size: int
+    def _assign_preconditioners_rank(
+        self,
+        rank: int,
+        world_size: int,
+        preconditioner_rank_increment: int = 0,
     ) -> int:
         for k in range(self.order):
             if self.preconditioner_types[k] == PreconditionerType.FULL:
                 self.preconditioner_ranks[k] = rank % world_size
-                rank += 1
-                if self.idx is not None:
-                    logger.info(
-                        f"Assigned Preconditioner {self.preconditioner_idx[k]} to rank {self.preconditioner_ranks[k]}"
-                    )
-        return rank
-
-    def _assign_preconditioners_parameter_rank(self, rank: int, world_size: int) -> int:
-        for k in range(self.order):
-            if self.preconditioner_types[k] == PreconditionerType.FULL:
-                self.preconditioner_ranks[k] = rank % world_size
+                rank += preconditioner_rank_increment
                 if self.idx is not None:
                     logger.info(
                         f"Assigned Preconditioner {self.preconditioner_idx[k]} to rank {self.preconditioner_ranks[k]}"
@@ -572,13 +587,14 @@ class ShampooPreconditioner(Preconditioner):
     def assign_preconditioners_rank(self, rank: int, world_size: int) -> int:
         if self.root_inv_strategy == RootInvStrategy.NONE:
             return -1
-        elif (
-            self.root_inv_strategy == RootInvStrategy.PARAM
-            or self.root_inv_strategy == RootInvStrategy.BLOCK
-        ):
-            return self._assign_preconditioners_parameter_rank(rank, world_size)
+        elif self.root_inv_strategy in (RootInvStrategy.PARAM, RootInvStrategy.BLOCK):
+            return self._assign_preconditioners_rank(
+                rank, world_size, preconditioner_rank_increment=0
+            )
         elif self.root_inv_strategy == RootInvStrategy.PRECOND:
-            return self._assign_preconditioners_round_robin_rank(rank, world_size)
+            return self._assign_preconditioners_rank(
+                rank, world_size, preconditioner_rank_increment=1
+            )
         else:
             raise NotImplementedError(
                 "Root inverse strategy is not implemented! Specified root inverse strategy is "
@@ -727,39 +743,28 @@ class BlockShampooPreconditioner(Preconditioner):
             for preconditioner in self.split_preconditioners:
                 preconditioner.to(device=device)
 
-    def _assign_preconditioners_round_robin_rank(
-        self, rank: int, world_size: int
+    def _assign_preconditioners_rank(
+        self,
+        rank: int,
+        world_size: int,
+        block_rank_increment: int = 0,
     ) -> int:
         for preconditioner in self.split_preconditioners:
-            rank = preconditioner._assign_preconditioners_round_robin_rank(
-                rank, world_size
-            )
-        return rank
-
-    def _assign_preconditioners_block_rank(self, rank: int, world_size: int) -> int:
-        for preconditioner in self.split_preconditioners:
-            rank = preconditioner._assign_preconditioners_parameter_rank(
-                rank, world_size
-            )
-            rank += 1
-        return rank
-
-    def _assign_preconditioners_parameter_rank(self, rank: int, world_size: int) -> int:
-        for preconditioner in self.split_preconditioners:
-            rank = preconditioner._assign_preconditioners_parameter_rank(
-                rank, world_size
-            )
+            rank = preconditioner.assign_preconditioners_rank(rank, world_size)
+            rank += block_rank_increment
         return rank
 
     def assign_preconditioners_rank(self, rank: int, world_size: int) -> int:
         if self.root_inv_strategy == RootInvStrategy.NONE:
             return -1
-        elif self.root_inv_strategy == RootInvStrategy.PARAM:
-            return self._assign_preconditioners_parameter_rank(rank, world_size)
+        elif self.root_inv_strategy in (RootInvStrategy.PARAM, RootInvStrategy.PRECOND):
+            return self._assign_preconditioners_rank(
+                rank, world_size, block_rank_increment=0
+            )
         elif self.root_inv_strategy == RootInvStrategy.BLOCK:
-            return self._assign_preconditioners_block_rank(rank, world_size)
-        elif self.root_inv_strategy == RootInvStrategy.PRECOND:
-            return self._assign_preconditioners_round_robin_rank(rank, world_size)
+            return self._assign_preconditioners_rank(
+                rank, world_size, block_rank_increment=1
+            )
         else:
             raise NotImplementedError(
                 "Root inverse strategy is not implemented! Specified root inverse strategy is "
