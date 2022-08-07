@@ -111,6 +111,7 @@ def _matrix_root_eigen(
 
     # check if matrix is scalar
     if len(A.shape) == 0 or (len(A.shape) == 1 and A.shape[0] == 1):
+        # pyre-fixme[58]: `**` is not supported for operand types `Tensor` and `float`.
         return A**alpha, A, torch.tensor(1.0)
 
     # check matrix shape
@@ -186,6 +187,7 @@ def _matrix_inverse_root_newton(
     z = (root + 1) / (2 * A_nrm)
     X = z ** (-alpha) * identity
     M = z * A
+    # pyre-fixme[6]: For 1st param expected `Tensor` but got `float`.
     error = torch.dist(M, identity, p=torch.inf)
 
     # main for loop
@@ -197,9 +199,10 @@ def _matrix_inverse_root_newton(
         error = torch.dist(M, identity, p=torch.inf)
 
     # determine convergence flag
-    if error <= tolerance:
-        termination_flag = NewtonConvergenceFlag.CONVERGED
-    else:
-        termination_flag = NewtonConvergenceFlag.REACHED_MAX_ITERS
+    termination_flag = (
+        NewtonConvergenceFlag.CONVERGED
+        if error <= tolerance
+        else NewtonConvergenceFlag.REACHED_MAX_ITERS
+    )
 
     return X, M, termination_flag, iteration, error
