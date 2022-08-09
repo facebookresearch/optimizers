@@ -367,8 +367,7 @@ class ShampooPreconditioner(Preconditioner):
             raise ValueError(f"Invalid Grafting Type {self._grafting_type}!")
 
         # Counts parameters for grafted method.
-        if self._grafting_type != GraftingType.NONE:
-            self._parameter_count += self.grafting.parameter_count
+        self._parameter_count += getattr(self.grafting, "parameter_count", 0)
 
     def update_preconditioners(self, grad: Tensor) -> None:
         assert (
@@ -385,12 +384,10 @@ class ShampooPreconditioner(Preconditioner):
 
             # Update diagonal Shampoo preconditioner.
             if preconditioner_type == PreconditionerType.DIAGONAL:
-                diagonal_or_outer_product = (
-                    torch.linalg.norm(
+                diagonal_or_outer_product = torch.linalg.norm(
                         grad.transpose(0, k).contiguous().view(dim, -1),
                         dim=1,
-                    ).pow(2),
-                )
+                    ).pow(2)
 
             # Update full Shampoo preconditioner.
             else:

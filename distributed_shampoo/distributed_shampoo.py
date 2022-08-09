@@ -155,7 +155,7 @@ class DistributedShampoo(Optimizer):
         lr: float = 1e-2,
         betas: Tuple[float, float] = (0.9, 1.0),
         epsilon: float = 1e-12,
-        momentum: float = 0.,
+        momentum: float = 0.0,
         weight_decay: float = 0.0,
         max_preconditioner_dim: int = 1024,
         precondition_frequency: int = 100,
@@ -219,31 +219,51 @@ class DistributedShampoo(Optimizer):
             else 0
         )
 
-        self._initialize_preconditioners()
+        self._initialize_preconditioners_and_steps()
         self._assign_preconditioners_to_ranks()
 
     @torch.no_grad()
-    def _initialize_preconditioners(self):
+    def _initialize_preconditioners_and_steps(self):
         """Initialize Shampoo preconditioners and inverse preconditioners."""
 
         for group in self.param_groups:
             for idx, p in enumerate(group[PARAMS]):
                 state = self.state[p]
                 dims = torch.tensor(p.shape)
+                state[STEP] = 0
+
+                # Blocks the tensor and applies Shampoo to each block, with block
+                # size equal to the max_preconditioner_dim; see feature above.
+                if self._large_dim_method == LargeDimMethod.BLOCKING:
+                    state[PRECONDITIONERS] = BlockShampooPreconditioner(
+                        p,
+                        beta2=group[BETAS][1],
+                        epsilon=group[EPSILON],
+                        use_bias_correction=self._use_bias_correction,
+                        block_size=self._max_preconditioner_dim,
+                        dtype=self._preconditioner_dtype,
+                        root_inv_strategy=self._root_inv_strategy,
+                        idx=idx,
+                        use_merge_dims=self._use_merge_dims,
+                        start_preconditioning_step=self._start_preconditioning_step,
+                        grafting_type=self._grafting_type,
+                        grafting_beta2=self._grafting_beta2,
+                        grafting_epsilon=self._grafting_epsilon,
+                    )
 
                 # Uses Adagrad preconditioner if any dimension is larger than
                 # the max_preconditioner_dim; see features above.
-                if self._large_dim_method == LargeDimMethod.ADAGRAD:
-                    if torch.any(dims > self._max_preconditioner_dim):
-                        state[PRECONDITIONERS] = AdagradPreconditioner(
+                elif self._large_dim_method == LargeDimMethod.ADAGRAD:
+                    state[PRECONDITIONERS] = (
+                        AdagradPreconditioner(
                             p,
                             beta2=group[BETAS][1],
                             epsilon=group[EPSILON],
                             use_bias_correction=self._use_bias_correction,
                             idx=idx,
                         )
-                    else:
-                        state[PRECONDITIONERS] = ShampooPreconditioner(
+                        if torch.any(dims > self._max_preconditioner_dim)
+                        else ShampooPreconditioner(
                             p,
                             beta2=group[BETAS][1],
                             epsilon=group[EPSILON],
@@ -257,6 +277,7 @@ class DistributedShampoo(Optimizer):
                             grafting_beta2=self._grafting_beta2,
                             grafting_epsilon=self._grafting_epsilon,
                         )
+                    )
 
                 # Uses diagonal Shampoo preconditioner in place of full Shampoo
                 # preconditioner if dimension is larger than max_preconditioner_dim; see feature
@@ -270,25 +291,6 @@ class DistributedShampoo(Optimizer):
                         diagonal_threshold=self._max_preconditioner_dim,
                         dtype=self._preconditioner_dtype,
                         idx=idx,
-                        start_preconditioning_step=self._start_preconditioning_step,
-                        grafting_type=self._grafting_type,
-                        grafting_beta2=self._grafting_beta2,
-                        grafting_epsilon=self._grafting_epsilon,
-                    )
-
-                # Blocks the tensor and applies Shampoo to each block, with block
-                # size equal to the max_preconditioner_dim; see feature above.
-                elif self._large_dim_method == LargeDimMethod.BLOCKING:
-                    state[PRECONDITIONERS] = BlockShampooPreconditioner(
-                        p,
-                        beta2=group[BETAS][1],
-                        epsilon=group[EPSILON],
-                        use_bias_correction=self._use_bias_correction,
-                        block_size=self._max_preconditioner_dim,
-                        dtype=self._preconditioner_dtype,
-                        root_inv_strategy=self._root_inv_strategy,
-                        idx=idx,
-                        use_merge_dims=self._use_merge_dims,
                         start_preconditioning_step=self._start_preconditioning_step,
                         grafting_type=self._grafting_type,
                         grafting_beta2=self._grafting_beta2,
@@ -410,10 +412,8 @@ class DistributedShampoo(Optimizer):
     def _iterate_step(self):
         for group in self.param_groups:
             for p in group[PARAMS]:
-                state = self.state[p]
-                state.setdefault(STEP, 0)
-                state[STEP] += 1
-        return state[STEP]
+                self.state[p][STEP] += 1
+        return self.state[p][STEP]
 
     @torch.no_grad()
     def step(self, closure=None):
@@ -434,7 +434,10 @@ class DistributedShampoo(Optimizer):
 
         # Computes root inverse of all preconditioners every self._precondition_frequency
         # after the self._start_preconditiong_step iteration.
-        if iteration % self._precondition_frequency == 0 and iteration >= self._start_preconditioning_step:
+        if (
+            iteration % self._precondition_frequency == 0
+            and iteration >= self._start_preconditioning_step
+        ):
             self._compute_root_inverse()
             if self._root_inv_strategy != RootInvStrategy.NONE:
                 self._broadcast_inv_preconditioners()
@@ -442,7 +445,7 @@ class DistributedShampoo(Optimizer):
         # Loops over all parameter groups and parameters to perform update.
         for group in self.param_groups:
             beta1, _ = group[BETAS]
-            momentum = group[MOMENTUM]
+            momentum_param = group[MOMENTUM]
             weight_decay = group[WEIGHT_DECAY]
             lr = group[LR]
 
@@ -471,20 +474,18 @@ class DistributedShampoo(Optimizer):
 
                         # Compute exponential moving average of the gradient (with
                         # potential bias correction).
-                        buf = state.setdefault(
+                        filtered_grad = state.setdefault(
                             EXP_AVG,
-                            torch.zeros_like(
-                                grad, memory_format=torch.preserve_format
-                            ),
+                            torch.zeros_like(grad, memory_format=torch.preserve_format),
                         )
-                        buf.mul_(beta1).add_(grad, alpha=1 - beta1)
-                        grad.copy_(buf / bias_correction1)
+                        filtered_grad.mul_(beta1).add_(grad, alpha=1 - beta1)
+                        grad.copy_(filtered_grad / bias_correction1)
 
                     # Compute preconditioned gradient and update parameters.
                     #
                     # If we are not applying momentum, uses the precondition_and_update
                     # function for improved performance.
-                    if momentum == 0.0:
+                    if momentum_param == 0.0:
                         # Adds decoupled weight decay term.
                         if self._use_decoupled_weight_decay and weight_decay != 0:
                             p.mul_(1 - lr * weight_decay)
@@ -503,21 +504,17 @@ class DistributedShampoo(Optimizer):
 
                         # Generates momentum term and applies momentum or stochastic
                         # primal iterate averaging.
-                        buf = state.setdefault(
+                        momentum_direction = state.setdefault(
                             MOMENTUM,
-                            torch.zeros_like(
-                                grad, memory_format=torch.preserve_format
-                            ),
+                            torch.zeros_like(grad, memory_format=torch.preserve_format),
                         )
-                        buf.mul_(momentum).add_(search_direction)
+                        momentum_direction.mul_(momentum_param).add_(search_direction)
 
                         # Incorporates Nesterov momentum.
                         if self._use_nesterov:
-                            search_direction.add_(
-                                buf, alpha=momentum
-                            )
+                            search_direction.add_(momentum_direction, alpha=momentum_param)
                         else:
-                            search_direction = momentum
+                            search_direction = momentum_direction
 
                         # Performs update by taking step along search direction.
                         p.add_(search_direction, alpha=-lr)

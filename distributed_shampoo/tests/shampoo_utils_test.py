@@ -304,14 +304,14 @@ class ShampooPreconditionerTest(unittest.TestCase):
         with torch.no_grad():
             # pyre-fixme[6]: For 2nd param expected `Tensor` but got `Optional[Tensor]`.
             shampoo.precondition_and_update(param, grad, 1.0)
-        self.assertTrue(torch.all(torch.isclose(param, torch.zeros((2, 3)))))
+        self.assertTrue(torch.allclose(param, torch.zeros((2, 3))))
 
     def test_compute_norm(self) -> None:
         param, loss, grad, shampoo = self._setup_test(beta2=1.0, epsilon=1.0, use_bias_correction=False, diagonal_threshold=2)
         shampoo.compute_root_inverse()
         # pyre-fixme[6]: For 1st param expected `Tensor` but got `Optional[Tensor]`.
         norm = shampoo.compute_norm(grad)
-        self.assertEqual(norm, torch.sqrt(torch.tensor(55.0)))
+        self.assertTrue(torch.isclose(norm, torch.sqrt(torch.tensor(55.0))))
 
 
 if __name__ == "__main__":

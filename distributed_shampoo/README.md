@@ -15,7 +15,7 @@ Key distinctives of this implementation include:
 - Offers different options to handle large-dimensional tensors, including:
     - Diagonalizing the Shampoo preconditioners.
     - Using standard diagonal Adagrad.
-    - Blocking the tensor and applying Shampoo to each block. (Needs to be improved.)
+    - Blocking the tensor and applying Shampoo to each block.
 - Offers multiple approaches for computing the root inverse, including:
     - Using symmetric eigendecomposition (used by default).
     - Coupled inverse Newton iteration [4].
@@ -36,9 +36,12 @@ optimizer = shampoo.Shampoo(
     lr=0.001,
     betas=(0.9, 0.999),
     epsilon=1e-12,
-    use_bias_correction=True,
-    adam_w_mode=True,
     weight_decay=0.01,
+    max_preconditioner_dim=1024,
+    precondition_frequency=100,
+    start_preconditioning_step=500,
+    use_bias_correction=True,
+    use_decoupled_weight_decay=True,
     grafting_type=GraftingType.ADAM,
     grafting_epsilon=1e-08,
     grafting_beta2=0.999,
