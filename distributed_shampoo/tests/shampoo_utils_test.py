@@ -240,7 +240,7 @@ class ShampooPreconditionerTest(unittest.TestCase):
         for i, (preconditioner, preconditioner_sol) in enumerate(zip(shampoo._preconditioners, preconditioner_sols)):
             with self.subTest(f"Test preconditioner {i}"):
                 self.assertTrue(
-                    torch.allclose(preconditioner, preconditioner_sol if beta2 == 1.0 else (1 - beta2) * preconditioner_sol)
+                    torch.allclose(preconditioner.factor_matrix, preconditioner_sol if beta2 == 1.0 else (1 - beta2) * preconditioner_sol)
                 )
         with self.subTest("Test bias correction"):
             self.assertTrue(

@@ -19,7 +19,6 @@ import torch.distributed as dist
 from shampoo_utils import (
     AdagradPreconditioner,
     BlockShampooPreconditioner,
-    Grafting,
     GraftingType,
     LargeDimMethod,
     Preconditioner,
@@ -49,6 +48,8 @@ class DistributedShampoo(Optimizer):
     Implemented by:
         Hao-Jun Michael Shi (Meta Platforms, Inc.)
         Tsung-Hsien Lee (Cruise)
+
+    with support from: Rohan Anil (Google), Vineet Gupta (Google), Dheevatsa Mudigere (Meta), and Mike Rabbat (Meta).
 
     Partly based on the work in:
     - https://arxiv.org/pdf/1802.09568.pdf
@@ -160,7 +161,7 @@ class DistributedShampoo(Optimizer):
         max_preconditioner_dim: int = 1024,
         precondition_frequency: int = 100,
         start_preconditioning_step: int = 1000,
-        use_nesterov: bool = True,
+        use_nesterov: bool = False,
         use_bias_correction: bool = True,
         use_decoupled_weight_decay: bool = True,
         preconditioner_dtype: torch.dtype = torch.float,
@@ -177,12 +178,20 @@ class DistributedShampoo(Optimizer):
             raise ValueError(f"Invalid beta parameter at index 0: {betas[0]}")
         if not 0.0 < betas[1] <= 1.0:
             raise ValueError(f"Invalid beta parameter at index 1: {betas[1]}")
-        if not 0.0 < grafting_beta2 <= 1.0:
-            raise ValueError(f"Invalid grafting beta parameter: {grafting_beta2}")
-        if not weight_decay >= 0.0:
-            raise ValueError(f"Invalid weight_decay value: {weight_decay}")
         if not epsilon > 0.0:
             raise ValueError(f"Invalid epsilon value: {epsilon}")
+        if not 0.0 <= momentum < 1.0:
+            raise ValueError(f"Invalid momentum parameter: {momentum}")
+        if not weight_decay >= 0.0:
+            raise ValueError(f"Invalid weight_decay value: {weight_decay}")
+        if not max_preconditioner_dim >= 1:
+            raise ValueError(f"Invalid max preconditioner dimension: {max_preconditioner_dim}")
+        if not precondition_frequency >= 1:
+            raise ValueError(f"Invalid precondition frequency: {precondition_frequency}")
+        if not start_preconditioning_step >= 0:
+            raise ValueError(f"Invalid start preconditioning step: {start_preconditioning_step}")
+        if not 0.0 < grafting_beta2 <= 1.0:
+            raise ValueError(f"Invalid grafting beta parameter: {grafting_beta2}")
         if not grafting_epsilon > 0.0:
             raise ValueError(f"Invalid epsilon value: {grafting_epsilon}")
 
@@ -218,6 +227,9 @@ class DistributedShampoo(Optimizer):
             if self._root_inv_strategy != RootInvStrategy.NONE
             else 0
         )
+
+        if self._use_nesterov and momentum == 0.:
+            logger.warning("Nesterov flag is enabled but momentum parameter is zero! Continuing without using momentum or Nesterov acceleration...")
 
         self._initialize_preconditioners_and_steps()
         self._assign_preconditioners_to_ranks()
@@ -573,9 +585,6 @@ class DistributedShampoo(Optimizer):
             # are casted correctly. This enables us to use generic map_locations when
             # checkpointing.
             elif isinstance(value, Preconditioner):
-                value.to(param.device)
-                return value
-            elif isinstance(value, Grafting):
                 value.to(param.device)
                 return value
             else:
