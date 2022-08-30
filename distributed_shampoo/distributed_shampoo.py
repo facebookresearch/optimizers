@@ -224,15 +224,16 @@ class DistributedShampoo(Optimizer):
         self._use_nesterov = use_nesterov
         self._world_size = (
             dist.get_world_size()
-            if self._root_inv_strategy != RootInvStrategy.NONE
-            else 0
+            if self._root_inv_strategy != RootInvStrategy.NONE and dist.is_initialized()
+            else 1
         )
 
         if self._use_nesterov and momentum == 0.:
             logger.warning("Nesterov flag is enabled but momentum parameter is zero! Continuing without using momentum or Nesterov acceleration...")
 
         self._initialize_preconditioners_and_steps()
-        self._assign_preconditioners_to_ranks()
+        if self._world_size > 1:
+            self._assign_preconditioners_to_ranks()
 
     @torch.no_grad()
     def _initialize_preconditioners_and_steps(self):
@@ -451,7 +452,7 @@ class DistributedShampoo(Optimizer):
             and iteration >= self._start_preconditioning_step
         ):
             self._compute_root_inverse()
-            if self._root_inv_strategy != RootInvStrategy.NONE:
+            if self._root_inv_strategy != RootInvStrategy.NONE and dist.is_initialized():
                 self._broadcast_inv_preconditioners()
 
         # Loops over all parameter groups and parameters to perform update.
