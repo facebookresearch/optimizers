@@ -470,35 +470,13 @@ class DistributedShampoo(Optimizer):
     def _broadcast_inv_preconditioners(self):
         """Broadcasts inverse preconditioners."""
         for group in self.param_groups:
-            for i, p in enumerate(group[PARAMS]):
+            for p in group[PARAMS]:
                 state = self.state[p]
                 if PRECONDITIONERS in state:
-                    if i == 0:
-                        print(
-                            "PRECONDITIONER (BEFORE BROADCAST):",
-                            state[PRECONDITIONERS]
-                            ._preconditioners[0]
-                            .factor_matrix.view(-1)[0],
-                        )
-                        print(
-                            "INV PRECONDITIONER (BEFORE BROADCAST):",
-                            state[PRECONDITIONERS]
-                            ._preconditioners[0]
-                            .inv_factor_matrix.view(-1)[0],
-                        )
-
                     my_rank = dist.get_rank() if dist.is_initialized() else -1
                     my_group = self._root_inv_dist_groups[my_rank]
 
                     state[PRECONDITIONERS].broadcast(group=my_group)
-
-                    if i == 0:
-                        print(
-                            "INV PRECONDITIONER (AFTER BROADCAST):",
-                            state[PRECONDITIONERS]
-                            ._preconditioners[0]
-                            .inv_factor_matrix.view(-1)[0],
-                        )
 
     @torch.no_grad()
     def _update_preconditioners(self):
