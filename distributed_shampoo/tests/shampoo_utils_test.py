@@ -268,7 +268,7 @@ class ShampooPreconditionerTest(unittest.TestCase):
 
     def test_precondition_with_root_inverse(self) -> None:
         param, loss, grad, shampoo = self._setup_test(beta2=1.0, epsilon=1.0, use_bias_correction=False, start_preconditioning_step=-1)
-        shampoo.compute_root_inverse()
+        shampoo.compute_root_inverse(rank=-1, group=None)
         # pyre-fixme[6]: For 1st param expected `Tensor` but got `Optional[Tensor]`.
         preconditioned_grad = shampoo.precondition(grad)
         # pyre-fixme[6]: For 2nd param expected `Tensor` but got `Optional[Tensor]`.
@@ -276,7 +276,7 @@ class ShampooPreconditionerTest(unittest.TestCase):
 
     def test_precondition_with_diagonal_threshold(self) -> None:
         param, loss, grad, shampoo = self._setup_test(beta2=1.0, epsilon=1.0, use_bias_correction=False, diagonal_threshold=2)
-        shampoo.compute_root_inverse()
+        shampoo.compute_root_inverse(rank=-1, group=None)
         # pyre-fixme[6]: For 1st param expected `Tensor` but got `Optional[Tensor]`.
         preconditioned_grad = shampoo.precondition(grad)
         # pyre-fixme[6]: For 2nd param expected `Tensor` but got `Optional[Tensor]`.
@@ -284,7 +284,7 @@ class ShampooPreconditionerTest(unittest.TestCase):
 
     def test_precondition_with_grafting(self) -> None:
         param, loss, grad, shampoo = self._setup_test(beta2=1.0, epsilon=1.0, use_bias_correction=False, grafting_type=GraftingType.ADAGRAD, grafting_epsilon=1.0)
-        shampoo.compute_root_inverse()
+        shampoo.compute_root_inverse(rank=-1, group=None)
         # pyre-fixme[6]: For 1st param expected `Tensor` but got `Optional[Tensor]`.
         preconditioned_grad = shampoo.precondition(grad)
         # pyre-fixme[6]: For 2nd param expected `Tensor` but got `Optional[Tensor]`.
@@ -292,7 +292,7 @@ class ShampooPreconditionerTest(unittest.TestCase):
 
     def test_precondition_and_update(self) -> None:
         param, loss, grad, shampoo = self._setup_test(beta2=1.0, epsilon=1.0, use_bias_correction=False, start_preconditioning_step=-1)
-        shampoo.compute_root_inverse()
+        shampoo.compute_root_inverse(rank=-1, group=None)
         with torch.no_grad():
             # pyre-fixme[6]: For 2nd param expected `Tensor` but got `Optional[Tensor]`.
             shampoo.precondition_and_update(param, grad, 1.0)
@@ -300,7 +300,7 @@ class ShampooPreconditionerTest(unittest.TestCase):
 
     def test_precondition_and_update_with_grafting(self) -> None:
         param, loss, grad, shampoo = self._setup_test(beta2=1.0, epsilon=1.0, use_bias_correction=False, grafting_type=GraftingType.ADAGRAD, grafting_epsilon=1.0)
-        shampoo.compute_root_inverse()
+        shampoo.compute_root_inverse(rank=-1, group=None)
         with torch.no_grad():
             # pyre-fixme[6]: For 2nd param expected `Tensor` but got `Optional[Tensor]`.
             shampoo.precondition_and_update(param, grad, 1.0)
@@ -308,7 +308,7 @@ class ShampooPreconditionerTest(unittest.TestCase):
 
     def test_compute_norm(self) -> None:
         param, loss, grad, shampoo = self._setup_test(beta2=1.0, epsilon=1.0, use_bias_correction=False, diagonal_threshold=2)
-        shampoo.compute_root_inverse()
+        shampoo.compute_root_inverse(rank=-1, group=None)
         # pyre-fixme[6]: For 1st param expected `Tensor` but got `Optional[Tensor]`.
         norm = shampoo.compute_norm(grad)
         self.assertTrue(torch.isclose(norm, torch.sqrt(torch.tensor(55.0))))
