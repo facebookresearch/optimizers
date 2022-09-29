@@ -14,11 +14,16 @@ from typing import cast
 
 import torch
 import torch.nn as nn
-from ..shampoo_model_utils import CombinedLinear
+
+try:
+    from ai_codesign.optimizers.distributed_shampoo.shampoo_model_utils import (
+        CombinedLinear,
+    )
+except ImportError:
+    from ..shampoo_model_utils import CombinedLinear
 
 
 class CombinedLinearTest(unittest.TestCase):
-
     def _init_weights(self, m, seed) -> None:
         torch.random.manual_seed(seed)
         if type(m) == nn.Linear:
@@ -51,8 +56,12 @@ class CombinedLinearTest(unittest.TestCase):
 
         # confirm weights are initialized equally
         if bias:
-            assert torch.equal(original_linear.weight, combined_linear.combined_weight[:, :-1])
-            assert torch.equal(original_linear.bias, combined_linear.combined_weight[:, -1])
+            assert torch.equal(
+                original_linear.weight, combined_linear.combined_weight[:, :-1]
+            )
+            assert torch.equal(
+                original_linear.bias, combined_linear.combined_weight[:, -1]
+            )
         else:
             assert torch.equal(original_linear.weight, combined_linear.combined_weight)
 
@@ -70,39 +79,78 @@ class CombinedLinearTest(unittest.TestCase):
 
         with self.subTest("Test backward"):
             if bias:
-                self.assertTrue(torch.equal(cast(torch.Tensor, original_linear.weight.grad), cast(torch.Tensor, combined_linear.combined_weight.grad)[:, :-1]))
-                self.assertTrue(torch.equal(cast(torch.Tensor, original_linear.bias.grad), cast(torch.Tensor, combined_linear.combined_weight.grad)[:, -1]))
+                self.assertTrue(
+                    torch.equal(
+                        cast(torch.Tensor, original_linear.weight.grad),
+                        cast(torch.Tensor, combined_linear.combined_weight.grad)[
+                            :, :-1
+                        ],
+                    )
+                )
+                self.assertTrue(
+                    torch.equal(
+                        cast(torch.Tensor, original_linear.bias.grad),
+                        cast(torch.Tensor, combined_linear.combined_weight.grad)[:, -1],
+                    )
+                )
             else:
-                self.assertTrue(torch.equal(cast(torch.Tensor, original_linear.weight.grad), cast(torch.Tensor, combined_linear.combined_weight.grad)))
+                self.assertTrue(
+                    torch.equal(
+                        cast(torch.Tensor, original_linear.weight.grad),
+                        cast(torch.Tensor, combined_linear.combined_weight.grad),
+                    )
+                )
 
     def test_linear_forward_backward(self):
         dims = [2, 10]
         biases = [False, True]
         seeds = [920, 2022]
 
-        for in_features, out_features, bias, seed in itertools.product(dims, dims, biases, seeds):
-            with self.subTest(f"Test with in_features = {in_features}, out_features = {out_features}, bias = {bias}, seed = {seed}"):
+        for in_features, out_features, bias, seed in itertools.product(
+            dims, dims, biases, seeds
+        ):
+            with self.subTest(
+                f"Test with in_features = {in_features}, out_features = {out_features}, bias = {bias}, seed = {seed}"
+            ):
                 torch.random.manual_seed(seed)
                 feature_vector = torch.rand(in_features)
-                self._test_linear_forward_backward(feature_vector, in_features, out_features, bias, seed)
+                self._test_linear_forward_backward(
+                    feature_vector, in_features, out_features, bias, seed
+                )
 
     def test_initialization(self):
         in_features = 10
         out_features = 20
-        bias = [False, True]
+        biases = [False, True]
         seeds = [920, 2022]
 
-        for seed in seeds:
-            with self.subTest(f"Test with in_features = {in_features}, out_features = {out_features}, bias = {bias}, seed = {seed}"):
+        for bias, seed in itertools.product(biases, seeds):
+            with self.subTest(
+                f"Test with in_features = {in_features}, out_features = {out_features}, bias = {bias}, seed = {seed}"
+            ):
                 # generate linear layers and initialize
                 torch.random.manual_seed(seed)
                 original_linear = nn.Linear(in_features, out_features, bias=bias)
                 torch.random.manual_seed(seed)
                 combined_linear = CombinedLinear(in_features, out_features, bias=bias)
 
-        # confirm weights are initialized equally
-        if bias:
-            self.assertTrue(torch.equal(original_linear.weight, combined_linear.combined_weight[:, :-1]))
-            self.assertTrue(torch.equal(original_linear.bias, combined_linear.combined_weight[:, -1]))
-        else:
-            self.assertTrue(torch.equal(original_linear.weight, combined_linear.combined_weight))
+                # confirm weights are initialized equally
+                if bias:
+                    self.assertTrue(
+                        torch.equal(
+                            original_linear.weight, combined_linear.combined_weight[:, :-1]
+                        )
+                    )
+                    self.assertTrue(
+                        torch.equal(
+                            original_linear.bias, combined_linear.combined_weight[:, -1]
+                        )
+                    )
+                else:
+                    self.assertTrue(
+                        torch.equal(original_linear.weight, combined_linear.combined_weight)
+                    )
+
+
+if __name__ == "__main__":
+    unittest.main()

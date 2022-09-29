@@ -13,7 +13,15 @@ import unittest
 import numpy as np
 
 import torch
-from ..matrix_functions import _matrix_inverse_root_newton, _matrix_root_eigen
+
+try:
+    from ai_codesign.optimizers.distributed_shampoo.matrix_functions import (
+        _matrix_inverse_root_newton,
+        _matrix_root_eigen,
+    )
+
+except ImportError:
+    from ..matrix_functions import _matrix_inverse_root_newton, _matrix_root_eigen
 
 
 class EigenRootTest(unittest.TestCase):

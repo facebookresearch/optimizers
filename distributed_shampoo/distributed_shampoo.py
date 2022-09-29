@@ -17,17 +17,29 @@ from typing import Dict, List, Optional, Tuple
 
 import torch
 import torch.distributed as dist
-
-from shampoo_utils import (
-    AdagradPreconditioner,
-    BlockShampooPreconditioner,
-    GraftingType,
-    LargeDimMethod,
-    Preconditioner,
-    RootInvStrategy,
-    ShampooPreconditioner,
-)
 from torch.optim.optimizer import Optimizer
+
+try:
+    from ai_codesign.optimizers.distributed_shampoo.shampoo_utils import (
+        AdagradPreconditioner,
+        BlockShampooPreconditioner,
+        GraftingType,
+        LargeDimMethod,
+        Preconditioner,
+        RootInvStrategy,
+        ShampooPreconditioner,
+    )
+
+except ImportError:
+    from shampoo_utils import (
+        AdagradPreconditioner,
+        BlockShampooPreconditioner,
+        GraftingType,
+        LargeDimMethod,
+        Preconditioner,
+        RootInvStrategy,
+        ShampooPreconditioner,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -145,10 +157,10 @@ class DistributedShampoo(Optimizer):
         use_bias_correction (bool): flag for using bias correction (Default: True)
         use_decoupled_weight_decay (bool): Flag for using AdamW-style decoupled weight decay (Default: True)
         weight_decay (float): weight decay (L2 penalty) (Default: 0)
+        max_preconditioner_dim (int): maximum preconditioner dimension (Default: 1024)
         precondition_frequency (int): frequency for computing root inverse preconditioner (Default: 1)
         start_preconditioning_step (int): iteration to start computing inverse preconditioner. If -1, uses
             the same value as precondition_frequency. (Default: -1)
-        max_preconditioner_dim (int): maximum preconditioner dimension (Default: 1024)
         preconditioner_dtype (torch.dtype): data type for preconditioner (Default: torch.float)
         large_dim_method (LargeDimMethod): method for handling large scale tensors. (Default: LargeDimMethod.BLOCKING)
         root_inv_strategy (RootInvStrategy): distributes root inverse computation across multiple GPU workers using
@@ -258,14 +270,11 @@ class DistributedShampoo(Optimizer):
             self._start_preconditioning_step = start_preconditioning_step
 
         # Initialize comms-related fields.
-        self._world_size = (
-            dist.get_world_size()
-            if dist.is_initialized()
-            else 1
-        )
+        self._world_size = dist.get_world_size() if dist.is_initialized() else 1
         # Currently supports only homogeneous architecture.
         self._number_of_gpus_per_node = (
-            [torch.cuda.device_count()] * (self._world_size // torch.cuda.device_count())
+            [torch.cuda.device_count()]
+            * (self._world_size // torch.cuda.device_count())
             if torch.cuda.is_available()
             and self._root_inv_strategy == RootInvStrategy.INTRA_NODE_ONLY
             else [self._world_size]
@@ -287,14 +296,20 @@ class DistributedShampoo(Optimizer):
         self, number_of_gpus_per_node: List[int]
     ) -> Optional[Dict[int, Optional[dist.ProcessGroup]]]:
         """Creates different distributed groups for GPUs within each node. Used for distributing root inverse computation."""
-        assert min(number_of_gpus_per_node) > 0, f"Number of GPUs per node {number_of_gpus_per_node} must be greater than 0 on all nodes!"
+        assert (
+            min(number_of_gpus_per_node) > 0
+        ), f"Number of GPUs per node {number_of_gpus_per_node} must be greater than 0 on all nodes!"
 
         if self._root_inv_strategy == RootInvStrategy.CROSS_NODE:
-            logger.info("Using default (global) distributed process group for distributing root inverse computation with cross-node communication...")
+            logger.info(
+                "Using default (global) distributed process group for distributing root inverse computation with cross-node communication..."
+            )
             root_inv_dist_groups = {rank: None for rank in range(self._world_size)}
 
         elif self._root_inv_strategy == RootInvStrategy.INTRA_NODE_ONLY:
-            logger.info("Setting up distributed process groups for each node for distributing root inverse computation with intra-node-only communication...")
+            logger.info(
+                "Setting up distributed process groups for each node for distributing root inverse computation with intra-node-only communication..."
+            )
             prev_rank = 0
             root_inv_dist_groups = {}
             for i, number_of_gpus_current_node in enumerate(number_of_gpus_per_node):
@@ -422,9 +437,12 @@ class DistributedShampoo(Optimizer):
             #   If the current rank is 8, then the node index is 1 and the number of GPUs on the current node is 12.
             #   If the current rank is 7, then the node index is 0 and the number of GPUs on the current node is 8.
             my_rank = dist.get_rank()
-            logger.info(f"GLOBAL RANK: {my_rank}")
-            assert 0 <= my_rank < sum(self._number_of_gpus_per_node), f"Rank is not within the range {self._world_size}"
-            node_index = bisect.bisect_right(list(itertools.accumulate(self._number_of_gpus_per_node)), my_rank)
+            assert (
+                0 <= my_rank < sum(self._number_of_gpus_per_node)
+            ), f"Rank is not within the range {self._world_size}"
+            node_index = bisect.bisect_right(
+                list(itertools.accumulate(self._number_of_gpus_per_node)), my_rank
+            )
             number_of_gpus_current_node = self._number_of_gpus_per_node[node_index]
 
             preconditioner_count = 0
@@ -435,7 +453,9 @@ class DistributedShampoo(Optimizer):
                         state[PRECONDITIONERS],
                         (ShampooPreconditioner, BlockShampooPreconditioner),
                     ):
-                        preconditioner_count = state[PRECONDITIONERS].assign_preconditioners_rank(
+                        preconditioner_count = state[
+                            PRECONDITIONERS
+                        ].assign_preconditioners_rank(
                             preconditioner_count, number_of_gpus_current_node
                         )
         else:
