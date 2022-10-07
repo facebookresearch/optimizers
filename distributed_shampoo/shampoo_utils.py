@@ -17,37 +17,41 @@ from typing import List, Optional, Union
 
 import torch
 import torch.distributed as dist
+
+from distributed_shampoo.matrix_functions import matrix_inverse_root
 from torch import Tensor
 from torch.distributed.distributed_c10d import GroupMember
 
-try:
-    from ai_codesign.optimizers.distributed_shampoo.matrix_functions import (
-        matrix_inverse_root,
+# For backward compatibility, since get_group_rank / get_global_rank
+# are not yet officially released in PyTorch.
+if not hasattr(dist, "get_group_rank"):
+    from torch.distributed.distributed_c10d import _get_group_rank
+
+    dist.get_group_rank = (
+        lambda group, global_rank: global_rank
+        if group is GroupMember.WORLD
+        else _get_group_rank(group, global_rank)
     )
-except ImportError:
-    from matrix_functions import matrix_inverse_root
+
+if not hasattr(dist, "get_global_rank"):
+    from torch.distributed.distributed_c10d import _get_global_rank
+
+    dist.get_global_rank = (
+        lambda group, group_rank: group_rank
+        if group is GroupMember.WORLD
+        else _get_global_rank(group, group_rank)
+    )
+
 
 logger = logging.getLogger(__name__)
 
 ###### ENUM CLASSES ######
-class ArgTypeMixin(enum.Enum):
-    @classmethod
-    def argtype(cls, s: str) -> enum.Enum:
-        try:
-            return cls[s]
-        except KeyError:
-            raise ValueError(f"{s!r} is not a valid {cls.__name__}")
-
-    def __str__(self):
-        return self.name
-
-
-class PreconditionerType(ArgTypeMixin, enum.Enum):
+class PreconditionerType(enum.Enum):
     FULL = 0
     DIAGONAL = 1
 
 
-class GraftingType(ArgTypeMixin, enum.Enum):
+class GraftingType(enum.Enum):
     NONE = 0
     SGD = 1
     ADAGRAD = 2
@@ -58,13 +62,13 @@ class GraftingType(ArgTypeMixin, enum.Enum):
     ADAM_NORMALIZED = 7
 
 
-class LargeDimMethod(ArgTypeMixin, enum.Enum):
+class LargeDimMethod(enum.Enum):
     DIAGONAL = 0
     ADAGRAD = 1
     BLOCKING = 2
 
 
-class RootInvStrategy(ArgTypeMixin, enum.Enum):
+class RootInvStrategy(enum.Enum):
     NONE = 0
     CROSS_NODE = 1
     INTRA_NODE_ONLY = 2

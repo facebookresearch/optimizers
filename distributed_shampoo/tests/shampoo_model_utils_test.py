@@ -15,12 +15,7 @@ from typing import cast
 import torch
 import torch.nn as nn
 
-try:
-    from ai_codesign.optimizers.distributed_shampoo.shampoo_model_utils import (
-        CombinedLinear,
-    )
-except ImportError:
-    from ..shampoo_model_utils import CombinedLinear
+from distributed_shampoo.shampoo_model_utils import CombinedLinear
 
 
 class CombinedLinearTest(unittest.TestCase):

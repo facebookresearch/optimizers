@@ -12,27 +12,15 @@ from typing import Optional, Tuple
 
 import torch
 
-try:
-    from ai_codesign.optimizers.distributed_shampoo.shampoo_utils import (
-        AdagradPreconditioner,
-        GraftingType,
-        merge_small_dims,
-        multi_dim_cat,
-        multi_dim_split,
-        RootInvStrategy,
-        ShampooPreconditioner,
-    )
-
-except ImportError:
-    from ..shampoo_utils import (
-        AdagradPreconditioner,
-        GraftingType,
-        merge_small_dims,
-        multi_dim_cat,
-        multi_dim_split,
-        RootInvStrategy,
-        ShampooPreconditioner,
-    )
+from distributed_shampoo.shampoo_utils import (
+    AdagradPreconditioner,
+    GraftingType,
+    merge_small_dims,
+    multi_dim_cat,
+    multi_dim_split,
+    RootInvStrategy,
+    ShampooPreconditioner,
+)
 
 
 class MergeSmallDimsTest(unittest.TestCase):

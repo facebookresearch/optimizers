@@ -10,6 +10,7 @@ LICENSE file in the root directory of this source tree.
 import bisect
 import itertools
 import logging
+import os
 from collections import abc as container_abcs, defaultdict
 from copy import deepcopy
 from itertools import chain
@@ -17,29 +18,17 @@ from typing import Dict, List, Optional, Tuple
 
 import torch
 import torch.distributed as dist
+
+from distributed_shampoo.shampoo_utils import (
+    AdagradPreconditioner,
+    BlockShampooPreconditioner,
+    GraftingType,
+    LargeDimMethod,
+    Preconditioner,
+    RootInvStrategy,
+    ShampooPreconditioner,
+)
 from torch.optim.optimizer import Optimizer
-
-try:
-    from ai_codesign.optimizers.distributed_shampoo.shampoo_utils import (
-        AdagradPreconditioner,
-        BlockShampooPreconditioner,
-        GraftingType,
-        LargeDimMethod,
-        Preconditioner,
-        RootInvStrategy,
-        ShampooPreconditioner,
-    )
-
-except ImportError:
-    from shampoo_utils import (
-        AdagradPreconditioner,
-        BlockShampooPreconditioner,
-        GraftingType,
-        LargeDimMethod,
-        Preconditioner,
-        RootInvStrategy,
-        ShampooPreconditioner,
-    )
 
 logger = logging.getLogger(__name__)
 
@@ -222,12 +211,13 @@ class DistributedShampoo(Optimizer):
             raise ValueError(f"Invalid grafting beta parameter: {grafting_beta2}")
         if not grafting_epsilon > 0.0:
             raise ValueError(f"Invalid epsilon value: {grafting_epsilon}")
-        if root_inv_strategy != RootInvStrategy.NONE and not torch.cuda.is_available():
-            raise ValueError("Using distributed version of Shampoo without GPUs!")
-        if root_inv_strategy != RootInvStrategy.NONE and not dist.is_initialized():
-            raise ValueError(
-                "Using distributed version of Shampoo without initializing distributed process group!"
-            )
+        if root_inv_strategy != RootInvStrategy.NONE:
+            if not torch.cuda.is_available():
+                raise ValueError("Using distributed version of Shampoo without GPUs!")
+            if not dist.is_initialized():
+                raise ValueError(
+                    "Using distributed version of Shampoo without initializing distributed process group!"
+                )
 
         super(DistributedShampoo, self).__init__(
             params,
@@ -271,17 +261,23 @@ class DistributedShampoo(Optimizer):
 
         # Initialize comms-related fields.
         self._world_size = dist.get_world_size() if dist.is_initialized() else 1
-        # Currently supports only homogeneous architecture.
+
+        # Currently supports only homogeneous architectures and assumes that the environmental
+        # variable LOCAL_WORLD_SIZE is set (for example, through torchrun / torch.distributed.launch).
+        #
+        # TODO: Need to find way to obtain the number of GPUs / node to support heterogeneous architectures
+        # and not rely on an environmental variable.
+        local_world_size = int(os.environ.get("LOCAL_WORLD_SIZE", 1))
         self._number_of_gpus_per_node = (
-            [torch.cuda.device_count()]
-            * (self._world_size // torch.cuda.device_count())
+            [local_world_size]
+            * (self._world_size // local_world_size)
             if torch.cuda.is_available()
             and self._root_inv_strategy == RootInvStrategy.INTRA_NODE_ONLY
             else [self._world_size]
         )
         if sum(self._number_of_gpus_per_node) != self._world_size:
             raise ValueError(
-                f"Total number of GPUs {sum(self._number_of_gpus_per_node)} does not equal world size {self._world_size}!"
+                f"Sum of number of GPUs per node {self._number_of_gpus_per_node} does not equal world size {self._world_size}!"
             )
         self._root_inv_dist_groups = self._create_root_inv_distributed_groups(
             self._number_of_gpus_per_node
@@ -290,6 +286,10 @@ class DistributedShampoo(Optimizer):
         # Initialize Shampoo preconditioners.
         self._initialize_preconditioners_and_steps()
         self._assign_preconditioners_to_ranks()
+
+    @torch.no_grad()
+    def _use_distributed(self) -> bool:
+        return self._root_inv_strategy != RootInvStrategy.NONE and dist.is_initialized()
 
     @torch.no_grad()
     def _create_root_inv_distributed_groups(
@@ -426,7 +426,7 @@ class DistributedShampoo(Optimizer):
             RootInvStrategy.INTRA_NODE_ONLY: Preconditioners are distributed in a round-robin fashion within each node.
 
         """
-        if self._root_inv_strategy == RootInvStrategy.NONE or not dist.is_initialized():
+        if not self._use_distributed():
             return
         elif self._root_inv_strategy in (
             RootInvStrategy.CROSS_NODE,
@@ -479,7 +479,11 @@ class DistributedShampoo(Optimizer):
                     state[PRECONDITIONERS],
                     (ShampooPreconditioner, BlockShampooPreconditioner),
                 ):
-                    my_rank = dist.get_rank() if dist.is_initialized() else -1
+                    my_rank = (
+                        dist.get_rank()
+                        if self._use_distributed()
+                        else -1
+                    )
                     my_group = self._root_inv_dist_groups[my_rank]
 
                     state[PRECONDITIONERS].compute_root_inverse(
@@ -489,11 +493,14 @@ class DistributedShampoo(Optimizer):
     @torch.no_grad()
     def _broadcast_inv_preconditioners(self):
         """Broadcasts inverse preconditioners."""
+        if not self._use_distributed():
+            return
+
         for group in self.param_groups:
             for p in group[PARAMS]:
                 state = self.state[p]
                 if PRECONDITIONERS in state:
-                    my_rank = dist.get_rank() if dist.is_initialized() else -1
+                    my_rank = dist.get_rank()
                     my_group = self._root_inv_dist_groups[my_rank]
 
                     state[PRECONDITIONERS].broadcast(group=my_group)
@@ -564,11 +571,7 @@ class DistributedShampoo(Optimizer):
             and iteration >= self._start_preconditioning_step
         ):
             self._compute_root_inverse()
-            if (
-                self._root_inv_strategy != RootInvStrategy.NONE
-                and dist.is_initialized()
-            ):
-                self._broadcast_inv_preconditioners()
+            self._broadcast_inv_preconditioners()
 
         # Loops over all parameter groups and parameters to perform update.
         for group in self.param_groups:
