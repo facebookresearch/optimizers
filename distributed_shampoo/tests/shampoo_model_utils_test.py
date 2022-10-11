@@ -70,30 +70,24 @@ class CombinedLinearTest(unittest.TestCase):
 
         # check values are equal
         with self.subTest("Test forward"):
-            self.assertTrue(torch.equal(original_output, combined_output))
+            torch.testing.assert_close(original_output, combined_output)
 
         with self.subTest("Test backward"):
             if bias:
-                self.assertTrue(
-                    torch.equal(
-                        cast(torch.Tensor, original_linear.weight.grad),
-                        cast(torch.Tensor, combined_linear.combined_weight.grad)[
-                            :, :-1
-                        ],
-                    )
+                torch.testing.assert_close(
+                    cast(torch.Tensor, original_linear.weight.grad),
+                    cast(torch.Tensor, combined_linear.combined_weight.grad)[
+                        :, :-1
+                    ],
                 )
-                self.assertTrue(
-                    torch.equal(
-                        cast(torch.Tensor, original_linear.bias.grad),
-                        cast(torch.Tensor, combined_linear.combined_weight.grad)[:, -1],
-                    )
+                torch.testing.assert_close(
+                    cast(torch.Tensor, original_linear.bias.grad),
+                    cast(torch.Tensor, combined_linear.combined_weight.grad)[:, -1],
                 )
             else:
-                self.assertTrue(
-                    torch.equal(
-                        cast(torch.Tensor, original_linear.weight.grad),
-                        cast(torch.Tensor, combined_linear.combined_weight.grad),
-                    )
+                torch.testing.assert_close(
+                    cast(torch.Tensor, original_linear.weight.grad),
+                    cast(torch.Tensor, combined_linear.combined_weight.grad),
                 )
 
     def test_linear_forward_backward(self):
@@ -131,19 +125,15 @@ class CombinedLinearTest(unittest.TestCase):
 
                 # confirm weights are initialized equally
                 if bias:
-                    self.assertTrue(
-                        torch.equal(
-                            original_linear.weight, combined_linear.combined_weight[:, :-1]
-                        )
+                    torch.testing.assert_close(
+                        original_linear.weight, combined_linear.combined_weight[:, :-1]
                     )
-                    self.assertTrue(
-                        torch.equal(
-                            original_linear.bias, combined_linear.combined_weight[:, -1]
-                        )
+                    torch.testing.assert_close(
+                        original_linear.bias, combined_linear.combined_weight[:, -1]
                     )
                 else:
-                    self.assertTrue(
-                        torch.equal(original_linear.weight, combined_linear.combined_weight)
+                    torch.testing.assert_close(
+                        original_linear.weight, combined_linear.combined_weight
                     )
 
 

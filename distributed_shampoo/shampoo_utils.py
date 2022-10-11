@@ -217,7 +217,7 @@ class AdagradPreconditioner(Preconditioner):
         self._num_updates = 0
         self._use_bias_correction = use_bias_correction
         self._bias_correction2 = torch.tensor(1.0)
-        self._parameter_count += torch.prod(torch.tensor(self._preconditioner.shape))
+        self._parameter_count += torch.prod(torch.tensor(self._preconditioner.shape)).detach().cpu().numpy()
 
         if self._idx is not None:
             self._preconditioner_idx = str(self._idx) + "." + str(0)
@@ -268,7 +268,6 @@ class AdagradPreconditioner(Preconditioner):
         if device is not None:
             self._preconditioner = self._preconditioner.to(device=device)
             self._bias_correction2 = self._bias_correction2.to(device=device)
-            self._parameter_count = self._parameter_count.to(device=device)
 
 
 @dataclass
@@ -606,7 +605,6 @@ class ShampooPreconditioner(Preconditioner):
     def to(self, device: Union[None, torch.device] = None):
         if device is not None:
             self._bias_correction2 = self._bias_correction2.to(device=device)
-            self._parameter_count = self._parameter_count.to(device=device)
             for preconditioner in self._preconditioners:
                 preconditioner.to(device)
             if self._grafting is not None:
@@ -765,7 +763,6 @@ class BlockShampooPreconditioner(Preconditioner):
 
     def to(self, device: Union[None, torch.device] = None):
         if device is not None:
-            self._parameter_count = self._parameter_count.to(device=device)
             for preconditioner in self._split_preconditioners:
                 preconditioner.to(device=device)
 

@@ -36,7 +36,7 @@ class EigenRootTest(unittest.TestCase):
         abs_error = torch.dist(torch.linalg.matrix_power(X, root), A, p=torch.inf)
         A_norm = torch.linalg.norm(A, ord=torch.inf)
         rel_error = abs_error / torch.maximum(torch.tensor(1.0), A_norm)
-        self.assertTrue(torch.allclose(L, eig_sols))
+        torch.testing.assert_close(L, eig_sols)
         self.assertLessEqual(rel_error, tolerance)
 
     def _test_eigen_root_multi_dim(

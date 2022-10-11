@@ -55,7 +55,7 @@ class MultiDimSplitTest(unittest.TestCase):
     def _test_multi_dim_split(self, grad, splits, split_grad) -> None:
         for idx, g in enumerate(multi_dim_split(grad, splits)):
             with self.subTest(f"Test with idx = {idx}"):
-                self.assertTrue(torch.equal(split_grad[idx], g))
+                torch.testing.assert_close(split_grad[idx], g)
 
     def test_multi_dim_split_for_one_dim(self) -> None:
         grad = torch.arange(10).reshape(5, 2)
@@ -92,7 +92,7 @@ class MultiDimSplitTest(unittest.TestCase):
 
 class MultiDimCatTest(unittest.TestCase):
     def _test_multi_dim_cat(self, grad, num_splits, split_grad) -> None:
-        self.assertTrue(torch.equal(multi_dim_cat(split_grad, num_splits), grad))
+        torch.testing.assert_close(multi_dim_cat(split_grad, num_splits), grad)
 
     def test_multi_dim_cat_for_one_dim(self) -> None:
         grad = torch.arange(10).reshape(5, 2)
@@ -154,11 +154,9 @@ class AdagradPreconditionerTest(unittest.TestCase):
         adagrad.update_preconditioners(grad)
 
         with self.subTest("Test preconditioner"):
-            self.assertTrue(torch.allclose(adagrad._preconditioner, precond_sol))
+            torch.testing.assert_close(adagrad._preconditioner, precond_sol)
         with self.subTest("Test bias correction"):
-            self.assertTrue(
-                torch.isclose(torch.tensor(adagrad._bias_correction2), bias_correction2)
-            )
+            torch.testing.assert_close(torch.tensor(adagrad._bias_correction2), bias_correction2)
         with self.subTest("Test number of updates"):
             self.assertEqual(adagrad._num_updates, 1)
 
@@ -178,7 +176,7 @@ class AdagradPreconditionerTest(unittest.TestCase):
         # pyre-fixme[6]: For 1st param expected `Tensor` but got `Optional[Tensor]`.
         preconditioned_grad = adagrad.precondition(grad)
         # pyre-fixme[6]: For 2nd param expected `Tensor` but got `Optional[Tensor]`.
-        self.assertTrue(torch.allclose(preconditioned_grad, grad))
+        torch.testing.assert_close(preconditioned_grad, grad)
 
     def test_precondition_with_preconditioner_update(self) -> None:
         param, loss, grad, adagrad = self._setup_test(
@@ -188,7 +186,7 @@ class AdagradPreconditionerTest(unittest.TestCase):
         adagrad.update_preconditioners(grad)
         # pyre-fixme[6]: For 1st param expected `Tensor` but got `Optional[Tensor]`.
         preconditioned_grad = adagrad.precondition(grad)
-        self.assertTrue(torch.allclose(preconditioned_grad, torch.ones(2)))
+        torch.testing.assert_close(preconditioned_grad, torch.ones(2))
 
     def test_precondition_and_update_without_preconditioner_update(self) -> None:
         param, loss, grad, adagrad = self._setup_test(
@@ -197,7 +195,7 @@ class AdagradPreconditionerTest(unittest.TestCase):
         with torch.no_grad():
             # pyre-fixme[6]: For 2nd param expected `Tensor` but got `Optional[Tensor]`.
             adagrad.precondition_and_update(param, grad, 1.0)
-        self.assertTrue(torch.allclose(param, torch.tensor([-1.0, -2.0])))
+        torch.testing.assert_close(param, torch.tensor([-1.0, -2.0]))
 
     def test_precondition_and_update_with_preconditioner_update(self) -> None:
         param, loss, grad, adagrad = self._setup_test(
@@ -208,7 +206,7 @@ class AdagradPreconditionerTest(unittest.TestCase):
         with torch.no_grad():
             # pyre-fixme[6]: For 2nd param expected `Tensor` but got `Optional[Tensor]`.
             adagrad.precondition_and_update(param, grad, 1.0)
-        self.assertTrue(torch.allclose(param, torch.tensor([0.0, 1.0])))
+        torch.testing.assert_close(param, torch.tensor([0.0, 1.0]))
 
     def test_compute_norm_without_preconditioner_update(self) -> None:
         param, loss, grad, adagrad = self._setup_test(
@@ -216,7 +214,7 @@ class AdagradPreconditionerTest(unittest.TestCase):
         )
         # pyre-fixme[6]: For 1st param expected `Tensor` but got `Optional[Tensor]`.
         norm = adagrad.compute_norm(grad)
-        self.assertEqual(norm, torch.sqrt(torch.tensor(20.0)))
+        torch.testing.assert_close(norm, torch.sqrt(torch.tensor(20.0)))
 
     def test_compute_norm_with_preconditioner_update(self) -> None:
         param, loss, grad, adagrad = self._setup_test(
@@ -226,7 +224,16 @@ class AdagradPreconditionerTest(unittest.TestCase):
         adagrad.update_preconditioners(grad)
         # pyre-fixme[6]: For 1st param expected `Tensor` but got `Optional[Tensor]`.
         norm = adagrad.compute_norm(grad)
-        self.assertEqual(norm, torch.sqrt(torch.tensor(2.0)))
+        torch.testing.assert_close(norm, torch.sqrt(torch.tensor(2.0)))
+
+    def test_to(self) -> None:
+        _, _, _, adagrad = self._setup_test(
+            beta2=1.0, epsilon=0.0, use_bias_correction=False
+        )
+        try:
+            adagrad.to("cpu")
+        except Exception:
+            self.fail(".to() raised Exception!")
 
 
 class ShampooPreconditionerTest(unittest.TestCase):
@@ -274,20 +281,16 @@ class ShampooPreconditionerTest(unittest.TestCase):
             zip(shampoo._preconditioners, preconditioner_sols)
         ):
             with self.subTest(f"Test preconditioner {i}"):
-                self.assertTrue(
-                    torch.allclose(
-                        preconditioner.factor_matrix,
-                        preconditioner_sol
-                        if beta2 == 1.0
-                        else (1 - beta2) * preconditioner_sol,
-                    )
+                torch.testing.assert_close(
+                    preconditioner.factor_matrix,
+                    preconditioner_sol
+                    if beta2 == 1.0
+                    else (1 - beta2) * preconditioner_sol,
                 )
         with self.subTest("Test bias correction"):
-            self.assertTrue(
-                torch.isclose(
-                    torch.tensor(shampoo._bias_correction2),
-                    torch.tensor(1.0 if not use_bias_correction else 1.0 - beta2),
-                )
+            torch.testing.assert_close(
+                torch.tensor(shampoo._bias_correction2),
+                torch.tensor(1.0 if not use_bias_correction else 1.0 - beta2),
             )
         with self.subTest("Test number of updates"):
             self.assertEqual(shampoo._num_updates, 1)
@@ -310,7 +313,7 @@ class ShampooPreconditionerTest(unittest.TestCase):
         )
         # pyre-fixme[6]: For 1st param expected `Tensor` but got `Optional[Tensor]`.
         preconditioned_grad = shampoo.precondition(grad)
-        self.assertTrue(torch.allclose(preconditioned_grad, torch.zeros((2, 3))))
+        torch.testing.assert_close(preconditioned_grad, torch.zeros((2, 3)))
 
     def test_precondition_with_root_inverse(self) -> None:
         param, loss, grad, shampoo = self._setup_test(
@@ -323,7 +326,7 @@ class ShampooPreconditionerTest(unittest.TestCase):
         # pyre-fixme[6]: For 1st param expected `Tensor` but got `Optional[Tensor]`.
         preconditioned_grad = shampoo.precondition(grad)
         # pyre-fixme[6]: For 2nd param expected `Tensor` but got `Optional[Tensor]`.
-        self.assertTrue(torch.allclose(preconditioned_grad, grad))
+        torch.testing.assert_close(preconditioned_grad, grad)
 
     def test_precondition_with_diagonal_threshold(self) -> None:
         param, loss, grad, shampoo = self._setup_test(
@@ -333,7 +336,7 @@ class ShampooPreconditionerTest(unittest.TestCase):
         # pyre-fixme[6]: For 1st param expected `Tensor` but got `Optional[Tensor]`.
         preconditioned_grad = shampoo.precondition(grad)
         # pyre-fixme[6]: For 2nd param expected `Tensor` but got `Optional[Tensor]`.
-        self.assertTrue(torch.allclose(preconditioned_grad, grad))
+        torch.testing.assert_close(preconditioned_grad, grad)
 
     def test_precondition_with_grafting(self) -> None:
         param, loss, grad, shampoo = self._setup_test(
@@ -347,7 +350,7 @@ class ShampooPreconditionerTest(unittest.TestCase):
         # pyre-fixme[6]: For 1st param expected `Tensor` but got `Optional[Tensor]`.
         preconditioned_grad = shampoo.precondition(grad)
         # pyre-fixme[6]: For 2nd param expected `Tensor` but got `Optional[Tensor]`.
-        self.assertTrue(torch.allclose(preconditioned_grad, grad))
+        torch.testing.assert_close(preconditioned_grad, grad)
 
     def test_precondition_and_update(self) -> None:
         param, loss, grad, shampoo = self._setup_test(
@@ -360,7 +363,7 @@ class ShampooPreconditionerTest(unittest.TestCase):
         with torch.no_grad():
             # pyre-fixme[6]: For 2nd param expected `Tensor` but got `Optional[Tensor]`.
             shampoo.precondition_and_update(param, grad, 1.0)
-        self.assertTrue(torch.allclose(param, torch.zeros((2, 3))))
+        torch.testing.assert_close(param, torch.zeros((2, 3)))
 
     def test_precondition_and_update_with_grafting(self) -> None:
         param, loss, grad, shampoo = self._setup_test(
@@ -374,7 +377,7 @@ class ShampooPreconditionerTest(unittest.TestCase):
         with torch.no_grad():
             # pyre-fixme[6]: For 2nd param expected `Tensor` but got `Optional[Tensor]`.
             shampoo.precondition_and_update(param, grad, 1.0)
-        self.assertTrue(torch.allclose(param, torch.zeros((2, 3))))
+        torch.testing.assert_close(param, torch.zeros((2, 3)))
 
     def test_compute_norm(self) -> None:
         param, loss, grad, shampoo = self._setup_test(
@@ -383,7 +386,16 @@ class ShampooPreconditionerTest(unittest.TestCase):
         shampoo.compute_root_inverse()
         # pyre-fixme[6]: For 1st param expected `Tensor` but got `Optional[Tensor]`.
         norm = shampoo.compute_norm(grad)
-        self.assertTrue(torch.isclose(norm, torch.sqrt(torch.tensor(55.0))))
+        torch.testing.assert_close(norm, torch.sqrt(torch.tensor(55.0)))
+
+    def test_to(self) -> None:
+        _, _, _, shampoo = self._setup_test(
+            beta2=1.0, epsilon=1.0, use_bias_correction=False, diagonal_threshold=2
+        )
+        try:
+            shampoo.to("cpu")
+        except Exception:
+            self.fail(".to() raised Exception!")
 
 
 if __name__ == "__main__":
