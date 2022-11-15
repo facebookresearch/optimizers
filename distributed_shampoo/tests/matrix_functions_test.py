@@ -22,14 +22,18 @@ class EigenRootTest(unittest.TestCase):
         self,
         A,
         root,
-        perturb,
+        make_positive_semidefinite,
         inverse,
         epsilon,
         tolerance,
         eig_sols,
     ) -> None:
         X, L, Q = _matrix_root_eigen(
-            A=A, root=root, epsilon=epsilon, perturb=perturb, inverse=inverse
+            A=A,
+            root=root,
+            epsilon=epsilon,
+            make_positive_semidefinite=make_positive_semidefinite,
+            inverse=inverse,
         )
         if inverse:
             root = -root
@@ -44,7 +48,7 @@ class EigenRootTest(unittest.TestCase):
         A,
         dims,
         roots,
-        perturb,
+        make_positive_semidefinite,
         epsilons,
         tolerance,
         eig_sols,
@@ -54,7 +58,7 @@ class EigenRootTest(unittest.TestCase):
                 self._test_eigen_root(
                     A(n),
                     root,
-                    perturb,
+                    make_positive_semidefinite,
                     False,
                     epsilon,
                     tolerance,
@@ -63,7 +67,7 @@ class EigenRootTest(unittest.TestCase):
                 self._test_eigen_root(
                     A(n),
                     root,
-                    perturb,
+                    make_positive_semidefinite,
                     True,
                     epsilon,
                     tolerance,
@@ -75,7 +79,7 @@ class EigenRootTest(unittest.TestCase):
         dims = [10, 100]
         roots = [1, 2, 4, 8]
         epsilons = [0.0]
-        perturb = False
+        make_positive_semidefinite = False
 
         def eig_sols(n):
             return torch.ones(n)
@@ -84,7 +88,7 @@ class EigenRootTest(unittest.TestCase):
             return torch.eye(n)
 
         self._test_eigen_root_multi_dim(
-            A, dims, roots, perturb, epsilons, tolerance, eig_sols
+            A, dims, roots, make_positive_semidefinite, epsilons, tolerance, eig_sols
         )
 
     def test_eigen_root_tridiagonal_1(self) -> None:
@@ -92,7 +96,7 @@ class EigenRootTest(unittest.TestCase):
         dims = [10, 100]
         roots = [1, 2, 4, 8]
         epsilons = [0.0]
-        perturb = False
+        make_positive_semidefinite = False
 
         for alpha, beta in itertools.product(
             [0.001, 0.01, 0.1, 1.0, 10.0, 100.0], repeat=2
@@ -121,7 +125,13 @@ class EigenRootTest(unittest.TestCase):
                     )
 
                 self._test_eigen_root_multi_dim(
-                    A, dims, roots, perturb, epsilons, tolerance, eig_sols
+                    A,
+                    dims,
+                    roots,
+                    make_positive_semidefinite,
+                    epsilons,
+                    tolerance,
+                    eig_sols,
                 )
 
     def test_eigen_root_tridiagonal_2(self) -> None:
@@ -129,7 +139,7 @@ class EigenRootTest(unittest.TestCase):
         dims = [10, 100]
         roots = [1, 2, 4, 8]
         epsilons = [0.0]
-        perturb = False
+        make_positive_semidefinite = False
 
         for alpha, beta in itertools.product(
             [0.001, 0.01, 0.1, 1.0, 10.0, 100.0], repeat=2
@@ -161,7 +171,13 @@ class EigenRootTest(unittest.TestCase):
                     )
 
                 self._test_eigen_root_multi_dim(
-                    A, dims, roots, perturb, epsilons, tolerance, eig_sols
+                    A,
+                    dims,
+                    roots,
+                    make_positive_semidefinite,
+                    epsilons,
+                    tolerance,
+                    eig_sols,
                 )
 
 

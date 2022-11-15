@@ -13,12 +13,15 @@ import math
 from abc import ABC
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import List, Optional, Union
+from typing import List, Optional, Tuple, Union
 
 import torch
 import torch.distributed as dist
 
-from distributed_shampoo.matrix_functions import matrix_inverse_root
+from distributed_shampoo.matrix_functions import (
+    compute_matrix_root_inverse_residuals,
+    matrix_inverse_root,
+)
 from torch import Tensor
 from torch.distributed.distributed_c10d import GroupMember
 
@@ -217,7 +220,9 @@ class AdagradPreconditioner(Preconditioner):
         self._num_updates = 0
         self._use_bias_correction = use_bias_correction
         self._bias_correction2 = torch.tensor(1.0)
-        self._parameter_count += torch.prod(torch.tensor(self._preconditioner.shape)).detach().cpu().numpy()
+        self._parameter_count += (
+            torch.prod(torch.tensor(self._preconditioner.shape)).detach().cpu().numpy()
+        )
 
         if self._idx is not None:
             self._preconditioner_idx = str(self._idx) + "." + str(0)
@@ -535,11 +540,16 @@ class ShampooPreconditioner(Preconditioner):
         )(grad)
 
     def compute_root_inverse(
-        self, rank: int = -1, group: Optional[dist.ProcessGroup] = None
+        self,
+        rank: int = -1,
+        group: Optional[dist.ProcessGroup] = None,
     ) -> None:
         # Get group rank.
-        group_rank = dist.get_group_rank(group if group else GroupMember.WORLD, rank)
+        group_rank = dist.get_group_rank(
+            group if group else dist.distributed_c10d.GroupMember.WORLD, rank
+        )
 
+        root = 2 * self._order
         for k, preconditioner in enumerate(self._preconditioners):
 
             # Check that this is a full Shampoo preconditioner.
@@ -564,7 +574,6 @@ class ShampooPreconditioner(Preconditioner):
                     )
 
                 # Compute inverse preconditioner.
-                root = 2 * self._order
                 inv_factor_matrix = matrix_inverse_root(
                     A=bias_corrected_preconditioner,
                     root=root,
@@ -576,6 +585,35 @@ class ShampooPreconditioner(Preconditioner):
                         dtype=preconditioner.inv_factor_matrix.dtype
                     )
                 preconditioner.inv_factor_matrix = inv_factor_matrix
+
+    def compute_root_inverse_residuals(
+        self,
+    ) -> Tuple[List[Tensor], List[Tensor]]:
+        relative_errors = []
+        relative_residuals = []
+
+        root = 2 * self._order
+        for preconditioner in self._preconditioners:
+            bias_corrected_preconditioner = (
+                preconditioner.factor_matrix / self._bias_correction2
+            )
+            (
+                relative_error,
+                relative_residual,
+            ) = compute_matrix_root_inverse_residuals(
+                bias_corrected_preconditioner,
+                preconditioner.inv_factor_matrix,
+                root,
+                self._epsilon,
+            )
+
+            relative_errors.append(relative_error)
+            relative_residuals.append(relative_residual)
+
+        return (
+            relative_errors,
+            relative_residuals,
+        )
 
     def precondition_and_update(
         self, param, grad: Tensor, lr: Union[float, Tensor]
@@ -593,7 +631,7 @@ class ShampooPreconditioner(Preconditioner):
         for preconditioner in self._preconditioners:
             if preconditioner.preconditioner_type == PreconditionerType.FULL:
                 global_source_rank = dist.get_global_rank(
-                    group=group if group else GroupMember.WORLD,
+                    group=group if group else dist.distributed_c10d.GroupMember.WORLD,
                     group_rank=preconditioner.group_source_rank,
                 )
                 dist.broadcast(
@@ -744,6 +782,26 @@ class BlockShampooPreconditioner(Preconditioner):
     ) -> None:
         for preconditioner in self._split_preconditioners:
             preconditioner.compute_root_inverse(rank=rank, group=group)
+
+    def compute_root_inverse_residuals(
+        self,
+    ) -> Tuple[List[Tensor], List[Tensor]]:
+        relative_errors = []
+        relative_residuals = []
+
+        for preconditioner in self._split_preconditioners:
+            (
+                relative_errors_temp,
+                relative_residuals_temp,
+            ) = preconditioner.compute_root_inverse_residuals()
+
+            relative_errors += relative_errors_temp
+            relative_residuals += relative_residuals_temp
+
+        return (
+            relative_errors,
+            relative_residuals,
+        )
 
     def precondition_and_update(
         self,

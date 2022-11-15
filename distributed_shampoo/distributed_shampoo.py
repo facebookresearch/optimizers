@@ -158,6 +158,7 @@ class DistributedShampoo(Optimizer):
         grafting_type (GraftingType): selects grafting method. (Default: GraftingType.ADAGRAD)
         grafting_epsilon (float): epsilon for grafting method. (Default: 1e-3)
         grafting_beta2 (float): exponential moving average factor for grafting method. (Default: 1.0)
+        debug_mode (bool): debugging mode. Uses more memory to compute error to fp64 case. Must enable logging level to DEBUG. (Default: False)
 
     """
 
@@ -182,6 +183,7 @@ class DistributedShampoo(Optimizer):
         grafting_type: GraftingType = GraftingType.ADAGRAD,
         grafting_epsilon: float = 1e-3,
         grafting_beta2: float = 1.0,
+        debug_mode: bool = False,
     ):
         if not lr >= 0.0:
             raise ValueError(f"Invalid learning rate: {lr}")
@@ -246,6 +248,7 @@ class DistributedShampoo(Optimizer):
         self._grafting_beta2 = grafting_beta2
         self._parameter_count = 0
         self._use_nesterov = use_nesterov
+        self._debug_mode = debug_mode
         if self._use_nesterov and momentum == 0.0:
             logger.warning(
                 "Nesterov flag is enabled but momentum parameter is zero! Continuing without using momentum or Nesterov acceleration..."
@@ -269,8 +272,7 @@ class DistributedShampoo(Optimizer):
         # and not rely on an environmental variable.
         local_world_size = int(os.environ.get("LOCAL_WORLD_SIZE", 1))
         self._number_of_gpus_per_node = (
-            [local_world_size]
-            * (self._world_size // local_world_size)
+            [local_world_size] * (self._world_size // local_world_size)
             if torch.cuda.is_available()
             and self._root_inv_strategy == RootInvStrategy.INTRA_NODE_ONLY
             else [self._world_size]
@@ -479,16 +481,59 @@ class DistributedShampoo(Optimizer):
                     state[PRECONDITIONERS],
                     (ShampooPreconditioner, BlockShampooPreconditioner),
                 ):
-                    my_rank = (
-                        dist.get_rank()
-                        if self._use_distributed()
-                        else -1
-                    )
+                    my_rank = dist.get_rank() if self._use_distributed() else -1
                     my_group = self._root_inv_dist_groups[my_rank]
 
                     state[PRECONDITIONERS].compute_root_inverse(
                         rank=my_rank, group=my_group
                     )
+
+    @torch.no_grad()
+    def _compute_and_log_root_inverse_residuals(
+        self,
+    ):
+        """Compute root inverse residuals over all preconditioners."""
+
+        # Compute expected relative errors/residuals for debugging purposes
+        if self._preconditioner_dtype == torch.float64:
+            expected_relative_error = 1e-7
+        elif self._preconditioner_dtype == torch.float:
+            expected_relative_error = 1e-3
+        else:
+            logger.warning("Expected relative error/residual not supported for precision lower than float32.")
+
+        # Accumulate relative errors/residuals
+        relative_errors = []
+        relative_residuals = []
+
+        for group in self.param_groups:
+            for p in group[PARAMS]:
+                state = self.state[p]
+
+                if isinstance(
+                    state[PRECONDITIONERS],
+                    (ShampooPreconditioner, BlockShampooPreconditioner),
+                ):
+                    relative_error, relative_residual = state[
+                        PRECONDITIONERS
+                    ].compute_root_inverse_residuals()
+
+                    relative_errors += relative_error
+                    relative_residuals += relative_residual
+
+        relative_errors = torch.stack(relative_errors)
+        relative_residuals = torch.stack(relative_residuals)
+
+        quantiles = torch.tensor([0, 0.25, 0.5, 0.75, 1], device=relative_errors.device, dtype=relative_errors.dtype)
+        logger.debug(
+            f"Expect Relative Error <= {expected_relative_error}"
+        )
+        logger.debug(
+            f"Relative Error (||X - X_hat||_inf / ||X||_inf)       Average: {torch.mean(relative_errors)}, Quantiles [0, 25, 50, 75, 100]: {torch.quantile(relative_errors, quantiles, interpolation='nearest')}"
+        )
+        logger.debug(
+            f"Relative Residual (||X_hat^-r - A||_inf / ||A||_inf) Average: {torch.mean(relative_residuals)}, Quantiles [0, 25, 50, 75, 100]: {torch.quantile(relative_residuals, quantiles, interpolation='nearest')}"
+        )
 
     @torch.no_grad()
     def _broadcast_inv_preconditioners(self):
@@ -572,6 +617,9 @@ class DistributedShampoo(Optimizer):
         ):
             self._compute_root_inverse()
             self._broadcast_inv_preconditioners()
+
+            if self._debug_mode:
+                self._compute_and_log_root_inverse_residuals()
 
         # Loops over all parameter groups and parameters to perform update.
         for group in self.param_groups:

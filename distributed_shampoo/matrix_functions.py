@@ -78,7 +78,7 @@ def _matrix_root_eigen(
     root: int,
     epsilon: float = 0.0,
     inverse: bool = True,
-    perturb: bool = True,
+    make_positive_semidefinite: bool = True,
 ) -> Tuple[Tensor, Tensor, Tensor]:
     """Compute matrix (inverse) root using eigendecomposition of symmetric positive (semi-)definite matrix.
 
@@ -91,7 +91,7 @@ def _matrix_root_eigen(
         root (int): Root of interest. Any natural number.
         epsilon (float): Adds epsilon * I to matrix before taking matrix root. (Default: 0.0)
         inverse (bool): Returns inverse root matrix. (Default: True)
-        perturb (bool): Perturbs matrix eigenvalues to ensure it is (practically) positive semi-definite. (Default: True)
+        make_positive_semidefinite (bool): Perturbs matrix eigenvalues to ensure it is (practically) positive semi-definite. (Default: True)
 
     Returns:
         X (Tensor): (Inverse) root of matrix. Same dimensions as A.
@@ -112,6 +112,8 @@ def _matrix_root_eigen(
     # check if matrix is scalar
     if len(A.shape) == 0 or (len(A.shape) == 1 and A.shape[0] == 1):
         # pyre-fixme[58]: `**` is not supported for operand types `Tensor` and `float`.
+        # pyre-fixme[7]: Expected `Tuple[Tensor, Tensor, Tensor]` but got
+        #  `Tuple[float, Tensor, Tensor]`.
         return A**alpha, A, torch.tensor(1.0)
 
     # check matrix shape
@@ -124,8 +126,8 @@ def _matrix_root_eigen(
     L, Q = torch.linalg.eigh(A)
     lambda_min = torch.min(L)
 
-    # perturb eigenvalues (if necessary)
-    if perturb:
+    # make eigenvalues >= 0 (if necessary)
+    if make_positive_semidefinite:
         L += -torch.minimum(lambda_min, torch.tensor(0.0))
 
     # add epsilon
@@ -206,3 +208,48 @@ def _matrix_inverse_root_newton(
     )
 
     return X, M, termination_flag, iteration, error
+
+
+def compute_matrix_root_inverse_residuals(
+    A: Tensor,
+    X_hat: Tensor,
+    root: int,
+    epsilon: float,
+) -> Tuple[Tensor, Tensor]:
+    """Compute residual of matrix root inverse for debugging purposes.
+
+        relative error    = ||X - X_hat||_inf / ||X||_inf
+        relative residual = ||A X^r - I||_inf
+
+    Args:
+        A (Tensor): Matrix of interest.
+        X (Tensor): Computed matrix root inverse.
+        root (int): Root of interest.
+        epsilon (float): Adds epsilon * I to matrix.
+
+    Returns:
+        absolute_error (Tensor): absolute error of matrix root inverse
+        relative_error (Tensor): relative error of matrix root inverse
+        residual (Tensor): residual of matrix root inverse
+
+    """
+
+    # check shape of matrix
+    if len(A.shape) != 2:
+        raise ValueError("Matrix is not 2-dimensional!")
+    elif A.shape[0] != A.shape[1]:
+        raise ValueError("Matrix is not square!")
+    elif A.shape != X_hat.shape:
+        raise ValueError("Matrix shapes do not match!")
+
+    # compute error by comparing against double precision
+    X = matrix_inverse_root(A.double(), root, epsilon=epsilon)
+    relative_error = torch.dist(X, X_hat, p=torch.inf) / torch.norm(X, p=torch.inf)
+
+    # compute residual
+    X_invr = torch.linalg.matrix_power(X_hat.double(), n=-root)
+    relative_residual = torch.dist(X_invr, A.double(), p=torch.inf) / torch.norm(
+        A.double(), p=torch.inf
+    )
+
+    return relative_error, relative_residual

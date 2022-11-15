@@ -166,6 +166,11 @@ class Parser:
             default=0.999,
             help="Grafting beta2 parameter for Shampoo.",
         )
+        parser.add_argument(
+            "--debug-mode",
+            action="store_true",
+            help="Use debug mode for examining root inverse residuals.",
+        )
 
         # arguments for distributed training
         # not used if using single GPU training
@@ -275,11 +280,13 @@ def instantiate_optimizer(
     use_nesterov: bool,
     use_bias_correction: bool,
     use_decoupled_weight_decay: bool,
+    preconditioner_dtype: DType,
     large_dim_method: LargeDimMethod,
     root_inv_strategy: RootInvStrategy,
     grafting_type: GraftingType,
     grafting_epsilon: float,
     grafting_beta2: float,
+    debug_mode: bool,
 ) -> torch.optim.Optimizer:
     if optimizer_type == OptimizerType.SGD:
         optimizer = torch.optim.SGD(
@@ -321,11 +328,13 @@ def instantiate_optimizer(
             use_nesterov=use_nesterov,
             use_bias_correction=use_bias_correction,
             use_decoupled_weight_decay=use_decoupled_weight_decay,
+            preconditioner_dtype=preconditioner_dtype,
             large_dim_method=large_dim_method,
             root_inv_strategy=root_inv_strategy,
             grafting_type=grafting_type,
             grafting_epsilon=grafting_epsilon,
             grafting_beta2=grafting_beta2,
+            debug_mode=debug_mode,
         )
     else:
         raise ValueError(f"Invalid OptimizerType {optimizer_type}!")
@@ -432,11 +441,13 @@ if __name__ == "__main__":
         use_nesterov=args.use_nesterov,
         use_bias_correction=args.use_bias_correction,
         use_decoupled_weight_decay=args.use_decoupled_weight_decay,
+        preconditioner_dtype=torch.float if args.preconditioner_dtype == DType.FLOAT else torch.float64,
         large_dim_method=args.large_dim_method,
         root_inv_strategy=RootInvStrategy.NONE,
         grafting_type=args.grafting_type,
         grafting_epsilon=args.grafting_epsilon,
         grafting_beta2=args.grafting_beta2,
+        debug_mode=args.debug_mode,
     )
 
     # train model

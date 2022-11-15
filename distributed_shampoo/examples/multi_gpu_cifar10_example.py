@@ -20,6 +20,7 @@ import torch.distributed as dist
 from distributed_shampoo.examples.convnet import ConvNet
 from distributed_shampoo.examples.single_gpu_cifar10_example import (
     instantiate_optimizer,
+    DType,
     LossMetrics,
     Parser,
 )
@@ -165,11 +166,13 @@ if __name__ == "__main__":
         use_nesterov=args.use_nesterov,
         use_bias_correction=args.use_bias_correction,
         use_decoupled_weight_decay=args.use_decoupled_weight_decay,
+        preconditioner_dtype=torch.float if args.preconditioner_dtype == DType.FLOAT else torch.float64,
         large_dim_method=args.large_dim_method,
         root_inv_strategy=args.root_inv_strategy,
         grafting_type=args.grafting_type,
         grafting_epsilon=args.grafting_epsilon,
         grafting_beta2=args.grafting_beta2,
+        debug_mode=args.debug_mode,
     )
 
     # train model
