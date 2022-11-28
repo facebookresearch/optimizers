@@ -7,8 +7,9 @@ LICENSE file in the root directory of this source tree.
 
 """
 
+import math
 import unittest
-from typing import Optional, Tuple
+from typing import cast, Tuple
 
 import torch
 
@@ -130,33 +131,30 @@ class MultiDimCatTest(unittest.TestCase):
 class AdagradPreconditionerTest(unittest.TestCase):
     def _setup_test(
         self, beta2, epsilon, use_bias_correction
-    ) -> Tuple[
-        torch.Tensor, torch.Tensor, Optional[torch.Tensor], AdagradPreconditioner
-    ]:
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, AdagradPreconditioner]:
         param = torch.tensor([1.0, 2.0], requires_grad=True)
         loss = torch.dot(param, param)
         loss.backward()
         adagrad = AdagradPreconditioner(
             param, beta2=beta2, epsilon=epsilon, use_bias_correction=use_bias_correction
         )
-        return param, loss, param.grad, adagrad
+        return param, loss, cast(torch.Tensor, param.grad), adagrad
 
     def _test_update_preconditioners(self, beta2, use_bias_correction) -> None:
         param, loss, grad, adagrad = self._setup_test(
             beta2=beta2, epsilon=0.0, use_bias_correction=use_bias_correction
         )
-        # pyre-fixme[58]: `**` is not supported for operand types
-        #  `Optional[torch._tensor.Tensor]` and `int`.
-        precond_sol = grad**2
+        precond_sol = grad**torch.tensor(2)
         precond_sol = precond_sol if beta2 == 1.0 else (1.0 - beta2) * precond_sol
         bias_correction2 = torch.tensor(1.0 if not use_bias_correction else 1.0 - beta2)
-        # pyre-fixme[6]: For 1st param expected `Tensor` but got `Optional[Tensor]`.
         adagrad.update_preconditioners(grad)
 
         with self.subTest("Test preconditioner"):
             torch.testing.assert_close(adagrad._preconditioner, precond_sol)
         with self.subTest("Test bias correction"):
-            torch.testing.assert_close(torch.tensor(adagrad._bias_correction2), bias_correction2)
+            torch.testing.assert_close(
+                torch.tensor(adagrad._bias_correction2), bias_correction2
+            )
         with self.subTest("Test number of updates"):
             self.assertEqual(adagrad._num_updates, 1)
 
@@ -173,18 +171,14 @@ class AdagradPreconditionerTest(unittest.TestCase):
         param, loss, grad, adagrad = self._setup_test(
             beta2=1.0, epsilon=1.0, use_bias_correction=False
         )
-        # pyre-fixme[6]: For 1st param expected `Tensor` but got `Optional[Tensor]`.
         preconditioned_grad = adagrad.precondition(grad)
-        # pyre-fixme[6]: For 2nd param expected `Tensor` but got `Optional[Tensor]`.
         torch.testing.assert_close(preconditioned_grad, grad)
 
     def test_precondition_with_preconditioner_update(self) -> None:
         param, loss, grad, adagrad = self._setup_test(
             beta2=1.0, epsilon=0.0, use_bias_correction=False
         )
-        # pyre-fixme[6]: For 1st param expected `Tensor` but got `Optional[Tensor]`.
         adagrad.update_preconditioners(grad)
-        # pyre-fixme[6]: For 1st param expected `Tensor` but got `Optional[Tensor]`.
         preconditioned_grad = adagrad.precondition(grad)
         torch.testing.assert_close(preconditioned_grad, torch.ones(2))
 
@@ -193,7 +187,6 @@ class AdagradPreconditionerTest(unittest.TestCase):
             beta2=1.0, epsilon=1.0, use_bias_correction=False
         )
         with torch.no_grad():
-            # pyre-fixme[6]: For 2nd param expected `Tensor` but got `Optional[Tensor]`.
             adagrad.precondition_and_update(param, grad, 1.0)
         torch.testing.assert_close(param, torch.tensor([-1.0, -2.0]))
 
@@ -201,10 +194,8 @@ class AdagradPreconditionerTest(unittest.TestCase):
         param, loss, grad, adagrad = self._setup_test(
             beta2=1.0, epsilon=0.0, use_bias_correction=False
         )
-        # pyre-fixme[6]: For 1st param expected `Tensor` but got `Optional[Tensor]`.
         adagrad.update_preconditioners(grad)
         with torch.no_grad():
-            # pyre-fixme[6]: For 2nd param expected `Tensor` but got `Optional[Tensor]`.
             adagrad.precondition_and_update(param, grad, 1.0)
         torch.testing.assert_close(param, torch.tensor([0.0, 1.0]))
 
@@ -212,7 +203,6 @@ class AdagradPreconditionerTest(unittest.TestCase):
         param, loss, grad, adagrad = self._setup_test(
             beta2=1.0, epsilon=1.0, use_bias_correction=False
         )
-        # pyre-fixme[6]: For 1st param expected `Tensor` but got `Optional[Tensor]`.
         norm = adagrad.compute_norm(grad)
         torch.testing.assert_close(norm, torch.sqrt(torch.tensor(20.0)))
 
@@ -220,9 +210,7 @@ class AdagradPreconditionerTest(unittest.TestCase):
         param, loss, grad, adagrad = self._setup_test(
             beta2=1.0, epsilon=0.0, use_bias_correction=False
         )
-        # pyre-fixme[6]: For 1st param expected `Tensor` but got `Optional[Tensor]`.
         adagrad.update_preconditioners(grad)
-        # pyre-fixme[6]: For 1st param expected `Tensor` but got `Optional[Tensor]`.
         norm = adagrad.compute_norm(grad)
         torch.testing.assert_close(norm, torch.sqrt(torch.tensor(2.0)))
 
@@ -231,7 +219,7 @@ class AdagradPreconditionerTest(unittest.TestCase):
             beta2=1.0, epsilon=0.0, use_bias_correction=False
         )
         try:
-            adagrad.to("cpu")
+            adagrad.to(torch.device("cpu"))
         except Exception:
             self.fail(".to() raised Exception!")
 
@@ -242,12 +230,13 @@ class ShampooPreconditionerTest(unittest.TestCase):
         beta2,
         epsilon,
         use_bias_correction,
+        exponent_override=0,
         start_preconditioning_step=0,
         diagonal_threshold=None,
         grafting_type=GraftingType.NONE,
         grafting_epsilon=1e-3,
     ) -> Tuple[
-        torch.Tensor, torch.Tensor, Optional[torch.Tensor], ShampooPreconditioner
+        torch.Tensor, torch.Tensor, torch.Tensor, ShampooPreconditioner
     ]:
         param = torch.tensor([[0.0, 1.0, 2.0], [3.0, 4.0, 5.0]], requires_grad=True)
         loss = torch.linalg.norm(param, ord="fro") ** 2 / 2.0
@@ -256,6 +245,7 @@ class ShampooPreconditionerTest(unittest.TestCase):
             param,
             beta2=beta2,
             epsilon=epsilon,
+            exponent_override=exponent_override,
             use_bias_correction=use_bias_correction,
             dtype=torch.float,
             root_inv_strategy=RootInvStrategy.NONE,
@@ -264,9 +254,11 @@ class ShampooPreconditionerTest(unittest.TestCase):
             grafting_type=grafting_type,
             grafting_epsilon=grafting_epsilon,
         )
-        return param, loss, param.grad, shampoo
+        return param, loss, cast(torch.Tensor, param.grad), shampoo
 
-    def _test_update_preconditioners(self, beta2, use_bias_correction) -> None:
+    def _test_update_preconditioners(
+        self, beta2, use_bias_correction
+    ) -> ShampooPreconditioner:
         param, loss, grad, shampoo = self._setup_test(
             beta2=beta2, epsilon=0.0, use_bias_correction=use_bias_correction
         )
@@ -274,7 +266,6 @@ class ShampooPreconditionerTest(unittest.TestCase):
             param @ param.transpose(0, 1),
             param.transpose(0, 1) @ param,
         ]
-        # pyre-fixme[6]: For 1st param expected `Tensor` but got `Optional[Tensor]`.
         shampoo.update_preconditioners(grad)
 
         for i, (preconditioner, preconditioner_sol) in enumerate(
@@ -295,6 +286,8 @@ class ShampooPreconditionerTest(unittest.TestCase):
         with self.subTest("Test number of updates"):
             self.assertEqual(shampoo._num_updates, 1)
 
+        return shampoo
+
     def test_update_preconditioners_adagrad(self) -> None:
         self._test_update_preconditioners(beta2=1.0, use_bias_correction=False)
 
@@ -311,7 +304,6 @@ class ShampooPreconditionerTest(unittest.TestCase):
             use_bias_correction=False,
             start_preconditioning_step=-1,
         )
-        # pyre-fixme[6]: For 1st param expected `Tensor` but got `Optional[Tensor]`.
         preconditioned_grad = shampoo.precondition(grad)
         torch.testing.assert_close(preconditioned_grad, torch.zeros((2, 3)))
 
@@ -323,9 +315,7 @@ class ShampooPreconditionerTest(unittest.TestCase):
             start_preconditioning_step=-1,
         )
         shampoo.compute_root_inverse()
-        # pyre-fixme[6]: For 1st param expected `Tensor` but got `Optional[Tensor]`.
         preconditioned_grad = shampoo.precondition(grad)
-        # pyre-fixme[6]: For 2nd param expected `Tensor` but got `Optional[Tensor]`.
         torch.testing.assert_close(preconditioned_grad, grad)
 
     def test_precondition_with_diagonal_threshold(self) -> None:
@@ -333,9 +323,7 @@ class ShampooPreconditionerTest(unittest.TestCase):
             beta2=1.0, epsilon=1.0, use_bias_correction=False, diagonal_threshold=2
         )
         shampoo.compute_root_inverse()
-        # pyre-fixme[6]: For 1st param expected `Tensor` but got `Optional[Tensor]`.
         preconditioned_grad = shampoo.precondition(grad)
-        # pyre-fixme[6]: For 2nd param expected `Tensor` but got `Optional[Tensor]`.
         torch.testing.assert_close(preconditioned_grad, grad)
 
     def test_precondition_with_grafting(self) -> None:
@@ -347,9 +335,7 @@ class ShampooPreconditionerTest(unittest.TestCase):
             grafting_epsilon=1.0,
         )
         shampoo.compute_root_inverse()
-        # pyre-fixme[6]: For 1st param expected `Tensor` but got `Optional[Tensor]`.
         preconditioned_grad = shampoo.precondition(grad)
-        # pyre-fixme[6]: For 2nd param expected `Tensor` but got `Optional[Tensor]`.
         torch.testing.assert_close(preconditioned_grad, grad)
 
     def test_precondition_and_update(self) -> None:
@@ -361,7 +347,6 @@ class ShampooPreconditionerTest(unittest.TestCase):
         )
         shampoo.compute_root_inverse()
         with torch.no_grad():
-            # pyre-fixme[6]: For 2nd param expected `Tensor` but got `Optional[Tensor]`.
             shampoo.precondition_and_update(param, grad, 1.0)
         torch.testing.assert_close(param, torch.zeros((2, 3)))
 
@@ -375,7 +360,6 @@ class ShampooPreconditionerTest(unittest.TestCase):
         )
         shampoo.compute_root_inverse()
         with torch.no_grad():
-            # pyre-fixme[6]: For 2nd param expected `Tensor` but got `Optional[Tensor]`.
             shampoo.precondition_and_update(param, grad, 1.0)
         torch.testing.assert_close(param, torch.zeros((2, 3)))
 
@@ -384,7 +368,6 @@ class ShampooPreconditionerTest(unittest.TestCase):
             beta2=1.0, epsilon=1.0, use_bias_correction=False, diagonal_threshold=2
         )
         shampoo.compute_root_inverse()
-        # pyre-fixme[6]: For 1st param expected `Tensor` but got `Optional[Tensor]`.
         norm = shampoo.compute_norm(grad)
         torch.testing.assert_close(norm, torch.sqrt(torch.tensor(55.0)))
 
@@ -393,9 +376,74 @@ class ShampooPreconditionerTest(unittest.TestCase):
             beta2=1.0, epsilon=1.0, use_bias_correction=False, diagonal_threshold=2
         )
         try:
-            shampoo.to("cpu")
+            shampoo.to(torch.device("cpu"))
         except Exception:
             self.fail(".to() raised Exception!")
+
+    def test_reset_preconditioners(self) -> None:
+        shampoo = self._test_update_preconditioners(
+            beta2=1.0, use_bias_correction=False
+        )
+        shampoo.reset_preconditioners()
+        for i, preconditioner in enumerate(shampoo._preconditioners):
+            with self.subTest(f"Test preconditioner {i}"):
+                torch.testing.assert_allclose(
+                    preconditioner.factor_matrix,
+                    torch.zeros_like(preconditioner.factor_matrix),
+                )
+
+    def test_exponent_override(self) -> None:
+        """
+        To test, will update preconditioners using two gradients:
+
+           G_1 = [[1, 0, 0], [0, 1, 0]]
+           G_2 = [[0, 0, 0], [0, 0, 2]]
+
+        Note that:
+
+           L = G_1 G_1^T + G_2 G_2^T = [[1, 0], [0, 5]]
+           R = G_1^T G_1 + G_2^T G_2 = [[1, 0, 0], [0, 1, 0], [0, 0, 4]]
+
+        and we can compute the root inverse of these matrices.
+        """
+
+        param, loss, grad, shampoo = self._setup_test(
+            beta2=1.0,
+            epsilon=0.0,
+            use_bias_correction=False,
+            exponent_override=2,
+        )
+        with self.subTest("Test stored exponent override int"):
+            self.assertEqual(shampoo._exponent_override, 2)
+
+        grad_1 = torch.zeros_like(grad)
+        grad_1[0, 0] = 1
+        grad_1[1, 1] = 1
+        shampoo.update_preconditioners(grad_1)
+
+        grad_2 = torch.zeros_like(grad)
+        grad_2[1, 2] = 2
+        shampoo.update_preconditioners(grad_2)
+
+        shampoo.compute_root_inverse()
+        left_root_inverse = torch.diag(
+            torch.tensor([1.0, 1.0 / math.sqrt(5.0)])
+        )
+        right_root_inverse = torch.diag(torch.tensor([1.0, 1.0, 0.5]))
+
+        with self.subTest("Test left root inverse matrix"):
+            torch.testing.assert_close(
+                shampoo._preconditioners[0].inv_factor_matrix, left_root_inverse
+            )
+        with self.subTest("Test right root inverse matrix"):
+            torch.testing.assert_close(
+                shampoo._preconditioners[1].inv_factor_matrix, right_root_inverse
+            )
+
+        true_preconditioned_grad = left_root_inverse @ grad @ right_root_inverse
+        preconditioned_grad = shampoo.precondition(grad)
+        with self.subTest("Test preconditioned grad"):
+            torch.testing.assert_close(preconditioned_grad, true_preconditioned_grad)
 
 
 if __name__ == "__main__":

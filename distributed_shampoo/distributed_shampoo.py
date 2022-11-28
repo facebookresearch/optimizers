@@ -142,14 +142,15 @@ class DistributedShampoo(Optimizer):
             of gradient and its square (Default: (0.9, 1.0))
         epsilon (float): term added to the denominator to improve numerical stability (Default: 1e-12)
         momentum (float): momentum parameter (default: 0.)
-        use_nesterov (bool): uses Nesterov momentum (default: True)
-        use_bias_correction (bool): flag for using bias correction (Default: True)
-        use_decoupled_weight_decay (bool): Flag for using AdamW-style decoupled weight decay (Default: True)
         weight_decay (float): weight decay (L2 penalty) (Default: 0)
         max_preconditioner_dim (int): maximum preconditioner dimension (Default: 1024)
         precondition_frequency (int): frequency for computing root inverse preconditioner (Default: 1)
         start_preconditioning_step (int): iteration to start computing inverse preconditioner. If -1, uses
             the same value as precondition_frequency. (Default: -1)
+        exponent_override (int): exponent to use in Shampoo. (Default: 0)
+        use_nesterov (bool): uses Nesterov momentum (default: False)
+        use_bias_correction (bool): flag for using bias correction (Default: True)
+        use_decoupled_weight_decay (bool): Flag for using AdamW-style decoupled weight decay (Default: True)
         preconditioner_dtype (torch.dtype): data type for preconditioner (Default: torch.float)
         large_dim_method (LargeDimMethod): method for handling large scale tensors. (Default: LargeDimMethod.BLOCKING)
         root_inv_strategy (RootInvStrategy): distributes root inverse computation across multiple GPU workers using
@@ -173,6 +174,7 @@ class DistributedShampoo(Optimizer):
         max_preconditioner_dim: int = 1024,
         precondition_frequency: int = 1,
         start_preconditioning_step: int = -1,
+        exponent_override: int = 0,
         use_nesterov: bool = False,
         use_bias_correction: bool = True,
         use_decoupled_weight_decay: bool = True,
@@ -237,6 +239,7 @@ class DistributedShampoo(Optimizer):
         # Initialize algorithm-related fields.
         self._max_preconditioner_dim = max_preconditioner_dim
         self._precondition_frequency = precondition_frequency
+        self._exponent_override = exponent_override
         self._root_inv_strategy = root_inv_strategy
         self._use_merge_dims = use_merge_dims
         self._large_dim_method = large_dim_method
@@ -591,6 +594,12 @@ class DistributedShampoo(Optimizer):
             for p in group[PARAMS]:
                 self.state[p][STEP] += 1
         return self.state[p][STEP]
+
+    @torch.no_grad()
+    def reset_preconditioners(self):
+        for group in self.param_groups:
+            for p in group[PARAMS]:
+                self.state[p][PRECONDITIONERS].reset_preconditioners()
 
     @torch.no_grad()
     def step(self, closure=None):

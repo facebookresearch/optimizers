@@ -300,6 +300,8 @@ class ShampooPreconditioner(Preconditioner):
         param (Tensor): Parameter of interest.
         beta2 (float): Exponential moving average factor. If beta2 = 1., will use Adagrad update. (Default: 1.0)
         epsilon (float): Epsilon term for regularizing preconditioner to ensure positive definiteness. (Default: 1e-12)
+        exponent_override (int): Exponent override for taking the root of the matrix. If exponent_override = 0, uses
+            2 * order of the tensor. (Default: 0)
         use_bias_correction (bool): Flag for using bias correction. (Default: True)
         diagonal_threshold (int): Threshold for using diagonal preconditioners. If None, disabled. (Default: None)
         dtype (torch.dtype): Data type for accumulating and computing root inverse of preconditioners. (Default: torch.float)
@@ -317,6 +319,7 @@ class ShampooPreconditioner(Preconditioner):
         param,
         beta2: float = 1.0,
         epsilon: float = 1e-12,
+        exponent_override: int = 0,
         use_bias_correction: bool = True,
         diagonal_threshold: Union[None, int] = None,
         dtype: torch.dtype = torch.float,
@@ -333,6 +336,7 @@ class ShampooPreconditioner(Preconditioner):
         # Initialize parameters.
         self._beta2 = beta2
         self._epsilon = epsilon
+        self._exponent_override = exponent_override
         self._diagonal_threshold = diagonal_threshold
         self._dtype = dtype
         self._num_updates = 0
@@ -546,10 +550,15 @@ class ShampooPreconditioner(Preconditioner):
     ) -> None:
         # Get group rank.
         group_rank = dist.get_group_rank(
-            group if group else dist.distributed_c10d.GroupMember.WORLD, rank
+            # pyre-fixme[6]: For 1st param expected `ProcessGroup` but got
+            #  `Optional[ProcessGroup]`.
+            group if group is not None else dist.distributed_c10d.GroupMember.WORLD,
+            rank,
         )
 
-        root = 2 * self._order
+        root = (
+            2 * self._order if self._exponent_override == 0 else self._exponent_override
+        )
         for k, preconditioner in enumerate(self._preconditioners):
 
             # Check that this is a full Shampoo preconditioner.
@@ -631,7 +640,11 @@ class ShampooPreconditioner(Preconditioner):
         for preconditioner in self._preconditioners:
             if preconditioner.preconditioner_type == PreconditionerType.FULL:
                 global_source_rank = dist.get_global_rank(
-                    group=group if group else dist.distributed_c10d.GroupMember.WORLD,
+                    # pyre-fixme[6]: For 1st param expected `ProcessGroup` but got
+                    #  `Optional[ProcessGroup]`.
+                    group=group
+                    if group is not None
+                    else dist.distributed_c10d.GroupMember.WORLD,
                     group_rank=preconditioner.group_source_rank,
                 )
                 dist.broadcast(
@@ -663,6 +676,10 @@ class ShampooPreconditioner(Preconditioner):
                     )
         return preconditioner_count
 
+    def reset_preconditioners(self) -> None:
+        for preconditioner in self._preconditioners:
+            preconditioner.factor_matrix.zero_()
+
 
 class BlockShampooPreconditioner(Preconditioner):
     """Shampoo with blocking applied to the parameters.
@@ -673,6 +690,8 @@ class BlockShampooPreconditioner(Preconditioner):
         param (Tensor): Parameter of interest.
         beta2 (float): Exponential moving average factor. If beta2 = 1., will use Adagrad update. (Default: 1.0)
         epsilon (float): Epsilon term for regularizing preconditioner to ensure positive definiteness. (Default: 1e-12)
+        exponent_override (int): Exponent override for taking the root of the matrix. If exponent_override = 0, uses
+            2 * order of the tensor. (Default: 0)
         use_bias_correction (bool): Flag for using bias correction. (Default: True)
         block_size (int): Block size for blocking large tensors. (Default: 1024)
         dtype (torch.dtype): Data type for accumulating and computing root inverse of preconditioners. (Default: torch.float)
@@ -691,6 +710,7 @@ class BlockShampooPreconditioner(Preconditioner):
         param,
         beta2: float = 1.0,
         epsilon: float = 1e-12,
+        exponent_override: int = 0,
         use_bias_correction: bool = True,
         block_size: int = 1024,
         dtype: torch.dtype = torch.float,
@@ -707,6 +727,7 @@ class BlockShampooPreconditioner(Preconditioner):
         # Set parameters.
         self._beta2 = beta2
         self._epsilon = epsilon
+        self._exponent_override = exponent_override
         self._use_bias_correction = use_bias_correction
         self._block_size = block_size
         self._dtype = dtype
@@ -738,6 +759,7 @@ class BlockShampooPreconditioner(Preconditioner):
                 p,
                 beta2=beta2,
                 epsilon=epsilon,
+                exponent_override=exponent_override,
                 use_bias_correction=use_bias_correction,
                 dtype=dtype,
                 root_inv_strategy=root_inv_strategy,
@@ -834,6 +856,10 @@ class BlockShampooPreconditioner(Preconditioner):
                 preconditioner_count, group_size
             )
         return preconditioner_count
+
+    def reset_preconditioners(self) -> None:
+        for preconditioner in self._split_preconditioners:
+            preconditioner.reset_preconditioners()
 
 
 ###### GRAFTING CLASSES ######
