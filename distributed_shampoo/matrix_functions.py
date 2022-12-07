@@ -27,6 +27,20 @@ class RootInvMethod(enum.Enum):
     NEWTON = 1
 
 
+def check_diagonal(A: Tensor) -> Tensor:
+    """Checks if symmetric matrix is diagonal. """
+
+    A_shape = A.shape
+    if len(A_shape) != 2:
+        raise ValueError("Matrix is not 2-dimensional!")
+
+    m, n = A_shape
+    if m != n:
+        raise ValueError("Matrix is not square!")
+
+    return ~torch.any(A.reshape(-1)[:-1].reshape(m - 1, n + 1)[:, 1:].bool())
+
+
 def matrix_inverse_root(
     A: Tensor,
     root: int,
@@ -34,8 +48,9 @@ def matrix_inverse_root(
     root_inv_method: RootInvMethod = RootInvMethod.EIGEN,
     max_iterations: int = 1000,
     tolerance: float = 1e-6,
+    is_diagonal: bool = False,
 ) -> Tensor:
-    """Computes matrix root inverse.
+    """Computes matrix root inverse of square symmetric positive definite matrix.
 
     Args:
         A (Tensor): Square matrix of interest.
@@ -43,14 +58,30 @@ def matrix_inverse_root(
         epsilon (float): Adds epsilon * I to matrix before taking matrix root. (Default: 0.0)
         root_inv_method (RootInvMethod): Specifies method to use to compute root inverse. (Default: RootInvMethod.EIGEN)
         max_iterations (int): Maximum number of iterations for coupled Newton iteration. (Default: 1000)
+        tolerance (float): Tolerance for computing root inverse using coupled Newton iteration. (Default: 1e-6)
+        is_diagonal (bool): Flag for whether or not matrix is diagonal. If so, will compute root inverse by computing
+            root inverse of diagonal entries. (Default: False)
 
     Returns:
         X (Tensor): Inverse root of matrix A.
 
     """
 
-    if root_inv_method == RootInvMethod.EIGEN:
-        X, _, _ = _matrix_root_eigen(A=A, root=root, epsilon=epsilon)
+    # check if matrix is scalar
+    if len(A.shape) == 0 or (len(A.shape) == 1 and A.shape[0] == 1):
+        alpha = torch.tensor(-1 / root)
+        return A**alpha
+
+    # check matrix shape
+    if len(A.shape) != 2:
+        raise ValueError("Matrix is not 2-dimensional!")
+    elif A.shape[0] != A.shape[1]:
+        raise ValueError("Matrix is not square!")
+
+    if is_diagonal:
+        X = matrix_root_diagonal(A=A, root=root, epsilon=epsilon, inverse=True, return_full_matrix=True)
+    elif root_inv_method == RootInvMethod.EIGEN:
+        X, _, _ = _matrix_root_eigen(A=A, root=root, epsilon=epsilon, inverse=True)
     elif root_inv_method == RootInvMethod.NEWTON:
         X, _, termination_flag, _, _ = _matrix_inverse_root_newton(
             A=A,
@@ -71,6 +102,47 @@ def matrix_inverse_root(
         )
 
     return X
+
+
+def matrix_root_diagonal(
+    A: Tensor,
+    root: int,
+    epsilon: float = 0.0,
+    inverse: bool = True,
+    return_full_matrix: bool = False,
+) -> Tensor:
+    """Computes matrix inverse root for a diagonal matrix by taking inverse square root of diagonal entries.
+
+    Args:
+        A (Tensor): One- or two-dimensional tensor containing either the diagonal entries of the matrix or a diagonal matrix.
+        root (int): Root of interest. Any natural number.
+        epsilon (float): Adds epsilon * I to matrix before taking matrix root. (Default: 0.0)
+        inverse (bool): Returns inverse root matrix. (Default: True)
+        return_full_matrix (bool): Returns full matrix by taking torch.diag of diagonal entries. (bool: False)
+
+    Returns:
+        X (Tensor): Inverse root of diagonal entries.
+
+    """
+
+    # check order of tensor
+    order = len(A.shape)
+    if order == 2:
+        A = torch.diag(A)
+    elif order > 2:
+        raise ValueError("Matrix is not 2-dimensional!")
+
+    # check if root is positive integer
+    if root <= 0:
+        raise ValueError(f"Root {root} should be positive!")
+
+    # compute matrix power
+    alpha = 1 / root
+    if inverse:
+        alpha = -alpha
+
+    X = (A + epsilon).pow(alpha)
+    return torch.diag(X) if return_full_matrix else X
 
 
 def _matrix_root_eigen(
@@ -109,19 +181,6 @@ def _matrix_root_eigen(
     if inverse:
         alpha = -alpha
 
-    # check if matrix is scalar
-    if len(A.shape) == 0 or (len(A.shape) == 1 and A.shape[0] == 1):
-        # pyre-fixme[58]: `**` is not supported for operand types `Tensor` and `float`.
-        # pyre-fixme[7]: Expected `Tuple[Tensor, Tensor, Tensor]` but got
-        #  `Tuple[float, Tensor, Tensor]`.
-        return A**alpha, A, torch.tensor(1.0)
-
-    # check matrix shape
-    if len(A.shape) != 2:
-        raise ValueError("Matrix is not 2-dimensional!")
-    elif A.shape[0] != A.shape[1]:
-        raise ValueError("Matrix is not square!")
-
     # compute eigendecomposition and compute minimum eigenvalue
     L, Q = torch.linalg.eigh(A)
     lambda_min = torch.min(L)
@@ -146,7 +205,7 @@ def _matrix_inverse_root_newton(
     max_iterations: int = 1000,
     tolerance: float = 1e-6,
 ) -> Tuple[Tensor, Tensor, NewtonConvergenceFlag, int, Tensor]:
-    """Compute matrix square root using coupled inverse Newton iteration.
+    """Compute matrix inverse root using coupled inverse Newton iteration.
 
         alpha <- -1 / p
         X <- 1/c * I

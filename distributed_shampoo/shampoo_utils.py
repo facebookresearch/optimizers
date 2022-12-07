@@ -19,6 +19,7 @@ import torch
 import torch.distributed as dist
 
 from distributed_shampoo.matrix_functions import (
+    check_diagonal,
     compute_matrix_root_inverse_residuals,
     matrix_inverse_root,
 )
@@ -235,7 +236,7 @@ class AdagradPreconditioner(Preconditioner):
             self._preconditioner.addcmul_(grad, grad, value=1)
         else:
             self._preconditioner.mul_(self._beta2).addcmul_(
-                grad, torch.conj(grad), value=1 - self._beta2
+                grad, grad, value=1 - self._beta2
             )
 
         self._num_updates += 1
@@ -284,6 +285,7 @@ class ShampooKroneckerFactor:
     inv_factor_matrix: Optional[Tensor] = None
     group_source_rank: Optional[int] = None
     index: Optional[str] = None
+    is_diagonal: Optional[Tensor] = torch.tensor(True)
 
     def to(self, device):
         self.factor_matrix = self.factor_matrix.to(device)
@@ -466,6 +468,11 @@ class ShampooPreconditioner(Preconditioner):
                     diagonal_or_outer_product = diagonal_or_outer_product.to(
                         dtype=self._dtype
                     )
+                if preconditioner.is_diagonal and not check_diagonal(diagonal_or_outer_product):
+                    preconditioner.is_diagonal = False
+                    logger.info(
+                        f"Preconditioner {preconditioner.index} is not diagonal."
+                    )
 
             preconditioner.factor_matrix.add_(
                 diagonal_or_outer_product,
@@ -482,7 +489,7 @@ class ShampooPreconditioner(Preconditioner):
                 1.0 - self._beta2**self._num_updates
             )
 
-    def _shampoo_precondition(self, grad: Tensor) -> Tensor:
+    def shampoo_precondition(self, grad: Tensor) -> Tensor:
         preconditioned_grad = grad.clone()
         for k, preconditioner in enumerate(self._preconditioners):
 
@@ -529,7 +536,7 @@ class ShampooPreconditioner(Preconditioner):
 
         return preconditioned_grad
 
-    def _graft_precondition(self, grad: Tensor) -> Tensor:
+    def graft_precondition(self, grad: Tensor) -> Tensor:
         return (
             self._grafting.precondition(grad)
             if self._grafting_type != GraftingType.NONE
@@ -538,9 +545,9 @@ class ShampooPreconditioner(Preconditioner):
 
     def precondition(self, grad: Tensor) -> Tensor:
         return (
-            self._graft_precondition
+            self.graft_precondition
             if self._num_updates <= self._start_preconditioning_step
-            else self._shampoo_precondition
+            else self.shampoo_precondition
         )(grad)
 
     def compute_root_inverse(
@@ -587,6 +594,7 @@ class ShampooPreconditioner(Preconditioner):
                     A=bias_corrected_preconditioner,
                     root=root,
                     epsilon=self._epsilon,
+                    is_diagonal=preconditioner.is_diagonal,
                 )
 
                 if inv_factor_matrix.dtype != preconditioner.inv_factor_matrix.dtype:
@@ -785,6 +793,32 @@ class BlockShampooPreconditioner(Preconditioner):
         ):
             block_preconditioner.update_preconditioners(block_grad)
         self._num_updates += 1
+
+    def shampoo_precondition(self, grad: Tensor) -> Tensor:
+        split_grad = self._combine_and_split_dims(grad)
+        assert len(self._split_preconditioners) == len(split_grad)
+        split_preconditioned_grad = [
+            p.shampoo_precondition(g) for p, g in zip(self._split_preconditioners, split_grad)
+        ]
+        preconditioned_grad = multi_dim_cat(split_preconditioned_grad, self._num_splits)
+        return (
+            preconditioned_grad.view(self._original_dims)
+            if self._use_merge_dims
+            else preconditioned_grad
+        )
+
+    def graft_precondition(self, grad: Tensor) -> Tensor:
+        split_grad = self._combine_and_split_dims(grad)
+        assert len(self._split_preconditioners) == len(split_grad)
+        split_preconditioned_grad = [
+            p.graft_precondition(g) for p, g in zip(self._split_preconditioners, split_grad)
+        ]
+        preconditioned_grad = multi_dim_cat(split_preconditioned_grad, self._num_splits)
+        return (
+            preconditioned_grad.view(self._original_dims)
+            if self._use_merge_dims
+            else preconditioned_grad
+        )
 
     def precondition(self, grad: Tensor) -> Tensor:
         split_grad = self._combine_and_split_dims(grad)

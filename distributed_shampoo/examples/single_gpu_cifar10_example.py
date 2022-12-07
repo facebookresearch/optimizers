@@ -122,6 +122,12 @@ class Parser:
             help="Start preconditioning step for Shampoo.",
         )
         parser.add_argument(
+            "--exponent-override",
+            type=int,
+            default=0,
+            help="Exponent override for Shampoo root inverse.",
+        )
+        parser.add_argument(
             "--use-nesterov",
             action="store_true",
             help="Use Nesterov momentum for SGD and Shampoo.",
@@ -135,6 +141,11 @@ class Parser:
             "--use-decoupled-weight-decay",
             action="store_true",
             help="Use decoupled weight decay for Adam and Shampoo.",
+        )
+        parser.add_argument(
+            "--use-separate-momentum",
+            action="store_true",
+            help="Use separate momentum between grafted method and Shampoo.",
         )
         parser.add_argument(
             "--preconditioner-dtype",
@@ -277,9 +288,11 @@ def instantiate_optimizer(
     max_preconditioner_dim: int,
     precondition_frequency: int,
     start_preconditioning_step: int,
+    exponent_override: int,
     use_nesterov: bool,
     use_bias_correction: bool,
     use_decoupled_weight_decay: bool,
+    use_separate_momentum: bool,
     preconditioner_dtype: DType,
     large_dim_method: LargeDimMethod,
     root_inv_strategy: RootInvStrategy,
@@ -325,9 +338,11 @@ def instantiate_optimizer(
             max_preconditioner_dim=max_preconditioner_dim,
             precondition_frequency=precondition_frequency,
             start_preconditioning_step=start_preconditioning_step,
+            exponent_override=exponent_override,
             use_nesterov=use_nesterov,
             use_bias_correction=use_bias_correction,
             use_decoupled_weight_decay=use_decoupled_weight_decay,
+            use_separate_momentum=use_separate_momentum,
             preconditioner_dtype=preconditioner_dtype,
             large_dim_method=large_dim_method,
             root_inv_strategy=root_inv_strategy,
@@ -438,9 +453,11 @@ if __name__ == "__main__":
         max_preconditioner_dim=args.max_preconditioner_dim,
         precondition_frequency=args.precondition_frequency,
         start_preconditioning_step=args.start_preconditioning_step,
+        exponent_override=args.exponent_override,
         use_nesterov=args.use_nesterov,
         use_bias_correction=args.use_bias_correction,
         use_decoupled_weight_decay=args.use_decoupled_weight_decay,
+        use_separate_momentum=args.use_separate_momentum,
         preconditioner_dtype=torch.float if args.preconditioner_dtype == DType.FLOAT else torch.float64,
         large_dim_method=args.large_dim_method,
         root_inv_strategy=RootInvStrategy.NONE,

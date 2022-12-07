@@ -37,6 +37,7 @@ EXP_AVG = "exp_avg"
 EPSILON = "epsilon"
 GRAFTING_BETA2 = "grafting_beta2"
 GRAFTING_EPSILON = "grafting_epsilon"
+GRAFTING_MOMENTUM = "grafting_momentum"
 LR = "lr"
 MOMENTUM = "momentum"
 PARAMS = "params"
@@ -151,6 +152,8 @@ class DistributedShampoo(Optimizer):
         use_nesterov (bool): uses Nesterov momentum (default: False)
         use_bias_correction (bool): flag for using bias correction (Default: True)
         use_decoupled_weight_decay (bool): Flag for using AdamW-style decoupled weight decay (Default: True)
+        use_separate_momentum (bool): Flag for using separate momentum terms between Shampoo and the grafted method.
+            (Default: False)
         preconditioner_dtype (torch.dtype): data type for preconditioner (Default: torch.float)
         large_dim_method (LargeDimMethod): method for handling large scale tensors. (Default: LargeDimMethod.BLOCKING)
         root_inv_strategy (RootInvStrategy): distributes root inverse computation across multiple GPU workers using
@@ -178,6 +181,7 @@ class DistributedShampoo(Optimizer):
         use_nesterov: bool = False,
         use_bias_correction: bool = True,
         use_decoupled_weight_decay: bool = True,
+        use_separate_momentum: bool = False,
         preconditioner_dtype: torch.dtype = torch.float,
         large_dim_method: LargeDimMethod = LargeDimMethod.BLOCKING,
         root_inv_strategy: RootInvStrategy = RootInvStrategy.INTRA_NODE_ONLY,
@@ -251,6 +255,7 @@ class DistributedShampoo(Optimizer):
         self._grafting_beta2 = grafting_beta2
         self._parameter_count = 0
         self._use_nesterov = use_nesterov
+        self._use_separate_momentum = use_separate_momentum
         self._debug_mode = debug_mode
         if self._use_nesterov and momentum == 0.0:
             logger.warning(
@@ -683,20 +688,55 @@ class DistributedShampoo(Optimizer):
                     # Otherwise, uses the precondition function in order to apply
                     # momentum to the entire update to the parameters.
                     else:
-                        # Compute search direction / preconditioned gradient.
-                        search_direction = state[PRECONDITIONERS].precondition(grad)
+                        # Uses two separate momentum terms for the grafted and Shampoo methods.
+                        if self._use_separate_momentum:
 
-                        # Adds decoupled weight decay term.
-                        if self._use_decoupled_weight_decay and weight_decay != 0:
-                            search_direction.add_(p, alpha=weight_decay)
+                            # Compute search direction / preconditioned gradient for both Shampoo and
+                            # grafted methods separately.
+                            grafted_direction = state[PRECONDITIONERS].graft_precondition(grad)
+                            shampoo_direction = state[PRECONDITIONERS].shampoo_precondition(grad)
 
-                        # Generates momentum term and applies momentum or stochastic
-                        # primal iterate averaging.
-                        momentum_direction = state.setdefault(
-                            MOMENTUM,
-                            torch.zeros_like(grad, memory_format=torch.preserve_format),
-                        )
-                        momentum_direction.mul_(momentum_param).add_(search_direction)
+                            # Adds decoupled weight decay term to both directions.
+                            if self._use_decoupled_weight_decay and weight_decay != 0:
+                                grafted_direction.add_(p, alpha=weight_decay)
+                                shampoo_direction.add_(p, alpha=weight_decay)
+
+                            # Generates momentum term and applies momentum or stochastic
+                            # primal iterate averaging.
+                            grafted_momentum_direction = state.setdefault(
+                                GRAFTING_MOMENTUM,
+                                torch.zeros_like(grad, memory_format=torch.preserve_format),
+                            )
+                            shampoo_momentum_direction = state.setdefault(
+                                MOMENTUM,
+                                torch.zeros_like(grad, memory_format=torch.preserve_format),
+                            )
+                            grafted_momentum_direction.mul_(momentum_param).add_(grafted_direction)
+                            shampoo_momentum_direction.mul_(momentum_param).add_(shampoo_direction)
+
+                            # Select which direction to use (with possible Nesterov acceleration).
+                            if iteration < self._start_preconditioning_step:
+                                search_direction = grafted_direction
+                                momentum_direction = grafted_momentum_direction
+                            else:
+                                search_direction = shampoo_direction
+                                momentum_direction = shampoo_momentum_direction
+
+                        else:
+                            # Compute search direction / preconditioned gradient.
+                            search_direction = state[PRECONDITIONERS].precondition(grad)
+
+                            # Adds decoupled weight decay term.
+                            if self._use_decoupled_weight_decay and weight_decay != 0:
+                                search_direction.add_(p, alpha=weight_decay)
+
+                            # Generates momentum term and applies momentum or stochastic
+                            # primal iterate averaging.
+                            momentum_direction = state.setdefault(
+                                MOMENTUM,
+                                torch.zeros_like(grad, memory_format=torch.preserve_format),
+                            )
+                            momentum_direction.mul_(momentum_param).add_(search_direction)
 
                         # Incorporates Nesterov momentum.
                         if self._use_nesterov:
