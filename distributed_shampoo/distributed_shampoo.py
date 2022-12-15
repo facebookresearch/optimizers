@@ -28,7 +28,6 @@ from distributed_shampoo.shampoo_utils import (
     RootInvStrategy,
     ShampooPreconditioner,
 )
-from torch.optim.optimizer import Optimizer
 
 logger = logging.getLogger(__name__)
 
@@ -46,14 +45,16 @@ STEP = "step"
 WEIGHT_DECAY = "weight_decay"
 
 
-class DistributedShampoo(Optimizer):
+class DistributedShampoo(torch.optim.Optimizer):
     """Implements distributed Shampoo algorithm.
 
     Implemented by:
         Hao-Jun Michael Shi (Meta Platforms, Inc.)
         Tsung-Hsien Lee (Cruise)
 
-    with support from: Rohan Anil (Google), Vineet Gupta (Google), Dheevatsa Mudigere (Meta), and Mike Rabbat (Meta).
+    with support from:
+        Rohan Anil (Google), Vineet Gupta (Google), Zhijing Li (Meta), Dheevatsa Mudigere (Nvidia),
+        Mike Rabbat (Meta), and Kaushik Rangadurai (Meta).
 
     Partly based on the work in:
     - https://arxiv.org/pdf/1802.09568.pdf
@@ -149,6 +150,7 @@ class DistributedShampoo(Optimizer):
         start_preconditioning_step (int): iteration to start computing inverse preconditioner. If -1, uses
             the same value as precondition_frequency. (Default: -1)
         exponent_override (int): exponent to use in Shampoo. (Default: 0)
+        exponent_multiplier (float): number to be multiplied to the numerator of the inverse root. (Default: 1.0)
         use_nesterov (bool): uses Nesterov momentum (default: False)
         use_bias_correction (bool): flag for using bias correction (Default: True)
         use_decoupled_weight_decay (bool): Flag for using AdamW-style decoupled weight decay (Default: True)
@@ -178,6 +180,7 @@ class DistributedShampoo(Optimizer):
         precondition_frequency: int = 1,
         start_preconditioning_step: int = -1,
         exponent_override: int = 0,
+        exponent_multiplier: float = 1.0,
         use_nesterov: bool = False,
         use_bias_correction: bool = True,
         use_decoupled_weight_decay: bool = True,
@@ -244,6 +247,7 @@ class DistributedShampoo(Optimizer):
         self._max_preconditioner_dim = max_preconditioner_dim
         self._precondition_frequency = precondition_frequency
         self._exponent_override = exponent_override
+        self._exponent_multiplier = exponent_multiplier
         self._root_inv_strategy = root_inv_strategy
         self._use_merge_dims = use_merge_dims
         self._large_dim_method = large_dim_method
@@ -345,8 +349,8 @@ class DistributedShampoo(Optimizer):
         for group in self.param_groups:
             for idx, p in enumerate(group[PARAMS]):
                 state = self.state[p]
-                dims = torch.tensor(p.shape)
-                state[STEP] = 0
+                dims = torch.as_tensor(p.shape)
+                state[STEP] = torch.as_tensor(0)
 
                 # Blocks the tensor and applies Shampoo to each block, with block
                 # size equal to the max_preconditioner_dim; see feature above.
@@ -365,6 +369,7 @@ class DistributedShampoo(Optimizer):
                         grafting_type=self._grafting_type,
                         grafting_beta2=self._grafting_beta2,
                         grafting_epsilon=self._grafting_epsilon,
+                        exponent_multiplier=self._exponent_multiplier,
                     )
 
                 # Uses Adagrad preconditioner if any dimension is larger than
@@ -392,6 +397,7 @@ class DistributedShampoo(Optimizer):
                             grafting_type=self._grafting_type,
                             grafting_beta2=self._grafting_beta2,
                             grafting_epsilon=self._grafting_epsilon,
+                            exponent_multiplier=self._exponent_multiplier,
                         )
                     )
 
@@ -411,6 +417,7 @@ class DistributedShampoo(Optimizer):
                         grafting_type=self._grafting_type,
                         grafting_beta2=self._grafting_beta2,
                         grafting_epsilon=self._grafting_epsilon,
+                        exponent_multiplier=self._exponent_multiplier,
                     )
 
                 else:
@@ -508,7 +515,9 @@ class DistributedShampoo(Optimizer):
         elif self._preconditioner_dtype == torch.float:
             expected_relative_error = 1e-3
         else:
-            logger.warning("Expected relative error/residual not supported for precision lower than float32.")
+            logger.warning(
+                "Expected relative error/residual not supported for precision lower than float32."
+            )
 
         # Accumulate relative errors/residuals
         relative_errors = []
@@ -532,10 +541,12 @@ class DistributedShampoo(Optimizer):
         relative_errors = torch.stack(relative_errors)
         relative_residuals = torch.stack(relative_residuals)
 
-        quantiles = torch.tensor([0, 0.25, 0.5, 0.75, 1], device=relative_errors.device, dtype=relative_errors.dtype)
-        logger.debug(
-            f"Expect Relative Error <= {expected_relative_error}"
+        quantiles = torch.as_tensor(
+            [0, 0.25, 0.5, 0.75, 1],
+            device=relative_errors.device,
+            dtype=relative_errors.dtype,
         )
+        logger.debug(f"Expect Relative Error <= {expected_relative_error}")
         logger.debug(
             f"Relative Error (||X - X_hat||_inf / ||X||_inf)       Average: {torch.mean(relative_errors)}, Quantiles [0, 25, 50, 75, 100]: {torch.quantile(relative_errors, quantiles, interpolation='nearest')}"
         )
@@ -624,7 +635,7 @@ class DistributedShampoo(Optimizer):
         self._update_preconditioners()
 
         # Computes root inverse of all preconditioners every self._precondition_frequency
-        # after the self._start_preconditiong_step iteration.
+        # after the self._start_preconditioning_step iteration.
         if (
             iteration % self._precondition_frequency == 0
             and iteration >= self._start_preconditioning_step
@@ -661,9 +672,10 @@ class DistributedShampoo(Optimizer):
                     # Incorporate first-moment or filtered gradient estimation.
                     if beta1 != 0:
                         # Compute bias corrections if necessary.
-                        bias_correction1 = 1.0
-                        if self._use_bias_correction and beta1 < 1:
-                            bias_correction1 -= beta1**iteration
+                        if self._use_bias_correction:
+                            bias_correction1 = 1.0 - beta1**iteration
+                        else:
+                            bias_correction1 = torch.as_tensor(1.0)
 
                         # Compute exponential moving average of the gradient (with
                         # potential bias correction).
@@ -693,8 +705,12 @@ class DistributedShampoo(Optimizer):
 
                             # Compute search direction / preconditioned gradient for both Shampoo and
                             # grafted methods separately.
-                            grafted_direction = state[PRECONDITIONERS].graft_precondition(grad)
-                            shampoo_direction = state[PRECONDITIONERS].shampoo_precondition(grad)
+                            grafted_direction = state[
+                                PRECONDITIONERS
+                            ].graft_precondition(grad)
+                            shampoo_direction = state[
+                                PRECONDITIONERS
+                            ].shampoo_precondition(grad)
 
                             # Adds decoupled weight decay term to both directions.
                             if self._use_decoupled_weight_decay and weight_decay != 0:
@@ -705,14 +721,22 @@ class DistributedShampoo(Optimizer):
                             # primal iterate averaging.
                             grafted_momentum_direction = state.setdefault(
                                 GRAFTING_MOMENTUM,
-                                torch.zeros_like(grad, memory_format=torch.preserve_format),
+                                torch.zeros_like(
+                                    grad, memory_format=torch.preserve_format
+                                ),
                             )
                             shampoo_momentum_direction = state.setdefault(
                                 MOMENTUM,
-                                torch.zeros_like(grad, memory_format=torch.preserve_format),
+                                torch.zeros_like(
+                                    grad, memory_format=torch.preserve_format
+                                ),
                             )
-                            grafted_momentum_direction.mul_(momentum_param).add_(grafted_direction)
-                            shampoo_momentum_direction.mul_(momentum_param).add_(shampoo_direction)
+                            grafted_momentum_direction.mul_(momentum_param).add_(
+                                grafted_direction
+                            )
+                            shampoo_momentum_direction.mul_(momentum_param).add_(
+                                shampoo_direction
+                            )
 
                             # Select which direction to use (with possible Nesterov acceleration).
                             if iteration < self._start_preconditioning_step:
@@ -734,9 +758,13 @@ class DistributedShampoo(Optimizer):
                             # primal iterate averaging.
                             momentum_direction = state.setdefault(
                                 MOMENTUM,
-                                torch.zeros_like(grad, memory_format=torch.preserve_format),
+                                torch.zeros_like(
+                                    grad, memory_format=torch.preserve_format
+                                ),
                             )
-                            momentum_direction.mul_(momentum_param).add_(search_direction)
+                            momentum_direction.mul_(momentum_param).add_(
+                                search_direction
+                            )
 
                         # Incorporates Nesterov momentum.
                         if self._use_nesterov:

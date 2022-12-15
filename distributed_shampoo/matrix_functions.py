@@ -9,7 +9,7 @@ LICENSE file in the root directory of this source tree.
 
 import enum
 import logging
-from typing import Tuple
+from typing import Tuple, Union
 
 import torch
 from torch import Tensor
@@ -28,7 +28,7 @@ class RootInvMethod(enum.Enum):
 
 
 def check_diagonal(A: Tensor) -> Tensor:
-    """Checks if symmetric matrix is diagonal. """
+    """Checks if symmetric matrix is diagonal."""
 
     A_shape = A.shape
     if len(A_shape) != 2:
@@ -45,10 +45,11 @@ def matrix_inverse_root(
     A: Tensor,
     root: int,
     epsilon: float = 0.0,
+    exponent_multiplier: float = 1.0,
     root_inv_method: RootInvMethod = RootInvMethod.EIGEN,
     max_iterations: int = 1000,
     tolerance: float = 1e-6,
-    is_diagonal: bool = False,
+    is_diagonal: Union[Tensor, bool] = False,
 ) -> Tensor:
     """Computes matrix root inverse of square symmetric positive definite matrix.
 
@@ -56,10 +57,11 @@ def matrix_inverse_root(
         A (Tensor): Square matrix of interest.
         root (int): Root of interest. Any natural number.
         epsilon (float): Adds epsilon * I to matrix before taking matrix root. (Default: 0.0)
+        exponent_multiplier (float): exponent multiplier in the eigen method (Default: 1.0)
         root_inv_method (RootInvMethod): Specifies method to use to compute root inverse. (Default: RootInvMethod.EIGEN)
         max_iterations (int): Maximum number of iterations for coupled Newton iteration. (Default: 1000)
         tolerance (float): Tolerance for computing root inverse using coupled Newton iteration. (Default: 1e-6)
-        is_diagonal (bool): Flag for whether or not matrix is diagonal. If so, will compute root inverse by computing
+        is_diagonal (Tensor, bool): Flag for whether or not matrix is diagonal. If so, will compute root inverse by computing
             root inverse of diagonal entries. (Default: False)
 
     Returns:
@@ -69,7 +71,7 @@ def matrix_inverse_root(
 
     # check if matrix is scalar
     if len(A.shape) == 0 or (len(A.shape) == 1 and A.shape[0] == 1):
-        alpha = torch.tensor(-1 / root)
+        alpha = torch.as_tensor(-1 / root)
         return A**alpha
 
     # check matrix shape
@@ -79,10 +81,28 @@ def matrix_inverse_root(
         raise ValueError("Matrix is not square!")
 
     if is_diagonal:
-        X = matrix_root_diagonal(A=A, root=root, epsilon=epsilon, inverse=True, return_full_matrix=True)
+        X = matrix_root_diagonal(
+            A=A,
+            root=root,
+            epsilon=epsilon,
+            inverse=True,
+            exponent_multiplier=exponent_multiplier,
+            return_full_matrix=True,
+        )
     elif root_inv_method == RootInvMethod.EIGEN:
-        X, _, _ = _matrix_root_eigen(A=A, root=root, epsilon=epsilon, inverse=True)
+        X, _, _ = _matrix_root_eigen(
+            A=A,
+            root=root,
+            epsilon=epsilon,
+            inverse=True,
+            exponent_multiplier=exponent_multiplier,
+        )
     elif root_inv_method == RootInvMethod.NEWTON:
+        if exponent_multiplier != 1.0:
+            raise ValueError(
+                f"Exponent multiplier {exponent_multiplier} must be equal to 1 to use coupled inverse Newton iteration!"
+            )
+
         X, _, termination_flag, _, _ = _matrix_inverse_root_newton(
             A=A,
             root=root,
@@ -109,6 +129,7 @@ def matrix_root_diagonal(
     root: int,
     epsilon: float = 0.0,
     inverse: bool = True,
+    exponent_multiplier: float = 1.0,
     return_full_matrix: bool = False,
 ) -> Tensor:
     """Computes matrix inverse root for a diagonal matrix by taking inverse square root of diagonal entries.
@@ -137,7 +158,7 @@ def matrix_root_diagonal(
         raise ValueError(f"Root {root} should be positive!")
 
     # compute matrix power
-    alpha = 1 / root
+    alpha = exponent_multiplier / root
     if inverse:
         alpha = -alpha
 
@@ -150,6 +171,7 @@ def _matrix_root_eigen(
     root: int,
     epsilon: float = 0.0,
     inverse: bool = True,
+    exponent_multiplier: float = 1.0,
     make_positive_semidefinite: bool = True,
 ) -> Tuple[Tensor, Tensor, Tensor]:
     """Compute matrix (inverse) root using eigendecomposition of symmetric positive (semi-)definite matrix.
@@ -163,7 +185,8 @@ def _matrix_root_eigen(
         root (int): Root of interest. Any natural number.
         epsilon (float): Adds epsilon * I to matrix before taking matrix root. (Default: 0.0)
         inverse (bool): Returns inverse root matrix. (Default: True)
-        make_positive_semidefinite (bool): Perturbs matrix eigenvalues to ensure it is (practically) positive semi-definite. (Default: True)
+        exponent_multiplier (float): exponent multiplier in the eigen method (Default: 1.0)
+        make_positive_semidefinite (bool): Perturbs matrix eigenvalues to ensure it is numerically positive semi-definite. (Default: True)
 
     Returns:
         X (Tensor): (Inverse) root of matrix. Same dimensions as A.
@@ -177,7 +200,7 @@ def _matrix_root_eigen(
         raise ValueError(f"Root {root} should be positive!")
 
     # compute matrix power
-    alpha = 1 / root
+    alpha = exponent_multiplier / root
     if inverse:
         alpha = -alpha
 
@@ -187,7 +210,7 @@ def _matrix_root_eigen(
 
     # make eigenvalues >= 0 (if necessary)
     if make_positive_semidefinite:
-        L += -torch.minimum(lambda_min, torch.tensor(0.0))
+        L += -torch.minimum(lambda_min, torch.as_tensor(0.0))
 
     # add epsilon
     L += epsilon
@@ -217,6 +240,8 @@ def _matrix_inverse_root_newton(
 
     where c = (2 |A|_F / (p + 1))^{1/p}. This ensures that |A|_2 <= |A|_F < (p + 1) c^p, which guarantees convergence.
     We will instead use z = (p + 1) / (2 * |A|_F).
+
+    NOTE: Exponent multiplier not compatible with coupled inverse Newton iteration!
 
     Args:
         A (Tensor): Matrix of interest.
@@ -274,6 +299,7 @@ def compute_matrix_root_inverse_residuals(
     X_hat: Tensor,
     root: int,
     epsilon: float,
+    exponent_multiplier: float,
 ) -> Tuple[Tensor, Tensor]:
     """Compute residual of matrix root inverse for debugging purposes.
 
@@ -285,6 +311,7 @@ def compute_matrix_root_inverse_residuals(
         X (Tensor): Computed matrix root inverse.
         root (int): Root of interest.
         epsilon (float): Adds epsilon * I to matrix.
+        exponent_multiplier (float): Exponent multiplier to be multiplied to the numerator of the inverse root.
 
     Returns:
         absolute_error (Tensor): absolute error of matrix root inverse
@@ -302,11 +329,24 @@ def compute_matrix_root_inverse_residuals(
         raise ValueError("Matrix shapes do not match!")
 
     # compute error by comparing against double precision
-    X = matrix_inverse_root(A.double(), root, epsilon=epsilon)
+    X = matrix_inverse_root(
+        A.double(), root, epsilon=epsilon, exponent_multiplier=exponent_multiplier
+    )
     relative_error = torch.dist(X, X_hat, p=torch.inf) / torch.norm(X, p=torch.inf)
 
     # compute residual
-    X_invr = torch.linalg.matrix_power(X_hat.double(), n=-root)
+    if exponent_multiplier == 1.0:
+        X_invr = torch.linalg.matrix_power(X_hat.double(), n=-root)
+    else:
+        X_invr = _matrix_root_eigen(
+            X_hat.double(),
+            root=1,
+            epsilon=0.0,
+            inverse=True,
+            make_positive_semidefinite=True,
+            exponent_multiplier=root / exponent_multiplier,
+        )
+
     relative_residual = torch.dist(X_invr, A.double(), p=torch.inf) / torch.norm(
         A.double(), p=torch.inf
     )

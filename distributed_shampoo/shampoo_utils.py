@@ -12,7 +12,6 @@ import logging
 import math
 from abc import ABC
 from copy import deepcopy
-from dataclasses import dataclass
 from typing import List, Optional, Tuple, Union
 
 import torch
@@ -153,7 +152,6 @@ class Preconditioner(ABC):
 
     def __init__(self):
         self._parameter_count = 0
-        pass
 
     def update_preconditioners(self, grad: Tensor) -> None:
         pass
@@ -218,11 +216,11 @@ class AdagradPreconditioner(Preconditioner):
         self._epsilon = epsilon
         self._preconditioner = torch.zeros_like(param)
         self._idx = idx
-        self._num_updates = 0
+        self._num_updates = torch.as_tensor(0)
         self._use_bias_correction = use_bias_correction
-        self._bias_correction2 = torch.tensor(1.0)
+        self._bias_correction2 = torch.as_tensor(1.0)
         self._parameter_count += (
-            torch.prod(torch.tensor(self._preconditioner.shape)).detach().cpu().numpy()
+            torch.prod(torch.as_tensor(self._preconditioner.shape)).cpu().numpy()
         )
 
         if self._idx is not None:
@@ -241,9 +239,7 @@ class AdagradPreconditioner(Preconditioner):
 
         self._num_updates += 1
         if self._use_bias_correction and self._beta2 < 1.0:
-            self._bias_correction2 = torch.tensor(
-                1.0 - self._beta2**self._num_updates
-            )
+            self._bias_correction2 = 1.0 - self._beta2**self._num_updates
 
     def precondition(self, grad: Tensor) -> Tensor:
         denom = (
@@ -276,16 +272,24 @@ class AdagradPreconditioner(Preconditioner):
             self._bias_correction2 = self._bias_correction2.to(device=device)
 
 
-@dataclass
 class ShampooKroneckerFactor:
     """Shampoo Kronecker Factor Matrix / Preconditioner data class."""
 
-    preconditioner_type: PreconditionerType
-    factor_matrix: Tensor
-    inv_factor_matrix: Optional[Tensor] = None
-    group_source_rank: Optional[int] = None
-    index: Optional[str] = None
-    is_diagonal: Optional[Tensor] = torch.tensor(True)
+    def __init__(
+        self,
+        preconditioner_type: PreconditionerType,
+        factor_matrix: Tensor,
+        inv_factor_matrix: Optional[Tensor] = None,
+        group_source_rank: Optional[int] = None,
+        index: Optional[str] = None,
+        is_diagonal: bool = True,
+    ):
+        self.preconditioner_type = preconditioner_type
+        self.factor_matrix = factor_matrix
+        self.inv_factor_matrix = inv_factor_matrix
+        self.group_source_rank = group_source_rank
+        self.index = index
+        self.is_diagonal = torch.as_tensor(is_diagonal)
 
     def to(self, device):
         self.factor_matrix = self.factor_matrix.to(device)
@@ -304,6 +308,7 @@ class ShampooPreconditioner(Preconditioner):
         epsilon (float): Epsilon term for regularizing preconditioner to ensure positive definiteness. (Default: 1e-12)
         exponent_override (int): Exponent override for taking the root of the matrix. If exponent_override = 0, uses
             2 * order of the tensor. (Default: 0)
+        exponent_multiplier (float): Exponent multiplier to be multiplied to the numerator of the inverse root. (Default: 1.0)
         use_bias_correction (bool): Flag for using bias correction. (Default: True)
         diagonal_threshold (int): Threshold for using diagonal preconditioners. If None, disabled. (Default: None)
         dtype (torch.dtype): Data type for accumulating and computing root inverse of preconditioners. (Default: torch.float)
@@ -322,6 +327,7 @@ class ShampooPreconditioner(Preconditioner):
         beta2: float = 1.0,
         epsilon: float = 1e-12,
         exponent_override: int = 0,
+        exponent_multiplier: float = 1.0,
         use_bias_correction: bool = True,
         diagonal_threshold: Union[None, int] = None,
         dtype: torch.dtype = torch.float,
@@ -339,17 +345,23 @@ class ShampooPreconditioner(Preconditioner):
         self._beta2 = beta2
         self._epsilon = epsilon
         self._exponent_override = exponent_override
+        self._exponent_multiplier = exponent_multiplier
         self._diagonal_threshold = diagonal_threshold
         self._dtype = dtype
-        self._num_updates = 0
+        self._num_updates = torch.as_tensor(0)
         self._use_bias_correction = use_bias_correction
-        self._bias_correction2 = torch.tensor(1.0)
-        self._dims = torch.tensor(param.shape).numpy()
+        self._bias_correction2 = torch.as_tensor(1.0)
+        self._dims = torch.as_tensor(param.shape).numpy()
         self._order = param.dim()
         self._root_inv_strategy = root_inv_strategy
         self._idx = idx
         self._grafting_type = grafting_type
         self._start_preconditioning_step = start_preconditioning_step
+
+        # Compute root.
+        self._root = (
+            2 * self._order if self._exponent_override == 0 else self._exponent_override
+        )
 
         # Initialize lists for preconditioners, inverse preconditioners, types, and ranks.
         self._preconditioners = []
@@ -468,8 +480,14 @@ class ShampooPreconditioner(Preconditioner):
                     diagonal_or_outer_product = diagonal_or_outer_product.to(
                         dtype=self._dtype
                     )
-                if preconditioner.is_diagonal and not check_diagonal(diagonal_or_outer_product):
-                    preconditioner.is_diagonal = False
+
+                # For tracking diagonality of the preconditioner.
+                # Checks if the preconditioner is currently diagonal, then checks whether or not
+                # the update matrix is diagonal.
+                if preconditioner.is_diagonal and not check_diagonal(
+                    diagonal_or_outer_product
+                ):
+                    preconditioner.is_diagonal = torch.as_tensor(False)
                     logger.info(
                         f"Preconditioner {preconditioner.index} is not diagonal."
                     )
@@ -485,9 +503,7 @@ class ShampooPreconditioner(Preconditioner):
 
         self._num_updates += 1
         if self._use_bias_correction and self._beta2 < 1.0:
-            self._bias_correction2 = torch.tensor(
-                1.0 - self._beta2**self._num_updates
-            )
+            self._bias_correction2 = 1.0 - self._beta2**self._num_updates
 
     def shampoo_precondition(self, grad: Tensor) -> Tensor:
         preconditioned_grad = grad.clone()
@@ -502,7 +518,7 @@ class ShampooPreconditioner(Preconditioner):
                         preconditioner.factor_matrix / self._bias_correction2
                     ).add_(self._epsilon)
                     preconditioned_grad.div_(
-                        denom.pow(-1 / (2 * self._order))[
+                        denom.pow(-self._exponent_multiplier / self._root)[
                             (None,) * k + (...,) + (None,) * (self._order - k - 1)
                         ]
                     )
@@ -563,9 +579,6 @@ class ShampooPreconditioner(Preconditioner):
             rank,
         )
 
-        root = (
-            2 * self._order if self._exponent_override == 0 else self._exponent_override
-        )
         for k, preconditioner in enumerate(self._preconditioners):
 
             # Check that this is a full Shampoo preconditioner.
@@ -592,8 +605,9 @@ class ShampooPreconditioner(Preconditioner):
                 # Compute inverse preconditioner.
                 inv_factor_matrix = matrix_inverse_root(
                     A=bias_corrected_preconditioner,
-                    root=root,
+                    root=self._root,
                     epsilon=self._epsilon,
+                    exponent_multiplier=self._exponent_multiplier,
                     is_diagonal=preconditioner.is_diagonal,
                 )
 
@@ -609,7 +623,6 @@ class ShampooPreconditioner(Preconditioner):
         relative_errors = []
         relative_residuals = []
 
-        root = 2 * self._order
         for preconditioner in self._preconditioners:
             bias_corrected_preconditioner = (
                 preconditioner.factor_matrix / self._bias_correction2
@@ -620,8 +633,9 @@ class ShampooPreconditioner(Preconditioner):
             ) = compute_matrix_root_inverse_residuals(
                 bias_corrected_preconditioner,
                 preconditioner.inv_factor_matrix,
-                root,
+                self._root,
                 self._epsilon,
+                self._exponent_multiplier,
             )
 
             relative_errors.append(relative_error)
@@ -700,6 +714,7 @@ class BlockShampooPreconditioner(Preconditioner):
         epsilon (float): Epsilon term for regularizing preconditioner to ensure positive definiteness. (Default: 1e-12)
         exponent_override (int): Exponent override for taking the root of the matrix. If exponent_override = 0, uses
             2 * order of the tensor. (Default: 0)
+        exponent_multiplier (float): Exponent multiplier to be multiplied to the numerator of the inverse root. (Default: 1.0)
         use_bias_correction (bool): Flag for using bias correction. (Default: True)
         block_size (int): Block size for blocking large tensors. (Default: 1024)
         dtype (torch.dtype): Data type for accumulating and computing root inverse of preconditioners. (Default: torch.float)
@@ -719,6 +734,7 @@ class BlockShampooPreconditioner(Preconditioner):
         beta2: float = 1.0,
         epsilon: float = 1e-12,
         exponent_override: int = 0,
+        exponent_multiplier: float = 1.0,
         use_bias_correction: bool = True,
         block_size: int = 1024,
         dtype: torch.dtype = torch.float,
@@ -736,15 +752,15 @@ class BlockShampooPreconditioner(Preconditioner):
         self._beta2 = beta2
         self._epsilon = epsilon
         self._exponent_override = exponent_override
+        self._exponent_multiplier = exponent_multiplier
         self._use_bias_correction = use_bias_correction
         self._block_size = block_size
         self._dtype = dtype
-        self._num_updates = 0
         self._idx = idx
         self._root_inv_strategy = root_inv_strategy
         self._start_preconditioning_step = start_preconditioning_step
         self._use_merge_dims = use_merge_dims
-        self._original_dims = [*torch.tensor(param.shape).numpy()]
+        self._original_dims = [*torch.as_tensor(param.shape).numpy()]
         self._merged_dims = (
             merge_small_dims(self._original_dims, self._block_size)
             if self._block_size is not None and use_merge_dims
@@ -761,13 +777,14 @@ class BlockShampooPreconditioner(Preconditioner):
 
         split_param = self._combine_and_split_dims(param)
         for i, p in enumerate(split_param):
-            self._split_sizes.append(torch.tensor(p.shape))
+            self._split_sizes.append(torch.as_tensor(p.shape))
             split_idx = str(idx) + "." + str(i)
             preconditioner = ShampooPreconditioner(
                 p,
                 beta2=beta2,
                 epsilon=epsilon,
                 exponent_override=exponent_override,
+                exponent_multiplier=exponent_multiplier,
                 use_bias_correction=use_bias_correction,
                 dtype=dtype,
                 root_inv_strategy=root_inv_strategy,
@@ -792,13 +809,13 @@ class BlockShampooPreconditioner(Preconditioner):
             self._split_preconditioners, split_grad
         ):
             block_preconditioner.update_preconditioners(block_grad)
-        self._num_updates += 1
 
     def shampoo_precondition(self, grad: Tensor) -> Tensor:
         split_grad = self._combine_and_split_dims(grad)
         assert len(self._split_preconditioners) == len(split_grad)
         split_preconditioned_grad = [
-            p.shampoo_precondition(g) for p, g in zip(self._split_preconditioners, split_grad)
+            p.shampoo_precondition(g)
+            for p, g in zip(self._split_preconditioners, split_grad)
         ]
         preconditioned_grad = multi_dim_cat(split_preconditioned_grad, self._num_splits)
         return (
@@ -811,7 +828,8 @@ class BlockShampooPreconditioner(Preconditioner):
         split_grad = self._combine_and_split_dims(grad)
         assert len(self._split_preconditioners) == len(split_grad)
         split_preconditioned_grad = [
-            p.graft_precondition(g) for p, g in zip(self._split_preconditioners, split_grad)
+            p.graft_precondition(g)
+            for p, g in zip(self._split_preconditioners, split_grad)
         ]
         preconditioned_grad = multi_dim_cat(split_preconditioned_grad, self._num_splits)
         return (
@@ -908,7 +926,6 @@ class Grafting(ABC):
 
     def __init__(self, param: Tensor):
         self._parameter_count = 0
-        pass
 
     def update_preconditioners(self, grad: Tensor):
         pass
