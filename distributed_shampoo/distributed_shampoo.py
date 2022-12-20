@@ -218,6 +218,10 @@ class DistributedShampoo(torch.optim.Optimizer):
             raise ValueError(
                 f"Invalid start preconditioning step: {start_preconditioning_step}"
             )
+        if not exponent_override >= 0:
+            raise ValueError(
+                f"Invalid exponent override: {exponent_override}"
+            )
         if not 0.0 < grafting_beta2 <= 1.0:
             raise ValueError(f"Invalid grafting beta parameter: {grafting_beta2}")
         if not grafting_epsilon > 0.0:
@@ -739,12 +743,11 @@ class DistributedShampoo(torch.optim.Optimizer):
                             )
 
                             # Select which direction to use (with possible Nesterov acceleration).
-                            if iteration < self._start_preconditioning_step:
-                                search_direction = grafted_direction
-                                momentum_direction = grafted_momentum_direction
-                            else:
-                                search_direction = shampoo_direction
-                                momentum_direction = shampoo_momentum_direction
+                            search_direction, momentum_direction = (
+                                (grafted_direction, grafted_momentum_direction)
+                                if iteration < self._start_preconditioning_step
+                                else (shampoo_direction, shampoo_momentum_direction)
+                            )
 
                         else:
                             # Compute search direction / preconditioned gradient.
