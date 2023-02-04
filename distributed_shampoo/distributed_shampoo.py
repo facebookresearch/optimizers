@@ -363,6 +363,8 @@ class DistributedShampoo(torch.optim.Optimizer):
                         p,
                         beta2=group[BETAS][1],
                         epsilon=group[EPSILON],
+                        exponent_override=self._exponent_override,
+                        exponent_multiplier=self._exponent_multiplier,
                         use_bias_correction=self._use_bias_correction,
                         block_size=self._max_preconditioner_dim,
                         dtype=self._preconditioner_dtype,
@@ -373,7 +375,6 @@ class DistributedShampoo(torch.optim.Optimizer):
                         grafting_type=self._grafting_type,
                         grafting_beta2=self._grafting_beta2,
                         grafting_epsilon=self._grafting_epsilon,
-                        exponent_multiplier=self._exponent_multiplier,
                     )
 
                 # Uses Adagrad preconditioner if any dimension is larger than
@@ -392,6 +393,8 @@ class DistributedShampoo(torch.optim.Optimizer):
                             p,
                             beta2=group[BETAS][1],
                             epsilon=group[EPSILON],
+                            exponent_override=self._exponent_override,
+                            exponent_multiplier=self._exponent_multiplier,
                             use_bias_correction=self._use_bias_correction,
                             diagonal_threshold=self._max_preconditioner_dim,
                             dtype=self._preconditioner_dtype,
@@ -401,7 +404,6 @@ class DistributedShampoo(torch.optim.Optimizer):
                             grafting_type=self._grafting_type,
                             grafting_beta2=self._grafting_beta2,
                             grafting_epsilon=self._grafting_epsilon,
-                            exponent_multiplier=self._exponent_multiplier,
                         )
                     )
 
@@ -413,6 +415,8 @@ class DistributedShampoo(torch.optim.Optimizer):
                         p,
                         beta2=group[BETAS][1],
                         epsilon=group[EPSILON],
+                        exponent_override=self._exponent_override,
+                        exponent_multiplier=self._exponent_multiplier,
                         use_bias_correction=self._use_bias_correction,
                         diagonal_threshold=self._max_preconditioner_dim,
                         dtype=self._preconditioner_dtype,
@@ -421,7 +425,6 @@ class DistributedShampoo(torch.optim.Optimizer):
                         grafting_type=self._grafting_type,
                         grafting_beta2=self._grafting_beta2,
                         grafting_epsilon=self._grafting_epsilon,
-                        exponent_multiplier=self._exponent_multiplier,
                     )
 
                 else:
