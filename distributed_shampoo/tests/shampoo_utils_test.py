@@ -19,7 +19,7 @@ from distributed_shampoo.shampoo_utils import (
     merge_small_dims,
     multi_dim_cat,
     multi_dim_split,
-    RootInvStrategy,
+    DistStrategy,
     ShampooPreconditioner,
 )
 
@@ -248,7 +248,7 @@ class ShampooPreconditionerTest(unittest.TestCase):
             exponent_override=exponent_override,
             use_bias_correction=use_bias_correction,
             dtype=torch.float,
-            root_inv_strategy=RootInvStrategy.NONE,
+            dist_strategy=DistStrategy.NONE,
             start_preconditioning_step=start_preconditioning_step,
             diagonal_threshold=diagonal_threshold,
             grafting_type=grafting_type,

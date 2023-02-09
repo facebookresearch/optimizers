@@ -26,7 +26,7 @@ from distributed_shampoo.examples.convnet import ConvNet
 from distributed_shampoo.shampoo_utils import (
     GraftingType,
     LargeDimMethod,
-    RootInvStrategy,
+    DistStrategy,
 )
 from torch import nn
 from torchvision import datasets, transforms
@@ -199,8 +199,8 @@ class Parser:
             help="Distributed backend.",
         )
         parser.add_argument(
-            "--root-inv-strategy",
-            type=argtype(RootInvStrategy),
+            "--dist-strategy",
+            type=argtype(DistStrategy),
             default="CROSS_NODE",
             help="Strategy for distributing root inverse computation.",
         )
@@ -295,7 +295,7 @@ def instantiate_optimizer(
     use_separate_momentum: bool,
     preconditioner_dtype: DType,
     large_dim_method: LargeDimMethod,
-    root_inv_strategy: RootInvStrategy,
+    dist_strategy: DistStrategy,
     grafting_type: GraftingType,
     grafting_epsilon: float,
     grafting_beta2: float,
@@ -327,7 +327,7 @@ def instantiate_optimizer(
                 weight_decay=weight_decay,
             )
     elif optimizer_type == OptimizerType.DISTRIBUTED_SHAMPOO:
-        # since only working with a single GPU, root_inv_strategy = RootInvStrategy.NONE
+        # since only working with a single GPU, dist_strategy = DistStrategy.NONE
         optimizer = DistributedShampoo(
             model.parameters(),
             lr=lr,
@@ -345,7 +345,7 @@ def instantiate_optimizer(
             use_separate_momentum=use_separate_momentum,
             preconditioner_dtype=preconditioner_dtype,
             large_dim_method=large_dim_method,
-            root_inv_strategy=root_inv_strategy,
+            dist_strategy=dist_strategy,
             grafting_type=grafting_type,
             grafting_epsilon=grafting_epsilon,
             grafting_beta2=grafting_beta2,
@@ -460,7 +460,7 @@ if __name__ == "__main__":
         use_separate_momentum=args.use_separate_momentum,
         preconditioner_dtype=torch.float if args.preconditioner_dtype == DType.FLOAT else torch.float64,
         large_dim_method=args.large_dim_method,
-        root_inv_strategy=RootInvStrategy.NONE,
+        dist_strategy=DistStrategy.NONE,
         grafting_type=args.grafting_type,
         grafting_epsilon=args.grafting_epsilon,
         grafting_beta2=args.grafting_beta2,

@@ -25,7 +25,7 @@ from distributed_shampoo.shampoo_utils import (
     GraftingType,
     LargeDimMethod,
     Preconditioner,
-    RootInvStrategy,
+    DistStrategy,
     ShampooPreconditioner,
 )
 
@@ -53,14 +53,14 @@ class DistributedShampoo(torch.optim.Optimizer):
         Tsung-Hsien Lee (Cruise)
 
     with support from:
-        Rohan Anil (Google), Vineet Gupta (Google), Zhijing Li (Meta), Dheevatsa Mudigere (Nvidia),
+        Rohan Anil (Google), Vineet Gupta (Google), Shintaro Iwasaki (Meta), Zhijing Li (Meta), Dheevatsa Mudigere (Nvidia),
         Mike Rabbat (Meta), and Kaushik Rangadurai (Meta).
 
     Partly based on the work in:
     - https://arxiv.org/pdf/1802.09568.pdf
     - https://arxiv.org/pdf/2002.09018.pdf
 
-    Uses infinity norm to evaluate residuals and errors.
+    Uses infinity norm to evaluate residuals and errors. By default, grafts from Adagrad.
 
     --------
     Features
@@ -122,15 +122,15 @@ class DistributedShampoo(torch.optim.Optimizer):
             Computational cost = O(mn)
             Memory cost = m + n
 
-    3. Distributed Root Inverse Computation: Supports multi-GPU data-parallel training via torch.distributed by setting root_inv_strategy.
+    3. Distributed Root Inverse Computation: Supports multi-GPU data-parallel training via torch.distributed by setting dist_strategy.
         Enables multiple strategies for distributing root inverse computation over multiple GPUs:
-        - RootInvStrategy.INTRA_NODE_ONLY (Default): Distributes preconditioner root inverse computation in
-            a per-preconditioner round-robin fashion across GPUs within each node. Performs intra-node communication
-            only to synchronize root inverse preconditioners.
-        - RootInvStrategy.CROSS_NODE: Distributes preconditioner root inverse computation in
+        - DistStrategy.CROSS_NODE (Default): Distributes preconditioner root inverse computation in
             a per-preconditioner round-robin fashion across all nodes. Performs inter- and intra-node communication
             to synchronize root inverse preconditioners.
-        - RootInvStrategy.NONE: No distributing of the preconditioner root inverse computation.
+        - DistStrategy.INTRA_NODE_ONLY: Distributes preconditioner root inverse computation in
+            a per-preconditioner round-robin fashion across GPUs within each node. Performs intra-node communication
+            only to synchronize root inverse preconditioners.
+        - DistStrategy.NONE: No distributing of the preconditioner root inverse computation.
 
         Requirements:
         - torch.distributed must be initialized in advance.
@@ -158,8 +158,8 @@ class DistributedShampoo(torch.optim.Optimizer):
             (Default: False)
         preconditioner_dtype (torch.dtype): data type for preconditioner (Default: torch.float)
         large_dim_method (LargeDimMethod): method for handling large scale tensors. (Default: LargeDimMethod.BLOCKING)
-        root_inv_strategy (RootInvStrategy): distributes root inverse computation across multiple GPU workers using
-            specified strategy. (Default: RootInvStrategy.INTRA_NODE_ONLY)
+        dist_strategy (DistStrategy): distributes root inverse computation across multiple GPU workers using
+            specified strategy. (Default: DistStrategy.INTRA_NODE_ONLY)
         use_merge_dims (bool): merge dimensions if possible while respecting max_preconditioner_dim. (Default: True)
         grafting_type (GraftingType): selects grafting method. (Default: GraftingType.ADAGRAD)
         grafting_epsilon (float): epsilon for grafting method. (Default: 1e-3)
@@ -187,7 +187,7 @@ class DistributedShampoo(torch.optim.Optimizer):
         use_separate_momentum: bool = False,
         preconditioner_dtype: torch.dtype = torch.float,
         large_dim_method: LargeDimMethod = LargeDimMethod.BLOCKING,
-        root_inv_strategy: RootInvStrategy = RootInvStrategy.INTRA_NODE_ONLY,
+        dist_strategy: DistStrategy = DistStrategy.CROSS_NODE,
         use_merge_dims: bool = True,
         grafting_type: GraftingType = GraftingType.ADAGRAD,
         grafting_epsilon: float = 1e-3,
@@ -219,14 +219,12 @@ class DistributedShampoo(torch.optim.Optimizer):
                 f"Invalid start preconditioning step: {start_preconditioning_step}"
             )
         if not exponent_override >= 0:
-            raise ValueError(
-                f"Invalid exponent override: {exponent_override}"
-            )
+            raise ValueError(f"Invalid exponent override: {exponent_override}")
         if not 0.0 < grafting_beta2 <= 1.0:
             raise ValueError(f"Invalid grafting beta parameter: {grafting_beta2}")
         if not grafting_epsilon > 0.0:
             raise ValueError(f"Invalid epsilon value: {grafting_epsilon}")
-        if root_inv_strategy != RootInvStrategy.NONE:
+        if dist_strategy != DistStrategy.NONE:
             if not torch.cuda.is_available():
                 raise ValueError("Using distributed version of Shampoo without GPUs!")
             if not dist.is_initialized():
@@ -252,7 +250,7 @@ class DistributedShampoo(torch.optim.Optimizer):
         self._precondition_frequency = precondition_frequency
         self._exponent_override = exponent_override
         self._exponent_multiplier = exponent_multiplier
-        self._root_inv_strategy = root_inv_strategy
+        self._dist_strategy = dist_strategy
         self._use_merge_dims = use_merge_dims
         self._large_dim_method = large_dim_method
         self._use_decoupled_weight_decay = use_decoupled_weight_decay
@@ -290,7 +288,7 @@ class DistributedShampoo(torch.optim.Optimizer):
         self._number_of_gpus_per_node = (
             [local_world_size] * (self._world_size // local_world_size)
             if torch.cuda.is_available()
-            and self._root_inv_strategy == RootInvStrategy.INTRA_NODE_ONLY
+            and self._dist_strategy == DistStrategy.INTRA_NODE_ONLY
             else [self._world_size]
         )
         if sum(self._number_of_gpus_per_node) != self._world_size:
@@ -307,7 +305,7 @@ class DistributedShampoo(torch.optim.Optimizer):
 
     @torch.no_grad()
     def _use_distributed(self) -> bool:
-        return self._root_inv_strategy != RootInvStrategy.NONE and dist.is_initialized()
+        return self._dist_strategy != DistStrategy.NONE and dist.is_initialized()
 
     @torch.no_grad()
     def _create_root_inv_distributed_groups(
@@ -318,13 +316,13 @@ class DistributedShampoo(torch.optim.Optimizer):
             min(number_of_gpus_per_node) > 0
         ), f"Number of GPUs per node {number_of_gpus_per_node} must be greater than 0 on all nodes!"
 
-        if self._root_inv_strategy == RootInvStrategy.CROSS_NODE:
+        if self._dist_strategy == DistStrategy.CROSS_NODE:
             logger.info(
                 "Using default (global) distributed process group for distributing root inverse computation with cross-node communication..."
             )
             root_inv_dist_groups = {rank: None for rank in range(self._world_size)}
 
-        elif self._root_inv_strategy == RootInvStrategy.INTRA_NODE_ONLY:
+        elif self._dist_strategy == DistStrategy.INTRA_NODE_ONLY:
             logger.info(
                 "Setting up distributed process groups for each node for distributing root inverse computation with intra-node-only communication..."
             )
@@ -368,7 +366,7 @@ class DistributedShampoo(torch.optim.Optimizer):
                         use_bias_correction=self._use_bias_correction,
                         block_size=self._max_preconditioner_dim,
                         dtype=self._preconditioner_dtype,
-                        root_inv_strategy=self._root_inv_strategy,
+                        dist_strategy=self._dist_strategy,
                         idx=idx,
                         use_merge_dims=self._use_merge_dims,
                         start_preconditioning_step=self._start_preconditioning_step,
@@ -398,7 +396,7 @@ class DistributedShampoo(torch.optim.Optimizer):
                             use_bias_correction=self._use_bias_correction,
                             diagonal_threshold=self._max_preconditioner_dim,
                             dtype=self._preconditioner_dtype,
-                            root_inv_strategy=self._root_inv_strategy,
+                            dist_strategy=self._dist_strategy,
                             idx=idx,
                             start_preconditioning_step=self._start_preconditioning_step,
                             grafting_type=self._grafting_type,
@@ -445,16 +443,16 @@ class DistributedShampoo(torch.optim.Optimizer):
         """Assign each preconditioner to a rank depending on strategy.
 
         This method uses the following strategy:
-            RootInvStrategy.NONE: All workers are independently responsible for all preconditioners.
-            RootInvStrategy.CROSS_NODE: Preconditioners are distributed in a round-robin fashion across all nodes.
-            RootInvStrategy.INTRA_NODE_ONLY: Preconditioners are distributed in a round-robin fashion within each node.
+            DistStrategy.NONE: All workers are independently responsible for all preconditioners.
+            DistStrategy.CROSS_NODE: Preconditioners are distributed in a round-robin fashion across all nodes.
+            DistStrategy.INTRA_NODE_ONLY: Preconditioners are distributed in a round-robin fashion within each node.
 
         """
         if not self._use_distributed():
             return
-        elif self._root_inv_strategy in (
-            RootInvStrategy.CROSS_NODE,
-            RootInvStrategy.INTRA_NODE_ONLY,
+        elif self._dist_strategy in (
+            DistStrategy.CROSS_NODE,
+            DistStrategy.INTRA_NODE_ONLY,
         ):
             # Obtain number of GPUs on current node based on number of GPUs per node and the current rank.
             # Example: Suppose the number of GPUs per node is [8, 12, 8] (a heterogeneous GPU architecture).
@@ -485,7 +483,7 @@ class DistributedShampoo(torch.optim.Optimizer):
         else:
             raise NotImplementedError(
                 "Root inverse strategy is not implemented! Specified root inverse strategy is "
-                + str(self._root_inv_strategy)
+                + str(self._dist_strategy)
                 + "."
             )
 

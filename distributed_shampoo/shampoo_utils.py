@@ -71,7 +71,7 @@ class LargeDimMethod(enum.Enum):
     BLOCKING = 2
 
 
-class RootInvStrategy(enum.Enum):
+class DistStrategy(enum.Enum):
     NONE = 0
     CROSS_NODE = 1
     INTRA_NODE_ONLY = 2
@@ -312,7 +312,7 @@ class ShampooPreconditioner(Preconditioner):
         use_bias_correction (bool): Flag for using bias correction. (Default: True)
         diagonal_threshold (int): Threshold for using diagonal preconditioners. If None, disabled. (Default: None)
         dtype (torch.dtype): Data type for accumulating and computing root inverse of preconditioners. (Default: torch.float)
-        root_inv_strategy (RootInvStrategy): Strategy for assigning root inverse computations. (Default: RootInvStrategy.INTRA_NODE_ONLY)
+        dist_strategy (DistStrategy): Strategy for assigning root inverse computations. (Default: DistStrategy.CROSS_NODE)
         idx (Union[None, int, str]): Layer index (for logging purposes). (Default: None)
         start_preconditioning_step (int): initial delay before starting to compute root inverse. Applies grafting method beforehand. (default: 0)
         grafting_type (GraftingType): Selects grafting method. (Default: GraftingType.NONE)
@@ -331,7 +331,7 @@ class ShampooPreconditioner(Preconditioner):
         use_bias_correction: bool = True,
         diagonal_threshold: Union[None, int] = None,
         dtype: torch.dtype = torch.float,
-        root_inv_strategy: RootInvStrategy = RootInvStrategy.INTRA_NODE_ONLY,
+        dist_strategy: DistStrategy = DistStrategy.CROSS_NODE,
         idx: Union[None, int, str] = None,
         start_preconditioning_step: int = 0,
         grafting_type: GraftingType = GraftingType.NONE,
@@ -353,7 +353,7 @@ class ShampooPreconditioner(Preconditioner):
         self._bias_correction2 = torch.as_tensor(1.0)
         self._dims = torch.as_tensor(param.shape).numpy()
         self._order = param.dim()
-        self._root_inv_strategy = root_inv_strategy
+        self._dist_strategy = dist_strategy
         self._idx = idx
         self._grafting_type = grafting_type
         self._start_preconditioning_step = start_preconditioning_step
@@ -584,7 +584,7 @@ class ShampooPreconditioner(Preconditioner):
             # Check that this is a full Shampoo preconditioner.
             if preconditioner.preconditioner_type == PreconditionerType.FULL and (
                 group_rank == preconditioner.group_source_rank
-                if self._root_inv_strategy != RootInvStrategy.NONE
+                if self._dist_strategy != DistStrategy.NONE
                 else True
             ):
                 # Add epsilon term and incorporate bias correction.
@@ -718,7 +718,7 @@ class BlockShampooPreconditioner(Preconditioner):
         use_bias_correction (bool): Flag for using bias correction. (Default: True)
         block_size (int): Block size for blocking large tensors. (Default: 1024)
         dtype (torch.dtype): Data type for accumulating and computing root inverse of preconditioners. (Default: torch.float)
-        root_inv_strategy (RootInvStrategy): Strategy for assigning root inverse computations. (Default: RootInvStrategy.INTRA_NODE_ONLY)
+        dist_strategy (DistStrategy): Strategy for assigning root inverse computations. (Default: DistStrategy.CROSS_NODE)
         idx (Union[None, int, str]): Layer index (for logging purposes). (Default: None)
         use_merge_dims (bool): Denotes whether or not dimensions are merged. (Default: True)
         start_preconditioning_step (int): initial delay before starting to compute root inverse. Applies grafting method beforehand. (Default: 0)
@@ -738,7 +738,7 @@ class BlockShampooPreconditioner(Preconditioner):
         use_bias_correction: bool = True,
         block_size: int = 1024,
         dtype: torch.dtype = torch.float,
-        root_inv_strategy: RootInvStrategy = RootInvStrategy.INTRA_NODE_ONLY,
+        dist_strategy: DistStrategy = DistStrategy.CROSS_NODE,
         idx: Union[None, int, str] = None,
         use_merge_dims: bool = True,
         start_preconditioning_step: int = 0,
@@ -757,7 +757,7 @@ class BlockShampooPreconditioner(Preconditioner):
         self._block_size = block_size
         self._dtype = dtype
         self._idx = idx
-        self._root_inv_strategy = root_inv_strategy
+        self._dist_strategy = dist_strategy
         self._start_preconditioning_step = start_preconditioning_step
         self._use_merge_dims = use_merge_dims
         self._original_dims = [*torch.as_tensor(param.shape).numpy()]
@@ -787,7 +787,7 @@ class BlockShampooPreconditioner(Preconditioner):
                 exponent_multiplier=exponent_multiplier,
                 use_bias_correction=use_bias_correction,
                 dtype=dtype,
-                root_inv_strategy=root_inv_strategy,
+                dist_strategy=dist_strategy,
                 idx=split_idx,
                 start_preconditioning_step=start_preconditioning_step,
                 grafting_type=grafting_type,

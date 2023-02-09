@@ -170,7 +170,7 @@ if __name__ == "__main__":
         use_separate_momentum=args.use_separate_momentum,
         preconditioner_dtype=torch.float if args.preconditioner_dtype == DType.FLOAT else torch.float64,
         large_dim_method=args.large_dim_method,
-        root_inv_strategy=args.root_inv_strategy,
+        dist_strategy=args.dist_strategy,
         grafting_type=args.grafting_type,
         grafting_epsilon=args.grafting_epsilon,
         grafting_beta2=args.grafting_beta2,
