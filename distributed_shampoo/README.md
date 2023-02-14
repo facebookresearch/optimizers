@@ -1,6 +1,8 @@
 # PyTorch Distributed Shampoo
 
-Distributed Shampoo is a second-order optimizer in the Adagrad family of methods [1, 2]. It converges in fewer iterations or epochs at the cost of more compute and memory. The key to tuning this optimizer is to balance accuracy, performance, and memory. We will discuss how to do this below.
+Distributed Shampoo is a second-order optimizer in the Adagrad family of methods [1, 2]. It converges in fewer iterations or epochs at the cost of more compute and memory.
+
+The key to tuning this optimizer is to balance accuracy, performance, and memory. This is discussed below.
 
 Developers:
 - Hao-Jun Michael Shi (Meta Platforms, Inc.)
@@ -18,7 +20,6 @@ with contributions and support from:
 This implementation is under development. Currently only supports dense parameters.
 
 ## Features
------------
 
 Key distinctives of this implementation include:
 - Learning rate grafting [3]. Our version of grafting only grafts the second moment/diagonal preconditioner. Momentum/first moment updates are performed separate from grafting. Supports the methods:
@@ -46,7 +47,7 @@ Key distinctives of this implementation include:
 *We are in the process of optimizing the performance of this implementation. Stay tuned!*
 
 ## How to Use
--------------
+
 **Given a learning rate schedule for your previous base optimizer, we can replace the optimizer with Shampoo and "graft" from the learning rate schedule of the base method.**
 
 A few notes on hyperparameters:
@@ -175,7 +176,6 @@ optimizer = DistributedShampoo(
 )
 ```
 
-
 ### Example 4: AdamW
 
 If we previously used the optimizer:
@@ -217,7 +217,6 @@ optimizer = DistributedShampoo(
 ```
 
 ## Hyperparameter Tuning
-------------------------
 
 **We want to tune Shampoo to balance model quality, memory, and efficiency/performance by applying approximations to a "pure" version of Shampoo.**
 
@@ -250,9 +249,7 @@ With the inclusion of learning rate grafting, no additional changes are needed f
 
 2. Use the smallest precondition_frequency (i.e., 1) and increase the precondition frequency.
 
-
     * This hyperparameter determines how frequently the preconditioner is computed. The smaller the value, the slower Shampoo becomes but with faster convergence. The goal is to find a value that balances convergence and speed.
-
 
     * It is normal to eventually set this hyperparameter on the order of hundreds or thousands. This is based primarily on the size of the network and the effective ratio between the cost of a single forward-backward pass + standard optimizer step to the cost of computing a series of matrix root inverses.
 
@@ -291,7 +288,7 @@ With the inclusion of learning rate grafting, no additional changes are needed f
     ```
 
 ## References
--------------
+
 1. [Shampoo: Preconditioned Stochastic Tensor Optimization](https://proceedings.mlr.press/v80/gupta18a/gupta18a.pdf ). Vineet Gupta, Tomer Koren, and Yoram Singer. International Conference on Machine Learning, 2018.
 2. [Scalable Second-Order Optimization for Deep Learning](https://arxiv.org/pdf/2002.09018.pdf). Rohan Anil, Vineet Gupta, Tomer Koren, Kevin Regan, and Yoram Singer. Tech Report, 2021.
 3. [Learning Rate Grafting: Transferability of Optimizer Tuning](https://openreview.net/pdf?id=FpKgG31Z_i9). Naman Agarwal, Rohan Anil, Elad Hazan, Tomer Koren, and Cyril Zhang. Tech Report, 2021.
