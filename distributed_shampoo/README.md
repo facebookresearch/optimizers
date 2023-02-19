@@ -60,7 +60,7 @@ A few notes on hyperparameters:
 
 - We allow for decoupled and coupled weight decay. If one sets `use_decoupled_weight_decay=True`, then you are enabling AdamW-style weight decay, while `use_decoupled_weight_decay=False` corresponds to the normal L2-regularization style weight decay.
 
-### Example 1: SGD with Momentum
+### Example 1: [SGD](https://pytorch.org/docs/stable/generated/torch.optim.SGD.html) with Momentum
 
 If we previously used the optimizer:
 ```
@@ -98,7 +98,7 @@ optimizer = DistributedShampoo(
 ```
 
 
-### Example 2: Adam
+### Example 2: [Adam](https://pytorch.org/docs/stable/generated/torch.optim.Adam.html)
 
 If we previously used the optimizer:
 ```
@@ -138,7 +138,7 @@ optimizer = DistributedShampoo(
 )
 ```
 
-### Example 3: Adagrad
+### Example 3: [Adagrad](https://pytorch.org/docs/stable/generated/torch.optim.Adagrad.html)
 
 If we previously used the optimizer:
 ```
@@ -176,7 +176,7 @@ optimizer = DistributedShampoo(
 )
 ```
 
-### Example 4: AdamW
+### Example 4: [AdamW](https://pytorch.org/docs/stable/generated/torch.optim.AdamW.html)
 
 If we previously used the optimizer:
 ```
@@ -247,7 +247,7 @@ With the inclusion of learning rate grafting, no additional changes are needed f
     )
     ```
 
-2. Use the smallest precondition_frequency (i.e., 1) and increase the precondition frequency.
+2. Use the smallest `precondition_frequency` (i.e., 1) and increase the precondition frequency.
 
     * This hyperparameter determines how frequently the preconditioner is computed. The smaller the value, the slower Shampoo becomes but with faster convergence. The goal is to find a value that balances convergence and speed.
 
@@ -272,7 +272,7 @@ With the inclusion of learning rate grafting, no additional changes are needed f
 
     * This hyperparameter determines when to start using Shampoo. Prior to this, the optimizer will use the grafted method. This value should generally be set larger than or equal to `precondition_frequency` except when the precondition frequency is 1. By default, `start_preconditioning_steps` is set equal to `precondition_frequency`.
 
-    * If the precondition_frequency = 1, then set start_preconditioning_steps = 0 in order to use Shampoo from the start.
+    * If the `precondition_frequency = 1`, then set `start_preconditioning_steps = 0` in order to use Shampoo from the start.
 
     * Following is an example of setting `start_preconditioning_steps = 300`:
     ```
