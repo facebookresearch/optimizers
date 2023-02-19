@@ -72,7 +72,6 @@ class Parser:
         parser.add_argument(
             "--optimizer-type",
             type=lambda t: enum_type_parse(t, OptimizerType),
-            choices=[t.name for t in OptimizerType],
             help="Optimizer type.",
         )
         parser.add_argument("--batch-size", type=int, default=128, help="Batch size.")
@@ -155,21 +154,18 @@ class Parser:
         parser.add_argument(
             "--preconditioner-dtype",
             type=lambda t: enum_type_parse(t, DType),
-            choices=[t.name for t in DType],
             default=DType.Float,
             help="Preconditioner dtype for Shampoo.",
         )
         parser.add_argument(
             "--large-dim-method",
             type=lambda t: enum_type_parse(t, LargeDimMethod),
-            choices=[t.name for t in LargeDimMethod],
             default=LargeDimMethod.BLOCKING,
             help="Large dimensional method for Shampoo.",
         )
         parser.add_argument(
             "--grafting-type",
             type=lambda t: enum_type_parse(t, GraftingType),
-            choices=[t.name for t in GraftingType],
             default=GraftingType.SGD,
             help="Grafted method for Shampoo.",
         )
@@ -209,7 +205,6 @@ class Parser:
         parser.add_argument(
             "--dist-strategy",
             type=lambda t: enum_type_parse(t, DistStrategy),
-            choices=[t.name for t in DistStrategy],
             default=DistStrategy.CROSS_NODE,
             help="Strategy for distributing root inverse computation.",
         )
