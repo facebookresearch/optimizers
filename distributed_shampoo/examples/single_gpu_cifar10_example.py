@@ -54,8 +54,13 @@ class OptimizerType(enum.Enum):
 
 
 ###### ARGPARSER ######
-def argtype(cls: enum.Enum):
-    return lambda s: cls[s]
+def enum_type_parse(s: str, enum_type: enum.Enum):
+    try:
+        return enum_type[s]
+    except KeyError:
+        raise argparse.ArgumentTypeError(
+            "Use one of {}".format(", ".join([t.name for t in enum_type]))
+        )
 
 
 class Parser:
@@ -66,8 +71,7 @@ class Parser:
         # arguments for training script
         parser.add_argument(
             "--optimizer-type",
-            type=argtype(OptimizerType),
-            default="SGD",
+            type=lambda t: enum_type_parse(t, OptimizerType),
             help="Optimizer type.",
         )
         parser.add_argument("--batch-size", type=int, default=128, help="Batch size.")
@@ -149,20 +153,20 @@ class Parser:
         )
         parser.add_argument(
             "--preconditioner-dtype",
-            type=argtype(DType),
-            default="FLOAT",
+            type=lambda t: enum_type_parse(t, DType),
+            default=DType.Float,
             help="Preconditioner dtype for Shampoo.",
         )
         parser.add_argument(
             "--large-dim-method",
-            type=argtype(LargeDimMethod),
-            default="BLOCKING",
+            type=lambda t: enum_type_parse(t, LargeDimMethod),
+            default=LargeDimMethod.BLOCKING,
             help="Large dimensional method for Shampoo.",
         )
         parser.add_argument(
             "--grafting-type",
-            type=argtype(GraftingType),
-            default="SGD",
+            type=lambda t: enum_type_parse(t, GraftingType),
+            default=GraftingType.SGD,
             help="Grafted method for Shampoo.",
         )
         parser.add_argument(
@@ -200,8 +204,8 @@ class Parser:
         )
         parser.add_argument(
             "--dist-strategy",
-            type=argtype(DistStrategy),
-            default="CROSS_NODE",
+            type=lambda t: enum_type_parse(t, DistStrategy),
+            default=DistStrategy.CROSS_NODE,
             help="Strategy for distributing root inverse computation.",
         )
 
