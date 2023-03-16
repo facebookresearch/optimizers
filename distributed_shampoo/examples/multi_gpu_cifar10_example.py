@@ -109,10 +109,8 @@ if __name__ == "__main__":
     Adam (with default parameters):
         torchrun --standalone --nnodes=1 --nproc_per_node=$NUM_TRAINERS -m distributed_shampoo.examples.multi_gpu_cifar10_example --optimizer-type ADAM
 
-    Distributed Shampoo (with default Adam grafting, precondition frequency = 100, and different root inverse strategies):
-        torchrun --standalone --nnodes=1 --nproc_per_node=$NUM_TRAINERS -m distributed_shampoo.examples.multi_gpu_cifar10_example --optimizer-type DISTRIBUTED_SHAMPOO --precondition-frequency 100 --grafting-type ADAM --dist-strategy NONE --use-bias-correction --use-decoupled-weight-decay
-        torchrun --standalone --nnodes=1 --nproc_per_node=$NUM_TRAINERS -m distributed_shampoo.examples.multi_gpu_cifar10_example --optimizer-type DISTRIBUTED_SHAMPOO --precondition-frequency 100 --grafting-type ADAM --dist-strategy CROSS_NODE --use-bias-correction --use-decoupled-weight-decay
-        torchrun --standalone --nnodes=1 --nproc_per_node=$NUM_TRAINERS -m distributed_shampoo.examples.multi_gpu_cifar10_example --optimizer-type DISTRIBUTED_SHAMPOO --precondition-frequency 100 --grafting-type ADAM --dist-strategy INTRA_NODE_ONLY --use-bias-correction --use-decoupled-weight-decay
+    Distributed Shampoo (with default Adam grafting, precondition frequency = 100):
+        torchrun --standalone --nnodes=1 --nproc_per_node=$NUM_TRAINERS -m distributed_shampoo.examples.multi_gpu_cifar10_example --optimizer-type DISTRIBUTED_SHAMPOO --precondition-frequency 100 --grafting-type ADAM --num-gpus-per-group -1 --use-bias-correction --use-decoupled-weight-decay
 
     The script will produce lifetime and window loss values retrieved from the forward pass over the data.
     Guaranteed reproducibility on a single GPU.
@@ -167,10 +165,9 @@ if __name__ == "__main__":
         use_nesterov=args.use_nesterov,
         use_bias_correction=args.use_bias_correction,
         use_decoupled_weight_decay=args.use_decoupled_weight_decay,
-        use_separate_momentum=args.use_separate_momentum,
         preconditioner_dtype=torch.float if args.preconditioner_dtype == DType.FLOAT else torch.float64,
         large_dim_method=args.large_dim_method,
-        dist_strategy=args.dist_strategy,
+        num_gpus_per_group=args.num_gpus_per_group,
         grafting_type=args.grafting_type,
         grafting_epsilon=args.grafting_epsilon,
         grafting_beta2=args.grafting_beta2,

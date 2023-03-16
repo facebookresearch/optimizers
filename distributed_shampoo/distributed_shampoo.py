@@ -7,25 +7,28 @@ LICENSE file in the root directory of this source tree.
 
 """
 
-import bisect
-import itertools
 import logging
 import os
 from collections import abc as container_abcs, defaultdict
 from copy import deepcopy
 from itertools import chain
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 import torch
 import torch.distributed as dist
 
+from distributed_shampoo.shampoo_dist_utils import (
+    distribute_buffer_sizes,
+    split_local_dist_buffers,
+)
+
 from distributed_shampoo.shampoo_utils import (
     AdagradPreconditioner,
     BlockShampooPreconditioner,
+    DistributedPreconditioner,
     GraftingType,
     LargeDimMethod,
     Preconditioner,
-    DistStrategy,
     ShampooPreconditioner,
 )
 
@@ -43,6 +46,8 @@ PARAMS = "params"
 PRECONDITIONERS = "preconditioners"
 STEP = "step"
 WEIGHT_DECAY = "weight_decay"
+DIST_BUFFER = "dist_buffer"
+MY_DIST_BUFFER = "my_dist_buffer"
 
 
 class DistributedShampoo(torch.optim.Optimizer):
@@ -51,9 +56,10 @@ class DistributedShampoo(torch.optim.Optimizer):
     Implemented by:
         Hao-Jun Michael Shi (Meta Platforms, Inc.)
         Tsung-Hsien Lee (Cruise)
+        Shintaro Iwasaki (Meta Platforms, Inc.)
 
     with support from:
-        Rohan Anil (Google), Vineet Gupta (Google), Shintaro Iwasaki (Meta), Zhijing Li (Meta), Dheevatsa Mudigere (Nvidia),
+        Rohan Anil (Google), Vineet Gupta (Google), Zhijing Li (Meta), Dheevatsa Mudigere (Nvidia),
         Mike Rabbat (Meta), and Kaushik Rangadurai (Meta).
 
     Partly based on the work in:
@@ -122,19 +128,14 @@ class DistributedShampoo(torch.optim.Optimizer):
             Computational cost = O(mn)
             Memory cost = m + n
 
-    3. Distributed Root Inverse Computation: Supports multi-GPU data-parallel training via torch.distributed by setting dist_strategy.
-        Enables multiple strategies for distributing root inverse computation over multiple GPUs:
-        - DistStrategy.CROSS_NODE (Default): Distributes preconditioner root inverse computation in
-            a per-preconditioner round-robin fashion across all nodes. Performs inter- and intra-node communication
-            to synchronize root inverse preconditioners.
-        - DistStrategy.INTRA_NODE_ONLY: Distributes preconditioner root inverse computation in
-            a per-preconditioner round-robin fashion across GPUs within each node. Performs intra-node communication
-            only to synchronize root inverse preconditioners.
-        - DistStrategy.NONE: No distributing of the preconditioner root inverse computation.
+    3. Distributed Memory and Computation: Supports multi-GPU data-parallel training via torch.distributed by setting num_gpus_per_group > 1.
+        Distributes the computation required for Shampoo (updating of the preconditioners, computation of the root inverse,
+        preconditioning of the gradients, etc.) across multiple GPUs. The memory is similarly distributed using DTensor.
+        num_gpus_per_group specifies the number of GPUs used per distributed group. The computation is replicated across different groups.
 
         Requirements:
         - torch.distributed must be initialized in advance.
-        - Currently only supports homogeneous hardware architectures.
+        - Only supports homogeneous hardware architectures.
 
     Args:
         params (iterable): iterable of parameters to optimize or dicts defining
@@ -154,12 +155,10 @@ class DistributedShampoo(torch.optim.Optimizer):
         use_nesterov (bool): uses Nesterov momentum (default: False)
         use_bias_correction (bool): flag for using bias correction (Default: True)
         use_decoupled_weight_decay (bool): Flag for using AdamW-style decoupled weight decay (Default: True)
-        use_separate_momentum (bool): Flag for using separate momentum terms between Shampoo and the grafted method.
-            (Default: False)
         preconditioner_dtype (torch.dtype): data type for preconditioner (Default: torch.float)
         large_dim_method (LargeDimMethod): method for handling large scale tensors. (Default: LargeDimMethod.BLOCKING)
-        dist_strategy (DistStrategy): distributes root inverse computation across multiple GPU workers using
-            specified strategy. (Default: DistStrategy.INTRA_NODE_ONLY)
+        num_gpus_per_group (int): number of GPUs per distributed process group for distributed computation/memory.
+            If num_gpus_per_group = -1 is used, then defaults to using the LOCAL_WORLD_SIZE. (Default: -1)
         use_merge_dims (bool): merge dimensions if possible while respecting max_preconditioner_dim. (Default: True)
         grafting_type (GraftingType): selects grafting method. (Default: GraftingType.ADAGRAD)
         grafting_epsilon (float): epsilon for grafting method. (Default: 1e-3)
@@ -184,53 +183,91 @@ class DistributedShampoo(torch.optim.Optimizer):
         use_nesterov: bool = False,
         use_bias_correction: bool = True,
         use_decoupled_weight_decay: bool = True,
-        use_separate_momentum: bool = False,
         preconditioner_dtype: torch.dtype = torch.float,
         large_dim_method: LargeDimMethod = LargeDimMethod.BLOCKING,
-        dist_strategy: DistStrategy = DistStrategy.CROSS_NODE,
+        num_gpus_per_group: int = 8,
         use_merge_dims: bool = True,
         grafting_type: GraftingType = GraftingType.ADAGRAD,
         grafting_epsilon: float = 1e-3,
         grafting_beta2: float = 1.0,
         debug_mode: bool = False,
     ):
+        # Hyperparameter checks.
         if not lr >= 0.0:
-            raise ValueError(f"Invalid learning rate: {lr}")
+            raise ValueError(f"Invalid learning rate: {lr}. Must be >= 0.0.")
         if not 0.0 <= betas[0] < 1.0:
-            raise ValueError(f"Invalid beta parameter at index 0: {betas[0]}")
+            raise ValueError(
+                f"Invalid beta parameter at index 0: {betas[0]}. Must be in [0.0, 1.0)."
+            )
         if not 0.0 < betas[1] <= 1.0:
-            raise ValueError(f"Invalid beta parameter at index 1: {betas[1]}")
+            raise ValueError(
+                f"Invalid beta parameter at index 1: {betas[1]}. Must be in (0.0, 1.0]."
+            )
         if not epsilon > 0.0:
-            raise ValueError(f"Invalid epsilon value: {epsilon}")
+            raise ValueError(f"Invalid epsilon value: {epsilon}. Must be > 0.0.")
         if not 0.0 <= momentum < 1.0:
-            raise ValueError(f"Invalid momentum parameter: {momentum}")
+            raise ValueError(
+                f"Invalid momentum parameter: {momentum}. Must be [0.0, 1.0)."
+            )
         if not weight_decay >= 0.0:
-            raise ValueError(f"Invalid weight_decay value: {weight_decay}")
+            raise ValueError(
+                f"Invalid weight_decay value: {weight_decay}. Must be > 0.0."
+            )
         if not max_preconditioner_dim >= 1:
             raise ValueError(
-                f"Invalid max preconditioner dimension: {max_preconditioner_dim}"
+                f"Invalid max preconditioner dimension: {max_preconditioner_dim}. Must be >= 1."
             )
         if not precondition_frequency >= 1:
             raise ValueError(
-                f"Invalid precondition frequency: {precondition_frequency}"
+                f"Invalid precondition frequency: {precondition_frequency}. Must be >= 1."
             )
         if not start_preconditioning_step >= -1:
             raise ValueError(
                 f"Invalid start preconditioning step: {start_preconditioning_step}"
             )
+        if not num_gpus_per_group >= -1:
+            raise ValueError(
+                f"Invalid number of GPUs per group: {num_gpus_per_group}. Must be >= -1."
+            )
         if not exponent_override >= 0:
-            raise ValueError(f"Invalid exponent override: {exponent_override}")
+            raise ValueError(
+                f"Invalid exponent override: {exponent_override}. Must be >= 0."
+            )
         if not 0.0 < grafting_beta2 <= 1.0:
-            raise ValueError(f"Invalid grafting beta parameter: {grafting_beta2}")
+            raise ValueError(
+                f"Invalid grafting beta parameter: {grafting_beta2}. Must be in (0.0, 1.0]."
+            )
         if not grafting_epsilon > 0.0:
-            raise ValueError(f"Invalid epsilon value: {grafting_epsilon}")
-        if dist_strategy != DistStrategy.NONE:
+            raise ValueError(
+                f"Invalid epsilon value: {grafting_epsilon}. Must be > 0.0."
+            )
+
+        # Distributed checks.
+        if num_gpus_per_group > 1 or num_gpus_per_group == -1:
             if not torch.cuda.is_available():
                 raise ValueError("Using distributed version of Shampoo without GPUs!")
             if not dist.is_initialized():
                 raise ValueError(
                     "Using distributed version of Shampoo without initializing distributed process group!"
                 )
+
+            # Defaults to number of GPUs per node if using -1.
+            if num_gpus_per_group == -1:
+                num_gpus_per_group = int(
+                    os.environ.get("LOCAL_WORLD_SIZE", dist.get_world_size())
+                )
+
+            if not dist.get_world_size() >= num_gpus_per_group:
+                num_gpus_per_group = dist.get_world_size()
+                logger.warning(
+                    f"Number of GPUs per group {num_gpus_per_group} is specified larger than global world size {dist.get_world_size()}. Setting to default world size."
+                )
+            if not dist.get_world_size() % num_gpus_per_group == 0:
+                raise ValueError(
+                    f"Invalid number of GPUs per group: {num_gpus_per_group}. Must divide global world size {dist.get_world_size()}."
+                )
+        else:
+            num_gpus_per_group = 1
 
         super(DistributedShampoo, self).__init__(
             params,
@@ -250,7 +287,7 @@ class DistributedShampoo(torch.optim.Optimizer):
         self._precondition_frequency = precondition_frequency
         self._exponent_override = exponent_override
         self._exponent_multiplier = exponent_multiplier
-        self._dist_strategy = dist_strategy
+        self._num_gpus_per_group = num_gpus_per_group
         self._use_merge_dims = use_merge_dims
         self._large_dim_method = large_dim_method
         self._use_decoupled_weight_decay = use_decoupled_weight_decay
@@ -261,7 +298,6 @@ class DistributedShampoo(torch.optim.Optimizer):
         self._grafting_beta2 = grafting_beta2
         self._parameter_count = 0
         self._use_nesterov = use_nesterov
-        self._use_separate_momentum = use_separate_momentum
         self._debug_mode = debug_mode
         if self._use_nesterov and momentum == 0.0:
             logger.warning(
@@ -277,78 +313,25 @@ class DistributedShampoo(torch.optim.Optimizer):
             self._start_preconditioning_step = start_preconditioning_step
 
         # Initialize comms-related fields.
-        self._world_size = dist.get_world_size() if dist.is_initialized() else 1
+        self._world_size = dist.get_world_size() if self._use_distributed() else 1
 
-        # Currently supports only homogeneous architectures and assumes that the environmental
-        # variable LOCAL_WORLD_SIZE is set (for example, through torchrun / torch.distributed.launch).
-        #
-        # TODO: Need to find way to obtain the number of GPUs / node to support heterogeneous architectures
-        # and not rely on an environmental variable.
-        local_world_size = int(os.environ.get("LOCAL_WORLD_SIZE", 1))
-        self._number_of_gpus_per_node = (
-            [local_world_size] * (self._world_size // local_world_size)
-            if torch.cuda.is_available()
-            and self._dist_strategy == DistStrategy.INTRA_NODE_ONLY
-            else [self._world_size]
-        )
-        if sum(self._number_of_gpus_per_node) != self._world_size:
-            raise ValueError(
-                f"Sum of number of GPUs per node {self._number_of_gpus_per_node} does not equal world size {self._world_size}!"
-            )
-        self._root_inv_dist_groups = self._create_root_inv_distributed_groups(
-            self._number_of_gpus_per_node
-        )
-
-        # Initialize Shampoo preconditioners.
-        self._initialize_preconditioners_and_steps()
-        self._assign_preconditioners_to_ranks()
+        # Initialize Shampoo preconditioners and distributed buffers.
+        self._dist_group = None
+        buffer_ranks_list = self._assign_preconditioners_to_ranks()
+        self._initialize_preconditioners_and_steps(buffer_ranks_list)
 
     @torch.no_grad()
     def _use_distributed(self) -> bool:
-        return self._dist_strategy != DistStrategy.NONE and dist.is_initialized()
+        return self._num_gpus_per_group > 1 and dist.is_initialized()
 
     @torch.no_grad()
-    def _create_root_inv_distributed_groups(
-        self, number_of_gpus_per_node: List[int]
-    ) -> Optional[Dict[int, Optional[dist.ProcessGroup]]]:
-        """Creates different distributed groups for GPUs within each node. Used for distributing root inverse computation."""
-        assert (
-            min(number_of_gpus_per_node) > 0
-        ), f"Number of GPUs per node {number_of_gpus_per_node} must be greater than 0 on all nodes!"
-
-        if self._dist_strategy == DistStrategy.CROSS_NODE:
-            logger.info(
-                "Using default (global) distributed process group for distributing root inverse computation with cross-node communication..."
-            )
-            root_inv_dist_groups = {rank: None for rank in range(self._world_size)}
-
-        elif self._dist_strategy == DistStrategy.INTRA_NODE_ONLY:
-            logger.info(
-                "Setting up distributed process groups for each node for distributing root inverse computation with intra-node-only communication..."
-            )
-            prev_rank = 0
-            root_inv_dist_groups = {}
-            for i, number_of_gpus_current_node in enumerate(number_of_gpus_per_node):
-                split = list(range(prev_rank, prev_rank + number_of_gpus_current_node))
-                dist_group = dist.new_group(ranks=split)
-                root_inv_dist_groups.update({rank: dist_group for rank in split})
-                prev_rank = prev_rank + number_of_gpus_current_node
-                logger.info(
-                    f"Ranks {split} from node {i} assigned to same process group for distributing root inverse computation!"
-                )
-
-        else:
-            # We use -1 for a designated rank for non-distributed ranks.
-            # None corresponds to the group, which will lead to the default (global) process group.
-            root_inv_dist_groups = {-1: None}
-
-        return root_inv_dist_groups
-
-    @torch.no_grad()
-    def _initialize_preconditioners_and_steps(self):
+    def _initialize_preconditioners_and_steps(
+        self, buffer_ranks_list: List[List[Tuple[torch.Tensor, int]]]
+    ):
         """Initialize Shampoo preconditioners and inverse preconditioners."""
 
-        for group in self.param_groups:
+        for group, buffer_ranks in zip(self.param_groups, buffer_ranks_list):
+            preconditioner_count = 0
             for idx, p in enumerate(group[PARAMS]):
                 state = self.state[p]
                 dims = torch.as_tensor(p.shape)
@@ -366,18 +349,29 @@ class DistributedShampoo(torch.optim.Optimizer):
                         use_bias_correction=self._use_bias_correction,
                         block_size=self._max_preconditioner_dim,
                         dtype=self._preconditioner_dtype,
-                        dist_strategy=self._dist_strategy,
                         idx=idx,
                         use_merge_dims=self._use_merge_dims,
                         start_preconditioning_step=self._start_preconditioning_step,
                         grafting_type=self._grafting_type,
                         grafting_beta2=self._grafting_beta2,
                         grafting_epsilon=self._grafting_epsilon,
+                        group=self._dist_group,
+                        dist_buffer_ranks=buffer_ranks,
+                        dist_buffer_index=preconditioner_count,
+                    )
+                    preconditioner_count += len(
+                        state[PRECONDITIONERS].get_split_dist_buffers()
                     )
 
                 # Uses Adagrad preconditioner if any dimension is larger than
                 # the max_preconditioner_dim; see features above.
                 elif self._large_dim_method == LargeDimMethod.ADAGRAD:
+                    dist_buffer, group_source_rank = (
+                        buffer_ranks[preconditioner_count]
+                        if buffer_ranks
+                        else (None, 0)
+                    )
+                    preconditioner_count += 1
                     state[PRECONDITIONERS] = (
                         AdagradPreconditioner(
                             p,
@@ -385,6 +379,9 @@ class DistributedShampoo(torch.optim.Optimizer):
                             epsilon=group[EPSILON],
                             use_bias_correction=self._use_bias_correction,
                             idx=idx,
+                            group=self._dist_group,
+                            group_source_rank=group_source_rank,
+                            dist_buffer=dist_buffer,
                         )
                         if torch.any(dims > self._max_preconditioner_dim)
                         else ShampooPreconditioner(
@@ -396,12 +393,14 @@ class DistributedShampoo(torch.optim.Optimizer):
                             use_bias_correction=self._use_bias_correction,
                             diagonal_threshold=self._max_preconditioner_dim,
                             dtype=self._preconditioner_dtype,
-                            dist_strategy=self._dist_strategy,
                             idx=idx,
                             start_preconditioning_step=self._start_preconditioning_step,
                             grafting_type=self._grafting_type,
                             grafting_beta2=self._grafting_beta2,
                             grafting_epsilon=self._grafting_epsilon,
+                            group=self._dist_group,
+                            group_source_rank=group_source_rank,
+                            dist_buffer=dist_buffer,
                         )
                     )
 
@@ -409,6 +408,12 @@ class DistributedShampoo(torch.optim.Optimizer):
                 # preconditioner if dimension is larger than max_preconditioner_dim; see feature
                 # above.
                 elif self._large_dim_method == LargeDimMethod.DIAGONAL:
+                    dist_buffer, group_source_rank = (
+                        buffer_ranks[preconditioner_count]
+                        if buffer_ranks
+                        else (None, 0)
+                    )
+                    preconditioner_count += 1
                     state[PRECONDITIONERS] = ShampooPreconditioner(
                         p,
                         beta2=group[BETAS][1],
@@ -423,6 +428,9 @@ class DistributedShampoo(torch.optim.Optimizer):
                         grafting_type=self._grafting_type,
                         grafting_beta2=self._grafting_beta2,
                         grafting_epsilon=self._grafting_epsilon,
+                        group=self._dist_group,
+                        group_source_rank=group_source_rank,
+                        dist_buffer=dist_buffer,
                     )
 
                 else:
@@ -439,53 +447,100 @@ class DistributedShampoo(torch.optim.Optimizer):
         logger.info(f"Total Parameter Count: {self._parameter_count}")
 
     @torch.no_grad()
-    def _assign_preconditioners_to_ranks(self):
-        """Assign each preconditioner to a rank depending on strategy.
+    def _assign_preconditioners_to_ranks(self) -> List[List[Tuple[torch.Tensor, int]]]:
+        """Assign each preconditioner to a rank depending on strategy."""
+        # Does not distribute computation.
+        if not self._use_distributed() or self._num_gpus_per_group <= 1:
+            self._dist_group = None
+            group_rank = 0
 
-        This method uses the following strategy:
-            DistStrategy.NONE: All workers are independently responsible for all preconditioners.
-            DistStrategy.CROSS_NODE: Preconditioners are distributed in a round-robin fashion across all nodes.
-            DistStrategy.INTRA_NODE_ONLY: Preconditioners are distributed in a round-robin fashion within each node.
+        # Distributes across default (global) process group.
+        elif self._num_gpus_per_group == dist.get_world_size():
+            self._dist_group = dist.distributed_c10d.GroupMember.WORLD
+            group_rank = dist.get_rank()
 
-        """
-        if not self._use_distributed():
-            return
-        elif self._dist_strategy in (
-            DistStrategy.CROSS_NODE,
-            DistStrategy.INTRA_NODE_ONLY,
-        ):
-            # Obtain number of GPUs on current node based on number of GPUs per node and the current rank.
-            # Example: Suppose the number of GPUs per node is [8, 12, 8] (a heterogeneous GPU architecture).
-            #   If the current rank is 8, then the node index is 1 and the number of GPUs on the current node is 12.
-            #   If the current rank is 7, then the node index is 0 and the number of GPUs on the current node is 8.
-            my_rank = dist.get_rank()
-            assert (
-                0 <= my_rank < sum(self._number_of_gpus_per_node)
-            ), f"Rank is not within the range {self._world_size}"
-            node_index = bisect.bisect_right(
-                list(itertools.accumulate(self._number_of_gpus_per_node)), my_rank
-            )
-            number_of_gpus_current_node = self._number_of_gpus_per_node[node_index]
-
-            preconditioner_count = 0
-            for group in self.param_groups:
-                for p in group[PARAMS]:
-                    state = self.state[p]
-                    if isinstance(
-                        state[PRECONDITIONERS],
-                        (ShampooPreconditioner, BlockShampooPreconditioner),
-                    ):
-                        preconditioner_count = state[
-                            PRECONDITIONERS
-                        ].assign_preconditioners_rank(
-                            preconditioner_count, number_of_gpus_current_node
-                        )
+        # Distributes across multiple process groups of equal size.
+        # Currently supports only homogeneous architectures and assumes that the environmental
+        # variable LOCAL_WORLD_SIZE is set (for example, through torchrun / torch.distributed.launch).
         else:
-            raise NotImplementedError(
-                "Root inverse strategy is not implemented! Specified root inverse strategy is "
-                + str(self._dist_strategy)
-                + "."
+            # Creates different process groups for AllGather.
+            # We need only one group, but we need to create multiple groups
+            # as new_group() is a collective across all the processes.
+            for group_ranks in [
+                list(range(r, r + self._num_gpus_per_group))
+                for r in range(0, dist.get_world_size(), self._num_gpus_per_group)
+            ]:
+                group = dist.new_group(ranks=group_ranks)
+
+                # Determines which group this rank belongs to.
+                if dist.get_rank() in group_ranks:
+                    self._dist_group = group
+
+            group_rank = dist.get_rank(group=self._dist_group)
+            logger.info(
+                f"Distributed Shampoo: Global Rank = {dist.get_rank()}, Group Rank = {group_rank}"
             )
+
+        buffer_ranks_list = []
+
+        # Calculate buffer sizes on a per-group basis.
+        for group in self.param_groups:
+
+            # Calculate necessary buffer sizes over all preconditioners for gradient communication.
+            buffer_sizes = []
+            for p in group[PARAMS]:
+                if self._large_dim_method == LargeDimMethod.BLOCKING:
+                    buffer_sizes.extend(
+                        BlockShampooPreconditioner.get_dist_buffer_sizes(
+                            p, self._max_preconditioner_dim, self._use_merge_dims
+                        )
+                    )
+
+                else:
+                    buffer_sizes.append(
+                        DistributedPreconditioner.get_dist_buffer_size(p)
+                    )
+
+            # Calculate distribution across ranks using obtained buffer sizes.
+            # buffer_size_ranks contains tuples of buffer sizes and ranks.
+            buffer_size_ranks = distribute_buffer_sizes(
+                buffer_sizes, self._num_gpus_per_group
+            )
+
+            # Allocate a single huge tensor.  Now every rank has the same size of buffer so
+            # that we can use all_gather_into_tensor which performs the best in NCCL.
+            # TODO: Switch from AllGather to AllGatherV once underlying NCCL supports efficient AllGatherV.
+            max_buffer_size_sum = max(
+                [
+                    sum([s for s, r in buffer_size_ranks if r == group_rank])
+                    for group_rank in range(self._num_gpus_per_group)
+                ]
+            )
+            total_buffer_size = max_buffer_size_sum * self._num_gpus_per_group
+
+            # global_dist_buffer allocated in terms of bytes.
+            global_dist_buffer = torch.zeros(
+                total_buffer_size,
+                dtype=torch.int8,
+                device=p.device,
+            )
+            group[DIST_BUFFER] = global_dist_buffer
+
+            logger.info(
+                f"Shampoo dist: group size = {self._num_gpus_per_group}, rank = {group_rank}, "
+                + f"total data = {max_buffer_size_sum} [B], buffer size = {total_buffer_size} [B]"
+            )
+
+            # Split global_dist_buffer into as many local buffers as my_group_size
+            local_dist_buffers = torch.split(global_dist_buffer, max_buffer_size_sum)
+            group[MY_DIST_BUFFER] = local_dist_buffers[group_rank]
+
+            # Further split local_dist_buffers so that we can assign them to preconditioners
+            buffer_ranks_list.append(
+                split_local_dist_buffers(buffer_size_ranks, local_dist_buffers)
+            )
+
+        return buffer_ranks_list
 
     @torch.no_grad()
     def _compute_root_inverse(self):
@@ -501,12 +556,7 @@ class DistributedShampoo(torch.optim.Optimizer):
                     state[PRECONDITIONERS],
                     (ShampooPreconditioner, BlockShampooPreconditioner),
                 ):
-                    my_rank = dist.get_rank() if self._use_distributed() else -1
-                    my_group = self._root_inv_dist_groups[my_rank]
-
-                    state[PRECONDITIONERS].compute_root_inverse(
-                        rank=my_rank, group=my_group
-                    )
+                    state[PRECONDITIONERS].compute_root_inverse()
 
     @torch.no_grad()
     def _compute_and_log_root_inverse_residuals(
@@ -560,21 +610,6 @@ class DistributedShampoo(torch.optim.Optimizer):
         )
 
     @torch.no_grad()
-    def _broadcast_inv_preconditioners(self):
-        """Broadcasts inverse preconditioners."""
-        if not self._use_distributed():
-            return
-
-        for group in self.param_groups:
-            for p in group[PARAMS]:
-                state = self.state[p]
-                if PRECONDITIONERS in state:
-                    my_rank = dist.get_rank()
-                    my_group = self._root_inv_dist_groups[my_rank]
-
-                    state[PRECONDITIONERS].broadcast(group=my_group)
-
-    @torch.no_grad()
     def _update_preconditioners(self):
         """Updates preconditioners.
 
@@ -584,11 +619,11 @@ class DistributedShampoo(torch.optim.Optimizer):
         """
         for group in self.param_groups:
             for p in group[PARAMS]:
-                if p.grad is None:
-                    continue
-
                 grad = p.grad
                 state = self.state[p]
+                if grad is None or not state[PRECONDITIONERS].on_source_rank:
+                    continue
+
                 weight_decay = group[WEIGHT_DECAY]
 
                 # TODO: Sparse case still not supported.
@@ -615,6 +650,48 @@ class DistributedShampoo(torch.optim.Optimizer):
             for p in group[PARAMS]:
                 self.state[p][STEP] += 1
         return self.state[p][STEP]
+
+    @torch.no_grad()
+    def _init_group(
+        self, group: Dict[str, Any]
+    ) -> Tuple[List[torch.Tensor], List[torch.Tensor], List[torch.Tensor]]:
+        # Set momentum parameter
+        momentum_param = group[MOMENTUM]
+        beta1, _ = group[BETAS]
+
+        # Instantiate lists for params, grads, and momentum.
+        split_params = []
+        split_preconditioned_grads = []
+        split_momentum_directions = []
+
+        for p in group[PARAMS]:
+            state = self.state[p]
+            if p.grad is None:
+                continue
+
+            if p.grad.is_sparse:
+                raise Exception(
+                    "Sparse parameters are not currently supported by Shampoo."
+                )
+
+            # Initialize momentum and exponential moving average of gradient.
+            if momentum_param != 0.0 and MOMENTUM not in state:
+                state[MOMENTUM] = torch.zeros_like(p.grad, memory_format=torch.preserve_format)
+            if beta1 != 0.0 and EXP_AVG not in state:
+                state[EXP_AVG] = torch.zeros_like(p.grad, memory_format=torch.preserve_format)
+
+            # Generate split lists.
+            split_params.extend(state[PRECONDITIONERS].combine_and_split_dims(p))
+            split_preconditioned_grads.extend(
+                state[PRECONDITIONERS].get_split_dist_buffers()
+            )
+            split_momentum_directions.extend(
+                state[PRECONDITIONERS].combine_and_split_dims(state[MOMENTUM])
+                if momentum_param != 0.0
+                else []
+            )
+
+        return split_params, split_preconditioned_grads, split_momentum_directions
 
     @torch.no_grad()
     def reset_preconditioners(self):
@@ -646,140 +723,92 @@ class DistributedShampoo(torch.optim.Optimizer):
             and iteration >= self._start_preconditioning_step
         ):
             self._compute_root_inverse()
-            self._broadcast_inv_preconditioners()
 
             if self._debug_mode:
                 self._compute_and_log_root_inverse_residuals()
 
         # Loops over all parameter groups and parameters to perform update.
         for group in self.param_groups:
+            split_params = []
+            split_preconditioned_grads = []
+            split_momentum_directions = []
+
             beta1, _ = group[BETAS]
             momentum_param = group[MOMENTUM]
             weight_decay = group[WEIGHT_DECAY]
             lr = group[LR]
 
+            (
+                split_params,
+                split_preconditioned_grads,
+                split_momentum_directions,
+            ) = self._init_group(group)
+
             for p in group[PARAMS]:
-                if p.grad is None:
+                state = self.state[p]
+                if p.grad is None or not state[PRECONDITIONERS].on_source_rank:
                     continue
 
-                # Initialize gradient, states, and dim for each parameter.
-                grad = p.grad
-                state = self.state[p]
-
-                # TODO: Sparse case still not supported.
-                if p.grad.is_sparse:
-                    raise Exception(
-                        "Sparse parameters are not currently supported by Shampoo."
+                # Incorporate first-moment or filtered gradient estimation.
+                if beta1 != 0:
+                    # Compute bias corrections if necessary.
+                    bias_correction1 = (
+                        1.0 - beta1**iteration
+                        if self._use_bias_correction
+                        else torch.as_tensor(1.0)
                     )
 
-                # Dense case
+                    # Compute exponential moving average of the gradient (with
+                    # potential bias correction).
+                    filtered_grad = state[EXP_AVG]
+                    filtered_grad.mul_(beta1).add_(p.grad, alpha=1 - beta1)
+                    p.grad.copy_(filtered_grad / bias_correction1)
+
+                # Compute preconditioned gradient and update parameters.
+                state[PRECONDITIONERS].preconditioned_grad_to_dist_buffer(p.grad)
+
+            # Perform all-gather to obtain search direction.
+            if self._num_gpus_per_group > 1:
+                # Distribute preconditioned_grads that have been set to self._my_dist_buffer.
+                dist.all_gather_into_tensor(
+                    group[DIST_BUFFER],
+                    group[MY_DIST_BUFFER],
+                    group=self._dist_group,
+                )
+
+            # Set search direction as preconditioned grads.
+            split_search_directions = split_preconditioned_grads
+
+            # Incorporate decoupled weight decay.
+            if self._use_decoupled_weight_decay and weight_decay != 0.0:
+                # Decoupled weight decay (no momentum case)
+                if momentum_param == 0.0:
+                    torch._foreach_mul_(split_params, 1.0 - lr * weight_decay)
+
+                # Decoupled weight decay (momentum case)
                 else:
-                    # Incorporate first-moment or filtered gradient estimation.
-                    if beta1 != 0:
-                        # Compute bias corrections if necessary.
-                        if self._use_bias_correction:
-                            bias_correction1 = 1.0 - beta1**iteration
-                        else:
-                            bias_correction1 = torch.as_tensor(1.0)
+                    torch._foreach_add_(
+                        split_search_directions, split_params, alpha=weight_decay
+                    )
 
-                        # Compute exponential moving average of the gradient (with
-                        # potential bias correction).
-                        filtered_grad = state.setdefault(
-                            EXP_AVG,
-                            torch.zeros_like(grad, memory_format=torch.preserve_format),
-                        )
-                        filtered_grad.mul_(beta1).add_(grad, alpha=1 - beta1)
-                        grad.copy_(filtered_grad / bias_correction1)
+            # Update momentum.
+            if momentum_param != 0.0:
+                torch._foreach_mul_(split_momentum_directions, momentum_param)
+                torch._foreach_add_(split_momentum_directions, split_search_directions)
 
-                    # Compute preconditioned gradient and update parameters.
-                    #
-                    # If we are not applying momentum, uses the precondition_and_update
-                    # function for improved performance.
-                    if momentum_param == 0.0:
-                        # Adds decoupled weight decay term.
-                        if self._use_decoupled_weight_decay and weight_decay != 0:
-                            p.mul_(1 - lr * weight_decay)
+                # Incorporates Nesterov momentum.
+                if self._use_nesterov:
+                    torch._foreach_add_(
+                        split_search_directions,
+                        split_momentum_directions,
+                        alpha=momentum_param,
+                    )
 
-                        state[PRECONDITIONERS].precondition_and_update(p, grad, lr)
+                else:
+                    split_search_directions = split_momentum_directions
 
-                    # Otherwise, uses the precondition function in order to apply
-                    # momentum to the entire update to the parameters.
-                    else:
-                        # Uses two separate momentum terms for the grafted and Shampoo methods.
-                        if self._use_separate_momentum:
-
-                            # Compute search direction / preconditioned gradient for both Shampoo and
-                            # grafted methods separately.
-                            grafted_direction = state[
-                                PRECONDITIONERS
-                            ].graft_precondition(grad)
-                            shampoo_direction = state[
-                                PRECONDITIONERS
-                            ].shampoo_precondition(grad)
-
-                            # Adds decoupled weight decay term to both directions.
-                            if self._use_decoupled_weight_decay and weight_decay != 0:
-                                grafted_direction.add_(p, alpha=weight_decay)
-                                shampoo_direction.add_(p, alpha=weight_decay)
-
-                            # Generates momentum term and applies momentum or stochastic
-                            # primal iterate averaging.
-                            grafted_momentum_direction = state.setdefault(
-                                GRAFTING_MOMENTUM,
-                                torch.zeros_like(
-                                    grad, memory_format=torch.preserve_format
-                                ),
-                            )
-                            shampoo_momentum_direction = state.setdefault(
-                                MOMENTUM,
-                                torch.zeros_like(
-                                    grad, memory_format=torch.preserve_format
-                                ),
-                            )
-                            grafted_momentum_direction.mul_(momentum_param).add_(
-                                grafted_direction
-                            )
-                            shampoo_momentum_direction.mul_(momentum_param).add_(
-                                shampoo_direction
-                            )
-
-                            # Select which direction to use (with possible Nesterov acceleration).
-                            search_direction, momentum_direction = (
-                                (grafted_direction, grafted_momentum_direction)
-                                if iteration < self._start_preconditioning_step
-                                else (shampoo_direction, shampoo_momentum_direction)
-                            )
-
-                        else:
-                            # Compute search direction / preconditioned gradient.
-                            search_direction = state[PRECONDITIONERS].precondition(grad)
-
-                            # Adds decoupled weight decay term.
-                            if self._use_decoupled_weight_decay and weight_decay != 0:
-                                search_direction.add_(p, alpha=weight_decay)
-
-                            # Generates momentum term and applies momentum or stochastic
-                            # primal iterate averaging.
-                            momentum_direction = state.setdefault(
-                                MOMENTUM,
-                                torch.zeros_like(
-                                    grad, memory_format=torch.preserve_format
-                                ),
-                            )
-                            momentum_direction.mul_(momentum_param).add_(
-                                search_direction
-                            )
-
-                        # Incorporates Nesterov momentum.
-                        if self._use_nesterov:
-                            search_direction.add_(
-                                momentum_direction, alpha=momentum_param
-                            )
-                        else:
-                            search_direction = momentum_direction
-
-                        # Performs update by taking step along search direction.
-                        p.add_(search_direction, alpha=-lr)
+            # Updates weights.
+            torch._foreach_add_(split_params, split_search_directions, alpha=-lr)
 
         return loss
 

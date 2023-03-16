@@ -19,7 +19,6 @@ from distributed_shampoo.shampoo_utils import (
     merge_small_dims,
     multi_dim_cat,
     multi_dim_split,
-    DistStrategy,
     ShampooPreconditioner,
 )
 
@@ -144,7 +143,7 @@ class AdagradPreconditionerTest(unittest.TestCase):
         param, loss, grad, adagrad = self._setup_test(
             beta2=beta2, epsilon=0.0, use_bias_correction=use_bias_correction
         )
-        precond_sol = grad**torch.tensor(2)
+        precond_sol = grad ** torch.tensor(2)
         precond_sol = precond_sol if beta2 == 1.0 else (1.0 - beta2) * precond_sol
         bias_correction2 = torch.tensor(1.0 if not use_bias_correction else 1.0 - beta2)
         adagrad.update_preconditioners(grad)
@@ -182,23 +181,6 @@ class AdagradPreconditionerTest(unittest.TestCase):
         preconditioned_grad = adagrad.precondition(grad)
         torch.testing.assert_close(preconditioned_grad, torch.ones(2))
 
-    def test_precondition_and_update_without_preconditioner_update(self) -> None:
-        param, loss, grad, adagrad = self._setup_test(
-            beta2=1.0, epsilon=1.0, use_bias_correction=False
-        )
-        with torch.no_grad():
-            adagrad.precondition_and_update(param, grad, 1.0)
-        torch.testing.assert_close(param, torch.tensor([-1.0, -2.0]))
-
-    def test_precondition_and_update_with_preconditioner_update(self) -> None:
-        param, loss, grad, adagrad = self._setup_test(
-            beta2=1.0, epsilon=0.0, use_bias_correction=False
-        )
-        adagrad.update_preconditioners(grad)
-        with torch.no_grad():
-            adagrad.precondition_and_update(param, grad, 1.0)
-        torch.testing.assert_close(param, torch.tensor([0.0, 1.0]))
-
     def test_compute_norm_without_preconditioner_update(self) -> None:
         param, loss, grad, adagrad = self._setup_test(
             beta2=1.0, epsilon=1.0, use_bias_correction=False
@@ -235,9 +217,7 @@ class ShampooPreconditionerTest(unittest.TestCase):
         diagonal_threshold=None,
         grafting_type=GraftingType.NONE,
         grafting_epsilon=1e-3,
-    ) -> Tuple[
-        torch.Tensor, torch.Tensor, torch.Tensor, ShampooPreconditioner
-    ]:
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, ShampooPreconditioner]:
         param = torch.tensor([[0.0, 1.0, 2.0], [3.0, 4.0, 5.0]], requires_grad=True)
         loss = torch.linalg.norm(param, ord="fro") ** 2 / 2.0
         loss.backward()
@@ -248,7 +228,6 @@ class ShampooPreconditionerTest(unittest.TestCase):
             exponent_override=exponent_override,
             use_bias_correction=use_bias_correction,
             dtype=torch.float,
-            dist_strategy=DistStrategy.NONE,
             start_preconditioning_step=start_preconditioning_step,
             diagonal_threshold=diagonal_threshold,
             grafting_type=grafting_type,
@@ -338,31 +317,6 @@ class ShampooPreconditionerTest(unittest.TestCase):
         preconditioned_grad = shampoo.precondition(grad)
         torch.testing.assert_close(preconditioned_grad, grad)
 
-    def test_precondition_and_update(self) -> None:
-        param, loss, grad, shampoo = self._setup_test(
-            beta2=1.0,
-            epsilon=1.0,
-            use_bias_correction=False,
-            start_preconditioning_step=-1,
-        )
-        shampoo.compute_root_inverse()
-        with torch.no_grad():
-            shampoo.precondition_and_update(param, grad, 1.0)
-        torch.testing.assert_close(param, torch.zeros((2, 3)))
-
-    def test_precondition_and_update_with_grafting(self) -> None:
-        param, loss, grad, shampoo = self._setup_test(
-            beta2=1.0,
-            epsilon=1.0,
-            use_bias_correction=False,
-            grafting_type=GraftingType.ADAGRAD,
-            grafting_epsilon=1.0,
-        )
-        shampoo.compute_root_inverse()
-        with torch.no_grad():
-            shampoo.precondition_and_update(param, grad, 1.0)
-        torch.testing.assert_close(param, torch.zeros((2, 3)))
-
     def test_compute_norm(self) -> None:
         param, loss, grad, shampoo = self._setup_test(
             beta2=1.0, epsilon=1.0, use_bias_correction=False, diagonal_threshold=2
@@ -426,9 +380,7 @@ class ShampooPreconditionerTest(unittest.TestCase):
         shampoo.update_preconditioners(grad_2)
 
         shampoo.compute_root_inverse()
-        left_root_inverse = torch.diag(
-            torch.tensor([1.0, 1.0 / math.sqrt(5.0)])
-        )
+        left_root_inverse = torch.diag(torch.tensor([1.0, 1.0 / math.sqrt(5.0)]))
         right_root_inverse = torch.diag(torch.tensor([1.0, 1.0, 0.5]))
 
         with self.subTest("Test left root inverse matrix"):

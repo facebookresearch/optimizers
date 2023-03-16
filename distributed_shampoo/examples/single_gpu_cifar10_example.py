@@ -26,7 +26,6 @@ from distributed_shampoo.examples.convnet import ConvNet
 from distributed_shampoo.shampoo_utils import (
     GraftingType,
     LargeDimMethod,
-    DistStrategy,
 )
 from torch import nn
 from torchvision import datasets, transforms
@@ -147,11 +146,6 @@ class Parser:
             help="Use decoupled weight decay for Adam and Shampoo.",
         )
         parser.add_argument(
-            "--use-separate-momentum",
-            action="store_true",
-            help="Use separate momentum between grafted method and Shampoo.",
-        )
-        parser.add_argument(
             "--preconditioner-dtype",
             type=lambda t: enum_type_parse(t, DType),
             default=DType.FLOAT,
@@ -203,10 +197,10 @@ class Parser:
             help="Distributed backend.",
         )
         parser.add_argument(
-            "--dist-strategy",
-            type=lambda t: enum_type_parse(t, DistStrategy),
-            default=DistStrategy.CROSS_NODE,
-            help="Strategy for distributing root inverse computation.",
+            "--num-gpus-per-group",
+            type=int,
+            default=-1,
+            help="Number of GPUs per distributed process group.",
         )
 
         return parser.parse_args()
@@ -296,10 +290,9 @@ def instantiate_optimizer(
     use_nesterov: bool,
     use_bias_correction: bool,
     use_decoupled_weight_decay: bool,
-    use_separate_momentum: bool,
     preconditioner_dtype: DType,
     large_dim_method: LargeDimMethod,
-    dist_strategy: DistStrategy,
+    num_gpus_per_group: int,
     grafting_type: GraftingType,
     grafting_epsilon: float,
     grafting_beta2: float,
@@ -331,7 +324,6 @@ def instantiate_optimizer(
                 weight_decay=weight_decay,
             )
     elif optimizer_type == OptimizerType.DISTRIBUTED_SHAMPOO:
-        # since only working with a single GPU, dist_strategy = DistStrategy.NONE
         optimizer = DistributedShampoo(
             model.parameters(),
             lr=lr,
@@ -346,10 +338,9 @@ def instantiate_optimizer(
             use_nesterov=use_nesterov,
             use_bias_correction=use_bias_correction,
             use_decoupled_weight_decay=use_decoupled_weight_decay,
-            use_separate_momentum=use_separate_momentum,
             preconditioner_dtype=preconditioner_dtype,
             large_dim_method=large_dim_method,
-            dist_strategy=dist_strategy,
+            num_gpus_per_group=num_gpus_per_group,
             grafting_type=grafting_type,
             grafting_epsilon=grafting_epsilon,
             grafting_beta2=grafting_beta2,
@@ -461,10 +452,9 @@ if __name__ == "__main__":
         use_nesterov=args.use_nesterov,
         use_bias_correction=args.use_bias_correction,
         use_decoupled_weight_decay=args.use_decoupled_weight_decay,
-        use_separate_momentum=args.use_separate_momentum,
         preconditioner_dtype=torch.float if args.preconditioner_dtype == DType.FLOAT else torch.float64,
         large_dim_method=args.large_dim_method,
-        dist_strategy=DistStrategy.NONE,
+        num_gpus_per_group=0,
         grafting_type=args.grafting_type,
         grafting_epsilon=args.grafting_epsilon,
         grafting_beta2=args.grafting_beta2,
