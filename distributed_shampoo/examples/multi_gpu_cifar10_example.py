@@ -110,9 +110,9 @@ if __name__ == "__main__":
         torchrun --standalone --nnodes=1 --nproc_per_node=$NUM_TRAINERS -m distributed_shampoo.examples.multi_gpu_cifar10_example --optimizer-type ADAM
 
     Distributed Shampoo (with default Adam grafting, precondition frequency = 100, and different root inverse strategies):
-        torchrun --standalone --nnodes=1 --nproc_per_node=$NUM_TRAINERS -m distributed_shampoo.examples.multi_gpu_cifar10_example --optimizer-type DISTRIBUTED_SHAMPOO --precondition-frequency 100 --grafting-type ADAM --root-inv-strategy NONE --use-bias-correction --use-decoupled-weight-decay
-        torchrun --standalone --nnodes=1 --nproc_per_node=$NUM_TRAINERS -m distributed_shampoo.examples.multi_gpu_cifar10_example --optimizer-type DISTRIBUTED_SHAMPOO --precondition-frequency 100 --grafting-type ADAM --root-inv-strategy CROSS_NODE --use-bias-correction --use-decoupled-weight-decay
-        torchrun --standalone --nnodes=1 --nproc_per_node=$NUM_TRAINERS -m distributed_shampoo.examples.multi_gpu_cifar10_example --optimizer-type DISTRIBUTED_SHAMPOO --precondition-frequency 100 --grafting-type ADAM --root-inv-strategy INTRA_NODE_ONLY --use-bias-correction --use-decoupled-weight-decay
+        torchrun --standalone --nnodes=1 --nproc_per_node=$NUM_TRAINERS -m distributed_shampoo.examples.multi_gpu_cifar10_example --optimizer-type DISTRIBUTED_SHAMPOO --precondition-frequency 100 --grafting-type ADAM --dist-strategy NONE --use-bias-correction --use-decoupled-weight-decay
+        torchrun --standalone --nnodes=1 --nproc_per_node=$NUM_TRAINERS -m distributed_shampoo.examples.multi_gpu_cifar10_example --optimizer-type DISTRIBUTED_SHAMPOO --precondition-frequency 100 --grafting-type ADAM --dist-strategy CROSS_NODE --use-bias-correction --use-decoupled-weight-decay
+        torchrun --standalone --nnodes=1 --nproc_per_node=$NUM_TRAINERS -m distributed_shampoo.examples.multi_gpu_cifar10_example --optimizer-type DISTRIBUTED_SHAMPOO --precondition-frequency 100 --grafting-type ADAM --dist-strategy INTRA_NODE_ONLY --use-bias-correction --use-decoupled-weight-decay
 
     The script will produce lifetime and window loss values retrieved from the forward pass over the data.
     Guaranteed reproducibility on a single GPU.

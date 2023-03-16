@@ -154,7 +154,7 @@ class Parser:
         parser.add_argument(
             "--preconditioner-dtype",
             type=lambda t: enum_type_parse(t, DType),
-            default=DType.Float,
+            default=DType.FLOAT,
             help="Preconditioner dtype for Shampoo.",
         )
         parser.add_argument(
