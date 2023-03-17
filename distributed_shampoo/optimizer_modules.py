@@ -7,7 +7,6 @@ LICENSE file in the root directory of this source tree.
 
 """
 
-import itertools
 import logging
 from copy import deepcopy
 from typing import Any, Dict, Iterable, Mapping, Optional
@@ -23,8 +22,8 @@ ALL_CLASSES = (torch.Tensor, dict) + COMPATIBLE_DATA_STRUCTURES
 
 def are_states_equal(prev_state: Any, new_state: Any) -> bool:
     r"""
-    Comparison function that checks whether or not two state dictionaries containing tensors
-    or other custom data types (ShardedTensor) are equal.
+    Comparison function that checks whether or not two nested state dictionaries containing tensors
+    or other custom data types are equal.
 
     Useful for debugging purposes.
 
@@ -39,23 +38,12 @@ def are_states_equal(prev_state: Any, new_state: Any) -> bool:
 
     if isinstance(prev_state, torch.Tensor):
         return torch.equal(prev_state, new_state)
-    elif isinstance(prev_state, OptimizerModule):
-        return are_states_equal(prev_state, new_state)
     elif isinstance(prev_state, dict):
         prev_keys = prev_state.keys()
         if prev_keys != new_state.keys():
             return False
         return all(
             [are_states_equal(prev_state[key], new_state[key]) for key in prev_keys]
-        )
-    elif isinstance(prev_state, COMPATIBLE_DATA_STRUCTURES):
-        if len(prev_state) != len(new_state):
-            return False
-        return all(
-            [
-                are_states_equal(prev_value, new_value)
-                for prev_value, new_value in itertools.product(prev_state, new_state)
-            ]
         )
     else:
         return prev_state == new_state
