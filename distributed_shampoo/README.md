@@ -6,12 +6,12 @@ The key to tuning this optimizer is to balance accuracy, performance, and memory
 
 Developers:
 - Hao-Jun Michael Shi (Meta Platforms, Inc.)
-- Tsung-Hsien Lee (Cruise)
+- Tsung-Hsien Lee
+- Shintaro Iwasaki (Meta Platforms, Inc.)
 
 with contributions and support from:
 - Rohan Anil (Google)
 - Vineet Gupta (Google)
-- Shintaro Iwasaki (Meta Platforms, Inc.)
 - Zhijing Li (Meta Platforms, Inc.)
 - Dheevatsa Mudigere (NVIDIA)
 - Mike Rabbat (Meta Platforms, Inc.)
