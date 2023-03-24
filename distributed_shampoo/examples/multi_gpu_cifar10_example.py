@@ -19,8 +19,8 @@ import torch.distributed as dist
 
 from distributed_shampoo.examples.convnet import ConvNet
 from distributed_shampoo.examples.single_gpu_cifar10_example import (
-    instantiate_optimizer,
     DType,
+    instantiate_optimizer,
     LossMetrics,
     Parser,
 )
@@ -41,6 +41,7 @@ os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
 LOCAL_RANK = int(os.environ["LOCAL_RANK"])
 WORLD_RANK = int(os.environ["RANK"])
 WORLD_SIZE = int(os.environ["WORLD_SIZE"])
+
 
 def average_gradients(model: nn.Module, world_size: int):
     """Gradient averaging across GPUs via all-reduce."""
@@ -126,12 +127,19 @@ if __name__ == "__main__":
     torch.use_deterministic_algorithms(True)
 
     # initialize distributed process group
-    dist.init_process_group(backend=args.backend, init_method='env://', rank=WORLD_RANK, world_size=WORLD_SIZE)
+    dist.init_process_group(
+        backend=args.backend,
+        init_method="env://",
+        rank=WORLD_RANK,
+        world_size=WORLD_SIZE,
+    )
     device = torch.device("cuda:{}".format(LOCAL_RANK))
 
     # instantiate model and loss function
     model = ConvNet(32, 32, 3).to(device)
-    model = nn.parallel.DistributedDataParallel(model, device_ids=[LOCAL_RANK], output_device=LOCAL_RANK)
+    model = nn.parallel.DistributedDataParallel(
+        model, device_ids=[LOCAL_RANK], output_device=LOCAL_RANK
+    )
     loss_function = nn.CrossEntropyLoss()
 
     # instantiate data loader
@@ -165,7 +173,9 @@ if __name__ == "__main__":
         use_nesterov=args.use_nesterov,
         use_bias_correction=args.use_bias_correction,
         use_decoupled_weight_decay=args.use_decoupled_weight_decay,
-        preconditioner_dtype=torch.float if args.preconditioner_dtype == DType.FLOAT else torch.float64,
+        preconditioner_dtype=torch.float
+        if args.preconditioner_dtype == DType.FLOAT
+        else torch.float64,
         large_dim_method=args.large_dim_method,
         num_gpus_per_group=args.num_gpus_per_group,
         grafting_type=args.grafting_type,

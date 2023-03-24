@@ -12,6 +12,7 @@ import sys
 from typing import Dict, List, Optional, Tuple
 
 import torch
+import torch.distributed as dist
 
 try:
     import torch.distributed._tensor as dtensor
@@ -49,7 +50,7 @@ def distribute_buffer_sizes(
 
     Example:
         buffer_sizes = [128, 64, 500, 256], group_size = 2
-        -> buffer_size_ranks = [(128, 0), (64, 0), (500, 1), (256, 0)]
+        -> buffer_size_ranks = [(128, 1), (64, 1), (512, 0), (256, 1)]
 
     """
 
@@ -130,7 +131,7 @@ def allocate_distributed_tensor(
     dtype: torch.dtype,
     device: torch.device,
     device_mesh_ranks: Optional[List[int]] = None,
-    use_dtensor: bool = False,
+    use_dtensor: bool = True,
 ) -> torch.Tensor:
     """Instantiates distributed tensor using Tensor or DTensor.
 
@@ -145,7 +146,7 @@ def allocate_distributed_tensor(
         out (Tensor): Desired tensor or DTensor.
 
     """
-    if use_dtensor and DTENSOR in sys.modules and device_mesh_ranks is not None:
+    if DTENSOR in sys.modules and dist.is_initialized() and use_dtensor and device_mesh_ranks is not None:
         global _device_mesh_cache
 
         key = repr(device_mesh_ranks)
@@ -165,10 +166,10 @@ def allocate_distributed_tensor(
         return torch.zeros(shape, dtype=dtype, device=device)
 
 
-def use_local_tensor(input: torch.Tensor) -> torch.Tensor:
+def use_local_tensor(input_tensor: torch.Tensor) -> torch.Tensor:
     """Uses local tensor if input is a DTensor."""
     return (
-        input.to_local()
-        if DTENSOR in sys.modules and isinstance(input, dtensor.DTensor)
-        else input
+        input_tensor.to_local()
+        if DTENSOR in sys.modules and isinstance(input_tensor, dtensor.DTensor)
+        else input_tensor
     )

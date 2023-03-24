@@ -55,7 +55,7 @@ class DistributedShampoo(torch.optim.Optimizer):
 
     Implemented by:
         Hao-Jun Michael Shi (Meta Platforms, Inc.)
-        Tsung-Hsien Lee (Cruise)
+        Tsung-Hsien Lee
         Shintaro Iwasaki (Meta Platforms, Inc.)
 
     with support from:
@@ -185,7 +185,7 @@ class DistributedShampoo(torch.optim.Optimizer):
         use_decoupled_weight_decay: bool = True,
         preconditioner_dtype: torch.dtype = torch.float,
         large_dim_method: LargeDimMethod = LargeDimMethod.BLOCKING,
-        num_gpus_per_group: int = 8,
+        num_gpus_per_group: int = -1,
         use_merge_dims: bool = True,
         grafting_type: GraftingType = GraftingType.ADAGRAD,
         grafting_epsilon: float = 1e-3,
@@ -322,7 +322,7 @@ class DistributedShampoo(torch.optim.Optimizer):
 
     @torch.no_grad()
     def _use_distributed(self) -> bool:
-        return self._num_gpus_per_group > 1 and dist.is_initialized()
+        return self._num_gpus_per_group > 1
 
     @torch.no_grad()
     def _initialize_preconditioners_and_steps(
@@ -335,7 +335,7 @@ class DistributedShampoo(torch.optim.Optimizer):
             for idx, p in enumerate(group[PARAMS]):
                 state = self.state[p]
                 dims = torch.as_tensor(p.shape)
-                state[STEP] = torch.as_tensor(0)
+                state[STEP] = torch.tensor(0)
 
                 # Blocks the tensor and applies Shampoo to each block, with block
                 # size equal to the max_preconditioner_dim; see feature above.
@@ -450,7 +450,7 @@ class DistributedShampoo(torch.optim.Optimizer):
     def _assign_preconditioners_to_ranks(self) -> List[List[Tuple[torch.Tensor, int]]]:
         """Assign each preconditioner to a rank depending on strategy."""
         # Does not distribute computation.
-        if not self._use_distributed() or self._num_gpus_per_group <= 1:
+        if not self._use_distributed():
             self._dist_group = None
             group_rank = 0
 
@@ -642,14 +642,7 @@ class DistributedShampoo(torch.optim.Optimizer):
                         grad.add_(p, alpha=weight_decay)
 
                     # Update each preconditioner using the gradient.
-                    state[PRECONDITIONERS].update_preconditioners(grad)
-
-    @torch.no_grad()
-    def _iterate_step(self):
-        for group in self.param_groups:
-            for p in group[PARAMS]:
-                self.state[p][STEP] += 1
-        return self.state[p][STEP]
+                    state[PRECONDITIONERS].update_preconditioners(grad, state[STEP])
 
     @torch.no_grad()
     def _init_group(
@@ -676,9 +669,13 @@ class DistributedShampoo(torch.optim.Optimizer):
 
             # Initialize momentum and exponential moving average of gradient.
             if momentum_param != 0.0 and MOMENTUM not in state:
-                state[MOMENTUM] = torch.zeros_like(p.grad, memory_format=torch.preserve_format)
+                state[MOMENTUM] = torch.zeros_like(
+                    p.grad, memory_format=torch.preserve_format
+                )
             if beta1 != 0.0 and EXP_AVG not in state:
-                state[EXP_AVG] = torch.zeros_like(p.grad, memory_format=torch.preserve_format)
+                state[EXP_AVG] = torch.zeros_like(
+                    p.grad, memory_format=torch.preserve_format
+                )
 
             # Generate split lists.
             split_params.extend(state[PRECONDITIONERS].combine_and_split_dims(p))
@@ -692,6 +689,13 @@ class DistributedShampoo(torch.optim.Optimizer):
             )
 
         return split_params, split_preconditioned_grads, split_momentum_directions
+
+    @torch.no_grad()
+    def _iterate_step(self) -> torch.Tensor:
+        for group in self.param_groups:
+            for p in group[PARAMS]:
+                self.state[p][STEP] += 1
+        return self.state[p][STEP]
 
     @torch.no_grad()
     def reset_preconditioners(self):
@@ -765,11 +769,13 @@ class DistributedShampoo(torch.optim.Optimizer):
                     p.grad.copy_(filtered_grad / bias_correction1)
 
                 # Compute preconditioned gradient and update parameters.
-                state[PRECONDITIONERS].preconditioned_grad_to_dist_buffer(p.grad)
+                state[PRECONDITIONERS].preconditioned_grad_to_dist_buffer(
+                    p.grad, iteration
+                )
 
             # Perform all-gather to obtain search direction.
-            if self._num_gpus_per_group > 1:
-                # Distribute preconditioned_grads that have been set to self._my_dist_buffer.
+            if self._use_distributed():
+                # Distribute preconditioned_grads that have been set to my_dist_buffer.
                 dist.all_gather_into_tensor(
                     group[DIST_BUFFER],
                     group[MY_DIST_BUFFER],
@@ -848,13 +854,6 @@ class DistributedShampoo(torch.optim.Optimizer):
         def cast(param, value, key=None):
             r"""Make a deep copy of value, casting all tensors to device of param."""
             if isinstance(value, torch.Tensor):
-                # Floating-point types are a bit special here. They are the only ones
-                # that are assumed to always match the type of params.
-                # Make sure state['step'] is not casted https://github.com/pytorch/pytorch/issues/74424
-                if key != STEP:
-                    if param.is_floating_point():
-                        value = value.to(param.dtype)
-                    value = value.to(param.device)
                 return value
             elif isinstance(value, dict):
                 return {k: cast(param, v, key=k) for k, v in value.items()}

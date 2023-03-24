@@ -14,7 +14,161 @@ import numpy as np
 
 import torch
 
-from distributed_shampoo.matrix_functions import _matrix_inverse_root_newton, _matrix_root_eigen
+from distributed_shampoo.matrix_functions import (
+    _matrix_inverse_root_newton,
+    _matrix_root_eigen,
+    check_diagonal,
+    compute_matrix_root_inverse_residuals,
+    matrix_inverse_root,
+    matrix_root_diagonal,
+    RootInvMethod,
+)
+
+
+class CheckDiagonalTest(unittest.TestCase):
+    def test_check_diagonal_for_not_two_dim_matrix(self):
+        A = torch.zeros((2, 2, 2))
+        self.assertRaisesRegex(
+            ValueError, "Matrix is not 2-dimensional!", check_diagonal, A
+        )
+
+    def test_check_diagonal_for_not_square_matrix(self):
+        A = torch.zeros((2, 3))
+        self.assertRaisesRegex(ValueError, "Matrix is not square!", check_diagonal, A)
+
+    def test_check_diagonal_for_diagonal_matrix(self):
+        A = torch.eye(2)
+        self.assertTrue(check_diagonal(A))
+
+
+class MatrixInverseRootTest(unittest.TestCase):
+    def test_matrix_inverse_root_scalar(self):
+        A = torch.tensor(2.0)
+        root = 2
+        exponent_multiplier = 1.82
+        with self.subTest("Test with scalar case."):
+            self.assertEqual(
+                A ** (-1.82 / 2),
+                matrix_inverse_root(
+                    A, root=root, exponent_multiplier=exponent_multiplier
+                ),
+            )
+        with self.subTest("Test with matrix case."):
+            self.assertEqual(
+                torch.tensor([[A ** (-1.82 / 2)]]),
+                matrix_inverse_root(
+                    torch.tensor([[A]]),
+                    root=root,
+                    exponent_multiplier=exponent_multiplier,
+                ),
+            )
+
+    def test_matrix_inverse_root_with_not_two_dim_matrix(self):
+        A = torch.zeros((1, 2, 3))
+        root = 4
+        exponent_multiplier = 1.82
+        self.assertRaisesRegex(
+            ValueError,
+            "Matrix is not 2-dimensional!",
+            matrix_inverse_root,
+            A=A,
+            root=root,
+            exponent_multiplier=exponent_multiplier,
+            is_diagonal=False,
+        )
+
+    def test_matrix_inverse_root_not_square(self):
+        A = torch.zeros((2, 3))
+        root = 4
+        exponent_multiplier = 1.82
+        self.assertRaisesRegex(
+            ValueError,
+            "Matrix is not square!",
+            matrix_inverse_root,
+            A=A,
+            root=root,
+            exponent_multiplier=exponent_multiplier,
+            is_diagonal=False,
+        )
+
+    def test_matrix_inverse_root(self):
+        A = torch.tensor([[1.0, 0.0], [0.0, 4.0]])
+        root = 2
+        exponent_multiplier = 1.0
+        actual_inverse_root = torch.tensor([[1.0, 0.0], [0.0, 0.5]])
+        with self.subTest("Test with diagonal case."):
+            torch.testing.assert_close(
+                actual_inverse_root,
+                matrix_inverse_root(
+                    A,
+                    root=root,
+                    exponent_multiplier=exponent_multiplier,
+                    is_diagonal=True,
+                ),
+            )
+        with self.subTest("Test with EIGEN."):
+            torch.testing.assert_close(
+                actual_inverse_root,
+                matrix_inverse_root(
+                    A,
+                    root=root,
+                    exponent_multiplier=exponent_multiplier,
+                    root_inv_method=RootInvMethod.EIGEN,
+                    is_diagonal=False,
+                ),
+            )
+        with self.subTest("Test with NEWTON."):
+            torch.testing.assert_close(
+                actual_inverse_root,
+                matrix_inverse_root(
+                    A,
+                    root=root,
+                    exponent_multiplier=exponent_multiplier,
+                    root_inv_method=RootInvMethod.NEWTON,
+                    is_diagonal=False,
+                ),
+            )
+
+    def test_matrix_inverse_root_newton_with_exponent_multiplier(self):
+        A = torch.tensor([[1.0, 0.0], [0.0, 4.0]])
+        self.assertRaisesRegex(
+            ValueError,
+            f"Exponent multiplier {2.0} must be equal to 1 to use coupled inverse Newton iteration!",
+            matrix_inverse_root,
+            A=A,
+            root=4,
+            exponent_multiplier=2.0,
+            root_inv_method=RootInvMethod.NEWTON,
+            is_diagonal=False,
+        )
+
+
+class MatrixRootDiagonalTest(unittest.TestCase):
+    def test_matrix_root_diagonal_with_not_two_dim_matrix(self):
+        A = torch.zeros((1, 2, 3))
+        root = 4
+        exponent_multiplier = 1.82
+        self.assertRaisesRegex(
+            ValueError,
+            "Matrix is not 2-dimensional!",
+            matrix_root_diagonal,
+            A=A,
+            root=root,
+            exponent_multiplier=exponent_multiplier,
+            return_full_matrix=True,
+        )
+
+    def test_matrix_root_diagonal_nonpositive_root(self):
+        A = torch.tensor([[-1.0, 0.0], [0.0, 2.0]])
+        root = -1
+        self.assertRaisesRegex(
+            ValueError,
+            f"Root {root} should be positive!",
+            matrix_root_diagonal,
+            A=A,
+            root=root,
+            return_full_matrix=True,
+        )
 
 
 class EigenRootTest(unittest.TestCase):
@@ -180,6 +334,17 @@ class EigenRootTest(unittest.TestCase):
                     eig_sols,
                 )
 
+    def test_matrix_root_eigen_nonpositive_root(self):
+        A = torch.tensor([[-1.0, 0.0], [0.0, 2.0]])
+        root = -1
+        self.assertRaisesRegex(
+            ValueError,
+            f"Root {root} should be positive!",
+            _matrix_root_eigen,
+            A=A,
+            root=root,
+        )
+
 
 class NewtonRootInverseTest(unittest.TestCase):
     def _test_newton_root_inverse(
@@ -281,5 +446,108 @@ class NewtonRootInverseTest(unittest.TestCase):
                 )
 
 
-if __name__ == "__main__":
-    unittest.main()
+class ComputeMatrixRootInverseResidualsTest(unittest.TestCase):
+    def test_matrix_root_inverse_residuals_with_not_two_dim_matrix(self):
+        A = torch.zeros((1, 2, 3))
+        X_hat = torch.zeros((2, 2))
+        root = 4
+        exponent_multiplier = 1.82
+        self.assertRaisesRegex(
+            ValueError,
+            "Matrix is not 2-dimensional!",
+            compute_matrix_root_inverse_residuals,
+            A=A,
+            X_hat=X_hat,
+            root=root,
+            epsilon=0.0,
+            exponent_multiplier=exponent_multiplier,
+        )
+
+    def test_matrix_root_inverse_residuals_with_not_square_matrix(self):
+        A = torch.zeros((1, 2))
+        X_hat = torch.zeros((2, 2))
+        root = 4
+        exponent_multiplier = 1.82
+        self.assertRaisesRegex(
+            ValueError,
+            "Matrix is not square!",
+            compute_matrix_root_inverse_residuals,
+            A=A,
+            X_hat=X_hat,
+            root=root,
+            epsilon=0.0,
+            exponent_multiplier=exponent_multiplier,
+        )
+
+    def test_matrix_root_inverse_residuals_with_inconsistent_dims(self):
+        A = torch.zeros((2, 2))
+        X_hat = torch.zeros((3, 3))
+        root = 4
+        exponent_multiplier = 1.82
+        self.assertRaisesRegex(
+            ValueError,
+            "Matrix shapes do not match!",
+            compute_matrix_root_inverse_residuals,
+            A=A,
+            X_hat=X_hat,
+            root=root,
+            epsilon=0.0,
+            exponent_multiplier=exponent_multiplier,
+        )
+
+    def _test_matrix_root_inverse_residuals(
+        self,
+        A: torch.Tensor,
+        X_hat: torch.Tensor,
+        root: int,
+        exponent_multiplier: float,
+        expected_relative_error: torch.Tensor,
+        expected_relative_residual: torch.Tensor,
+    ):
+        (
+            actual_relative_error,
+            actual_relative_residual,
+        ) = compute_matrix_root_inverse_residuals(
+            A=A,
+            X_hat=X_hat,
+            root=root,
+            epsilon=0.0,
+            exponent_multiplier=exponent_multiplier,
+        )
+        torch.testing.assert_close(
+            actual_relative_error,
+            expected_relative_error,
+        )
+        torch.testing.assert_close(
+            actual_relative_residual,
+            expected_relative_residual,
+        )
+
+    def test_matrix_root_inverse_residuals(self):
+        A = torch.eye(2)
+        X_hat = torch.eye(2)
+        expected_relative_error = torch.tensor(0.0, dtype=torch.float64)
+        expected_relative_residual = torch.tensor(0.0, dtype=torch.float64)
+
+        with self.subTest("Exponent multiplier = 1."):
+            root = 2
+            exponent_multiplier = 1.0
+            self._test_matrix_root_inverse_residuals(
+                A=A,
+                X_hat=X_hat,
+                root=root,
+                exponent_multiplier=exponent_multiplier,
+                expected_relative_error=expected_relative_error,
+                expected_relative_residual=expected_relative_residual,
+            )
+        with self.subTest("Exponent multiplier != 1."):
+            root = 4
+            exponent_multiplier = 2.0
+            self._test_matrix_root_inverse_residuals(
+                A=A,
+                X_hat=X_hat,
+                root=root,
+                exponent_multiplier=exponent_multiplier,
+                expected_relative_error=expected_relative_error,
+                expected_relative_residual=expected_relative_residual,
+            )

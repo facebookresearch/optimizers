@@ -70,9 +70,9 @@ def matrix_inverse_root(
     """
 
     # check if matrix is scalar
-    if len(A.shape) == 0 or (len(A.shape) == 1 and A.shape[0] == 1):
-        alpha = torch.as_tensor(-1 / root)
-        return A**alpha
+    if torch.numel(A) == 1:
+        alpha = torch.as_tensor(-exponent_multiplier / root)
+        return (A + epsilon) ** alpha
 
     # check matrix shape
     if len(A.shape) != 2:
@@ -338,7 +338,7 @@ def compute_matrix_root_inverse_residuals(
     if exponent_multiplier == 1.0:
         X_invr = torch.linalg.matrix_power(X_hat.double(), n=-root)
     else:
-        X_invr = _matrix_root_eigen(
+        X_invr, _, _ = _matrix_root_eigen(
             X_hat.double(),
             root=1,
             epsilon=0.0,
@@ -347,8 +347,11 @@ def compute_matrix_root_inverse_residuals(
             exponent_multiplier=root / exponent_multiplier,
         )
 
-    relative_residual = torch.dist(X_invr, A.double(), p=torch.inf) / torch.norm(
-        A.double(), p=torch.inf
+    A_reg = A.double() + epsilon * torch.eye(
+        A.shape[0], dtype=torch.float64, device=A.device
+    )
+    relative_residual = torch.dist(X_invr, A_reg, p=torch.inf) / torch.norm(
+        A_reg, p=torch.inf
     )
 
     return relative_error, relative_residual
