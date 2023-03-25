@@ -11,11 +11,14 @@ Developers:
 
 with contributions and support from:
 - Rohan Anil (Google)
+- Yizi Gu (Meta Platforms, Inc.)
 - Vineet Gupta (Google)
 - Zhijing Li (Meta Platforms, Inc.)
+- Wanchao Liang (Meta Platforms, Inc.)
 - Dheevatsa Mudigere (NVIDIA)
 - Mike Rabbat (Meta Platforms, Inc.)
 - Kaushik Rangadurai (Meta Platforms, Inc.)
+- Xunnan (Shawn) Xu (Meta Platforms, Inc.)
 
 This implementation is under development. Currently only supports dense parameters.
 
