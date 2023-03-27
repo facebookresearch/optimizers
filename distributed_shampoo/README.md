@@ -8,11 +8,13 @@ Developers:
 - Hao-Jun Michael Shi (Meta Platforms, Inc.)
 - Tsung-Hsien Lee
 - Shintaro Iwasaki (Meta Platforms, Inc.)
+- Jose Gallego-Posada (MILA / Meta Platforms, Inc.)
 
 with contributions and support from:
 - Rohan Anil (Google)
 - Yizi Gu (Meta Platforms, Inc.)
 - Vineet Gupta (Google)
+- Minhui Huang (Meta Platforms, Inc.)
 - Zhijing Li (Meta Platforms, Inc.)
 - Wanchao Liang (Meta Platforms, Inc.)
 - Dheevatsa Mudigere (NVIDIA)
@@ -47,7 +49,15 @@ Key distinctives of this implementation include:
 - Choice of precision for preconditioner accumulation and root inverse computation.
 - Merging of small dimensions.
 
-*We are in the process of optimizing the performance of this implementation. Stay tuned!*
+## Requirements
+
+We have tested this implementation on the following versions of PyTorch:
+
+- PyTorch >= 1.13;
+- Python >= 3.8;
+- CUDA 11.3-11.4; 12.
+
+Note: We have observed known instabilities with the `torch.linalg.eigh` operator on CUDA 11.6-11.8, specifically for low-rank matrices, which may appear with using a small `start_preconditioning_step`. Please avoid these versions of CUDA if possible.
 
 ## How to Use
 
@@ -225,15 +235,19 @@ optimizer = DistributedShampoo(
 
 This requires adjusting the hyperparameters `max_preconditioner_dim`, `precondition_frequency`, and `start_preconditioning_step`. The general approach is to start by using as close to a “pure” version of Shampoo as possible, then incorporate approximations to ensure that one obtains fast performance. A pure version of Shampoo would set `max_preconditioner_dim = 8192` and `precondition_frequency = 1`.
 
-With the inclusion of learning rate grafting, no additional changes are needed for your existing learning rate scheduler. Other techniques for preventing divergence (gradient clipping) may also be removed.
+With the inclusion of learning rate grafting, we can extract a good learning rate schedule from your existing scheduler. Other techniques for preventing divergence (gradient clipping) may also be removed.
 
 ### Step-by-Step Guide
 
-1. Start with the largest `max_preconditioner_dim` (i.e., 4096 or 8192) and reduce the block size.
+1. Start with a reasonable `max_preconditioner_dim` (i.e., 8192) and reduce the block size as necessary for memory and performance.
 
     * The maximum effective value of this hyperparameter is the maximum value of the products of each layer’s dimensions. For example, if we have a model with three layers where the first layer is 5x5x3x6, the second layer is 3x3x3x8, and the third layer is 216x5; the products of the first, second, and third layers’ dimensions are 5x5x3x6=450, 3x3x3x8=216, and 216x10=1080, respectively. In this example, 1080 is the maximum effective value of this hyperparameter, and any value greater than 1080 will perform the same as 1080.
 
-    * The higher this value is, the better the convergence of the algorithm will be at the cost of more memory.
+    * The higher this value is, the better the model quality we expect.
+
+    * There is a sweet spot in terms of performance - if the number is too small, the algorithm will slow down due to kernel latency. On the other hand, using too large of a value leads to slow matrix computations (i.e., matrix root inverses), which scale as $O(n^3)$ if $n$ is the dimension of the matrix. In our experience, using a `max_preconditioner_dim` between 1024 and 8192 is ideal for performance.
+
+    * Memory varies depending on the order of the tensor. For vectors, increasing `max_preconditioner_dim` leads to increased memory costs, but for 3rd-order tensors (or higher), increasing `max_preconditioner_dim` leads to decreased memory costs. Blocked matrices yield a fixed memory cost regardless of `max_preconditioner_dim`.
 
     * For efficiency purposes, it is best to set this value as a multiple of 2.
 
@@ -271,13 +285,13 @@ With the inclusion of learning rate grafting, no additional changes are needed f
     )
     ```
 
-3. Set `start_preconditioning_steps` to be consistent with the precondition frequency.
+3. Set `start_preconditioning_step` to be consistent with the precondition frequency.
 
-    * This hyperparameter determines when to start using Shampoo. Prior to this, the optimizer will use the grafted method. This value should generally be set larger than or equal to `precondition_frequency` except when the precondition frequency is 1. By default, `start_preconditioning_steps` is set equal to `precondition_frequency`.
+    * This hyperparameter determines when to start using Shampoo. Prior to this, the optimizer will use the grafted method. This value should generally be set larger than or equal to `precondition_frequency` except when the precondition frequency is 1. By default, `start_preconditioning_step` is set equal to `precondition_frequency`.
 
-    * If the `precondition_frequency = 1`, then set `start_preconditioning_steps = 0` in order to use Shampoo from the start.
+    * If the `precondition_frequency = 1`, then set `start_preconditioning_step = 0` in order to use Shampoo from the start.
 
-    * Following is an example of setting `start_preconditioning_steps = 300`:
+    * Following is an example of setting `start_preconditioning_step = 300`:
     ```
     optimizer = shampoo.DistributedShampoo(
         nn.parameters(),
@@ -285,10 +299,19 @@ With the inclusion of learning rate grafting, no additional changes are needed f
         betas=(0., 0.999),
         momentum=0.9,
         weight_decay=0.01,
-        start_preconditioning_steps=300,
+        start_preconditioning_step=300,
         grafting_type=GraftingType.SGD,
     )
     ```
+
+4. One can fine-tune the algorithm further by playing with other hyperparameters, including:
+
+    * Learning rate (`lr`),
+    * Epsilon regularization (`epsilon`),
+    * EMA parameters (`betas`),
+    * Exponent override and multipliers (`exponent_override`, `exponent_multiplier`).
+
+Using an exponent override of 2 is ideal for fully-connected layers. For MTML models, we have found that the task weights often need to be re-tuned as Distributed Shampoo will better exploit certain imbalances between different task losses.
 
 ## References
 
