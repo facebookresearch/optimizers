@@ -28,6 +28,19 @@ class AreStatesEqualTest(unittest.TestCase):
         }
         self.assertTrue(are_states_equal(prev_state_dict, new_state_dict))
 
+    def test_are_states_equal_false_with_different_types(self) -> None:
+        prev_state_dict = {
+            "hello": 42,
+            "goodbye": torch.tensor(24),
+            "dict": {"tensor": torch.tensor(0.0)},
+        }
+        new_state_dict = {
+            "hello": torch.tensor(42),
+            "goodbye": torch.tensor(24),
+            "dict": {"tensor": torch.tensor(0.0)},
+        }
+        self.assertFalse(are_states_equal(prev_state_dict, new_state_dict))
+
     def test_are_states_equal_false_with_different_lengths(self) -> None:
         prev_state_dict = {
             "hello": 42,
@@ -153,3 +166,39 @@ class OptimizerModulesTest(unittest.TestCase):
         test_module.load_state_dict(state_dict=state_dict, store_non_tensors=False)
 
         self.assertEqual(test_module.state_dict(store_non_tensors=False), state_dict)
+
+    def test_load_state_dict_with_non_matching_objects(self) -> None:
+        test_module = self.init_optimizer_module()
+
+        # state dict to load
+        state_dict = {
+            "attribute": 24,
+            "list_of_values": {0: {}, 1: torch.tensor(3.0)},
+            "tuple_of_values": {0: "hello", 1: 5.0, 2: 6.0},
+            "dictionary_of_values": torch.tensor(4.0),
+            "other_module": {
+                "attribute": 24,
+                "list_of_values": None,
+                "tuple_of_values": None,
+                "dictionary_of_values": None,
+                "other_module": None,
+            },
+        }
+        expected_state_dict = {
+            "attribute": torch.tensor(42),
+            "list_of_values": {0: {}, 1: torch.tensor(3.0)},
+            "tuple_of_values": {0: 1.0, 1: 5.0, 2: 6.0},
+            "dictionary_of_values": {"tensor": torch.tensor(2.0)},
+            "other_module": {
+                "attribute": 24,
+                "list_of_values": None,
+                "tuple_of_values": None,
+                "dictionary_of_values": None,
+                "other_module": None,
+            },
+        }
+        test_module.load_state_dict(state_dict=state_dict, store_non_tensors=True)
+
+        self.assertEqual(
+            test_module.state_dict(store_non_tensors=True), expected_state_dict
+        )

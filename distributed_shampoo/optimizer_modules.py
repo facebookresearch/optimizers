@@ -113,8 +113,6 @@ class OptimizerModule:
                 )
             elif store_non_tensors:
                 destination[key] = value
-            else:
-                continue
 
     def state_dict(
         self,
@@ -160,8 +158,6 @@ class OptimizerModule:
     def _load_from_state_dict(
         self, old_state: Any, new_state: Any, store_non_tensors: bool
     ) -> Any:
-
-        # TODO: Add case for ShardedTensor
         if isinstance(old_state, torch.Tensor):
             if not isinstance(new_state, torch.Tensor):
                 logger.warning(
@@ -176,7 +172,7 @@ class OptimizerModule:
                 logger.warning(
                     f"Both old state {old_state} and new_state {new_state} must be dicts! Continuing..."
                 )
-                return
+                return old_state
             for key, old_value in old_state.items():
                 if key in new_state:
                     old_state[key] = self._load_from_state_dict(
@@ -201,7 +197,7 @@ class OptimizerModule:
                 logger.warning(
                     f"Types of old value {type(old_state)} and new value {type(new_state)} do not match! Continuing..."
                 )
-                return
+                return old_state
             old_state = deepcopy(new_state)
 
         return old_state
