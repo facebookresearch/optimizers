@@ -42,7 +42,6 @@ LOCAL_RANK = int(os.environ["LOCAL_RANK"])
 WORLD_RANK = int(os.environ["RANK"])
 WORLD_SIZE = int(os.environ["WORLD_SIZE"])
 
-
 def average_gradients(model: nn.Module, world_size: int):
     """Gradient averaging across GPUs via all-reduce."""
     for param in model.parameters():
@@ -134,6 +133,12 @@ if __name__ == "__main__":
         world_size=WORLD_SIZE,
     )
     device = torch.device("cuda:{}".format(LOCAL_RANK))
+
+    # Necessary to ensure DTensor's local tensors are instantiated
+    # on the correct device.
+    #
+    # TODO: DTensor zeros instantiation needs to be fixed.
+    torch.cuda.set_device(LOCAL_RANK)
 
     # instantiate model and loss function
     model = ConvNet(32, 32, 3).to(device)

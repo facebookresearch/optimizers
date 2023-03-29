@@ -57,9 +57,10 @@ class DistributedShampoo(torch.optim.Optimizer):
         Hao-Jun Michael Shi (Meta Platforms, Inc.)
         Tsung-Hsien Lee
         Shintaro Iwasaki (Meta Platforms, Inc.)
+        Jose Gallego-Posada (MILA / Meta Platforms, Inc.)
 
     with support from:
-        Rohan Anil (Google), Yizi Gu (Meta), Vineet Gupta (Google), Zhijing Li (Meta), Wanchao Liang (Meta),
+        Rohan Anil (Google), Yizi Gu (Meta), Vineet Gupta (Google), Minhui Huang (Meta), Zhijing Li (Meta), Wanchao Liang (Meta),
         Dheevatsa Mudigere (Nvidia), Mike Rabbat (Meta), Kaushik Rangadurai (Meta), and Xunnan (Shawn) Xu (Meta).
 
     Partly based on the work in:

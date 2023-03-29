@@ -8,25 +8,31 @@ LICENSE file in the root directory of this source tree.
 """
 
 import math
-import sys
 from typing import Dict, List, Optional, Tuple
 
 import torch
 import torch.distributed as dist
 
 try:
+    # DTensor requires PyTorch 2.1 nightly build.
     import torch.distributed._tensor as dtensor
+    from torch.distributed._tensor import zeros as dtensor_zeros
+
+    # Flag that DTensor is enabled.
+    ENABLE_DTENSOR = True
 
     # Cache for device meshes for allocating distributed tensors.
     _device_mesh_cache: Dict[str, dtensor.DeviceMesh] = {}
 
-except Exception:
-    pass
+except ImportError:
+    # If we encounter an import error, turns off DTensor.
+    ENABLE_DTENSOR = False
 
 ALIGNMENT_BYTES = (
     64  # necessary for determining buffer size, possibly hardware-dependent
 )
 DTENSOR = "torch.distributed._tensor"
+
 
 ###### HELPER FUNCTIONS ######
 def distribute_buffer_sizes(
@@ -146,7 +152,7 @@ def allocate_distributed_tensor(
         out (Tensor): Desired tensor or DTensor.
 
     """
-    if DTENSOR in sys.modules and dist.is_initialized() and use_dtensor and device_mesh_ranks is not None:
+    if ENABLE_DTENSOR and dist.is_initialized() and use_dtensor and device_mesh_ranks is not None:
         global _device_mesh_cache
 
         key = repr(device_mesh_ranks)
@@ -156,7 +162,7 @@ def allocate_distributed_tensor(
             )
         device_mesh = _device_mesh_cache[key]
 
-        return dtensor.zeros(
+        return dtensor_zeros(
             shape,
             dtype=dtype,
             device_mesh=device_mesh,
@@ -170,6 +176,6 @@ def use_local_tensor(input_tensor: torch.Tensor) -> torch.Tensor:
     """Uses local tensor if input is a DTensor."""
     return (
         input_tensor.to_local()
-        if DTENSOR in sys.modules and isinstance(input_tensor, dtensor.DTensor)
+        if ENABLE_DTENSOR and isinstance(input_tensor, dtensor.DTensor)
         else input_tensor
     )
