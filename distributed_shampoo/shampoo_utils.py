@@ -28,28 +28,6 @@ from distributed_shampoo.shampoo_dist_utils import (
     use_local_tensor,
 )
 from torch import Tensor
-from torch.distributed.distributed_c10d import GroupMember
-
-# For backward compatibility, since get_group_rank / get_global_rank
-# are not yet officially released in PyTorch.
-if not hasattr(dist, "get_group_rank"):
-    from torch.distributed.distributed_c10d import _get_group_rank
-
-    dist.get_group_rank = (
-        lambda group, global_rank: global_rank
-        if group is GroupMember.WORLD
-        else _get_group_rank(group, global_rank)
-    )
-
-if not hasattr(dist, "get_global_rank"):
-    from torch.distributed.distributed_c10d import _get_global_rank
-
-    dist.get_global_rank = (
-        lambda group, group_rank: group_rank
-        if group is GroupMember.WORLD
-        else _get_global_rank(group, group_rank)
-    )
-
 
 logger = logging.getLogger(__name__)
 
@@ -288,6 +266,7 @@ class AdagradPreconditioner(DistributedPreconditioner):
         group (Optional[dist.ProcessGroup]): Process group for distributed computation. (Default: None)
         group_source_rank (int): Group rank assigned to preconditioner. (Default: 0)
         dist_buffer (Optional[Tensor]): Buffer for distributed computation. (Default: None)
+        use_dtensor (bool): Flag for using DTensor. Requires PyTorch 2.1 nightly. Otherwise, uses Tensor. (Default: True)
 
     """
 
@@ -301,6 +280,7 @@ class AdagradPreconditioner(DistributedPreconditioner):
         group: Optional[dist.ProcessGroup] = None,
         group_source_rank: int = 0,
         dist_buffer: Optional[Tensor] = None,
+        use_dtensor: bool = True,
     ):
         super(AdagradPreconditioner, self).__init__(
             param, group, group_source_rank, dist_buffer
@@ -312,6 +292,7 @@ class AdagradPreconditioner(DistributedPreconditioner):
             dtype=param.dtype,
             device=param.device,
             device_mesh_ranks=self._device_mesh_ranks,
+            use_dtensor=use_dtensor,
         )
         self._idx = idx
         self._use_bias_correction = use_bias_correction
@@ -416,6 +397,7 @@ class ShampooPreconditioner(DistributedPreconditioner):
         group (Optional[dist.ProcessGroup]): Process group for distributed computation. (Default: None)
         group_source_rank (int): Group rank assigned to preconditioner. (Default: 0)
         dist_buffer (Optional[Tensor]): Buffer for distributed computation. (Default: None)
+        use_dtensor (bool): Flag for using DTensor. Requires PyTorch 2.1 nightly. Otherwise, uses Tensor. (Default: True)
 
     """
 
@@ -437,6 +419,7 @@ class ShampooPreconditioner(DistributedPreconditioner):
         group: Optional[dist.ProcessGroup] = None,
         group_source_rank: int = 0,
         dist_buffer: Optional[Tensor] = None,
+        use_dtensor: bool = True,
     ):
 
         super(ShampooPreconditioner, self).__init__(
@@ -477,6 +460,7 @@ class ShampooPreconditioner(DistributedPreconditioner):
                     dtype=param.dtype,
                     device=param.device,
                     device_mesh_ranks=self._device_mesh_ranks,
+                    use_dtensor=use_dtensor,
                 )
                 inv_factor_matrix = None
 
@@ -494,12 +478,14 @@ class ShampooPreconditioner(DistributedPreconditioner):
                     dtype=self._dtype,
                     device=param.device,
                     device_mesh_ranks=self._device_mesh_ranks,
+                    use_dtensor=use_dtensor,
                 )
                 inv_factor_matrix = allocate_distributed_tensor(
                     (dim, dim),
                     dtype=self._dtype,
                     device=param.device,
                     device_mesh_ranks=self._device_mesh_ranks,
+                    use_dtensor=use_dtensor,
                 )
 
                 num_params = 2 * dim**2
@@ -531,6 +517,7 @@ class ShampooPreconditioner(DistributedPreconditioner):
                 group=group,
                 group_source_rank=group_source_rank,
                 dist_buffer=dist_buffer,
+                use_dtensor=use_dtensor,
             )
         elif self._grafting_type == GraftingType.RMSPROP:
             self._grafting = RMSPropGrafting(
@@ -540,6 +527,7 @@ class ShampooPreconditioner(DistributedPreconditioner):
                 group=group,
                 group_source_rank=group_source_rank,
                 dist_buffer=dist_buffer,
+                use_dtensor=use_dtensor,
             )
         elif self._grafting_type == GraftingType.ADAM:
             self._grafting = AdamGrafting(
@@ -549,6 +537,7 @@ class ShampooPreconditioner(DistributedPreconditioner):
                 group=group,
                 group_source_rank=group_source_rank,
                 dist_buffer=dist_buffer,
+                use_dtensor=use_dtensor,
             )
         elif self._grafting_type == GraftingType.ADAGRAD_NORMALIZED:
             self._grafting = AdagradNormalizedGrafting(
@@ -557,6 +546,7 @@ class ShampooPreconditioner(DistributedPreconditioner):
                 group=group,
                 group_source_rank=group_source_rank,
                 dist_buffer=dist_buffer,
+                use_dtensor=use_dtensor,
             )
         elif self._grafting_type == GraftingType.RMSPROP_NORMALIZED:
             self._grafting = RMSPropNormalizedGrafting(
@@ -566,6 +556,7 @@ class ShampooPreconditioner(DistributedPreconditioner):
                 group=group,
                 group_source_rank=group_source_rank,
                 dist_buffer=dist_buffer,
+                use_dtensor=use_dtensor,
             )
         elif self._grafting_type == GraftingType.ADAM_NORMALIZED:
             self._grafting = AdamNormalizedGrafting(
@@ -575,6 +566,7 @@ class ShampooPreconditioner(DistributedPreconditioner):
                 group=group,
                 group_source_rank=group_source_rank,
                 dist_buffer=dist_buffer,
+                use_dtensor=use_dtensor,
             )
         else:
             raise ValueError(f"Invalid Grafting Type {self._grafting_type}!")
@@ -816,6 +808,7 @@ class BlockShampooPreconditioner(DistributedPreconditioner):
             assignments. (Default: None)
         dist_buffer_index (int): Index for getting dist_buffer and rank from dist_buffer and rank list.
             (Default: 0)
+        use_dtensor (bool): Flag for using DTensor. Requires PyTorch 2.1 nightly. Otherwise, uses Tensor. (Default: True)
 
     """
 
@@ -838,6 +831,7 @@ class BlockShampooPreconditioner(DistributedPreconditioner):
         group: Optional[dist.ProcessGroup] = None,
         dist_buffer_ranks: Optional[List[Tuple[Tensor, int]]] = None,
         dist_buffer_index: int = 0,
+        use_dtensor: bool = True,
     ):
         super(BlockShampooPreconditioner, self).__init__(
             param,
@@ -894,6 +888,7 @@ class BlockShampooPreconditioner(DistributedPreconditioner):
                 group=group,
                 group_source_rank=group_source_rank,
                 dist_buffer=dist_buffer,
+                use_dtensor=use_dtensor,
             )
             self._split_preconditioners.append(preconditioner)
             self._parameter_count += preconditioner.parameter_count
@@ -1093,6 +1088,7 @@ class AdagradGrafting(Grafting):
         group (Optional[dist.ProcessGroup]): Process group for distributed computation. (Default: None)
         group_source_rank (int): Group rank assigned to preconditioner. (Default: 0)
         dist_buffer (Optional[Tensor]): Buffer for distributed computation. (Default: None)
+        use_dtensor (bool): Flag for using DTensor. Requires PyTorch 2.1 nightly. Otherwise, uses Tensor. (Default: True)
 
     """
 
@@ -1106,6 +1102,7 @@ class AdagradGrafting(Grafting):
         group: Optional[dist.ProcessGroup] = None,
         group_source_rank: int = 0,
         dist_buffer: Optional[Tensor] = None,
+        use_dtensor: bool = True,
     ):
         super(AdagradGrafting, self).__init__(param)
         self._preconditioner = AdagradPreconditioner(
@@ -1150,6 +1147,7 @@ class RMSPropGrafting(AdagradGrafting):
         group (Optional[dist.ProcessGroup]): Process group for distributed computation. (Default: None)
         group_source_rank (int): Group rank assigned to preconditioner. (Default: 0)
         dist_buffer (Optional[Tensor]): Buffer for distributed computation. (Default: None)
+        use_dtensor (bool): Flag for using DTensor. Requires PyTorch 2.1 nightly. Otherwise, uses Tensor. (Default: True)
 
     """
 
@@ -1161,6 +1159,7 @@ class RMSPropGrafting(AdagradGrafting):
         group: Optional[dist.ProcessGroup] = None,
         group_source_rank: int = 0,
         dist_buffer: Optional[Tensor] = None,
+        use_dtensor: bool = True,
     ):
         super(RMSPropGrafting, self).__init__(
             param=param,
@@ -1171,6 +1170,7 @@ class RMSPropGrafting(AdagradGrafting):
             group=group,
             group_source_rank=group_source_rank,
             dist_buffer=dist_buffer,
+            use_dtensor=use_dtensor,
         )
 
 
@@ -1184,6 +1184,7 @@ class AdamGrafting(AdagradGrafting):
         group (Optional[dist.ProcessGroup]): Process group for distributed computation. (Default: None)
         group_source_rank (int): Group rank assigned to preconditioner. (Default: 0)
         dist_buffer (Optional[Tensor]): Buffer for distributed computation. (Default: None)
+        use_dtensor (bool): Flag for using DTensor. Requires PyTorch 2.1 nightly. Otherwise, uses Tensor. (Default: True)
 
     """
 
@@ -1195,6 +1196,7 @@ class AdamGrafting(AdagradGrafting):
         group: Optional[dist.ProcessGroup] = None,
         group_source_rank: int = 0,
         dist_buffer: Optional[Tensor] = None,
+        use_dtensor: bool = True,
     ):
         super(AdamGrafting, self).__init__(
             param=param,
@@ -1205,6 +1207,7 @@ class AdamGrafting(AdagradGrafting):
             group=group,
             group_source_rank=group_source_rank,
             dist_buffer=dist_buffer,
+            use_dtensor=use_dtensor,
         )
 
 
@@ -1217,6 +1220,7 @@ class AdagradNormalizedGrafting(AdagradGrafting):
         group (Optional[dist.ProcessGroup]): Process group for distributed computation. (Default: None)
         group_source_rank (int): Group rank assigned to preconditioner. (Default: 0)
         dist_buffer (Optional[Tensor]): Buffer for distributed computation. (Default: None)
+        use_dtensor (bool): Flag for using DTensor. Requires PyTorch 2.1 nightly. Otherwise, uses Tensor. (Default: True)
 
     """
 
@@ -1227,6 +1231,7 @@ class AdagradNormalizedGrafting(AdagradGrafting):
         group: Optional[dist.ProcessGroup] = None,
         group_source_rank: int = 0,
         dist_buffer: Optional[Tensor] = None,
+        use_dtensor: bool = True,
     ):
         super(AdagradNormalizedGrafting, self).__init__(
             param=param,
@@ -1237,6 +1242,7 @@ class AdagradNormalizedGrafting(AdagradGrafting):
             group=group,
             group_source_rank=group_source_rank,
             dist_buffer=dist_buffer,
+            use_dtensor=use_dtensor,
         )
 
 
@@ -1250,6 +1256,7 @@ class RMSPropNormalizedGrafting(AdagradGrafting):
         group (Optional[dist.ProcessGroup]): Process group for distributed computation. (Default: None)
         group_source_rank (int): Group rank assigned to preconditioner. (Default: 0)
         dist_buffer (Optional[Tensor]): Buffer for distributed computation. (Default: None)
+        use_dtensor (bool): Flag for using DTensor. Requires PyTorch 2.1 nightly. Otherwise, uses Tensor. (Default: True)
 
     """
 
@@ -1261,6 +1268,7 @@ class RMSPropNormalizedGrafting(AdagradGrafting):
         group: Optional[dist.ProcessGroup] = None,
         group_source_rank: int = 0,
         dist_buffer: Optional[Tensor] = None,
+        use_dtensor: bool = True,
     ):
         super(RMSPropNormalizedGrafting, self).__init__(
             param=param,
@@ -1271,6 +1279,7 @@ class RMSPropNormalizedGrafting(AdagradGrafting):
             group=group,
             group_source_rank=group_source_rank,
             dist_buffer=dist_buffer,
+            use_dtensor=use_dtensor,
         )
 
 
@@ -1284,6 +1293,7 @@ class AdamNormalizedGrafting(AdagradGrafting):
         group (Optional[dist.ProcessGroup]): Process group for distributed computation. (Default: None)
         group_source_rank (int): Group rank assigned to preconditioner. (Default: 0)
         dist_buffer (Optional[Tensor]): Buffer for distributed computation. (Default: None)
+        use_dtensor (bool): Flag for using DTensor. Requires PyTorch 2.1 nightly. Otherwise, uses Tensor. (Default: True)
 
     """
 
@@ -1295,6 +1305,7 @@ class AdamNormalizedGrafting(AdagradGrafting):
         group: Optional[dist.ProcessGroup] = None,
         group_source_rank: int = 0,
         dist_buffer: Optional[Tensor] = None,
+        use_dtensor: bool = True,
     ):
         super(AdamNormalizedGrafting, self).__init__(
             param=param,
@@ -1305,4 +1316,5 @@ class AdamNormalizedGrafting(AdagradGrafting):
             group=group,
             group_source_rank=group_source_rank,
             dist_buffer=dist_buffer,
+            use_dtensor=use_dtensor,
         )

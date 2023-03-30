@@ -15,8 +15,16 @@ import numpy as np
 
 import torch
 import torch.distributed as dist
-from distributed_shampoo.shampoo_dist_utils import use_local_tensor
 
+try:
+    # DTensor requires PyTorch 2.1 nightly build.
+    import torch.distributed._tensor as dtensor
+
+    ENABLE_DTENSOR = True
+except ImportError:
+    ENABLE_DTENSOR = False
+
+from distributed_shampoo.shampoo_dist_utils import use_local_tensor
 from distributed_shampoo.shampoo_utils import (
     AdagradGrafting,
     AdagradNormalizedGrafting,
@@ -215,6 +223,7 @@ class AdagradPreconditionerTest(unittest.TestCase):
         group=None,
         group_source_rank=0,
         dist_buffer=None,
+        use_dtensor=True,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, AdagradPreconditioner]:
         param = torch.tensor([1.0, 2.0], requires_grad=True)
         loss = torch.dot(param, param)
@@ -228,6 +237,7 @@ class AdagradPreconditionerTest(unittest.TestCase):
             group=group,
             group_source_rank=group_source_rank,
             dist_buffer=dist_buffer,
+            use_dtensor=use_dtensor,
         )
         return param, loss, cast(torch.Tensor, param.grad), adagrad
 
@@ -321,6 +331,32 @@ class AdagradPreconditionerTest(unittest.TestCase):
             grad if dist.get_rank() == 0 else torch.zeros(2),
         )
 
+    @spawn_threads_and_init_comms(world_size=4)
+    def test_dtensor_enabled(self):
+        _, _, _, adagrad = self._setup_test(
+            beta2=1.0,
+            epsilon=1.0,
+            use_bias_correction=False,
+            use_dtensor=True,
+        )
+        self.assertTrue(
+            isinstance(
+                adagrad._preconditioner,
+                dtensor.DTensor if ENABLE_DTENSOR else torch.Tensor,
+            )
+        )
+
+    @spawn_threads_and_init_comms(world_size=4)
+    def test_dtensor_disabled(self):
+        _, _, _, adagrad = self._setup_test(
+            beta2=1.0,
+            epsilon=1.0,
+            use_bias_correction=False,
+            use_dtensor=False,
+        )
+        if ENABLE_DTENSOR:
+            self.assertFalse(isinstance(adagrad._preconditioner, dtensor.DTensor))
+
 
 class ShampooPreconditionerTest(unittest.TestCase):
     def _setup_test(
@@ -338,6 +374,7 @@ class ShampooPreconditionerTest(unittest.TestCase):
         group=None,
         group_source_rank=0,
         dist_buffer=None,
+        use_dtensor=True,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, ShampooPreconditioner]:
         param = torch.tensor([[0.0, 1.0, 2.0], [3.0, 4.0, 5.0]], requires_grad=True)
         loss = torch.linalg.norm(param, ord="fro") ** 2 / 2.0
@@ -361,6 +398,7 @@ class ShampooPreconditionerTest(unittest.TestCase):
             group=group,
             group_source_rank=group_source_rank,
             dist_buffer=dist_buffer,
+            use_dtensor=use_dtensor,
         )
         return param, loss, cast(torch.Tensor, param.grad), shampoo
 
@@ -648,6 +686,48 @@ class ShampooPreconditionerTest(unittest.TestCase):
             grad if dist.get_rank() == 0 else torch.zeros(2, 3),
         )
 
+    @spawn_threads_and_init_comms(world_size=4)
+    def test_dtensor_enabled(self):
+        _, _, _, shampoo = self._setup_test(
+            beta2=1.0,
+            epsilon=0.0,
+            use_dtensor=True,
+        )
+        for preconditioner in shampoo._preconditioners:
+            self.assertTrue(
+                isinstance(
+                    preconditioner.factor_matrix,
+                    dtensor.DTensor if ENABLE_DTENSOR else torch.Tensor,
+                )
+            )
+            self.assertTrue(
+                isinstance(
+                    preconditioner.inv_factor_matrix,
+                    dtensor.DTensor if ENABLE_DTENSOR else torch.Tensor,
+                )
+            )
+
+    def test_dtensor_disabled(self):
+        _, _, _, shampoo = self._setup_test(
+            beta2=1.0,
+            epsilon=0.0,
+            use_dtensor=False,
+        )
+        if ENABLE_DTENSOR:
+            for preconditioner in shampoo._preconditioners:
+                self.assertFalse(
+                    isinstance(
+                        preconditioner.factor_matrix,
+                        dtensor.DTensor,
+                    )
+                )
+                self.assertFalse(
+                    isinstance(
+                        preconditioner.inv_factor_matrix,
+                        dtensor.DTensor,
+                    )
+                )
+
 
 class BlockShampooPreconditionerTest(unittest.TestCase):
     def _setup_test(
@@ -662,6 +742,7 @@ class BlockShampooPreconditionerTest(unittest.TestCase):
         grafting_type: GraftingType = GraftingType.NONE,
         grafting_beta2: float = 1.0,
         grafting_epsilon: float = 1e-3,
+        use_dtensor: bool = True,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, BlockShampooPreconditioner]:
         param = torch.tensor([1.0, 2.0, 3.0, 4.0, 5.0], requires_grad=True)
         loss = torch.linalg.norm(param) ** 2 / 2.0
@@ -691,6 +772,7 @@ class BlockShampooPreconditionerTest(unittest.TestCase):
             group=None,
             dist_buffer_ranks=dist_buffer_ranks,
             dist_buffer_index=dist_buffer_index,
+            use_dtensor=use_dtensor,
         )
         return param, loss, cast(torch.Tensor, param.grad), block_shampoo
 
@@ -894,6 +976,50 @@ class BlockShampooPreconditionerTest(unittest.TestCase):
             [torch.zeros(2), torch.zeros(2), torch.zeros(1)],
         )
 
+    @spawn_threads_and_init_comms(world_size=4)
+    def test_dtensor_enabled(self):
+        _, _, _, block_shampoo = self._setup_test(
+            beta2=1.0,
+            epsilon=0.0,
+            use_dtensor=True,
+        )
+        for shampoo in block_shampoo._split_preconditioners:
+            for preconditioner in shampoo._preconditioners:
+                self.assertTrue(
+                    isinstance(
+                        preconditioner.factor_matrix,
+                        dtensor.DTensor if ENABLE_DTENSOR else torch.Tensor,
+                    )
+                )
+                self.assertTrue(
+                    isinstance(
+                        preconditioner.inv_factor_matrix,
+                        dtensor.DTensor if ENABLE_DTENSOR else torch.Tensor,
+                    )
+                )
+
+    def test_dtensor_disabled(self):
+        _, _, _, block_shampoo = self._setup_test(
+            beta2=1.0,
+            epsilon=0.0,
+            use_dtensor=False,
+        )
+        if ENABLE_DTENSOR:
+            for shampoo in block_shampoo._split_preconditioners:
+                for preconditioner in shampoo._preconditioners:
+                    self.assertFalse(
+                        isinstance(
+                            preconditioner.factor_matrix,
+                            dtensor.DTensor,
+                        )
+                    )
+                    self.assertFalse(
+                        isinstance(
+                            preconditioner.inv_factor_matrix,
+                            dtensor.DTensor,
+                        )
+                    )
+
 
 class SGDGraftingTest(unittest.TestCase):
     def _setup_test(self) -> Tuple[SGDGrafting, torch.Tensor]:
@@ -924,9 +1050,9 @@ class SGDGraftingTest(unittest.TestCase):
 
 
 class AdagradGraftingTest(unittest.TestCase):
-    def _setup_test(self) -> Tuple[AdagradGrafting, torch.Tensor]:
+    def _setup_test(self, use_dtensor=True) -> Tuple[AdagradGrafting, torch.Tensor]:
         param = torch.tensor([1.0, 2.0])
-        return AdagradGrafting(param, epsilon=1.0), param
+        return AdagradGrafting(param, epsilon=1.0, use_dtensor=use_dtensor), param
 
     @spawn_threads_and_init_comms(world_size=4)
     def test_init(self):
@@ -973,6 +1099,26 @@ class AdagradGraftingTest(unittest.TestCase):
         with self.subTest("Test normalize_gradient = False"):
             grafting.normalize_gradient = False
             torch.testing.assert_close(grafting._normalize_grad(grad), grad)
+
+    @spawn_threads_and_init_comms(world_size=4)
+    def test_dtensor_enabled(self):
+        grafting, _ = self._setup_test(use_dtensor=True)
+        self.assertTrue(
+            isinstance(
+                grafting._preconditioner._preconditioner,
+                dtensor.DTensor if ENABLE_DTENSOR else torch.Tensor,
+            )
+        )
+
+    def test_dtensor_disabled(self):
+        grafting, _ = self._setup_test(use_dtensor=False)
+        if ENABLE_DTENSOR:
+            self.assertFalse(
+                isinstance(
+                    grafting._preconditioner._preconditioner,
+                    dtensor.DTensor,
+                )
+            )
 
 
 class RMSPropGraftingTest(unittest.TestCase):

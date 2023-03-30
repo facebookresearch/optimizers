@@ -31,7 +31,6 @@ except ImportError:
 ALIGNMENT_BYTES = (
     64  # necessary for determining buffer size, possibly hardware-dependent
 )
-DTENSOR = "torch.distributed._tensor"
 
 
 ###### HELPER FUNCTIONS ######
@@ -152,7 +151,12 @@ def allocate_distributed_tensor(
         out (Tensor): Desired tensor or DTensor.
 
     """
-    if ENABLE_DTENSOR and dist.is_initialized() and use_dtensor and device_mesh_ranks is not None:
+    if (
+        ENABLE_DTENSOR
+        and dist.is_initialized()
+        and use_dtensor
+        and device_mesh_ranks is not None
+    ):
         global _device_mesh_cache
 
         key = repr(device_mesh_ranks)

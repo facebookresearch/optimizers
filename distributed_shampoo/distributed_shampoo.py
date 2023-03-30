@@ -69,6 +69,19 @@ class DistributedShampoo(torch.optim.Optimizer):
 
     Uses infinity norm to evaluate residuals and errors. By default, grafts from Adagrad.
 
+    ------------
+    Requirements
+    ------------
+
+    1. PyTorch >= 1.13
+    2. Python >= 3.8
+    3. CUDA 11.3, 11.4, 12
+
+    If one wants to use DTensor which leads to memory savings, please set use_dtensor = True. Requires PyTorch 2.1 nightly build.
+
+    Note: We have observed known instabilities with the torch.linalg.eigh operator on CUDA 11.6-11.8, specifically for low-rank
+    matrices, which may appear with using a small start_preconditioning_step. Please avoid these versions of CUDA if possible.
+
     --------
     Features
     --------
@@ -164,6 +177,7 @@ class DistributedShampoo(torch.optim.Optimizer):
         grafting_type (GraftingType): selects grafting method. (Default: GraftingType.ADAGRAD)
         grafting_epsilon (float): epsilon for grafting method. (Default: 1e-3)
         grafting_beta2 (float): exponential moving average factor for grafting method. (Default: 1.0)
+        use_dtensor (bool): use DTensor. Requires PyTorch 2.1 nightly. Otherwise, uses Tensor. (Default: True)
         debug_mode (bool): debugging mode. Uses more memory to compute error to fp64 case. Must enable logging level to DEBUG. (Default: False)
 
     """
@@ -191,6 +205,7 @@ class DistributedShampoo(torch.optim.Optimizer):
         grafting_type: GraftingType = GraftingType.ADAGRAD,
         grafting_epsilon: float = 1e-3,
         grafting_beta2: float = 1.0,
+        use_dtensor: bool = True,
         debug_mode: bool = False,
     ):
         # Hyperparameter checks.
@@ -299,6 +314,7 @@ class DistributedShampoo(torch.optim.Optimizer):
         self._grafting_beta2 = grafting_beta2
         self._parameter_count = 0
         self._use_nesterov = use_nesterov
+        self._use_dtensor = use_dtensor
         self._debug_mode = debug_mode
         if self._use_nesterov and momentum == 0.0:
             logger.warning(
@@ -359,6 +375,7 @@ class DistributedShampoo(torch.optim.Optimizer):
                         group=self._dist_group,
                         dist_buffer_ranks=buffer_ranks,
                         dist_buffer_index=preconditioner_count,
+                        use_dtensor=self._use_dtensor,
                     )
                     preconditioner_count += len(
                         state[PRECONDITIONERS].get_split_dist_buffers()
@@ -383,6 +400,7 @@ class DistributedShampoo(torch.optim.Optimizer):
                             group=self._dist_group,
                             group_source_rank=group_source_rank,
                             dist_buffer=dist_buffer,
+                            use_dtensor=self._use_dtensor,
                         )
                         if torch.any(dims > self._max_preconditioner_dim)
                         else ShampooPreconditioner(
@@ -402,6 +420,7 @@ class DistributedShampoo(torch.optim.Optimizer):
                             group=self._dist_group,
                             group_source_rank=group_source_rank,
                             dist_buffer=dist_buffer,
+                            use_dtensor=self._use_dtensor,
                         )
                     )
 
@@ -432,6 +451,7 @@ class DistributedShampoo(torch.optim.Optimizer):
                         group=self._dist_group,
                         group_source_rank=group_source_rank,
                         dist_buffer=dist_buffer,
+                        use_dtensor=self._use_dtensor,
                     )
 
                 else:
