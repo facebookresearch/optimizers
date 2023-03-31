@@ -7,6 +7,7 @@ LICENSE file in the root directory of this source tree.
 
 """
 
+import logging
 import math
 import unittest
 from typing import cast, Tuple
@@ -45,6 +46,13 @@ from distributed_shampoo.shampoo_utils import (
     ShampooPreconditioner,
 )
 from torch.testing._internal.common_distributed import spawn_threads_and_init_comms
+
+logger: logging.Logger = logging.getLogger(__name__)
+
+if not ENABLE_DTENSOR:
+    logger.warning(
+        "DTensor is not available and was not imported. Continuing with Tensor..."
+    )
 
 
 class MergeSmallDimsTest(unittest.TestCase):

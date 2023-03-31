@@ -7,6 +7,7 @@ LICENSE file in the root directory of this source tree.
 
 """
 
+import logging
 import math
 from typing import Dict, List, Optional, Tuple
 
@@ -31,6 +32,13 @@ except ImportError:
 ALIGNMENT_BYTES = (
     64  # necessary for determining buffer size, possibly hardware-dependent
 )
+
+logger: logging.Logger = logging.getLogger(__name__)
+
+if not ENABLE_DTENSOR:
+    logger.warning(
+        "DTensor is not available and was not imported. Continuing with Tensor..."
+    )
 
 
 ###### HELPER FUNCTIONS ######
