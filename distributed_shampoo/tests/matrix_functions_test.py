@@ -9,6 +9,7 @@ LICENSE file in the root directory of this source tree.
 
 import itertools
 import unittest
+import unittest.mock as mock
 
 import numpy as np
 
@@ -344,6 +345,56 @@ class EigenRootTest(unittest.TestCase):
             A=A,
             root=root,
         )
+
+    @mock.patch("torch.linalg.eigh")
+    def test_no_retry_double_precision_raise_exception(self, mock_eigh: mock.Mock):
+        mock_eigh.side_effect = RuntimeError("Mock Eigen Error")
+        A = torch.tensor([[-1.0, 0.0], [0.0, 2.0]])
+        with self.assertRaisesRegex(RuntimeError, "Mock Eigen Error"):
+            _matrix_root_eigen(
+                A=A,
+                root=2,
+                epsilon=0.0,
+                make_positive_semidefinite=True,
+                inverse=False,
+                retry_double_precision=False,
+            )
+        mock_eigh.assert_called_once()
+
+    @mock.patch("torch.linalg.eigh")
+    def test_retry_double_precision_raise_exception(self, mock_eigh: mock.Mock):
+        mock_eigh.side_effect = RuntimeError("Mock Eigen Error")
+        A = torch.tensor([[-1.0, 0.0], [0.0, 2.0]])
+        with self.assertRaisesRegex(RuntimeError, "Mock Eigen Error"):
+            _matrix_root_eigen(
+                A=A,
+                root=2,
+                epsilon=0.0,
+                make_positive_semidefinite=True,
+                inverse=False,
+                retry_double_precision=True,
+            )
+        mock_eigh.assert_called()
+        self.assertEqual(mock_eigh.call_count, 2)
+
+    @mock.patch("torch.linalg.eigh")
+    def test_retry_double_precision_double_precision(self, mock_eigh: mock.Mock):
+        mock_eigh.side_effect = [
+            RuntimeError("Mock Eigen Error"),
+            (torch.ones(2), torch.eye(2)),
+        ]
+        A = torch.tensor([[1.0, 0.0], [0.0, 1.0]])
+        X, _, _ = _matrix_root_eigen(
+            A=A,
+            root=2,
+            epsilon=0.0,
+            make_positive_semidefinite=True,
+            inverse=False,
+            retry_double_precision=True,
+        )
+        torch.testing.assert_allclose(X, torch.eye(2))
+        mock_eigh.assert_called()
+        self.assertEqual(mock_eigh.call_count, 2)
 
 
 class NewtonRootInverseTest(unittest.TestCase):

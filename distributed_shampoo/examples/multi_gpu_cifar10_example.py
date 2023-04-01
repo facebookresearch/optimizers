@@ -186,6 +186,8 @@ if __name__ == "__main__":
         grafting_type=args.grafting_type,
         grafting_epsilon=args.grafting_epsilon,
         grafting_beta2=args.grafting_beta2,
+        use_protected_eigh=args.use_protected_eigh,
+        use_dtensor=args.use_dtensor,
         debug_mode=args.debug_mode,
     )
 

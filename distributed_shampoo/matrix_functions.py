@@ -50,6 +50,7 @@ def matrix_inverse_root(
     max_iterations: int = 1000,
     tolerance: float = 1e-6,
     is_diagonal: Union[Tensor, bool] = False,
+    retry_double_precision: bool = True,
 ) -> Tensor:
     """Computes matrix root inverse of square symmetric positive definite matrix.
 
@@ -63,6 +64,8 @@ def matrix_inverse_root(
         tolerance (float): Tolerance for computing root inverse using coupled Newton iteration. (Default: 1e-6)
         is_diagonal (Tensor, bool): Flag for whether or not matrix is diagonal. If so, will compute root inverse by computing
             root inverse of diagonal entries. (Default: False)
+        retry_double_precision (bool): Flag for re-trying eigendecomposition with higher precision if lower precision fails due
+            to CuSOLVER failure. (Default: True)
 
     Returns:
         X (Tensor): Inverse root of matrix A.
@@ -96,6 +99,7 @@ def matrix_inverse_root(
             epsilon=epsilon,
             inverse=True,
             exponent_multiplier=exponent_multiplier,
+            retry_double_precision=retry_double_precision,
         )
     elif root_inv_method == RootInvMethod.NEWTON:
         if exponent_multiplier != 1.0:
@@ -173,6 +177,7 @@ def _matrix_root_eigen(
     inverse: bool = True,
     exponent_multiplier: float = 1.0,
     make_positive_semidefinite: bool = True,
+    retry_double_precision: bool = True,
 ) -> Tuple[Tensor, Tensor, Tensor]:
     """Compute matrix (inverse) root using eigendecomposition of symmetric positive (semi-)definite matrix.
 
@@ -187,6 +192,8 @@ def _matrix_root_eigen(
         inverse (bool): Returns inverse root matrix. (Default: True)
         exponent_multiplier (float): exponent multiplier in the eigen method (Default: 1.0)
         make_positive_semidefinite (bool): Perturbs matrix eigenvalues to ensure it is numerically positive semi-definite. (Default: True)
+        retry_double_precision (bool): Flag for re-trying eigendecomposition with higher precision if lower precision fails due
+            to CuSOLVER failure. (Default: True)
 
     Returns:
         X (Tensor): (Inverse) root of matrix. Same dimensions as A.
@@ -205,7 +212,18 @@ def _matrix_root_eigen(
         alpha = -alpha
 
     # compute eigendecomposition and compute minimum eigenvalue
-    L, Q = torch.linalg.eigh(A)
+    try:
+        L, Q = torch.linalg.eigh(A)
+
+    except Exception as exception:
+        if retry_double_precision and A.dtype != torch.float64:
+            logger.warning(
+                f"Failed to compute eigendecomposition in {A.dtype} precision with exception {exception}! Retrying in double precision..."
+            )
+            L, Q = torch.linalg.eigh(A.double())
+        else:
+            raise exception
+
     lambda_min = torch.min(L)
 
     # make eigenvalues >= 0 (if necessary)

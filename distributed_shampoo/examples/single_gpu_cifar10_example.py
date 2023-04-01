@@ -176,6 +176,16 @@ class Parser:
             help="Grafting beta2 parameter for Shampoo.",
         )
         parser.add_argument(
+            "--use-protected-eigh",
+            action="store_true",
+            help="Uses protected eigendecomposition."
+        )
+        parser.add_argument(
+            "--use-dtensor",
+            action="store_true",
+            help="Use DTensor if available."
+        )
+        parser.add_argument(
             "--debug-mode",
             action="store_true",
             help="Use debug mode for examining root inverse residuals.",
@@ -296,6 +306,8 @@ def instantiate_optimizer(
     grafting_type: GraftingType,
     grafting_epsilon: float,
     grafting_beta2: float,
+    use_protected_eigh: bool,
+    use_dtensor: bool,
     debug_mode: bool,
 ) -> torch.optim.Optimizer:
     if optimizer_type == OptimizerType.SGD:
@@ -344,6 +356,8 @@ def instantiate_optimizer(
             grafting_type=grafting_type,
             grafting_epsilon=grafting_epsilon,
             grafting_beta2=grafting_beta2,
+            use_protected_eigh=use_protected_eigh,
+            use_dtensor=use_dtensor,
             debug_mode=debug_mode,
         )
     else:
@@ -458,6 +472,8 @@ if __name__ == "__main__":
         grafting_type=args.grafting_type,
         grafting_epsilon=args.grafting_epsilon,
         grafting_beta2=args.grafting_beta2,
+        use_protected_eigh=args.use_protected_eigh,
+        use_dtensor=args.use_dtensor,
         debug_mode=args.debug_mode,
     )
 

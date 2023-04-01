@@ -266,7 +266,7 @@ class AdagradPreconditioner(DistributedPreconditioner):
         group (Optional[dist.ProcessGroup]): Process group for distributed computation. (Default: None)
         group_source_rank (int): Group rank assigned to preconditioner. (Default: 0)
         dist_buffer (Optional[Tensor]): Buffer for distributed computation. (Default: None)
-        use_dtensor (bool): Flag for using DTensor. Requires PyTorch 2.1 nightly. Otherwise, uses Tensor. (Default: True)
+        use_dtensor (bool): Flag for using DTensor. Requires PyTorch 2 nightly. Otherwise, uses Tensor. (Default: True)
 
     """
 
@@ -397,7 +397,11 @@ class ShampooPreconditioner(DistributedPreconditioner):
         group (Optional[dist.ProcessGroup]): Process group for distributed computation. (Default: None)
         group_source_rank (int): Group rank assigned to preconditioner. (Default: 0)
         dist_buffer (Optional[Tensor]): Buffer for distributed computation. (Default: None)
-        use_dtensor (bool): Flag for using DTensor. Requires PyTorch 2.1 nightly. Otherwise, uses Tensor. (Default: True)
+        use_protected_eigh (bool): Flag for using two guards to prevent failures of torch.linalg.eigh. (Default: True)
+            1. Attempts to compute root inverse in preconditioner_dtype precision.
+            2. Attempts to recompute the eigendecomposition if using lower-precision fails.
+            3. Otherwise, re-uses previous inverse factor matrix when both root inverse computations fail.
+        use_dtensor (bool): Flag for using DTensor. Requires PyTorch 2 nightly. Otherwise, uses Tensor. (Default: True)
 
     """
 
@@ -419,6 +423,7 @@ class ShampooPreconditioner(DistributedPreconditioner):
         group: Optional[dist.ProcessGroup] = None,
         group_source_rank: int = 0,
         dist_buffer: Optional[Tensor] = None,
+        use_protected_eigh: bool = True,
         use_dtensor: bool = True,
     ):
 
@@ -439,6 +444,7 @@ class ShampooPreconditioner(DistributedPreconditioner):
         self._idx = idx
         self._grafting_type = grafting_type
         self._start_preconditioning_step = start_preconditioning_step
+        self._use_protected_eigh = use_protected_eigh
 
         # Compute root.
         self._root = (
@@ -723,15 +729,40 @@ class ShampooPreconditioner(DistributedPreconditioner):
                     )
 
                 # Compute inverse preconditioner.
-                computed_inv_factor_matrix = matrix_inverse_root(
-                    A=bias_corrected_preconditioner,
-                    root=self._root,
-                    epsilon=self._epsilon,
-                    exponent_multiplier=self._exponent_multiplier,
-                    is_diagonal=preconditioner.is_diagonal,
-                ).to(dtype=self._dtype)
+                # If reuse_previous_inv_factor_matrix is True, will reuse previous matrix if matrix
+                # inverse root computation fails.
+                try:
+                    computed_inv_factor_matrix = matrix_inverse_root(
+                        A=bias_corrected_preconditioner,
+                        root=self._root,
+                        epsilon=self._epsilon,
+                        exponent_multiplier=self._exponent_multiplier,
+                        is_diagonal=preconditioner.is_diagonal,
+                        retry_double_precision=self._use_protected_eigh,
+                    ).to(dtype=self._dtype)
 
-                inv_factor_matrix.copy_(computed_inv_factor_matrix)
+                    # check if we encounter NaN or inf values in computed inverse matrix.
+                    if torch.any(torch.isnan(computed_inv_factor_matrix)):
+                        raise ValueError(
+                            f"Encountered nan values in root inv preconditioner {self._idx}.{k}!"
+                        )
+                    elif torch.any(torch.isinf(computed_inv_factor_matrix)):
+                        raise ValueError(
+                            f"Encountered inf values in root inv preconditioner {self._idx}.{k}!"
+                        )
+
+                    inv_factor_matrix.copy_(computed_inv_factor_matrix)
+
+                except Exception as exception:
+                    if (
+                        not self._use_protected_eigh
+                        or "values in root inv preconditioner" in str(exception)
+                    ):
+                        raise exception
+                    else:
+                        logger.warning(
+                            f"Matrix inverse root computation failed for preconditioner {self._idx}.{k} with exception {exception}. Using previous inv_factor_matrix and continuing..."
+                        )
 
     def compute_root_inverse_residuals(
         self,
@@ -808,7 +839,11 @@ class BlockShampooPreconditioner(DistributedPreconditioner):
             assignments. (Default: None)
         dist_buffer_index (int): Index for getting dist_buffer and rank from dist_buffer and rank list.
             (Default: 0)
-        use_dtensor (bool): Flag for using DTensor. Requires PyTorch 2.1 nightly. Otherwise, uses Tensor. (Default: True)
+        use_protected_eigh (bool): Flag for using two guards to prevent failures of torch.linalg.eigh. (Default: True)
+            1. Attempts to compute root inverse in preconditioner_dtype precision.
+            2. Attempts to recompute the eigendecomposition if using lower-precision fails.
+            3. Otherwise, re-uses previous inverse factor matrix when both root inverse computations fail.
+        use_dtensor (bool): Flag for using DTensor. Requires PyTorch 2 nightly. Otherwise, uses Tensor. (Default: True)
 
     """
 
@@ -831,6 +866,7 @@ class BlockShampooPreconditioner(DistributedPreconditioner):
         group: Optional[dist.ProcessGroup] = None,
         dist_buffer_ranks: Optional[List[Tuple[Tensor, int]]] = None,
         dist_buffer_index: int = 0,
+        use_protected_eigh: bool = True,
         use_dtensor: bool = True,
     ):
         super(BlockShampooPreconditioner, self).__init__(
@@ -888,6 +924,7 @@ class BlockShampooPreconditioner(DistributedPreconditioner):
                 group=group,
                 group_source_rank=group_source_rank,
                 dist_buffer=dist_buffer,
+                use_protected_eigh=use_protected_eigh,
                 use_dtensor=use_dtensor,
             )
             self._split_preconditioners.append(preconditioner)
@@ -1088,7 +1125,7 @@ class AdagradGrafting(Grafting):
         group (Optional[dist.ProcessGroup]): Process group for distributed computation. (Default: None)
         group_source_rank (int): Group rank assigned to preconditioner. (Default: 0)
         dist_buffer (Optional[Tensor]): Buffer for distributed computation. (Default: None)
-        use_dtensor (bool): Flag for using DTensor. Requires PyTorch 2.1 nightly. Otherwise, uses Tensor. (Default: True)
+        use_dtensor (bool): Flag for using DTensor. Requires PyTorch 2 nightly. Otherwise, uses Tensor. (Default: True)
 
     """
 
@@ -1147,7 +1184,7 @@ class RMSPropGrafting(AdagradGrafting):
         group (Optional[dist.ProcessGroup]): Process group for distributed computation. (Default: None)
         group_source_rank (int): Group rank assigned to preconditioner. (Default: 0)
         dist_buffer (Optional[Tensor]): Buffer for distributed computation. (Default: None)
-        use_dtensor (bool): Flag for using DTensor. Requires PyTorch 2.1 nightly. Otherwise, uses Tensor. (Default: True)
+        use_dtensor (bool): Flag for using DTensor. Requires PyTorch 2 nightly. Otherwise, uses Tensor. (Default: True)
 
     """
 
@@ -1184,7 +1221,7 @@ class AdamGrafting(AdagradGrafting):
         group (Optional[dist.ProcessGroup]): Process group for distributed computation. (Default: None)
         group_source_rank (int): Group rank assigned to preconditioner. (Default: 0)
         dist_buffer (Optional[Tensor]): Buffer for distributed computation. (Default: None)
-        use_dtensor (bool): Flag for using DTensor. Requires PyTorch 2.1 nightly. Otherwise, uses Tensor. (Default: True)
+        use_dtensor (bool): Flag for using DTensor. Requires PyTorch 2 nightly. Otherwise, uses Tensor. (Default: True)
 
     """
 
@@ -1220,7 +1257,7 @@ class AdagradNormalizedGrafting(AdagradGrafting):
         group (Optional[dist.ProcessGroup]): Process group for distributed computation. (Default: None)
         group_source_rank (int): Group rank assigned to preconditioner. (Default: 0)
         dist_buffer (Optional[Tensor]): Buffer for distributed computation. (Default: None)
-        use_dtensor (bool): Flag for using DTensor. Requires PyTorch 2.1 nightly. Otherwise, uses Tensor. (Default: True)
+        use_dtensor (bool): Flag for using DTensor. Requires PyTorch 2 nightly. Otherwise, uses Tensor. (Default: True)
 
     """
 
@@ -1256,7 +1293,7 @@ class RMSPropNormalizedGrafting(AdagradGrafting):
         group (Optional[dist.ProcessGroup]): Process group for distributed computation. (Default: None)
         group_source_rank (int): Group rank assigned to preconditioner. (Default: 0)
         dist_buffer (Optional[Tensor]): Buffer for distributed computation. (Default: None)
-        use_dtensor (bool): Flag for using DTensor. Requires PyTorch 2.1 nightly. Otherwise, uses Tensor. (Default: True)
+        use_dtensor (bool): Flag for using DTensor. Requires PyTorch 2 nightly. Otherwise, uses Tensor. (Default: True)
 
     """
 
@@ -1293,7 +1330,7 @@ class AdamNormalizedGrafting(AdagradGrafting):
         group (Optional[dist.ProcessGroup]): Process group for distributed computation. (Default: None)
         group_source_rank (int): Group rank assigned to preconditioner. (Default: 0)
         dist_buffer (Optional[Tensor]): Buffer for distributed computation. (Default: None)
-        use_dtensor (bool): Flag for using DTensor. Requires PyTorch 2.1 nightly. Otherwise, uses Tensor. (Default: True)
+        use_dtensor (bool): Flag for using DTensor. Requires PyTorch 2 nightly. Otherwise, uses Tensor. (Default: True)
 
     """
 

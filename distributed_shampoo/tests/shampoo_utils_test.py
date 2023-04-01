@@ -25,6 +25,8 @@ try:
 except ImportError:
     ENABLE_DTENSOR = False
 
+import unittest.mock as mock
+
 from distributed_shampoo.shampoo_dist_utils import use_local_tensor
 from distributed_shampoo.shampoo_utils import (
     AdagradGrafting,
@@ -382,6 +384,7 @@ class ShampooPreconditionerTest(unittest.TestCase):
         group=None,
         group_source_rank=0,
         dist_buffer=None,
+        use_protected_eigh=True,
         use_dtensor=True,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, ShampooPreconditioner]:
         param = torch.tensor([[0.0, 1.0, 2.0], [3.0, 4.0, 5.0]], requires_grad=True)
@@ -406,6 +409,7 @@ class ShampooPreconditionerTest(unittest.TestCase):
             group=group,
             group_source_rank=group_source_rank,
             dist_buffer=dist_buffer,
+            use_protected_eigh=use_protected_eigh,
             use_dtensor=use_dtensor,
         )
         return param, loss, cast(torch.Tensor, param.grad), shampoo
@@ -735,6 +739,66 @@ class ShampooPreconditionerTest(unittest.TestCase):
                         dtensor.DTensor,
                     )
                 )
+
+    @mock.patch("hpc.trainer.shampoo_utils.matrix_inverse_root")
+    def test_use_protected_eigh_disabled(self, mock_matrix_root: mock.Mock):
+        _, _, _, shampoo = self._setup_test(
+            beta2=1.0,
+            epsilon=0.0,
+            use_protected_eigh=False,
+            use_dtensor=False,
+        )
+        mock_matrix_root.side_effect = RuntimeError("Mock Matrix Root Eigen Error")
+        with self.assertRaisesRegex(RuntimeError, "Mock Matrix Root Eigen Error"):
+            shampoo.compute_root_inverse()
+        mock_matrix_root.assert_called_once()
+
+    @mock.patch("hpc.trainer.shampoo_utils.matrix_inverse_root")
+    def test_use_protected_eigh_enabled(self, mock_matrix_root: mock.Mock):
+        _, _, _, shampoo = self._setup_test(
+            beta2=1.0,
+            epsilon=0.0,
+            use_protected_eigh=True,
+            use_dtensor=False,
+        )
+        mock_matrix_root.side_effect = RuntimeError("Mock Matrix Root Eigen Error")
+        shampoo.compute_root_inverse()
+        expected_inv_factors = [torch.zeros((2, 2)), torch.zeros((3, 3))]
+        for preconditioner, expected_inv_factor_matrix in zip(
+            shampoo._preconditioners, expected_inv_factors
+        ):
+            torch.testing.assert_allclose(
+                preconditioner.inv_factor_matrix, expected_inv_factor_matrix
+            )
+        self.assertEqual(mock_matrix_root.call_count, 2)
+
+    @mock.patch("hpc.trainer.shampoo_utils.matrix_inverse_root")
+    def test_raise_inf_in_compute_root_inverse(self, mock_matrix_root: mock.Mock):
+        _, _, _, shampoo = self._setup_test(
+            beta2=1.0,
+            epsilon=0.0,
+            use_dtensor=False,
+        )
+        mock_matrix_root.side_effect = torch.tensor([torch.inf])
+        with self.assertRaisesRegex(
+            ValueError, "Encountered inf values in root inv preconditioner"
+        ):
+            shampoo.compute_root_inverse()
+        mock_matrix_root.assert_called_once()
+
+    @mock.patch("hpc.trainer.shampoo_utils.matrix_inverse_root")
+    def test_raise_nan_in_compute_root_inverse(self, mock_matrix_root: mock.Mock):
+        _, _, _, shampoo = self._setup_test(
+            beta2=1.0,
+            epsilon=0.0,
+            use_dtensor=False,
+        )
+        mock_matrix_root.side_effect = torch.tensor([torch.nan])
+        with self.assertRaisesRegex(
+            ValueError, "Encountered nan values in root inv preconditioner"
+        ):
+            shampoo.compute_root_inverse()
+        mock_matrix_root.assert_called_once()
 
 
 class BlockShampooPreconditionerTest(unittest.TestCase):
