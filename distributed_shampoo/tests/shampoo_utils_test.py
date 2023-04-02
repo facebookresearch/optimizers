@@ -740,7 +740,7 @@ class ShampooPreconditionerTest(unittest.TestCase):
                     )
                 )
 
-    @mock.patch("hpc.trainer.shampoo_utils.matrix_inverse_root")
+    @mock.patch("distributed_shampoo.shampoo_utils.matrix_inverse_root")
     def test_use_protected_eigh_disabled(self, mock_matrix_root: mock.Mock):
         _, _, _, shampoo = self._setup_test(
             beta2=1.0,
@@ -753,7 +753,7 @@ class ShampooPreconditionerTest(unittest.TestCase):
             shampoo.compute_root_inverse()
         mock_matrix_root.assert_called_once()
 
-    @mock.patch("hpc.trainer.shampoo_utils.matrix_inverse_root")
+    @mock.patch("distributed_shampoo.shampoo_utils.matrix_inverse_root")
     def test_use_protected_eigh_enabled(self, mock_matrix_root: mock.Mock):
         _, _, _, shampoo = self._setup_test(
             beta2=1.0,
@@ -772,7 +772,7 @@ class ShampooPreconditionerTest(unittest.TestCase):
             )
         self.assertEqual(mock_matrix_root.call_count, 2)
 
-    @mock.patch("hpc.trainer.shampoo_utils.matrix_inverse_root")
+    @mock.patch("distributed_shampoo.shampoo_utils.matrix_inverse_root")
     def test_raise_inf_in_compute_root_inverse(self, mock_matrix_root: mock.Mock):
         _, _, _, shampoo = self._setup_test(
             beta2=1.0,
@@ -786,7 +786,7 @@ class ShampooPreconditionerTest(unittest.TestCase):
             shampoo.compute_root_inverse()
         mock_matrix_root.assert_called_once()
 
-    @mock.patch("hpc.trainer.shampoo_utils.matrix_inverse_root")
+    @mock.patch("distributed_shampoo.shampoo_utils.matrix_inverse_root")
     def test_raise_nan_in_compute_root_inverse(self, mock_matrix_root: mock.Mock):
         _, _, _, shampoo = self._setup_test(
             beta2=1.0,
