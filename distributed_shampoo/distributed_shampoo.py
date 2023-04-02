@@ -103,12 +103,15 @@ class DistributedShampoo(torch.optim.Optimizer):
             - GraftingType.RMSPROP_NORMALIZED: Grafts the RMSProp method with normalized gradients.
             - GraftingType.ADAM_NORMALIZED: Grafts the Adam method with normalized gradients.
 
-        NOTE: These methods do not graft the first-moment component - it is entirely based upon grafting using the diagonal preconditioner.
-        If using an exponential moving average of the gradient (or gradient filtering), we can set beta1 as the same value from before, and
-        both Shampoo and the grafted method will use the filtered gradient.
+        NOTE: These methods do not graft the first-moment component - it is entirely based upon grafting using the
+        diagonal preconditioner. If using an exponential moving average of the gradient (or gradient filtering), we
+        can set beta1 as the same value from before, and both Shampoo and the grafted method will use the filtered
+        gradient.
 
     2. Large-Dimensional Tensors: Supports multiple approaches for scaling Shampoo to tensors with large dimensions.
-        For simplicity, we explain using a linear layer/matrix parameter, although this is generalizable to higher-order tensors.
+        For simplicity, we explain using a linear layer/matrix parameter, although this is generalizable to higher-order
+        tensors.
+
         Suppose that W is a m x n matrix, i.e.,
 
             [[w_11 w_12 ... w_1n]
@@ -116,8 +119,8 @@ class DistributedShampoo(torch.optim.Optimizer):
         W =           :
              [w_m1 w_m2 ... w_mn]]
 
-        - LargeDimMethod.BLOCKING (Default): Given a max_preconditioner_dim tau > 0, blocks W and applies Shampoo to each block, i.e.,
-            if tau divides both m, n, then:
+        - LargeDimMethod.BLOCKING (Default): Given a max_preconditioner_dim tau > 0, blocks W and applies Shampoo to
+            each block, i.e., if tau divides both m, n, then:
 
                 [[W_11 W_12 ... W_1k]
                  [W_21 W_22 ... W_2k]
@@ -130,22 +133,23 @@ class DistributedShampoo(torch.optim.Optimizer):
             Computational cost = O(tau^3)
             Memory cost = 4mn (including root inverse preconditioners)
 
-        - LargeDimMethod.ADAGRAD: Given a max_preconditioner_dim tau > 0, checks if any dimensions of the tensor is greater than tau. If so,
-            uses Adagrad preconditioner in place of Shampoo. Corresponds to a diagonal preconditioner.
+        - LargeDimMethod.ADAGRAD: Given a max_preconditioner_dim tau > 0, checks if any dimensions of the tensor is greater
+            than tau. If so, uses Adagrad preconditioner in place of Shampoo. Corresponds to a diagonal preconditioner.
 
             Computational cost = O(mn)
             Memory cost = mn
 
-        - LargeDimMethod.DIAGONAL: Given a max_preconditioner_dim tau > 0, uses a diagonal Shampoo preconditioner in place of the full
-            Shampoo preconditioner. Corresponds to a (crude) diagonal preconditioner.
+        - LargeDimMethod.DIAGONAL: Given a max_preconditioner_dim tau > 0, uses a diagonal Shampoo preconditioner in place of
+            the full Shampoo preconditioner. Corresponds to a (crude) diagonal preconditioner.
 
             Computational cost = O(mn)
             Memory cost = m + n
 
-    3. Distributed Memory and Computation: Supports multi-GPU data-parallel training via torch.distributed by setting num_gpus_per_group > 1.
-        Distributes the computation required for Shampoo (updating of the preconditioners, computation of the root inverse,
-        preconditioning of the gradients, etc.) across multiple GPUs. The memory is similarly distributed using DTensor.
-        num_gpus_per_group specifies the number of GPUs used per distributed group. The computation is replicated across different groups.
+    3. Distributed Memory and Computation: Supports multi-GPU data-parallel training via torch.distributed by setting
+        num_gpus_per_group > 1. Distributes the computation required for Shampoo (updating of the preconditioners, computation
+        of the root inverse, preconditioning of the gradients, etc.) across multiple GPUs. The memory is similarly distributed
+        using DTensor. num_gpus_per_group specifies the number of GPUs used per distributed group. The computation is
+        replicated across different groups.
 
         Requirements:
         - torch.distributed must be initialized in advance.
@@ -182,7 +186,8 @@ class DistributedShampoo(torch.optim.Optimizer):
             2. Attempts to recompute the eigendecomposition if using lower-precision fails.
             3. Otherwise, re-uses previous inverse factor matrix when both root inverse computations fail.
         use_dtensor (bool): use DTensor. Requires PyTorch 2 nightly. Otherwise, uses Tensor. (Default: True)
-        debug_mode (bool): debugging mode. Uses more memory to compute error to fp64 case. Must enable logging level to DEBUG. (Default: False)
+        debug_mode (bool): debugging mode. Uses more memory to compute error to fp64 case. Must enable logging level to
+            DEBUG. (Default: False)
 
     """
 
