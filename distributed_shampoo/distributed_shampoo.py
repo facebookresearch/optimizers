@@ -53,15 +53,20 @@ MY_DIST_BUFFER = "my_dist_buffer"
 class DistributedShampoo(torch.optim.Optimizer):
     """Implements distributed Shampoo algorithm.
 
-    Implemented by:
+    Developers:
         Hao-Jun Michael Shi (Meta Platforms, Inc.)
         Tsung-Hsien Lee
         Shintaro Iwasaki (Meta Platforms, Inc.)
         Jose Gallego-Posada (MILA / Meta Platforms, Inc.)
 
-    with support from:
-        Rohan Anil (Google), Yizi Gu (Meta), Vineet Gupta (Google), Minhui Huang (Meta), Zhijing Li (Meta), Wanchao Liang (Meta),
-        Dheevatsa Mudigere (Nvidia), Mike Rabbat (Meta), Kaushik Rangadurai (Meta), and Xunnan (Shawn) Xu (Meta).
+    with contributions and support from:
+
+    Rohan Anil (Google), Adnan Aziz (Meta), Pavan Balaji (Meta), Shuo Chang (Meta), Weiwei Chu (Meta), Assaf Eisenman (Meta),
+    Will Feng (Meta), Zhuobo Feng (Meta), Yizi Gu (Meta), Vineet Gupta (Google), Yuchen Hao (Meta), Yusuo Hu (Meta),
+    Yuxi Hu (Meta), Minhui Huang (Meta), Guna Lakshminarayanan (Meta), Zhijing Li (Meta), Ming Liang (Meta), Wanchao Liang (Meta),
+    Ying Liu (Meta), Wenguang Mao (Meta), Dheevatsa Mudigere (NVIDIA), Maxim Naumov (Meta), Jongsoo Park (Meta), Mike Rabbat (Meta),
+    Kaushik Rangadurai (Meta), Ke Sang (Meta), Dennis van der Staay (Meta), Fei Tian (Meta), Sanjay Vishwakarma (Meta),
+    Xunnan (Shawn) Xu (Meta), Jiyan Yang (Meta), and Wang Zhou (Meta).
 
     Partly based on the work in:
     - https://arxiv.org/pdf/1802.09568.pdf

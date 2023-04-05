@@ -1,8 +1,10 @@
 # PyTorch Distributed Shampoo
 
-Distributed Shampoo is a second-order optimizer in the Adagrad family of methods [1, 2]. It converges in fewer iterations or epochs at the cost of more compute and memory.
+Distributed Shampoo is a preconditioned stochastic gradient optimizer in the adaptive gradient (Adagrad) family of methods [1, 2]. It converges faster by leveraging neural network-specific structures to achieve comparable model quality/accuracy in fewer iterations or epochs at the cost of additional FLOPs and memory. In order to make this practical, our implementation distributes the computation and memory (via `DTensor`) in order to lower both Shampoo's memory requirements and its per-iteration wall-clock time at the cost of additional (`AllGather`) communication.
 
-The key to tuning this optimizer is to balance accuracy, performance, and memory. This is discussed below.
+Distributed Shampoo currently only supports dense parameters.
+
+The key to tuning this optimizer is to balance accuracy, performance, and memory. This is discussed in the Step-by-Step Guide below.
 
 Developers:
 - Hao-Jun Michael Shi (Meta Platforms, Inc.)
@@ -11,18 +13,8 @@ Developers:
 - Jose Gallego-Posada (MILA / Meta Platforms, Inc.)
 
 with contributions and support from:
-- Rohan Anil (Google)
-- Yizi Gu (Meta Platforms, Inc.)
-- Vineet Gupta (Google)
-- Minhui Huang (Meta Platforms, Inc.)
-- Zhijing Li (Meta Platforms, Inc.)
-- Wanchao Liang (Meta Platforms, Inc.)
-- Dheevatsa Mudigere (NVIDIA)
-- Mike Rabbat (Meta Platforms, Inc.)
-- Kaushik Rangadurai (Meta Platforms, Inc.)
-- Xunnan (Shawn) Xu (Meta Platforms, Inc.)
 
-This implementation is under development. Currently only supports dense parameters.
+Rohan Anil (Google), Adnan Aziz (Meta), Pavan Balaji (Meta), Shuo Chang (Meta), Weiwei Chu (Meta), Assaf Eisenman (Meta), Will Feng (Meta), Zhuobo Feng (Meta), Yizi Gu (Meta), Vineet Gupta (Google), Yuchen Hao (Meta), Yusuo Hu (Meta), Yuxi Hu (Meta), Minhui Huang (Meta), Guna Lakshminarayanan (Meta), Zhijing Li (Meta), Ming Liang (Meta), Wanchao Liang (Meta), Ying Liu (Meta), Wenguang Mao (Meta), Dheevatsa Mudigere (NVIDIA), Maxim Naumov (Meta), Jongsoo Park (Meta), Mike Rabbat (Meta), Kaushik Rangadurai (Meta), Ke Sang (Meta), Dennis van der Staay (Meta), Fei Tian (Meta), Sanjay Vishwakarma (Meta), Xunnan (Shawn) Xu (Meta), Jiyan Yang (Meta), and Wang Zhou (Meta).
 
 ## Features
 
@@ -38,7 +30,8 @@ Key distinctives of this implementation include:
 - Supports both normal and AdamW weight decay.
 - Incorporates exponential moving averaging (with or without bias correction) to the estimate the first moment (akin to Adam).
 - Incorporates momentum and Nesterov acceleration.
-- Distributes memory and computation across different GPUs for the data-parallel setting. Supports data-parallel multi-node, multi-GPU training using `torch.nn.parallel.DistributedDataParallel`. Broadcasts are performed using `torch.dist`.
+- Distributes computation across different GPUs for the data-parallel setting. Supports data-parallel multi-node, multi-GPU training using `torch.nn.parallel.DistributedDataParallel`. `AllGather` is performed using `torch.dist`.
+- Distributes memory using `DTensor` data structure.
 - Offers different options to handle large-dimensional tensors, including:
     - Diagonalizing the Shampoo preconditioners.
     - Using standard diagonal Adagrad.
@@ -55,11 +48,17 @@ We have tested this implementation on the following versions of PyTorch:
 
 - PyTorch >= 1.13;
 - Python >= 3.8;
-- CUDA 11.3-11.4; 12.
+- CUDA 11.3-11.4; 12;
+- [expecttest](https://github.com/ezyang/expecttest) (for distributed unit tests);
+- [hypothesis](https://github.com/HypothesisWorks/hypothesis) (for distributed unit tests).
 
 If one wants to use `DTensor` which leads to memory savings, please set the hidden default `use_dtensor = True` under `allocate_distributed_tensor` in `shampoo_dist_utils.py`. (This is on by default.) Requires PyTorch 2 nightly build.
 
 Note: We have observed known instabilities with the `torch.linalg.eigh` operator on CUDA 11.6-11.8, specifically for low-rank matrices, which may appear with using a small `start_preconditioning_step`. Please avoid these versions of CUDA if possible.
+
+## Known Issues
+
+- External checkpointing support for `DTensor` is ongoing.
 
 ## How to Use
 
