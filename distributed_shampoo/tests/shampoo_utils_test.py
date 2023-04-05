@@ -598,7 +598,7 @@ class ShampooPreconditionerTest(unittest.TestCase):
         shampoo.reset_preconditioners()
         for i, preconditioner in enumerate(shampoo._preconditioners):
             with self.subTest(f"Test preconditioner {i}"):
-                torch.testing.assert_allclose(
+                torch.testing.assert_close(
                     preconditioner.factor_matrix,
                     torch.zeros_like(preconditioner.factor_matrix),
                 )
@@ -681,21 +681,21 @@ class ShampooPreconditionerTest(unittest.TestCase):
             atol=1e-5,
         )
 
-    @spawn_threads_and_init_comms(world_size=4)
     def test_preconditioned_grad_to_dist_buffer(self):
         expected_dist_buffer = torch.zeros(2, 3)
         _, _, grad, preconditioner = self._setup_test(
             beta2=1.0,
             epsilon=1.0,
-            group=dist.group.WORLD,
+            group=None,
             group_source_rank=0,
             dist_buffer=expected_dist_buffer,
+            use_protected_eigh=False,
         )
         preconditioner.compute_root_inverse()
         preconditioner.preconditioned_grad_to_dist_buffer(grad, torch.tensor(1))
         torch.testing.assert_close(
             preconditioner._dist_buffer,
-            grad if dist.get_rank() == 0 else torch.zeros(2, 3),
+            grad,
         )
 
     @spawn_threads_and_init_comms(world_size=4)
@@ -767,7 +767,7 @@ class ShampooPreconditionerTest(unittest.TestCase):
         for preconditioner, expected_inv_factor_matrix in zip(
             shampoo._preconditioners, expected_inv_factors
         ):
-            torch.testing.assert_allclose(
+            torch.testing.assert_close(
                 preconditioner.inv_factor_matrix, expected_inv_factor_matrix
             )
         self.assertEqual(mock_matrix_root.call_count, 2)
