@@ -246,7 +246,7 @@ With the inclusion of learning rate grafting, we can extract a good learning rat
 
     * The higher this value is, the better the model quality we expect.
 
-    * There is a sweet spot in terms of performance - if the number is too small, the algorithm will slow down due to kernel latency. On the other hand, using too large of a value leads to slow matrix computations (i.e., matrix root inverses), which scale as $O(n^3)$ if $n$ is the dimension of the matrix. In our experience, using a `max_preconditioner_dim` between 1024 and 8192 is ideal for performance.
+    * There is a sweet spot in terms of performance - if the number is too small, the algorithm will slow down due to kernel latency. On the other hand, using too large of a value leads to slow matrix computations (i.e., matrix root inverses), which scale as $O(n^3)$ if $n$ is the dimension of the matrix, as well as poor load-balancing. In our experience, using a `max_preconditioner_dim` between 1024 and 8192 is ideal for performance.
 
     * Memory varies depending on the order of the tensor. For vectors, increasing `max_preconditioner_dim` leads to increased memory costs, but for 3rd-order tensors (or higher), increasing `max_preconditioner_dim` leads to decreased memory costs. Blocked matrices yield a fixed memory cost regardless of `max_preconditioner_dim`.
 
@@ -305,14 +305,17 @@ With the inclusion of learning rate grafting, we can extract a good learning rat
     )
     ```
 
-4. One can fine-tune the algorithm further by playing with other hyperparameters, including:
+4. To fine-tune for better model quality, one can tune:
 
-    * Learning rate (`lr`),
-    * Epsilon regularization (`epsilon`),
-    * EMA parameters (`betas`),
-    * Exponent override and multipliers (`exponent_override`, `exponent_multiplier`).
+    * **Learning Rate** (`lr`): One can change the learning rate schedule, and potentially use a larger learning rate.
+    * **Epsilon Regularization** (`epsilon`): One should typically search for a value in $\{10^{−12},10^{−11},...,10^{−2},10^{−1}\}$.
+    * **Exponential Moving Average Parameters** (`betas`): One can tune the `betas = (beta1, beta2)` parameters as is typical for Adam(W).
+    * **Exponent Override and Multiplier** (`exponent_override`, `exponent_multiplier`): In general, we have found that using `exponent_override = 2` or `exponent_multiplier = 1.82` works well in practice, particularly for models dominated by fully-connected layers.
+    * **MTML Task Weights**: Task weights often need to be re-tuned as Distributed Shampoo will better exploit certain imbalances between different task losses.
 
-Using an exponent override of 2 is ideal for fully-connected layers. For MTML models, we have found that the task weights often need to be re-tuned as Distributed Shampoo will better exploit certain imbalances between different task losses.
+5. To fine-tune for performance, one should tune:
+
+    * **Process Group Size** (`num_gpus_per_group`): For large-scale distributed jobs, this hyperparameter allows us to trade off computational and communication costs. Assuming the number of GPUs per node is 8, one should search for a value in $\{8,16,32,64\}$. This hyperparameter has no impact on model quality.
 
 ## References
 
