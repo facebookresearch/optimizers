@@ -151,9 +151,9 @@ class DistributedShampoo(torch.optim.Optimizer):
             Memory cost = m + n
 
     3. Distributed Memory and Computation: Supports multi-GPU data-parallel training via torch.distributed by setting
-        num_gpus_per_group > 1. Distributes the computation required for Shampoo (updating of the preconditioners, computation
+        num_trainers_per_group > 1. Distributes the computation required for Shampoo (updating of the preconditioners, computation
         of the root inverse, preconditioning of the gradients, etc.) across multiple GPUs. The memory is similarly distributed
-        using DTensor. num_gpus_per_group specifies the number of GPUs used per distributed group. The computation is
+        using DTensor. num_trainers_per_group specifies the number of GPUs used per distributed group. The computation is
         replicated across different groups.
 
         Requirements:
@@ -180,8 +180,8 @@ class DistributedShampoo(torch.optim.Optimizer):
         use_decoupled_weight_decay (bool): Flag for using AdamW-style decoupled weight decay (Default: True)
         preconditioner_dtype (torch.dtype): data type for preconditioner (Default: torch.float)
         large_dim_method (LargeDimMethod): method for handling large scale tensors. (Default: LargeDimMethod.BLOCKING)
-        num_gpus_per_group (int): number of GPUs per distributed process group for distributed computation/memory.
-            If num_gpus_per_group = -1 is used, then defaults to using the LOCAL_WORLD_SIZE. (Default: -1)
+        num_trainers_per_group (int): number of GPUs per distributed process group for distributed computation/memory.
+            If num_trainers_per_group = -1 is used, then defaults to using the LOCAL_WORLD_SIZE. (Default: -1)
         use_merge_dims (bool): merge dimensions if possible while respecting max_preconditioner_dim. (Default: True)
         grafting_type (GraftingType): selects grafting method. (Default: GraftingType.ADAGRAD)
         grafting_epsilon (float): epsilon for grafting method. (Default: 1e-3)
@@ -214,7 +214,7 @@ class DistributedShampoo(torch.optim.Optimizer):
         use_decoupled_weight_decay: bool = True,
         preconditioner_dtype: torch.dtype = torch.float,
         large_dim_method: LargeDimMethod = LargeDimMethod.BLOCKING,
-        num_gpus_per_group: int = -1,
+        num_trainers_per_group: int = -1,
         use_merge_dims: bool = True,
         grafting_type: GraftingType = GraftingType.ADAGRAD,
         grafting_epsilon: float = 1e-3,
@@ -256,9 +256,9 @@ class DistributedShampoo(torch.optim.Optimizer):
             raise ValueError(
                 f"Invalid start preconditioning step: {start_preconditioning_step}"
             )
-        if not num_gpus_per_group >= -1:
+        if not num_trainers_per_group >= -1:
             raise ValueError(
-                f"Invalid number of GPUs per group: {num_gpus_per_group}. Must be >= -1."
+                f"Invalid number of GPUs per group: {num_trainers_per_group}. Must be >= -1."
             )
         if not exponent_override >= 0:
             raise ValueError(
@@ -274,7 +274,7 @@ class DistributedShampoo(torch.optim.Optimizer):
             )
 
         # Distributed checks.
-        if num_gpus_per_group > 1 or num_gpus_per_group == -1:
+        if num_trainers_per_group > 1 or num_trainers_per_group == -1:
             if not torch.cuda.is_available():
                 raise ValueError("Using distributed version of Shampoo without GPUs!")
             if not dist.is_initialized():
@@ -283,22 +283,22 @@ class DistributedShampoo(torch.optim.Optimizer):
                 )
 
             # Defaults to number of GPUs per node if using -1.
-            if num_gpus_per_group == -1:
-                num_gpus_per_group = int(
+            if num_trainers_per_group == -1:
+                num_trainers_per_group = int(
                     os.environ.get("LOCAL_WORLD_SIZE", dist.get_world_size())
                 )
 
-            if not dist.get_world_size() >= num_gpus_per_group:
-                num_gpus_per_group = dist.get_world_size()
+            if not dist.get_world_size() >= num_trainers_per_group:
+                num_trainers_per_group = dist.get_world_size()
                 logger.warning(
-                    f"Number of GPUs per group {num_gpus_per_group} is specified larger than global world size {dist.get_world_size()}. Setting to default world size."
+                    f"Number of GPUs per group {num_trainers_per_group} is specified larger than global world size {dist.get_world_size()}. Setting to default world size."
                 )
-            if not dist.get_world_size() % num_gpus_per_group == 0:
+            if not dist.get_world_size() % num_trainers_per_group == 0:
                 raise ValueError(
-                    f"Invalid number of GPUs per group: {num_gpus_per_group}. Must divide global world size {dist.get_world_size()}."
+                    f"Invalid number of GPUs per group: {num_trainers_per_group}. Must divide global world size {dist.get_world_size()}."
                 )
         else:
-            num_gpus_per_group = 1
+            num_trainers_per_group = 1
 
         super(DistributedShampoo, self).__init__(
             params,
@@ -318,7 +318,7 @@ class DistributedShampoo(torch.optim.Optimizer):
         self._precondition_frequency = precondition_frequency
         self._exponent_override = exponent_override
         self._exponent_multiplier = exponent_multiplier
-        self._num_gpus_per_group = num_gpus_per_group
+        self._num_trainers_per_group = num_trainers_per_group
         self._use_merge_dims = use_merge_dims
         self._large_dim_method = large_dim_method
         self._use_decoupled_weight_decay = use_decoupled_weight_decay
@@ -355,7 +355,7 @@ class DistributedShampoo(torch.optim.Optimizer):
 
     @torch.no_grad()
     def _use_distributed(self) -> bool:
-        return self._num_gpus_per_group > 1
+        return self._num_trainers_per_group > 1
 
     @torch.no_grad()
     def _initialize_preconditioners_and_steps(
@@ -495,7 +495,7 @@ class DistributedShampoo(torch.optim.Optimizer):
             group_rank = 0
 
         # Distributes across default (global) process group.
-        elif self._num_gpus_per_group == dist.get_world_size():
+        elif self._num_trainers_per_group == dist.get_world_size():
             self._dist_group = dist.distributed_c10d.GroupMember.WORLD
             group_rank = dist.get_rank()
 
@@ -507,8 +507,8 @@ class DistributedShampoo(torch.optim.Optimizer):
             # We need only one group, but we need to create multiple groups
             # as new_group() is a collective across all the processes.
             for group_ranks in [
-                list(range(r, r + self._num_gpus_per_group))
-                for r in range(0, dist.get_world_size(), self._num_gpus_per_group)
+                list(range(r, r + self._num_trainers_per_group))
+                for r in range(0, dist.get_world_size(), self._num_trainers_per_group)
             ]:
                 group = dist.new_group(ranks=group_ranks)
 
@@ -544,7 +544,7 @@ class DistributedShampoo(torch.optim.Optimizer):
             # Calculate distribution across ranks using obtained buffer sizes.
             # buffer_size_ranks contains tuples of buffer sizes and ranks.
             buffer_size_ranks = distribute_buffer_sizes(
-                buffer_sizes, self._num_gpus_per_group
+                buffer_sizes, self._num_trainers_per_group
             )
 
             # Allocate a single huge tensor.  Now every rank has the same size of buffer so
@@ -553,10 +553,10 @@ class DistributedShampoo(torch.optim.Optimizer):
             max_buffer_size_sum = max(
                 [
                     sum([s for s, r in buffer_size_ranks if r == group_rank])
-                    for group_rank in range(self._num_gpus_per_group)
+                    for group_rank in range(self._num_trainers_per_group)
                 ]
             )
-            total_buffer_size = max_buffer_size_sum * self._num_gpus_per_group
+            total_buffer_size = max_buffer_size_sum * self._num_trainers_per_group
 
             # global_dist_buffer allocated in terms of bytes.
             global_dist_buffer = torch.zeros(
@@ -567,7 +567,7 @@ class DistributedShampoo(torch.optim.Optimizer):
             group[DIST_BUFFER] = global_dist_buffer
 
             logger.info(
-                f"Shampoo dist: group size = {self._num_gpus_per_group}, rank = {group_rank}, "
+                f"Shampoo dist: group size = {self._num_trainers_per_group}, rank = {group_rank}, "
                 + f"total data = {max_buffer_size_sum} [B], buffer size = {total_buffer_size} [B]"
             )
 

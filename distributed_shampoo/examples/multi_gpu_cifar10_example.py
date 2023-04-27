@@ -182,7 +182,7 @@ if __name__ == "__main__":
         if args.preconditioner_dtype == DType.FLOAT
         else torch.float64,
         large_dim_method=args.large_dim_method,
-        num_gpus_per_group=args.num_gpus_per_group,
+        num_trainers_per_group=args.num_trainers_per_group,
         grafting_type=args.grafting_type,
         grafting_epsilon=args.grafting_epsilon,
         grafting_beta2=args.grafting_beta2,

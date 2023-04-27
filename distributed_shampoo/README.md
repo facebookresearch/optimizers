@@ -315,7 +315,7 @@ With the inclusion of learning rate grafting, we can extract a good learning rat
 
 5. To fine-tune for performance, one should tune:
 
-    * **Process Group Size** (`num_gpus_per_group`): For large-scale distributed jobs, this hyperparameter allows us to trade off computational and communication costs. Assuming the number of GPUs per node is 8, one should search for a value in $\{8,16,32,64\}$. This hyperparameter has no impact on model quality.
+    * **Process Group Size** (`num_trainers_per_group`): For large-scale distributed jobs, this hyperparameter allows us to trade off computational and communication costs. Assuming the number of GPUs per node is 8, one should search for a value in $\{8,16,32,64\}$. This hyperparameter has no impact on model quality.
 
 ## References
 
