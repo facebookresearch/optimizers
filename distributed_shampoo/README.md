@@ -93,8 +93,8 @@ optimizer = SGD(
 we would instead use:
 ```
 import torch
-from distributed_shampoo import DistributedShampoo
-from shampoo_utils import GraftingType
+from distributed_shampoo.distributed_shampoo import DistributedShampoo
+from distributed_shampoo.shampoo_utils import GraftingType
 
 model = instantiate_model()
 
@@ -132,8 +132,8 @@ optimizer = Adam(
 we would instead use:
 ```
 import torch
-from distributed_shampoo import DistributedShampoo
-from shampoo_utils import GraftingType
+from distributed_shampoo.distributed_shampoo import DistributedShampoo
+from distributed_shampoo.shampoo_utils import GraftingType
 
 model = instantiate_model()
 
@@ -171,8 +171,8 @@ optimizer = Adagrad(
 we would instead use:
 ```
 import torch
-from distributed_shampoo import DistributedShampoo
-from shampoo_utils import GraftingType
+from distributed_shampoo.distributed_shampoo import DistributedShampoo
+from distributed_shampoo.shampoo_utils import GraftingType
 
 model = instantiate_model()
 
@@ -210,8 +210,8 @@ optimizer = AdamW(
 we would instead use:
 ```
 import torch
-from distributed_shampoo import DistributedShampoo
-from shampoo_utils import GraftingType
+from distributed_shampoo.distributed_shampoo import DistributedShampoo
+from distributed_shampoo.shampoo_utils import GraftingType
 
 model = instantiate_model()
 
@@ -254,7 +254,7 @@ With the inclusion of learning rate grafting, we can extract a good learning rat
 
     * The following is an example of setting `max_preconditioner_dim = 4096` with SGD grafting:
     ```
-    optimizer = shampoo.DistributedShampoo(
+    optimizer = DistributedShampoo(
         nn.parameters(),
         lr=0.01,
         betas=(0., 0.999),
@@ -275,7 +275,7 @@ With the inclusion of learning rate grafting, we can extract a good learning rat
 
     * The following is an example of setting `precondition_frequency = 100`:
     ```
-    optimizer = shampoo.DistributedShampoo(
+    optimizer = DistributedShampoo(
         nn.parameters(),
         lr=0.01,
         betas=(0., 0.999),
@@ -294,7 +294,7 @@ With the inclusion of learning rate grafting, we can extract a good learning rat
 
     * Following is an example of setting `start_preconditioning_step = 300`:
     ```
-    optimizer = shampoo.DistributedShampoo(
+    optimizer = DistributedShampoo(
         nn.parameters(),
         lr=0.01,
         betas=(0., 0.999),
