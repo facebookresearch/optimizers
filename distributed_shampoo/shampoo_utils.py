@@ -138,7 +138,7 @@ class Preconditioner(OptimizerModule):
     ):
         super(Preconditioner, self).__init__()
         self._parameter_count = 0
-        self._dims = torch.as_tensor(param.shape).numpy()
+        self._dims = list(param.size())
 
     def update_preconditioners(self, grad: Tensor, iteration: Tensor) -> None:
         pass
@@ -297,9 +297,7 @@ class AdagradPreconditioner(DistributedPreconditioner):
         self._idx = idx
         self._use_bias_correction = use_bias_correction
         self._bias_correction2 = 1.0
-        self._parameter_count += (
-            torch.prod(torch.as_tensor(self._preconditioner.shape)).cpu().numpy()
-        )
+        self._parameter_count += self._preconditioner.numel()
 
         if self._idx is not None:
             self._preconditioner_idx = str(self._idx) + "." + str(0)
@@ -884,7 +882,7 @@ class BlockShampooPreconditioner(DistributedPreconditioner):
         self._idx = idx
         self._start_preconditioning_step = start_preconditioning_step
         self._use_merge_dims = use_merge_dims
-        self._original_dims = [*torch.as_tensor(param.shape).numpy()]
+        self._original_dims = list(param.size())
         self._merged_dims = (
             merge_small_dims(self._original_dims, self._block_size)
             if self._block_size is not None and use_merge_dims
@@ -1008,7 +1006,7 @@ class BlockShampooPreconditioner(DistributedPreconditioner):
     def get_dist_buffer_sizes(
         param, block_size: int, use_merge_dims: bool
     ) -> List[int]:
-        original_dims = [*torch.as_tensor(param.shape).numpy()]
+        original_dims = list(param.size())
         merged_dims = (
             merge_small_dims(original_dims, block_size)
             if block_size is not None and use_merge_dims
