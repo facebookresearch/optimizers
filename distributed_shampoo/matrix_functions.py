@@ -25,6 +25,7 @@ class NewtonConvergenceFlag(enum.Enum):
 class RootInvMethod(enum.Enum):
     EIGEN = 0
     NEWTON = 1
+    PSEUDO_EIGEN = 2
 
 
 def check_diagonal(A: Tensor) -> Tensor:
@@ -91,8 +92,9 @@ def matrix_inverse_root(
             inverse=True,
             exponent_multiplier=exponent_multiplier,
             return_full_matrix=True,
+            use_pseudo_inverse=(root_inv_method == RootInvMethod.PSEUDO_EIGEN),
         )
-    elif root_inv_method == RootInvMethod.EIGEN:
+    elif root_inv_method in [RootInvMethod.EIGEN, RootInvMethod.PSEUDO_EIGEN]:
         X, _, _ = _matrix_root_eigen(
             A=A,
             root=root,
@@ -100,6 +102,7 @@ def matrix_inverse_root(
             inverse=True,
             exponent_multiplier=exponent_multiplier,
             retry_double_precision=retry_double_precision,
+            use_pseudo_inverse=(root_inv_method == RootInvMethod.PSEUDO_EIGEN),
         )
     elif root_inv_method == RootInvMethod.NEWTON:
         if exponent_multiplier != 1.0:
@@ -135,6 +138,7 @@ def matrix_root_diagonal(
     inverse: bool = True,
     exponent_multiplier: float = 1.0,
     return_full_matrix: bool = False,
+    use_pseudo_inverse: bool = False,
 ) -> Tensor:
     """Computes matrix inverse root for a diagonal matrix by taking inverse square root of diagonal entries.
 
@@ -143,12 +147,17 @@ def matrix_root_diagonal(
         root (int): Root of interest. Any natural number.
         epsilon (float): Adds epsilon * I to matrix before taking matrix root. (Default: 0.0)
         inverse (bool): Returns inverse root matrix. (Default: True)
-        return_full_matrix (bool): Returns full matrix by taking torch.diag of diagonal entries. (bool: False)
+        return_full_matrix (bool): Returns full matrix by taking torch.diag of diagonal entries. (Default: False)
+        use_pseudo_inverse (bool): Computes the matrix pseudo-inverse root by discarding negative eigenvalues/diagonal
+            elements. To use this option, `inverse` must be True. (Default: False)
 
     Returns:
         X (Tensor): Inverse root of diagonal entries.
 
     """
+
+    if use_pseudo_inverse and not inverse:
+        raise ValueError("Received invalid request to compute pseudoinverse but not calculating an inverse root.")
 
     # check order of tensor
     order = len(A.shape)
@@ -157,7 +166,6 @@ def matrix_root_diagonal(
     elif order > 2:
         raise ValueError("Matrix is not 2-dimensional!")
 
-    # check if root is positive integer
     if root <= 0:
         raise ValueError(f"Root {root} should be positive!")
 
@@ -166,7 +174,11 @@ def matrix_root_diagonal(
     if inverse:
         alpha = -alpha
 
-    X = (A + epsilon).pow(alpha)
+    if use_pseudo_inverse:
+        X = torch.where(A <= epsilon, torch.zeros_like(A), A.pow(alpha))
+    else:
+        X = (A + epsilon).pow(alpha)
+
     return torch.diag(X) if return_full_matrix else X
 
 
@@ -178,6 +190,7 @@ def _matrix_root_eigen(
     exponent_multiplier: float = 1.0,
     make_positive_semidefinite: bool = True,
     retry_double_precision: bool = True,
+    use_pseudo_inverse: bool = False,
 ) -> Tuple[Tensor, Tensor, Tensor]:
     """Compute matrix (inverse) root using eigendecomposition of symmetric positive (semi-)definite matrix.
 
@@ -194,6 +207,8 @@ def _matrix_root_eigen(
         make_positive_semidefinite (bool): Perturbs matrix eigenvalues to ensure it is numerically positive semi-definite. (Default: True)
         retry_double_precision (bool): Flag for re-trying eigendecomposition with higher precision if lower precision fails due
             to CuSOLVER failure. (Default: True)
+        use_pseudo_inverse (bool): Computes the matrix pseudo-inverse root by discarding negative eigenvalues elements.
+            To use this option, `inverse` must be True. (Default: False)
 
     Returns:
         X (Tensor): (Inverse) root of matrix. Same dimensions as A.
@@ -202,7 +217,9 @@ def _matrix_root_eigen(
 
     """
 
-    # check if root is positive integer
+    if use_pseudo_inverse and not inverse:
+        raise ValueError("Received invalid request to compute pseudoinverse but not calculating an inverse root.")
+
     if root <= 0:
         raise ValueError(f"Root {root} should be positive!")
 
@@ -224,17 +241,17 @@ def _matrix_root_eigen(
         else:
             raise exception
 
-    lambda_min = torch.min(L)
-
-    # make eigenvalues >= 0 (if necessary)
-    if make_positive_semidefinite:
-        L += -torch.minimum(lambda_min, torch.as_tensor(0.0))
-
-    # add epsilon
-    L += epsilon
+    if use_pseudo_inverse:
+        power_L = torch.where(L <= epsilon, torch.zeros_like(L), L.pow(alpha))
+    else:
+        lambda_min = torch.min(L)
+        # make eigenvalues >= 0 (if necessary)
+        if make_positive_semidefinite:
+            L += -torch.minimum(lambda_min, torch.as_tensor(0.0))
+        power_L = (L + epsilon).pow(alpha)
 
     # compute inverse preconditioner
-    X = Q * L.pow(alpha).unsqueeze(0) @ Q.T
+    X = Q * power_L.unsqueeze(0) @ Q.T
 
     return X, L, Q
 
