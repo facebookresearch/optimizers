@@ -342,6 +342,10 @@ class DistributedShampoo(torch.optim.Optimizer):
             logger.warning(
                 f"start_preconditioning_step set to -1. Setting start_preconditioning_step equal to precondition frequency {precondition_frequency} by default."
             )
+        elif start_preconditioning_step < precondition_frequency:
+            raise ValueError(
+                f"Invalid start_preconditioning_step value: {start_preconditioning_step}. Must be >= {precondition_frequency = }."
+            )
         else:
             self._start_preconditioning_step = start_preconditioning_step
 
