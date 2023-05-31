@@ -377,7 +377,7 @@ class ShampooPreconditionerTest(unittest.TestCase):
         exponent_multiplier=1.0,
         use_bias_correction=True,
         diagonal_threshold=None,
-        start_preconditioning_step=0,
+        start_preconditioning_step=-1,
         grafting_type=GraftingType.NONE,
         grafting_beta2=1.0,
         grafting_epsilon=1e-3,
