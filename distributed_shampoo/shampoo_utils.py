@@ -228,6 +228,11 @@ class DistributedPreconditioner(Preconditioner):
     def on_source_rank(self) -> bool:
         return self._on_source_rank
 
+    def precondition_grad(
+        self, grad: Tensor, iteration: Tensor
+    ) -> Tensor:
+        return self.precondition(grad, iteration)
+    
     def preconditioned_grad_to_dist_buffer(
         self, grad: Tensor, iteration: Tensor
     ) -> None:
@@ -1019,7 +1024,17 @@ class BlockShampooPreconditioner(DistributedPreconditioner):
             ShampooPreconditioner.get_dist_buffer_size(split_param)
             for split_param in multi_dim_split(param, splits)
         ]
-
+    
+    def precondition_grad(
+        self, grad: Tensor, iteration: Tensor
+    ) -> List[Tensor]:
+        split_grads = self.combine_and_split_dims(grad)
+        assert len(self._split_preconditioners) == len(split_grads)
+        split_preconditioned_grads = []
+        for preconditioner, grad in zip(self._split_preconditioners, split_grads):
+            split_preconditioned_grads.append(preconditioner.precondition_grad(grad, iteration))
+        return split_preconditioned_grads
+    
     def preconditioned_grad_to_dist_buffer(
         self, grad: Tensor, iteration: Tensor
     ) -> None:
@@ -1040,7 +1055,10 @@ class BlockShampooPreconditioner(DistributedPreconditioner):
             preconditioner._dist_buffer
             for preconditioner in self._split_preconditioners
         ]
-
+    
+    def num_preconditioners(self) -> int:
+        return len(self._split_preconditioners)
+    
     def reset_preconditioners(self) -> None:
         for preconditioner in self._split_preconditioners:
             preconditioner.reset_preconditioners()
