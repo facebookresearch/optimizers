@@ -353,47 +353,15 @@ class FSDPShampoo(torch.optim.Optimizer):
     @torch.no_grad()
     def _use_distributed(self) -> bool:
         return self._num_trainers_per_group > 1
-    
+
     @torch.no_grad()
     def _initialize_preconditioners_and_steps(self):
         """Initialize Shampoo preconditioners and inverse preconditioners."""
         # current workaround for group_source_rank
-        # TODO: clean up here and shampoo_utils.py
+        # TODO: try to keep dist_group information
         self._dist_group = None
         group_rank = 0
         buffer_ranks = None
-        
-        # # Does not distribute computation.
-        # if not self._use_distributed():
-        #     self._dist_group = None
-        #     group_rank = 0
-
-        # # Distributes across default (global) process group.
-        # elif self._num_trainers_per_group == dist.get_world_size():
-        #     self._dist_group = dist.distributed_c10d.GroupMember.WORLD
-        #     group_rank = dist.get_rank()
-
-        # # Distributes across multiple process groups of equal size.
-        # # Currently supports only homogeneous architectures and assumes that the environmental
-        # # variable LOCAL_WORLD_SIZE is set (for example, through torchrun / torch.distributed.launch).
-        # else:
-        #     # Creates different process groups for AllGather.
-        #     # We need only one group, but we need to create multiple groups
-        #     # as new_group() is a collective across all the processes.
-        #     for group_ranks in [
-        #         list(range(r, r + self._num_trainers_per_group))
-        #         for r in range(0, dist.get_world_size(), self._num_trainers_per_group)
-        #     ]:
-        #         group = dist.new_group(ranks=group_ranks)
-
-        #         # Determines which group this rank belongs to.
-        #         if dist.get_rank() in group_ranks:
-        #             self._dist_group = group
-
-        #     group_rank = dist.get_rank(group=self._dist_group)
-        #     logger.info(
-        #         f"Distributed Shampoo: Global Rank = {dist.get_rank()}, Group Rank = {group_rank}"
-        #     )
 
         for group in self.param_groups:
             preconditioner_count = 0
@@ -741,11 +709,14 @@ class FSDPShampoo(torch.optim.Optimizer):
             momentum_param = group[MOMENTUM]
             weight_decay = group[WEIGHT_DECAY]
             lr = group[LR]
-            
-            split_params, split_preconditioned_grads, split_momentum_directions, = self._init_group(group)
+
+            (
+                split_params,
+                split_preconditioned_grads,
+                split_momentum_directions,
+            ) = self._init_group(group)
 
             for p in group[PARAMS]:
-
                 state = self.state[p]
                 if p.grad is None or not state[PRECONDITIONERS].on_source_rank:
                     continue
@@ -766,9 +737,11 @@ class FSDPShampoo(torch.optim.Optimizer):
                     p.grad.copy_(filtered_grad / bias_correction1)
 
                 # Compute preconditioned gradient and update parameters.
-                split_preconditioned_grads.extend(state[PRECONDITIONERS].precondition(
-                    p.grad, iteration, return_split=True
-                ))
+                split_preconditioned_grads.extend(
+                    state[PRECONDITIONERS].precondition(
+                        p.grad, iteration, return_split=True
+                    )
+                )
 
             # Set search direction as preconditioned grads.
             split_search_directions = split_preconditioned_grads

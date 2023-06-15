@@ -15,6 +15,7 @@ from typing import List, Optional, Tuple, Union
 
 import torch
 import torch.distributed as dist
+from torch import Tensor
 
 from distributed_shampoo.matrix_functions import (
     check_diagonal,
@@ -27,9 +28,9 @@ from distributed_shampoo.shampoo_dist_utils import (
     get_dtype_size,
     use_local_tensor,
 )
-from torch import Tensor
 
 logger = logging.getLogger(__name__)
+
 
 ###### ENUM CLASSES ######
 class PreconditionerType(enum.Enum):
@@ -424,7 +425,6 @@ class ShampooPreconditioner(DistributedPreconditioner):
         use_protected_eigh: bool = True,
         use_dtensor: bool = True,
     ):
-
         super(ShampooPreconditioner, self).__init__(
             param, group, group_source_rank, dist_buffer
         )
@@ -634,7 +634,6 @@ class ShampooPreconditioner(DistributedPreconditioner):
 
             # To handle diagonal case, requires not transposing the tensor.
             if self._diagonal_threshold is not None:
-
                 # Precondition using diagonal preconditioner.
                 if preconditioner.preconditioner_type == PreconditionerType.DIAGONAL:
                     denom = (factor_matrix / self._bias_correction2).add_(self._epsilon)
@@ -703,7 +702,6 @@ class ShampooPreconditioner(DistributedPreconditioner):
 
             # Check that this is a full Shampoo preconditioner.
             if preconditioner.preconditioner_type == PreconditionerType.FULL:
-
                 # For tracking diagonality of the preconditioner.
                 # Checks if the preconditioner is currently diagonal, then checks whether or not
                 # the update matrix is diagonal.
@@ -956,7 +954,9 @@ class BlockShampooPreconditioner(DistributedPreconditioner):
         ):
             block_preconditioner.update_preconditioners(block_grad, iteration)
 
-    def precondition(self, grad: Tensor, iteration: Tensor, return_split: bool = False) -> Tensor:
+    def precondition(
+        self, grad: Tensor, iteration: Tensor, return_split: bool = False
+    ) -> Tensor:
         split_grad = self.combine_and_split_dims(grad)
         assert len(self._split_preconditioners) == len(split_grad)
         split_preconditioned_grad = [
@@ -966,12 +966,14 @@ class BlockShampooPreconditioner(DistributedPreconditioner):
         if return_split:
             return split_preconditioned_grad
         else:
-            preconditioned_grad = multi_dim_cat(split_preconditioned_grad, self._num_splits)
+            preconditioned_grad = multi_dim_cat(
+                split_preconditioned_grad, self._num_splits
+            )
             return (
                 preconditioned_grad.view(self._original_dims)
                 if self._use_merge_dims
                 else preconditioned_grad
-        )
+            )
 
     def compute_root_inverse(self) -> None:
         for preconditioner in self._split_preconditioners:
@@ -1022,7 +1024,7 @@ class BlockShampooPreconditioner(DistributedPreconditioner):
             ShampooPreconditioner.get_dist_buffer_size(split_param)
             for split_param in multi_dim_split(param, splits)
         ]
-    
+
     def preconditioned_grad_to_dist_buffer(
         self, grad: Tensor, iteration: Tensor
     ) -> None:
@@ -1043,10 +1045,10 @@ class BlockShampooPreconditioner(DistributedPreconditioner):
             preconditioner._dist_buffer
             for preconditioner in self._split_preconditioners
         ]
-    
+
     def num_preconditioners(self) -> int:
         return len(self._split_preconditioners)
-    
+
     def reset_preconditioners(self) -> None:
         for preconditioner in self._split_preconditioners:
             preconditioner.reset_preconditioners()
