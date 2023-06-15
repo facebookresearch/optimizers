@@ -17,15 +17,9 @@ from typing import Any, Dict, List, Tuple
 import torch
 import torch.distributed as dist
 
-from distributed_shampoo.shampoo_dist_utils import (
-    distribute_buffer_sizes,
-    split_local_dist_buffers,
-)
-
 from distributed_shampoo.shampoo_utils import (
     AdagradPreconditioner,
     BlockShampooPreconditioner,
-    DistributedPreconditioner,
     GraftingType,
     LargeDimMethod,
     Preconditioner,
@@ -355,7 +349,6 @@ class FSDPShampoo(torch.optim.Optimizer):
         # Initialize Shampoo preconditioners and distributed buffers.
         self._dist_group = None
         self._initialize_preconditioners_and_steps()
-        print("FSDPShampoo init complete")
 
     @torch.no_grad()
     def _use_distributed(self) -> bool:
@@ -405,6 +398,10 @@ class FSDPShampoo(torch.optim.Optimizer):
         for group in self.param_groups:
             preconditioner_count = 0
             for idx, p in enumerate(group[PARAMS]):
+                # skip parameters not on worker
+                if p.numel() == 0:
+                    continue
+
                 state = self.state[p]
                 dims = torch.as_tensor(p.shape)
                 state[STEP] = torch.tensor(0)
@@ -528,6 +525,10 @@ class FSDPShampoo(torch.optim.Optimizer):
         """Root inverse computation across all preconditioners/parameters."""
         for group in self.param_groups:
             for p in group[PARAMS]:
+                # skip parameters not on worker
+                if p.numel() == 0:
+                    continue
+
                 if p.grad is None:
                     continue
 
@@ -561,6 +562,10 @@ class FSDPShampoo(torch.optim.Optimizer):
 
         for group in self.param_groups:
             for p in group[PARAMS]:
+                # skip parameters not on worker
+                if p.numel() == 0:
+                    continue
+
                 state = self.state[p]
 
                 if isinstance(
@@ -600,6 +605,10 @@ class FSDPShampoo(torch.optim.Optimizer):
         """
         for group in self.param_groups:
             for p in group[PARAMS]:
+                # skip parameters not on worker
+                if p.numel() == 0:
+                    continue
+
                 grad = p.grad
                 state = self.state[p]
                 if grad is None or not state[PRECONDITIONERS].on_source_rank:
@@ -639,6 +648,10 @@ class FSDPShampoo(torch.optim.Optimizer):
         split_momentum_directions = []
 
         for p in group[PARAMS]:
+            # skip parameters not on worker
+            if p.numel() == 0:
+                continue
+
             state = self.state[p]
             if p.grad is None:
                 continue
@@ -670,15 +683,25 @@ class FSDPShampoo(torch.optim.Optimizer):
 
     @torch.no_grad()
     def _iterate_step(self) -> torch.Tensor:
+        iteration = None
         for group in self.param_groups:
             for p in group[PARAMS]:
+                # skip parameters not on worker
+                if p.numel() == 0:
+                    continue
+
                 self.state[p][STEP] += 1
-        return self.state[p][STEP]
+                iteration = self.state[p][STEP]
+        return iteration
 
     @torch.no_grad()
     def reset_preconditioners(self):
         for group in self.param_groups:
             for p in group[PARAMS]:
+                # skip parameters not on worker
+                if p.numel() == 0:
+                    continue
+
                 self.state[p][PRECONDITIONERS].reset_preconditioners()
 
     @torch.no_grad()
@@ -711,7 +734,6 @@ class FSDPShampoo(torch.optim.Optimizer):
 
             if self._debug_mode:
                 self._compute_and_log_root_inverse_residuals()
-        print(f"rank {current_rank} root inverse computation complete")
 
         # Loops over all parameter groups and parameters to perform update.
         for group in self.param_groups:
@@ -722,9 +744,7 @@ class FSDPShampoo(torch.optim.Optimizer):
             
             split_params, split_preconditioned_grads, split_momentum_directions, = self._init_group(group)
 
-            print(f"rank {current_rank}, num params {len(group[PARAMS])}")
             for p in group[PARAMS]:
-                # print(f"rank {current_rank}, param shape {p.shape}")
 
                 state = self.state[p]
                 if p.grad is None or not state[PRECONDITIONERS].on_source_rank:
@@ -746,10 +766,9 @@ class FSDPShampoo(torch.optim.Optimizer):
                     p.grad.copy_(filtered_grad / bias_correction1)
 
                 # Compute preconditioned gradient and update parameters.
-                split_preconditioned_grads.extend(state[PRECONDITIONERS].precondition_grad(
-                    p.grad, iteration
+                split_preconditioned_grads.extend(state[PRECONDITIONERS].precondition(
+                    p.grad, iteration, return_split=True
                 ))
-            print(f"rank {current_rank} len split_preconditioned_grads after precondition {len(split_preconditioned_grads)}")
 
             # Set search direction as preconditioned grads.
             split_search_directions = split_preconditioned_grads

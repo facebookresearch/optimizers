@@ -228,11 +228,6 @@ class DistributedPreconditioner(Preconditioner):
     def on_source_rank(self) -> bool:
         return self._on_source_rank
 
-    def precondition_grad(
-        self, grad: Tensor, iteration: Tensor
-    ) -> Tensor:
-        return self.precondition(grad, iteration)
-    
     def preconditioned_grad_to_dist_buffer(
         self, grad: Tensor, iteration: Tensor
     ) -> None:
@@ -961,18 +956,21 @@ class BlockShampooPreconditioner(DistributedPreconditioner):
         ):
             block_preconditioner.update_preconditioners(block_grad, iteration)
 
-    def precondition(self, grad: Tensor, iteration: Tensor) -> Tensor:
+    def precondition(self, grad: Tensor, iteration: Tensor, return_split: bool = False) -> Tensor:
         split_grad = self.combine_and_split_dims(grad)
         assert len(self._split_preconditioners) == len(split_grad)
         split_preconditioned_grad = [
             p.precondition(g, iteration)
             for p, g in zip(self._split_preconditioners, split_grad)
         ]
-        preconditioned_grad = multi_dim_cat(split_preconditioned_grad, self._num_splits)
-        return (
-            preconditioned_grad.view(self._original_dims)
-            if self._use_merge_dims
-            else preconditioned_grad
+        if return_split:
+            return split_preconditioned_grad
+        else:
+            preconditioned_grad = multi_dim_cat(split_preconditioned_grad, self._num_splits)
+            return (
+                preconditioned_grad.view(self._original_dims)
+                if self._use_merge_dims
+                else preconditioned_grad
         )
 
     def compute_root_inverse(self) -> None:
@@ -1024,16 +1022,6 @@ class BlockShampooPreconditioner(DistributedPreconditioner):
             ShampooPreconditioner.get_dist_buffer_size(split_param)
             for split_param in multi_dim_split(param, splits)
         ]
-    
-    def precondition_grad(
-        self, grad: Tensor, iteration: Tensor
-    ) -> List[Tensor]:
-        split_grads = self.combine_and_split_dims(grad)
-        assert len(self._split_preconditioners) == len(split_grads)
-        split_preconditioned_grads = []
-        for preconditioner, grad in zip(self._split_preconditioners, split_grads):
-            split_preconditioned_grads.append(preconditioner.precondition_grad(grad, iteration))
-        return split_preconditioned_grads
     
     def preconditioned_grad_to_dist_buffer(
         self, grad: Tensor, iteration: Tensor
