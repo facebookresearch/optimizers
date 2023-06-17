@@ -794,7 +794,7 @@ class DistributedShampoo(torch.optim.Optimizer):
 
             for p in group[PARAMS]:
                 state = self.state[p]
-                if p.grad is None or not state[PRECONDITIONERS].on_source_rank:
+                if p.grad is None:
                     continue
 
                 # Incorporate first-moment or filtered gradient estimation.
