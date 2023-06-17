@@ -23,10 +23,7 @@ import torch.distributed as dist
 from distributed_shampoo.distributed_shampoo import DistributedShampoo
 
 from distributed_shampoo.examples.convnet import ConvNet
-from distributed_shampoo.shampoo_utils import (
-    GraftingType,
-    LargeDimMethod,
-)
+from distributed_shampoo.shampoo_utils import GraftingType, LargeDimMethod
 from torch import nn
 from torchvision import datasets, transforms
 
@@ -178,12 +175,10 @@ class Parser:
         parser.add_argument(
             "--use-protected-eigh",
             action="store_true",
-            help="Uses protected eigendecomposition."
+            help="Uses protected eigendecomposition.",
         )
         parser.add_argument(
-            "--use-dtensor",
-            action="store_true",
-            help="Use DTensor if available."
+            "--use-dtensor", action="store_true", help="Use DTensor if available."
         )
         parser.add_argument(
             "--debug-mode",
@@ -212,6 +207,23 @@ class Parser:
             default=-1,
             help="Number of GPUs per distributed process group.",
         )
+        parser.add_argument(
+            "--data-path",
+            type=str,
+            default="./data",
+            help="Path to CIFAR-10 dataset.",
+        )
+        parser.add_argument(
+            "--use-distributed-checkpoint",
+            action="store_true",
+            help="Toggle distributed checkpoint testing.",
+        )
+        parser.add_argument(
+            "--checkpoint-dir",
+            type=str,
+            default="./checkpoints",
+            help="Directory to save checkpoints and logs.",
+        )
 
         return parser.parse_args()
 
@@ -229,7 +241,12 @@ class Metrics(ABC):
 
 
 class LossMetrics(Metrics):
-    def __init__(self, window_size: int = 100, device: torch.device = torch.device("cpu"), world_size: int = 0):
+    def __init__(
+        self,
+        window_size: int = 100,
+        device: torch.device = torch.device("cpu"),
+        world_size: int = 0,
+    ):
         super().__init__()
         self._world_size = world_size
         self._window_size = window_size
@@ -442,7 +459,9 @@ if __name__ == "__main__":
     transform = transforms.Compose(
         [transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))]
     )
-    dataset = datasets.CIFAR10("./data", train=True, download=True, transform=transform)
+    dataset = datasets.CIFAR10(
+        args.data_path, train=True, download=True, transform=transform
+    )
     data_loader = torch.utils.data.DataLoader(
         dataset,
         batch_size=args.batch_size,
@@ -466,7 +485,9 @@ if __name__ == "__main__":
         use_nesterov=args.use_nesterov,
         use_bias_correction=args.use_bias_correction,
         use_decoupled_weight_decay=args.use_decoupled_weight_decay,
-        preconditioner_dtype=torch.float if args.preconditioner_dtype == DType.FLOAT else torch.float64,
+        preconditioner_dtype=torch.float
+        if args.preconditioner_dtype == DType.FLOAT
+        else torch.float64,
         large_dim_method=args.large_dim_method,
         num_trainers_per_group=0,
         grafting_type=args.grafting_type,

@@ -14,7 +14,7 @@ Developers:
 
 with contributions and support from:
 
-Rohan Anil (Google), Adnan Aziz (Meta), Pavan Balaji (Meta), Shuo Chang (Meta), Weiwei Chu (Meta), Assaf Eisenman (Meta), Will Feng (Meta), Zhuobo Feng (Meta), Yizi Gu (Meta), Vineet Gupta (Google), Yuchen Hao (Meta), Yusuo Hu (Meta), Yuxi Hu (Meta), Minhui Huang (Meta), Guna Lakshminarayanan (Meta), Zhijing Li (Meta), Ming Liang (Meta), Wanchao Liang (Meta), Ying Liu (Meta), Wenguang Mao (Meta), Dheevatsa Mudigere (NVIDIA), Maxim Naumov (Meta), Jongsoo Park (Meta), Mike Rabbat (Meta), Kaushik Rangadurai (Meta), Ke Sang (Meta), Dennis van der Staay (Meta), Fei Tian (Meta), Sanjay Vishwakarma (Meta), Xunnan (Shawn) Xu (Meta), Jiyan Yang (Meta), and Wang Zhou (Meta).
+Rohan Anil (Google), Adnan Aziz (Meta), Pavan Balaji (Meta), Shuo Chang (Meta), Weiwei Chu (Meta), Assaf Eisenman (Meta), Will Feng (Meta), Zhuobo Feng (Meta), Yizi Gu (Meta), Vineet Gupta (Google), Yuchen Hao (Meta), Yusuo Hu (Meta), Yuxi Hu (Meta), Minhui Huang (Meta), Guna Lakshminarayanan (Meta), Zhijing Li (Meta), Ming Liang (Meta), Wanchao Liang (Meta), Ying Liu (Meta), Wenguang Mao (Meta), Dheevatsa Mudigere (NVIDIA), Maxim Naumov (Meta), Jongsoo Park (Meta), Mike Rabbat (Meta), Kaushik Rangadurai (Meta), Ke Sang (Meta), Dennis van der Staay (Meta), Fei Tian (Meta), Sanjay Vishwakarma (Meta), Xunnan (Shawn) Xu (Meta), Jiyan Yang (Meta), Iris Zhang (Meta), and Wang Zhou (Meta).
 
 ## Features
 
@@ -40,6 +40,8 @@ Key distinctives of this implementation include:
     - Using symmetric eigendecomposition (used by default).
     - Coupled inverse Newton iteration [4].
 - Choice of precision for preconditioner accumulation and root inverse computation.
+- Option for quantized (or low-precision) communications using BF16, FP16, or FP32 communications.
+- Ability to cache split parameters.
 - Merging of small dimensions.
 
 ## Requirements
@@ -55,10 +57,6 @@ We have tested this implementation on the following versions of PyTorch:
 If one wants to use `DTensor` which leads to memory savings, please set the hidden default `use_dtensor = True` under `allocate_distributed_tensor` in `shampoo_dist_utils.py`. (This is on by default.) Requires PyTorch 2 nightly build.
 
 Note: We have observed known instabilities with the `torch.linalg.eigh` operator on CUDA 11.6-11.8, specifically for low-rank matrices, which may appear with using a small `start_preconditioning_step`. Please avoid these versions of CUDA if possible.
-
-## Known Issues
-
-- External checkpointing support for `DTensor` is ongoing.
 
 ## How to Use
 
@@ -229,6 +227,38 @@ optimizer = DistributedShampoo(
     grafting_beta2=0.999,
 )
 ```
+
+## Checkpointing Support
+
+To checkpoint Distributed Shampoo, we have to use the `torch.distributed.checkpoint` solution with `DTensor`. *Note that we do not currently support the standard PyTorch checkpointing solution because it cannot handle storing process groups or `DTensor` by default.* We have therefore disabled `state_dict` and `load_state_dict` and instead rely on `distributed_state_dict` and `load_distributed_state_dict` instead.
+
+Distributed checkpointing requires a fully-qualified name (FQN) mapping for each parameter, unlike the identifier used in `torch.optim.Optimizer`. The easiest way to handle this requirement is to use the model's `named_parameters()` function and pass this as the `key_to_param` argument of `distributed_state_dict` and `load_distributed_state_dict`.
+
+Given a `CHECKPOINT_DIR`, to store the checkpoint:
+```
+import torch.distributed.checkpoint as dist_checkpoint
+
+state_dict = {
+    "model": model.state_dict(),
+    "optim": optimizer.distributed_state_dict(key_to_param=model.named_parameters()),
+}
+dist_checkpoint.save_state_dict(
+    state_dict=state_dict,
+    storage_writer=dist_checkpoint.FileSystemWriter(CHECKPOINT_DIR),
+)
+```
+
+To load the checkpoint:
+```
+dist_checkpoint.load_state_dict(
+    state_dict=state_dict,
+    storage_reader=dist_checkpoint.FileSystemReader(CHECKPOINT_DIR),
+)
+model.load_state_dict(state_dict["model"])
+optimizer.load_distributed_state_dict(state_dict["optim"], key_to_param=model.named_parameters())
+```
+
+You can also refer to `multi_gpu_cifar10_example.py` as an example.
 
 ## Hyperparameter Tuning
 
