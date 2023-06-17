@@ -37,6 +37,7 @@ from distributed_shampoo.shampoo_utils import (
     AdamGrafting,
     AdamNormalizedGrafting,
     BlockShampooPreconditioner,
+    CommunicationDType,
     convex_split,
     DistributedPreconditioner,
     GraftingType,
@@ -198,8 +199,21 @@ class DistributedPreconditionerTest(unittest.TestCase):
     @spawn_threads_and_init_comms(world_size=4)
     def test_get_dist_buffer_size(self):
         param, _ = self._setup_test(group=None, group_source_rank=0, dist_buffer=None)
-        actual_buffer_size = DistributedPreconditioner.get_dist_buffer_size(param)
-        self.assertEqual(actual_buffer_size, 8)
+        for comm_dtype in [
+            CommunicationDType.DEFAULT,
+            CommunicationDType.FP32,
+            CommunicationDType.FP16,
+            CommunicationDType.BF16,
+        ]:
+            actual_buffer_size = DistributedPreconditioner.get_dist_buffer_size(
+                param, comm_dtype
+            )
+            self.assertEqual(
+                actual_buffer_size,
+                8
+                if comm_dtype in [CommunicationDType.DEFAULT, CommunicationDType.FP32]
+                else 4,
+            )
 
     @spawn_threads_and_init_comms(world_size=4)
     def test_get_from_dist_buffer(self):
@@ -260,7 +274,7 @@ class AdagradPreconditionerTest(unittest.TestCase):
         precond_sol = grad ** torch.tensor(2)
         precond_sol = precond_sol if beta2 == 1.0 else (1.0 - beta2) * precond_sol
         bias_correction2 = torch.tensor(1.0 if not use_bias_correction else 1.0 - beta2)
-        adagrad.update_preconditioners(grad, torch.tensor(1))
+        adagrad.update_preconditioners(grad, 1)
 
         with self.subTest("Test preconditioner"):
             torch.testing.assert_close(
@@ -288,7 +302,7 @@ class AdagradPreconditionerTest(unittest.TestCase):
         param, loss, grad, adagrad = self._setup_test(
             beta2=1.0, epsilon=1.0, use_bias_correction=False
         )
-        preconditioned_grad = adagrad.precondition(grad, torch.tensor(1))
+        preconditioned_grad = adagrad.precondition(grad, 1)
         torch.testing.assert_close(preconditioned_grad, grad)
 
     @spawn_threads_and_init_comms(world_size=4)
@@ -296,8 +310,8 @@ class AdagradPreconditionerTest(unittest.TestCase):
         param, loss, grad, adagrad = self._setup_test(
             beta2=1.0, epsilon=0.0, use_bias_correction=False
         )
-        adagrad.update_preconditioners(grad, torch.tensor(1))
-        preconditioned_grad = adagrad.precondition(grad, torch.tensor(1))
+        adagrad.update_preconditioners(grad, 1)
+        preconditioned_grad = adagrad.precondition(grad, 1)
         torch.testing.assert_close(preconditioned_grad, torch.ones(2))
 
     @spawn_threads_and_init_comms(world_size=4)
@@ -305,7 +319,7 @@ class AdagradPreconditionerTest(unittest.TestCase):
         param, loss, grad, adagrad = self._setup_test(
             beta2=1.0, epsilon=1.0, use_bias_correction=False
         )
-        norm = adagrad.compute_norm(grad, torch.tensor(1))
+        norm = adagrad.compute_norm(grad, 1)
         torch.testing.assert_close(norm, torch.sqrt(torch.tensor(20.0)))
 
     @spawn_threads_and_init_comms(world_size=4)
@@ -313,19 +327,9 @@ class AdagradPreconditionerTest(unittest.TestCase):
         param, loss, grad, adagrad = self._setup_test(
             beta2=1.0, epsilon=0.0, use_bias_correction=False
         )
-        adagrad.update_preconditioners(grad, torch.tensor(1))
-        norm = adagrad.compute_norm(grad, torch.tensor(1))
+        adagrad.update_preconditioners(grad, 1)
+        norm = adagrad.compute_norm(grad, 1)
         torch.testing.assert_close(norm, torch.sqrt(torch.tensor(2.0)))
-
-    @spawn_threads_and_init_comms(world_size=4)
-    def test_to(self) -> None:
-        _, _, _, adagrad = self._setup_test(
-            beta2=1.0, epsilon=0.0, use_bias_correction=False
-        )
-        try:
-            adagrad.to(torch.device("cpu"))
-        except Exception:
-            self.fail(".to() raised Exception!")
 
     @spawn_threads_and_init_comms(world_size=4)
     def test_preconditioned_grad_to_dist_buffer(self):
@@ -337,7 +341,7 @@ class AdagradPreconditionerTest(unittest.TestCase):
             group_source_rank=0,
             dist_buffer=expected_dist_buffer,
         )
-        preconditioner.preconditioned_grad_to_dist_buffer(grad, torch.tensor(1))
+        preconditioner.preconditioned_grad_to_dist_buffer(grad, 1)
         torch.testing.assert_close(
             preconditioner._dist_buffer,
             grad if dist.get_rank() == 0 else torch.zeros(2),
@@ -482,7 +486,7 @@ class ShampooPreconditionerTest(unittest.TestCase):
             param @ param.transpose(0, 1),
             torch.linalg.norm(param, dim=0).pow(2),
         ]
-        shampoo.update_preconditioners(grad, torch.tensor(1))
+        shampoo.update_preconditioners(grad, 1)
 
         for i, (preconditioner, preconditioner_sol) in enumerate(
             zip(shampoo._preconditioners, preconditioner_sols)
@@ -522,7 +526,7 @@ class ShampooPreconditionerTest(unittest.TestCase):
             use_bias_correction=False,
             start_preconditioning_step=-1,
         )
-        preconditioned_grad = shampoo.precondition(grad, torch.tensor(1))
+        preconditioned_grad = shampoo.precondition(grad, 1)
         torch.testing.assert_close(preconditioned_grad, torch.zeros((2, 3)))
 
     @spawn_threads_and_init_comms(world_size=4)
@@ -534,7 +538,7 @@ class ShampooPreconditionerTest(unittest.TestCase):
             start_preconditioning_step=-1,
         )
         shampoo.compute_root_inverse()
-        preconditioned_grad = shampoo.precondition(grad, torch.tensor(1))
+        preconditioned_grad = shampoo.precondition(grad, 1)
         torch.testing.assert_close(preconditioned_grad, grad)
 
     @spawn_threads_and_init_comms(world_size=4)
@@ -543,7 +547,7 @@ class ShampooPreconditionerTest(unittest.TestCase):
             beta2=1.0, epsilon=1.0, use_bias_correction=False, diagonal_threshold=2
         )
         shampoo.compute_root_inverse()
-        preconditioned_grad = shampoo.precondition(grad, torch.tensor(1))
+        preconditioned_grad = shampoo.precondition(grad, 1)
         torch.testing.assert_close(preconditioned_grad, grad)
 
     @spawn_threads_and_init_comms(world_size=4)
@@ -556,7 +560,7 @@ class ShampooPreconditionerTest(unittest.TestCase):
             grafting_epsilon=1.0,
         )
         shampoo.compute_root_inverse()
-        preconditioned_grad = shampoo.precondition(grad, torch.tensor(1))
+        preconditioned_grad = shampoo.precondition(grad, 1)
         torch.testing.assert_close(preconditioned_grad, grad)
 
     @spawn_threads_and_init_comms(world_size=4)
@@ -570,7 +574,7 @@ class ShampooPreconditionerTest(unittest.TestCase):
             grafting_epsilon=1.0,
         )
         shampoo.compute_root_inverse()
-        preconditioned_grad = shampoo.precondition(grad, torch.tensor(1))
+        preconditioned_grad = shampoo.precondition(grad, 1)
         torch.testing.assert_close(preconditioned_grad, grad)
 
     @spawn_threads_and_init_comms(world_size=4)
@@ -579,18 +583,8 @@ class ShampooPreconditionerTest(unittest.TestCase):
             beta2=1.0, epsilon=1.0, use_bias_correction=False, diagonal_threshold=2
         )
         shampoo.compute_root_inverse()
-        norm = shampoo.compute_norm(grad, torch.tensor(1))
+        norm = shampoo.compute_norm(grad, 1)
         torch.testing.assert_close(norm, torch.sqrt(torch.tensor(55.0)))
-
-    @spawn_threads_and_init_comms(world_size=4)
-    def test_to(self) -> None:
-        _, _, _, shampoo = self._setup_test(
-            beta2=1.0, epsilon=1.0, use_bias_correction=False, diagonal_threshold=2
-        )
-        try:
-            shampoo.to(torch.device("cpu"))
-        except Exception:
-            self.fail(".to() raised Exception!")
 
     @spawn_threads_and_init_comms(world_size=4)
     def test_reset_preconditioners(self) -> None:
@@ -633,11 +627,11 @@ class ShampooPreconditionerTest(unittest.TestCase):
         grad_1 = torch.zeros_like(grad)
         grad_1[0, 0] = 1
         grad_1[1, 1] = 1
-        shampoo.update_preconditioners(grad_1, torch.tensor(1))
+        shampoo.update_preconditioners(grad_1, 1)
 
         grad_2 = torch.zeros_like(grad)
         grad_2[1, 2] = 2
-        shampoo.update_preconditioners(grad_2, torch.tensor(1))
+        shampoo.update_preconditioners(grad_2, 1)
 
         shampoo.compute_root_inverse()
         left_root_inverse = torch.diag(torch.tensor([1.0, 1.0 / math.sqrt(5.0)]))
@@ -655,7 +649,7 @@ class ShampooPreconditionerTest(unittest.TestCase):
             )
 
         true_preconditioned_grad = left_root_inverse @ grad @ right_root_inverse
-        preconditioned_grad = shampoo.precondition(grad, torch.tensor(1))
+        preconditioned_grad = shampoo.precondition(grad, 1)
         with self.subTest("Test preconditioned grad"):
             torch.testing.assert_close(preconditioned_grad, true_preconditioned_grad)
 
@@ -667,7 +661,7 @@ class ShampooPreconditionerTest(unittest.TestCase):
             use_bias_correction=False,
             diagonal_threshold=2,
         )
-        shampoo.update_preconditioners(grad, torch.tensor(1))
+        shampoo.update_preconditioners(grad, 1)
         shampoo.compute_root_inverse()
         relative_errors, relative_residuals = shampoo.compute_root_inverse_residuals()
         torch.testing.assert_close(
@@ -694,7 +688,7 @@ class ShampooPreconditionerTest(unittest.TestCase):
             use_protected_eigh=False,
         )
         preconditioner.compute_root_inverse()
-        preconditioner.preconditioned_grad_to_dist_buffer(grad, torch.tensor(1))
+        preconditioner.preconditioned_grad_to_dist_buffer(grad, 1)
         torch.testing.assert_close(
             preconditioner._dist_buffer,
             grad,
@@ -742,7 +736,7 @@ class ShampooPreconditionerTest(unittest.TestCase):
                     )
                 )
 
-    @mock.patch("distributed_shampoo.shampoo_utils.matrix_inverse_root")
+    @mock.patch("hpc.trainer.shampoo_utils.matrix_inverse_root")
     def test_use_protected_eigh_disabled(self, mock_matrix_root: mock.Mock):
         _, _, _, shampoo = self._setup_test(
             beta2=1.0,
@@ -755,7 +749,7 @@ class ShampooPreconditionerTest(unittest.TestCase):
             shampoo.compute_root_inverse()
         mock_matrix_root.assert_called_once()
 
-    @mock.patch("distributed_shampoo.shampoo_utils.matrix_inverse_root")
+    @mock.patch("hpc.trainer.shampoo_utils.matrix_inverse_root")
     def test_use_protected_eigh_enabled(self, mock_matrix_root: mock.Mock):
         _, _, _, shampoo = self._setup_test(
             beta2=1.0,
@@ -774,7 +768,7 @@ class ShampooPreconditionerTest(unittest.TestCase):
             )
         self.assertEqual(mock_matrix_root.call_count, 2)
 
-    @mock.patch("distributed_shampoo.shampoo_utils.matrix_inverse_root")
+    @mock.patch("hpc.trainer.shampoo_utils.matrix_inverse_root")
     def test_raise_inf_in_compute_root_inverse(self, mock_matrix_root: mock.Mock):
         _, _, _, shampoo = self._setup_test(
             beta2=1.0,
@@ -788,7 +782,7 @@ class ShampooPreconditionerTest(unittest.TestCase):
             shampoo.compute_root_inverse()
         mock_matrix_root.assert_called_once()
 
-    @mock.patch("distributed_shampoo.shampoo_utils.matrix_inverse_root")
+    @mock.patch("hpc.trainer.shampoo_utils.matrix_inverse_root")
     def test_raise_nan_in_compute_root_inverse(self, mock_matrix_root: mock.Mock):
         _, _, _, shampoo = self._setup_test(
             beta2=1.0,
@@ -801,6 +795,23 @@ class ShampooPreconditionerTest(unittest.TestCase):
         ):
             shampoo.compute_root_inverse()
         mock_matrix_root.assert_called_once()
+
+    def test_get_root_from_exponent_override(self):
+        with self.subTest("Test integer case:"):
+            self.assertEqual(
+                ShampooPreconditioner._get_root_from_exponent_override(2, 2), 2
+            )
+
+        with self.subTest("Test integer list case:"):
+            self.assertEqual(
+                ShampooPreconditioner._get_root_from_exponent_override([2, 3], 1), 2
+            )
+            self.assertEqual(
+                ShampooPreconditioner._get_root_from_exponent_override([2, 3], 2), 3
+            )
+            self.assertEqual(
+                ShampooPreconditioner._get_root_from_exponent_override([2, 3], 3), 6
+            )
 
 
 class BlockShampooPreconditionerTest(unittest.TestCase):
@@ -875,7 +886,7 @@ class BlockShampooPreconditionerTest(unittest.TestCase):
     @spawn_threads_and_init_comms(world_size=4)
     def test_update_preconditioners(self):
         _, _, grad, block_shampoo = self._setup_test()
-        block_shampoo.update_preconditioners(grad, torch.tensor(1))
+        block_shampoo.update_preconditioners(grad, 1)
         actual_factor_matrix_list = [
             use_local_tensor(preconditioner._preconditioners[0].factor_matrix)
             for preconditioner in block_shampoo._split_preconditioners
@@ -897,7 +908,7 @@ class BlockShampooPreconditionerTest(unittest.TestCase):
             use_bias_correction=False,
             start_preconditioning_step=-1,
         )
-        preconditioned_grad = block_shampoo.precondition(grad, torch.tensor(1))
+        preconditioned_grad = block_shampoo.precondition(grad, 1)
         torch.testing.assert_close(preconditioned_grad, torch.zeros(5))
 
     @spawn_threads_and_init_comms(world_size=4)
@@ -909,7 +920,7 @@ class BlockShampooPreconditionerTest(unittest.TestCase):
             start_preconditioning_step=-1,
         )
         block_shampoo.compute_root_inverse()
-        preconditioned_grad = block_shampoo.precondition(grad, torch.tensor(1))
+        preconditioned_grad = block_shampoo.precondition(grad, 1)
         torch.testing.assert_close(preconditioned_grad, grad)
 
     @spawn_threads_and_init_comms(world_size=4)
@@ -922,7 +933,7 @@ class BlockShampooPreconditionerTest(unittest.TestCase):
             grafting_epsilon=1.0,
         )
         block_shampoo.compute_root_inverse()
-        preconditioned_grad = block_shampoo.precondition(grad, torch.tensor(1))
+        preconditioned_grad = block_shampoo.precondition(grad, 1)
         torch.testing.assert_close(preconditioned_grad, grad)
 
     @spawn_threads_and_init_comms(world_size=4)
@@ -936,7 +947,7 @@ class BlockShampooPreconditionerTest(unittest.TestCase):
             grafting_epsilon=1.0,
         )
         block_shampoo.compute_root_inverse()
-        preconditioned_grad = block_shampoo.precondition(grad, torch.tensor(1))
+        preconditioned_grad = block_shampoo.precondition(grad, 1)
         torch.testing.assert_close(preconditioned_grad, grad)
 
     @spawn_threads_and_init_comms(world_size=4)
@@ -948,21 +959,8 @@ class BlockShampooPreconditionerTest(unittest.TestCase):
             start_preconditioning_step=-1,
         )
         block_shampoo.compute_root_inverse()
-        norm = block_shampoo.compute_norm(grad, torch.tensor(1))
+        norm = block_shampoo.compute_norm(grad, 1)
         torch.testing.assert_close(norm, torch.sqrt(torch.tensor(55.0)))
-
-    @spawn_threads_and_init_comms(world_size=4)
-    def test_to(self) -> None:
-        _, _, _, block_shampoo = self._setup_test(
-            beta2=1.0,
-            epsilon=1.0,
-            use_bias_correction=False,
-            start_preconditioning_step=-1,
-        )
-        try:
-            block_shampoo.to(torch.device("cpu"))
-        except Exception:
-            self.fail(".to() raised Exception!")
 
     @spawn_threads_and_init_comms(world_size=4)
     def test_reset_preconditioners(self) -> None:
@@ -972,7 +970,7 @@ class BlockShampooPreconditionerTest(unittest.TestCase):
             use_bias_correction=False,
             start_preconditioning_step=-1,
         )
-        block_shampoo.update_preconditioners(grad, torch.tensor(1))
+        block_shampoo.update_preconditioners(grad, 1)
         block_shampoo.reset_preconditioners()
         for shampoo_preconditioner in block_shampoo._split_preconditioners:
             for kronecker_factor in shampoo_preconditioner._preconditioners:
@@ -994,7 +992,7 @@ class BlockShampooPreconditionerTest(unittest.TestCase):
             use_bias_correction=False,
             start_preconditioning_step=-1,
         )
-        block_shampoo.update_preconditioners(grad, torch.tensor(1))
+        block_shampoo.update_preconditioners(grad, 1)
         block_shampoo.compute_root_inverse()
         (
             relative_errors,
@@ -1015,11 +1013,29 @@ class BlockShampooPreconditionerTest(unittest.TestCase):
 
     def test_get_dist_buffer_sizes(self):
         param = torch.tensor([1.0, 2.0, 3.0, 4.0, 5.0])
-        actual_dist_buffer_sizes = BlockShampooPreconditioner.get_dist_buffer_sizes(
-            param, block_size=2, use_merge_dims=True
-        )
-        expected_dist_buffer_sizes = [8, 8, 4]
-        self.assertEqual(actual_dist_buffer_sizes, expected_dist_buffer_sizes)
+        for comm_dtype in [
+            CommunicationDType.DEFAULT,
+            CommunicationDType.FP32,
+            CommunicationDType.FP16,
+            CommunicationDType.BF16,
+        ]:
+            actual_dist_buffer_sizes = BlockShampooPreconditioner.get_dist_buffer_sizes(
+                param,
+                block_size=2,
+                use_merge_dims=True,
+                communication_dtype=comm_dtype,
+            )
+            elem_nbytes = (
+                4
+                if comm_dtype in [CommunicationDType.DEFAULT, CommunicationDType.FP32]
+                else 2
+            )
+            expected_dist_buffer_sizes = [
+                2 * elem_nbytes,
+                2 * elem_nbytes,
+                1 * elem_nbytes,
+            ]
+            self.assertEqual(actual_dist_buffer_sizes, expected_dist_buffer_sizes)
 
     @spawn_threads_and_init_comms(world_size=4)
     def test_preconditioned_grad_to_dist_buffer(self):
@@ -1028,7 +1044,7 @@ class BlockShampooPreconditionerTest(unittest.TestCase):
         for preconditioner in block_shampoo._split_preconditioners:
             preconditioner._on_source_rank = True
         block_shampoo.compute_root_inverse()
-        block_shampoo.preconditioned_grad_to_dist_buffer(grad, torch.tensor(1))
+        block_shampoo.preconditioned_grad_to_dist_buffer(grad, 1)
         for split_grad, preconditioner in zip(
             block_shampoo.combine_and_split_dims(grad),
             block_shampoo._split_preconditioners,
@@ -1106,21 +1122,14 @@ class SGDGraftingTest(unittest.TestCase):
 
     def test_precondition(self):
         grafting, grad = self._setup_test()
-        torch.testing.assert_close(grafting.precondition(grad, torch.tensor(1)), grad)
+        torch.testing.assert_close(grafting.precondition(grad, 1), grad)
 
     def test_direction_norm(self):
         grafting, grad = self._setup_test()
         torch.testing.assert_close(
-            grafting.direction_norm(grad, torch.tensor(1)),
+            grafting.direction_norm(grad, 1),
             torch.sqrt(torch.tensor(5.0)),
         )
-
-    def test_to(self) -> None:
-        grafting, _ = self._setup_test()
-        try:
-            grafting.to(torch.device("cpu"))
-        except Exception:
-            self.fail(".to() raised Exception!")
 
 
 class AdagradGraftingTest(unittest.TestCase):
@@ -1138,29 +1147,21 @@ class AdagradGraftingTest(unittest.TestCase):
     def test_update_preconditioners(self):
         grafting, grad = self._setup_test()
         try:
-            grafting.update_preconditioners(grad, torch.tensor(1))
+            grafting.update_preconditioners(grad, 1)
         except Exception:
             self.fail(".update_preconditioners raised Exception!")
 
     @spawn_threads_and_init_comms(world_size=4)
     def test_precondition(self):
         grafting, grad = self._setup_test()
-        torch.testing.assert_close(grafting.precondition(grad, torch.tensor(1)), grad)
+        torch.testing.assert_close(grafting.precondition(grad, 1), grad)
 
     @spawn_threads_and_init_comms(world_size=4)
     def test_direction_norm(self):
         grafting, grad = self._setup_test()
         torch.testing.assert_close(
-            grafting.direction_norm(grad, torch.tensor(1)), torch.linalg.norm(grad)
+            grafting.direction_norm(grad, 1), torch.linalg.norm(grad)
         )
-
-    @spawn_threads_and_init_comms(world_size=4)
-    def test_to(self):
-        grafting, _ = self._setup_test()
-        try:
-            grafting.to(torch.device("cpu"))
-        except Exception:
-            self.fail(".to() raised Exception!")
 
     @spawn_threads_and_init_comms(world_size=4)
     def test_normalize_grad(self):

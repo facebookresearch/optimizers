@@ -51,10 +51,21 @@ class GraftingType(enum.Enum):
     ADAM_NORMALIZED = 7
 
 
+class CommunicationDType(enum.Enum):
+    DEFAULT = 0
+    FP16 = 1
+    BF16 = 2
+    FP32 = 3
+
+
 class LargeDimMethod(enum.Enum):
     DIAGONAL = 0
     ADAGRAD = 1
     BLOCKING = 2
+
+
+# DType mapping for quantized communications.
+dtype_mapping = {0: "DEFAULT", 1: torch.float16, 2: torch.bfloat16, 3: torch.float32}
 
 
 ###### MERGING AND BLOCKING HELPER FUNCTIONS ######
@@ -143,21 +154,18 @@ class Preconditioner(OptimizerModule):
         self._parameter_count = 0
         self._dims = list(param.size())
 
-    def update_preconditioners(self, grad: Tensor, iteration: Tensor) -> None:
+    def update_preconditioners(self, grad: Tensor, iteration: int) -> None:
         pass
 
-    def precondition(self, grad: Tensor, iteration: Tensor) -> Tensor:
+    def precondition(self, grad: Tensor, iteration: int) -> Tensor:
         pass
 
-    def compute_norm(self, grad: Tensor, iteration: Tensor) -> Tensor:
+    def compute_norm(self, grad: Tensor, iteration: int) -> Tensor:
         pass
 
     @property
     def parameter_count(self) -> int:
         return self._parameter_count
-
-    def to(self, device: Union[None, torch.device] = None):
-        pass
 
 
 class DistributedPreconditioner(Preconditioner):
@@ -170,6 +178,7 @@ class DistributedPreconditioner(Preconditioner):
         group (Optional[dist.ProcessGroup]): Process group for distributed computation. (Default: None)
         group_source_rank (int): Source rank (or owner) of preconditioner data. (Default: 0)
         dist_buffer (Optional[Tensor]): Distributed buffer for distributed computation. (Default: None)
+        communication_dtype (CommunicationDType): Datatype for communication between ranks. (Default: DEFAULT)
 
     """
 
@@ -179,6 +188,7 @@ class DistributedPreconditioner(Preconditioner):
         group: Optional[dist.ProcessGroup] = None,
         group_source_rank: int = 0,
         dist_buffer: Optional[Tensor] = None,
+        communication_dtype: CommunicationDType = CommunicationDType.DEFAULT,
     ):
         super(DistributedPreconditioner, self).__init__(param)
 
@@ -196,12 +206,18 @@ class DistributedPreconditioner(Preconditioner):
         # Initializes distributed buffer if dist_buffer is provided;
         # otherwise, sets to default values.
         if dist_buffer is not None:
-            requested_dist_buffer_size = self.get_dist_buffer_size(param)
+            requested_dist_buffer_size = self.get_dist_buffer_size(
+                param, communication_dtype
+            )
 
             # We ignore the remainder chunk.
             self._dist_buffer = (
                 dist_buffer.split(requested_dist_buffer_size)[0]
-                .view(param.dtype)
+                .view(
+                    param.dtype
+                    if communication_dtype == CommunicationDType.DEFAULT
+                    else dtype_mapping[communication_dtype.value]
+                )
                 .view(param.shape)
             )
 
@@ -217,23 +233,27 @@ class DistributedPreconditioner(Preconditioner):
         self._device_mesh_ranks = [
             *range(group_source_rank % group_size, global_size, group_size)
         ]
-        logger.info(f"Device Mesh Ranks: {self._device_mesh_ranks}")
 
     def combine_and_split_dims(self, p: Tensor) -> List[Tensor]:
         return [p]
 
     @staticmethod
-    def get_dist_buffer_size(param) -> int:
+    def get_dist_buffer_size(param, communication_dtype: CommunicationDType) -> int:
         # Get the buffer size in bytes
-        return int(math.prod(param.shape) * get_dtype_size(param.dtype))
+        return int(
+            math.prod(param.shape)
+            * get_dtype_size(
+                param.dtype
+                if communication_dtype == CommunicationDType.DEFAULT
+                else dtype_mapping[communication_dtype.value]
+            )
+        )
 
     @property
     def on_source_rank(self) -> bool:
         return self._on_source_rank
 
-    def preconditioned_grad_to_dist_buffer(
-        self, grad: Tensor, iteration: Tensor
-    ) -> None:
+    def preconditioned_grad_to_dist_buffer(self, grad: Tensor, iteration: int) -> None:
         if self._on_source_rank and self._dist_buffer is not None:
             self._dist_buffer.copy_(self.precondition(grad, iteration))
 
@@ -270,6 +290,7 @@ class AdagradPreconditioner(DistributedPreconditioner):
         group_source_rank (int): Group rank assigned to preconditioner. (Default: 0)
         dist_buffer (Optional[Tensor]): Buffer for distributed computation. (Default: None)
         use_dtensor (bool): Flag for using DTensor. Requires PyTorch 2 nightly. Otherwise, uses Tensor. (Default: True)
+        communication_dtype (CommunicationDType): Datatype for communication between ranks. (Default: DEFAULT)
 
     """
 
@@ -284,9 +305,10 @@ class AdagradPreconditioner(DistributedPreconditioner):
         group_source_rank: int = 0,
         dist_buffer: Optional[Tensor] = None,
         use_dtensor: bool = True,
+        communication_dtype: CommunicationDType = CommunicationDType.DEFAULT,
     ):
         super(AdagradPreconditioner, self).__init__(
-            param, group, group_source_rank, dist_buffer
+            param, group, group_source_rank, dist_buffer, communication_dtype
         )
         self._beta2 = beta2
         self._epsilon = epsilon
@@ -308,7 +330,7 @@ class AdagradPreconditioner(DistributedPreconditioner):
                 f"Diagonal Adagrad Preconditioner {self._preconditioner_idx} with Parameter {self._idx}"
             )
 
-    def update_preconditioners(self, grad: Tensor, iteration: Tensor) -> None:
+    def update_preconditioners(self, grad: Tensor, iteration: int) -> None:
         if not self._on_source_rank:
             return
 
@@ -322,7 +344,7 @@ class AdagradPreconditioner(DistributedPreconditioner):
         if self._use_bias_correction and self._beta2 < 1.0:
             self._bias_correction2 = 1.0 - self._beta2**iteration
 
-    def precondition(self, grad: Tensor, iteration: Tensor) -> Tensor:
+    def precondition(self, grad: Tensor, iteration: int) -> Tensor:
         if not self._on_source_rank:
             return grad
 
@@ -334,7 +356,7 @@ class AdagradPreconditioner(DistributedPreconditioner):
         grad.div_(denom)
         return grad
 
-    def compute_norm(self, grad: Tensor, iteration: Tensor):
+    def compute_norm(self, grad: Tensor, iteration: int):
         if not self._on_source_rank:
             return torch.as_tensor(1.0)  # return cheap tensor
 
@@ -372,11 +394,6 @@ class ShampooKroneckerFactor(OptimizerModule):
         self.index = index
         self.is_diagonal = is_diagonal
 
-    def to(self, device):
-        self.factor_matrix = self.factor_matrix.to(device)
-        if self.inv_factor_matrix is not None:
-            self.inv_factor_matrix = self.inv_factor_matrix.to(device)
-
 
 class ShampooPreconditioner(DistributedPreconditioner):
     """Shampoo preconditioners for some generic layer.
@@ -387,14 +404,18 @@ class ShampooPreconditioner(DistributedPreconditioner):
         param (Tensor): Parameter of interest.
         beta2 (float): Exponential moving average factor. If beta2 = 1., will use Adagrad update. (Default: 1.0)
         epsilon (float): Epsilon term for regularizing preconditioner to ensure positive definiteness. (Default: 1e-12)
-        exponent_override (int): Exponent override for taking the root of the matrix. If exponent_override = 0, uses
-            2 * order of the tensor. (Default: 0)
-        exponent_multiplier (float): Exponent multiplier to be multiplied to the numerator of the inverse root. (Default: 1.0)
+        exponent_override (int, List[int]): inverse root to use in Shampoo. If a list [l1, l2, ..., lp], then we will
+            use -1 / l1 for 1-D tensor (vectors), -1 / l2 for 2-D tensors (matrices), and so on. If the order of the
+            tensor exceeds the length of the list, we revert to using the default value. If 0 is used, uses the default
+            inverse root -1 / (2 * o), where o is the order of the tensor. (Default: 0)
+        exponent_multiplier (float): number to be multiplied to the numerator of the inverse root, i.e., eta where the
+            exponent is -eta / (2 * p). (Default: 1.0)
         use_bias_correction (bool): Flag for using bias correction. (Default: True)
         diagonal_threshold (int): Threshold for using diagonal preconditioners. If None, disabled. (Default: None)
         dtype (torch.dtype): Data type for accumulating and computing root inverse of preconditioners. (Default: torch.float)
         idx (Union[None, int, str]): Layer index (for logging purposes). (Default: None)
-        start_preconditioning_step (int): initial delay before starting to compute root inverse. Applies grafting method beforehand. (default: 0)
+        start_preconditioning_step (int): initial delay before starting to compute root inverse. Applies grafting method
+            beforehand. (default: 0)
         grafting_type (GraftingType): Selects grafting method. (Default: GraftingType.NONE)
         grafting_beta2 (float): Exponential moving average factor for grafting method. (Default: 1.0)
         grafting_epsilon (float): Epsilon for grafting method. (Default: 1e-3)
@@ -406,6 +427,7 @@ class ShampooPreconditioner(DistributedPreconditioner):
             2. Attempts to recompute the eigendecomposition if using lower-precision fails.
             3. Otherwise, re-uses previous inverse factor matrix when both root inverse computations fail.
         use_dtensor (bool): Flag for using DTensor. Requires PyTorch 2 nightly. Otherwise, uses Tensor. (Default: True)
+        communication_dtype (CommunicationDType): Datatype for communication between ranks. (Default: DEFAULT)
 
     """
 
@@ -414,7 +436,7 @@ class ShampooPreconditioner(DistributedPreconditioner):
         param,
         beta2: float = 1.0,
         epsilon: float = 1e-12,
-        exponent_override: int = 0,
+        exponent_override: Union[int, List[int]] = 0,
         exponent_multiplier: float = 1.0,
         use_bias_correction: bool = True,
         diagonal_threshold: Union[None, int] = None,
@@ -429,9 +451,10 @@ class ShampooPreconditioner(DistributedPreconditioner):
         dist_buffer: Optional[Tensor] = None,
         use_protected_eigh: bool = True,
         use_dtensor: bool = True,
+        communication_dtype: CommunicationDType = CommunicationDType.DEFAULT,
     ):
         super(ShampooPreconditioner, self).__init__(
-            param, group, group_source_rank, dist_buffer
+            param, group, group_source_rank, dist_buffer, communication_dtype
         )
 
         # Initialize parameters.
@@ -448,10 +471,11 @@ class ShampooPreconditioner(DistributedPreconditioner):
         self._grafting_type = grafting_type
         self._start_preconditioning_step = start_preconditioning_step
         self._use_protected_eigh = use_protected_eigh
+        self._communication_dtype = communication_dtype
 
         # Compute root.
-        self._root = (
-            2 * self._order if self._exponent_override == 0 else self._exponent_override
+        self._root = self._get_root_from_exponent_override(
+            self._exponent_override, self._order
         )
 
         # Initialize lists for preconditioners, inverse preconditioners, types, and ranks.
@@ -527,6 +551,7 @@ class ShampooPreconditioner(DistributedPreconditioner):
                 group_source_rank=group_source_rank,
                 dist_buffer=dist_buffer,
                 use_dtensor=use_dtensor,
+                communication_dtype=communication_dtype,
             )
         elif self._grafting_type == GraftingType.RMSPROP:
             self._grafting = RMSPropGrafting(
@@ -537,6 +562,7 @@ class ShampooPreconditioner(DistributedPreconditioner):
                 group_source_rank=group_source_rank,
                 dist_buffer=dist_buffer,
                 use_dtensor=use_dtensor,
+                communication_dtype=communication_dtype,
             )
         elif self._grafting_type == GraftingType.ADAM:
             self._grafting = AdamGrafting(
@@ -547,6 +573,7 @@ class ShampooPreconditioner(DistributedPreconditioner):
                 group_source_rank=group_source_rank,
                 dist_buffer=dist_buffer,
                 use_dtensor=use_dtensor,
+                communication_dtype=communication_dtype,
             )
         elif self._grafting_type == GraftingType.ADAGRAD_NORMALIZED:
             self._grafting = AdagradNormalizedGrafting(
@@ -556,6 +583,7 @@ class ShampooPreconditioner(DistributedPreconditioner):
                 group_source_rank=group_source_rank,
                 dist_buffer=dist_buffer,
                 use_dtensor=use_dtensor,
+                communication_dtype=communication_dtype,
             )
         elif self._grafting_type == GraftingType.RMSPROP_NORMALIZED:
             self._grafting = RMSPropNormalizedGrafting(
@@ -566,6 +594,7 @@ class ShampooPreconditioner(DistributedPreconditioner):
                 group_source_rank=group_source_rank,
                 dist_buffer=dist_buffer,
                 use_dtensor=use_dtensor,
+                communication_dtype=communication_dtype,
             )
         elif self._grafting_type == GraftingType.ADAM_NORMALIZED:
             self._grafting = AdamNormalizedGrafting(
@@ -576,6 +605,7 @@ class ShampooPreconditioner(DistributedPreconditioner):
                 group_source_rank=group_source_rank,
                 dist_buffer=dist_buffer,
                 use_dtensor=use_dtensor,
+                communication_dtype=communication_dtype,
             )
         else:
             raise ValueError(f"Invalid Grafting Type {self._grafting_type}!")
@@ -583,7 +613,29 @@ class ShampooPreconditioner(DistributedPreconditioner):
         # Counts parameters for grafted method.
         self._parameter_count += getattr(self._grafting, "parameter_count", 0)
 
-    def update_preconditioners(self, grad: Tensor, iteration: Tensor) -> None:
+    @staticmethod
+    def _get_root_from_exponent_override(
+        exponent_override: Union[int, List[int]], order: int
+    ) -> int:
+        """Retrieves the appropriate root from the exponent override parameter.
+
+        Args:
+            exponent_override (int, List[int]): Exponent override int or list.
+            order (List[int]): Order of the tensor of interest.
+
+        Returns:
+            root (int): Root to use in Shampoo.
+
+        """
+        if isinstance(exponent_override, list):
+            if order > len(exponent_override):
+                return 2 * order
+            else:
+                return exponent_override[order - 1]
+        else:
+            return 2 * order if exponent_override == 0 else exponent_override
+
+    def update_preconditioners(self, grad: Tensor, iteration: int) -> None:
         if not self._on_source_rank:
             return
 
@@ -627,7 +679,7 @@ class ShampooPreconditioner(DistributedPreconditioner):
         if self._use_bias_correction and self._beta2 < 1.0:
             self._bias_correction2 = 1.0 - self._beta2**iteration
 
-    def _shampoo_precondition(self, grad: Tensor, iteration: Tensor) -> Tensor:
+    def _shampoo_precondition(self, grad: Tensor, iteration: int) -> Tensor:
         if not self._on_source_rank:
             return grad  # An invalid tensor that can be returned at the lowest cost.
 
@@ -680,7 +732,7 @@ class ShampooPreconditioner(DistributedPreconditioner):
 
         return preconditioned_grad
 
-    def _graft_precondition(self, grad: Tensor, iteration: Tensor) -> Tensor:
+    def _graft_precondition(self, grad: Tensor, iteration: int) -> Tensor:
         if not self._on_source_rank:
             return grad  # An invalid tensor that can be returned at the lowest cost.
         return (
@@ -689,7 +741,7 @@ class ShampooPreconditioner(DistributedPreconditioner):
             else grad
         )
 
-    def precondition(self, grad: Tensor, iteration: Tensor) -> Tensor:
+    def precondition(self, grad: Tensor, iteration: int) -> Tensor:
         return (
             self._graft_precondition
             if iteration < self._start_preconditioning_step
@@ -799,7 +851,7 @@ class ShampooPreconditioner(DistributedPreconditioner):
             relative_residuals,
         )
 
-    def compute_norm(self, grad: Tensor, iteration: Tensor) -> Tensor:
+    def compute_norm(self, grad: Tensor, iteration: int) -> Tensor:
         return torch.linalg.norm(self.precondition(grad, iteration))
 
     def to(self, device: Union[None, torch.device] = None):
@@ -826,14 +878,18 @@ class BlockShampooPreconditioner(DistributedPreconditioner):
         param (Tensor): Parameter of interest.
         beta2 (float): Exponential moving average factor. If beta2 = 1., will use Adagrad update. (Default: 1.0)
         epsilon (float): Epsilon term for regularizing preconditioner to ensure positive definiteness. (Default: 1e-12)
-        exponent_override (int): Exponent override for taking the root of the matrix. If exponent_override = 0, uses
-            2 * order of the tensor. (Default: 0)
-        exponent_multiplier (float): Exponent multiplier to be multiplied to the numerator of the inverse root. (Default: 1.0)
+        exponent_override (int, List[int]): inverse root to use in Shampoo. If a list [l1, l2, ..., lp], then we will
+            use -1 / l1 for 1-D tensor (vectors), -1 / l2 for 2-D tensors (matrices), and so on. If the order of the
+            tensor exceeds the length of the list, we revert to using the default value. If 0 is used, uses the default
+            inverse root -1 / (2 * o), where o is the order of the tensor. (Default: 0)
+        exponent_multiplier (float): number to be multiplied to the numerator of the inverse root, i.e., eta where the
+            exponent is -eta / (2 * p). (Default: 1.0)
         use_bias_correction (bool): Flag for using bias correction. (Default: True)
         block_size (int): Block size for blocking large tensors. (Default: 1024)
         dtype (torch.dtype): Data type for accumulating and computing root inverse of preconditioners. (Default: torch.float)
         idx (Union[None, int, str]): Layer index (for logging purposes). (Default: None)
         use_merge_dims (bool): Denotes whether or not dimensions are merged. (Default: True)
+        cache_split_params (bool): cache split parameters across iterations. (Default: False)
         start_preconditioning_step (int): initial delay before starting to compute root inverse. Applies grafting method beforehand. (Default: 0)
         grafting_type (LayerwiseGraftingType): Selects grafting method. (Default: GraftingType.NONE)
         grafting_beta2 (float): Exponential moving average factor for grafting method. (Default: 1.0)
@@ -848,6 +904,7 @@ class BlockShampooPreconditioner(DistributedPreconditioner):
             2. Attempts to recompute the eigendecomposition if using lower-precision fails.
             3. Otherwise, re-uses previous inverse factor matrix when both root inverse computations fail.
         use_dtensor (bool): Flag for using DTensor. Requires PyTorch 2 nightly. Otherwise, uses Tensor. (Default: True)
+        communication_dtype (CommunicationDType): Datatype for communication between ranks. (Default: DEFAULT)
 
     """
 
@@ -856,13 +913,14 @@ class BlockShampooPreconditioner(DistributedPreconditioner):
         param,
         beta2: float = 1.0,
         epsilon: float = 1e-12,
-        exponent_override: int = 0,
+        exponent_override: Union[int, List[int]] = 0,
         exponent_multiplier: float = 1.0,
         use_bias_correction: bool = True,
         block_size: int = 1024,
         dtype: torch.dtype = torch.float,
         idx: Union[None, int, str] = None,
         use_merge_dims: bool = True,
+        cache_split_params: bool = False,
         start_preconditioning_step: int = 0,
         grafting_type: GraftingType = GraftingType.NONE,
         grafting_beta2: float = 1.0,
@@ -872,6 +930,7 @@ class BlockShampooPreconditioner(DistributedPreconditioner):
         dist_buffer_index: int = 0,
         use_protected_eigh: bool = True,
         use_dtensor: bool = True,
+        communication_dtype: CommunicationDType = CommunicationDType.DEFAULT,
     ):
         super(BlockShampooPreconditioner, self).__init__(
             param,
@@ -888,6 +947,7 @@ class BlockShampooPreconditioner(DistributedPreconditioner):
         self._idx = idx
         self._start_preconditioning_step = start_preconditioning_step
         self._use_merge_dims = use_merge_dims
+        self._cache_split_params = cache_split_params
         self._original_dims = list(param.size())
         self._merged_dims = (
             merge_small_dims(self._original_dims, self._block_size)
@@ -902,6 +962,7 @@ class BlockShampooPreconditioner(DistributedPreconditioner):
         # Construct multiple preconditioners for each block
         self._split_preconditioners = []
         self._split_sizes = []
+        self._cached_split_params = []
 
         split_param = self.combine_and_split_dims(param)
         for i, p in enumerate(split_param):
@@ -930,6 +991,7 @@ class BlockShampooPreconditioner(DistributedPreconditioner):
                 dist_buffer=dist_buffer,
                 use_protected_eigh=use_protected_eigh,
                 use_dtensor=use_dtensor,
+                communication_dtype=communication_dtype,
             )
             self._split_preconditioners.append(preconditioner)
             self._parameter_count += preconditioner.parameter_count
@@ -954,7 +1016,7 @@ class BlockShampooPreconditioner(DistributedPreconditioner):
             else preconditioned_grad
         )
 
-    def update_preconditioners(self, grad: Tensor, iteration: Tensor):
+    def update_preconditioners(self, grad: Tensor, iteration: int):
         split_grad = self.combine_and_split_dims(grad)
         assert (
             len(split_grad) == self.num_preconditioners()
@@ -964,7 +1026,7 @@ class BlockShampooPreconditioner(DistributedPreconditioner):
         ):
             block_preconditioner.update_preconditioners(block_grad, iteration)
 
-    def precondition(self, grad: Tensor, iteration: Tensor) -> Tensor:
+    def precondition(self, grad: Tensor, iteration: int) -> Tensor:
         split_grad = self.combine_and_split_dims(grad)
         assert self.num_preconditioners() == len(
             split_grad
@@ -1004,17 +1066,15 @@ class BlockShampooPreconditioner(DistributedPreconditioner):
             relative_residuals,
         )
 
-    def compute_norm(self, grad: Tensor, iteration: Tensor) -> Tensor:
+    def compute_norm(self, grad: Tensor, iteration: int) -> Tensor:
         return torch.linalg.norm(self.precondition(grad, iteration))
-
-    def to(self, device: Union[None, torch.device] = None):
-        if device is not None:
-            for preconditioner in self._split_preconditioners:
-                preconditioner.to(device=device)
 
     @staticmethod
     def get_dist_buffer_sizes(
-        param, block_size: int, use_merge_dims: bool
+        param,
+        block_size: int,
+        use_merge_dims: bool,
+        communication_dtype: CommunicationDType,
     ) -> List[int]:
         original_dims = list(param.size())
         merged_dims = (
@@ -1026,13 +1086,11 @@ class BlockShampooPreconditioner(DistributedPreconditioner):
         if use_merge_dims:
             param = param.view(merged_dims)
         return [
-            ShampooPreconditioner.get_dist_buffer_size(split_param)
+            ShampooPreconditioner.get_dist_buffer_size(split_param, communication_dtype)
             for split_param in multi_dim_split(param, splits)
         ]
 
-    def preconditioned_grad_to_dist_buffer(
-        self, grad: Tensor, iteration: Tensor
-    ) -> None:
+    def preconditioned_grad_to_dist_buffer(self, grad: Tensor, iteration: int) -> None:
         split_grads = self.combine_and_split_dims(grad)
         assert self.num_preconditioners() == len(
             split_grads
@@ -1055,6 +1113,19 @@ class BlockShampooPreconditioner(DistributedPreconditioner):
 
     def num_preconditioners(self) -> int:
         return len(self._split_preconditioners)
+
+    def get_split_parameters(self, param: Tensor) -> List[Tensor]:
+        if self._cache_split_params:
+            if (
+                len(self._cached_split_params) == 0
+                or self._cached_split_params[0].storage().data_ptr()
+                != param.storage().data_ptr()
+            ):
+                # Cache new split parameters.
+                self._cached_split_params = self.combine_and_split_dims(param)
+            return self._cached_split_params
+        else:
+            return self.combine_and_split_dims(param)
 
     def reset_preconditioners(self) -> None:
         for preconditioner in self._split_preconditioners:
@@ -1081,21 +1152,18 @@ class Grafting(OptimizerModule):
         super(Grafting, self).__init__()
         self._parameter_count = 0
 
-    def update_preconditioners(self, grad: Tensor, iteration: Tensor):
+    def update_preconditioners(self, grad: Tensor, iteration: int):
         pass
 
-    def precondition(self, grad: Tensor, iteration: Tensor) -> Tensor:
+    def precondition(self, grad: Tensor, iteration: int) -> Tensor:
         pass
 
-    def direction_norm(self, grad: Tensor, iteration: Tensor) -> Tensor:
+    def direction_norm(self, grad: Tensor, iteration: int) -> Tensor:
         pass
 
     @property
     def parameter_count(self):
         return self._parameter_count
-
-    def to(self, device: Union[None, torch.device] = None):
-        return
 
 
 class SGDGrafting(Grafting):
@@ -1115,10 +1183,10 @@ class SGDGrafting(Grafting):
     ):
         super(SGDGrafting, self).__init__(param)
 
-    def precondition(self, grad: Tensor, iteration: Tensor) -> Tensor:
+    def precondition(self, grad: Tensor, iteration: int) -> Tensor:
         return grad
 
-    def direction_norm(self, grad: Tensor, iteration: Tensor) -> Tensor:
+    def direction_norm(self, grad: Tensor, iteration: int) -> Tensor:
         return torch.linalg.norm(grad)
 
 
@@ -1139,6 +1207,7 @@ class AdagradGrafting(Grafting):
         group_source_rank (int): Group rank assigned to preconditioner. (Default: 0)
         dist_buffer (Optional[Tensor]): Buffer for distributed computation. (Default: None)
         use_dtensor (bool): Flag for using DTensor. Requires PyTorch 2 nightly. Otherwise, uses Tensor. (Default: True)
+        communication_dtype (CommunicationDType): Datatype for communication between ranks. (Default: DEFAULT)
 
     """
 
@@ -1153,6 +1222,7 @@ class AdagradGrafting(Grafting):
         group_source_rank: int = 0,
         dist_buffer: Optional[Tensor] = None,
         use_dtensor: bool = True,
+        communication_dtype: CommunicationDType = CommunicationDType.DEFAULT,
     ):
         super(AdagradGrafting, self).__init__(param)
         self._preconditioner = AdagradPreconditioner(
@@ -1164,6 +1234,7 @@ class AdagradGrafting(Grafting):
             group_source_rank=group_source_rank,
             dist_buffer=dist_buffer,
             use_dtensor=use_dtensor,
+            communication_dtype=communication_dtype,
         )
         self.normalize_gradient = normalize_gradient
         self._parameter_count += self._preconditioner.parameter_count
@@ -1171,21 +1242,16 @@ class AdagradGrafting(Grafting):
     def _normalize_grad(self, grad: Tensor) -> Tensor:
         return grad / torch.norm(grad) if self.normalize_gradient else grad
 
-    def update_preconditioners(self, grad: Tensor, iteration: Tensor):
+    def update_preconditioners(self, grad: Tensor, iteration: int):
         self._preconditioner.update_preconditioners(
             self._normalize_grad(grad), iteration
         )
 
-    def precondition(self, grad: Tensor, iteration: Tensor) -> Tensor:
+    def precondition(self, grad: Tensor, iteration: int) -> Tensor:
         return self._preconditioner.precondition(grad, iteration)
 
-    def direction_norm(self, grad: Tensor, iteration: Tensor) -> Tensor:
+    def direction_norm(self, grad: Tensor, iteration: int) -> Tensor:
         return self._preconditioner.compute_norm(grad, iteration)
-
-    def to(self, device: Union[None, torch.device] = None):
-        if device is not None:
-            self._preconditioner.to(device=device)
-        return
 
 
 class RMSPropGrafting(AdagradGrafting):
@@ -1199,6 +1265,7 @@ class RMSPropGrafting(AdagradGrafting):
         group_source_rank (int): Group rank assigned to preconditioner. (Default: 0)
         dist_buffer (Optional[Tensor]): Buffer for distributed computation. (Default: None)
         use_dtensor (bool): Flag for using DTensor. Requires PyTorch 2 nightly. Otherwise, uses Tensor. (Default: True)
+        communication_dtype (CommunicationDType): Datatype for communication between ranks. (Default: DEFAULT)
 
     """
 
@@ -1211,6 +1278,7 @@ class RMSPropGrafting(AdagradGrafting):
         group_source_rank: int = 0,
         dist_buffer: Optional[Tensor] = None,
         use_dtensor: bool = True,
+        communication_dtype: CommunicationDType = CommunicationDType.DEFAULT,
     ):
         super(RMSPropGrafting, self).__init__(
             param=param,
@@ -1222,6 +1290,7 @@ class RMSPropGrafting(AdagradGrafting):
             group_source_rank=group_source_rank,
             dist_buffer=dist_buffer,
             use_dtensor=use_dtensor,
+            communication_dtype=communication_dtype,
         )
 
 
@@ -1236,6 +1305,7 @@ class AdamGrafting(AdagradGrafting):
         group_source_rank (int): Group rank assigned to preconditioner. (Default: 0)
         dist_buffer (Optional[Tensor]): Buffer for distributed computation. (Default: None)
         use_dtensor (bool): Flag for using DTensor. Requires PyTorch 2 nightly. Otherwise, uses Tensor. (Default: True)
+        communication_dtype (CommunicationDType): Datatype for communication between ranks. (Default: DEFAULT)
 
     """
 
@@ -1248,6 +1318,7 @@ class AdamGrafting(AdagradGrafting):
         group_source_rank: int = 0,
         dist_buffer: Optional[Tensor] = None,
         use_dtensor: bool = True,
+        communication_dtype: CommunicationDType = CommunicationDType.DEFAULT,
     ):
         super(AdamGrafting, self).__init__(
             param=param,
@@ -1259,6 +1330,7 @@ class AdamGrafting(AdagradGrafting):
             group_source_rank=group_source_rank,
             dist_buffer=dist_buffer,
             use_dtensor=use_dtensor,
+            communication_dtype=communication_dtype,
         )
 
 
@@ -1272,6 +1344,7 @@ class AdagradNormalizedGrafting(AdagradGrafting):
         group_source_rank (int): Group rank assigned to preconditioner. (Default: 0)
         dist_buffer (Optional[Tensor]): Buffer for distributed computation. (Default: None)
         use_dtensor (bool): Flag for using DTensor. Requires PyTorch 2 nightly. Otherwise, uses Tensor. (Default: True)
+        communication_dtype (CommunicationDType): Datatype for communication between ranks. (Default: DEFAULT)
 
     """
 
@@ -1283,6 +1356,7 @@ class AdagradNormalizedGrafting(AdagradGrafting):
         group_source_rank: int = 0,
         dist_buffer: Optional[Tensor] = None,
         use_dtensor: bool = True,
+        communication_dtype: CommunicationDType = CommunicationDType.DEFAULT,
     ):
         super(AdagradNormalizedGrafting, self).__init__(
             param=param,
@@ -1294,6 +1368,7 @@ class AdagradNormalizedGrafting(AdagradGrafting):
             group_source_rank=group_source_rank,
             dist_buffer=dist_buffer,
             use_dtensor=use_dtensor,
+            communication_dtype=communication_dtype,
         )
 
 
@@ -1308,6 +1383,7 @@ class RMSPropNormalizedGrafting(AdagradGrafting):
         group_source_rank (int): Group rank assigned to preconditioner. (Default: 0)
         dist_buffer (Optional[Tensor]): Buffer for distributed computation. (Default: None)
         use_dtensor (bool): Flag for using DTensor. Requires PyTorch 2 nightly. Otherwise, uses Tensor. (Default: True)
+        communication_dtype (CommunicationDType): Datatype for communication between ranks. (Default: DEFAULT)
 
     """
 
@@ -1320,6 +1396,7 @@ class RMSPropNormalizedGrafting(AdagradGrafting):
         group_source_rank: int = 0,
         dist_buffer: Optional[Tensor] = None,
         use_dtensor: bool = True,
+        communication_dtype: CommunicationDType = CommunicationDType.DEFAULT,
     ):
         super(RMSPropNormalizedGrafting, self).__init__(
             param=param,
@@ -1331,6 +1408,7 @@ class RMSPropNormalizedGrafting(AdagradGrafting):
             group_source_rank=group_source_rank,
             dist_buffer=dist_buffer,
             use_dtensor=use_dtensor,
+            communication_dtype=communication_dtype,
         )
 
 
@@ -1345,6 +1423,7 @@ class AdamNormalizedGrafting(AdagradGrafting):
         group_source_rank (int): Group rank assigned to preconditioner. (Default: 0)
         dist_buffer (Optional[Tensor]): Buffer for distributed computation. (Default: None)
         use_dtensor (bool): Flag for using DTensor. Requires PyTorch 2 nightly. Otherwise, uses Tensor. (Default: True)
+        communication_dtype (CommunicationDType): Datatype for communication between ranks. (Default: DEFAULT)
 
     """
 
@@ -1357,6 +1436,7 @@ class AdamNormalizedGrafting(AdagradGrafting):
         group_source_rank: int = 0,
         dist_buffer: Optional[Tensor] = None,
         use_dtensor: bool = True,
+        communication_dtype: CommunicationDType = CommunicationDType.DEFAULT,
     ):
         super(AdamNormalizedGrafting, self).__init__(
             param=param,
@@ -1368,4 +1448,5 @@ class AdamNormalizedGrafting(AdagradGrafting):
             group_source_rank=group_source_rank,
             dist_buffer=dist_buffer,
             use_dtensor=use_dtensor,
+            communication_dtype=communication_dtype,
         )
