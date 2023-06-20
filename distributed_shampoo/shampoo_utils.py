@@ -11,8 +11,10 @@ import enum
 import logging
 import math
 from copy import deepcopy
+from math import prod
 from typing import List, Optional, Tuple, Union
 
+import numpy as np
 import torch
 import torch.distributed as dist
 from torch import Tensor
@@ -122,6 +124,66 @@ def multi_dim_cat(split_tensors: List[Tensor], num_splits: List[int]) -> Tensor:
             ]
     assert len(merged_tensor) == 1
     return merged_tensor[0]
+
+
+def convex_split(
+    tensor: Tensor, orig_shape: torch.Size, start_idx: int, end_idx: int
+) -> List[Tensor]:
+    """Chunks tensor across multiple dimensions to be convex.
+
+    Args:
+        tensor (Tensor): Flattened gradient or tensor to split.
+        orig_shape (torch.Size): Shape of original tensor that tensor is a slice of.
+        start_idx (int): Flattened index in original tensor where tensor starts.
+        end_idx (int): Flattened index in original tensor where tensor ends (inclusive).
+
+    Returns:
+        split_tensors (List[Tensor]): List of tensors.
+
+    """
+    assert len(tensor.size()) == 1, f"tensor is not flat, shape {tensor.size()}"
+    assert (
+        end_idx - start_idx + 1 == tensor.size()[0]
+    ), f"start/end indices do not match tensor size: start {start_idx} end {end_idx}, tensor size {tensor.size()}"
+
+    split_tensors = []  # TODO: figure out if order matters
+    cumul_start_idx = start_idx
+    cumul_end_idx = end_idx
+    remainder = tensor
+    for i in range(len(orig_shape) - 1, -1, -1):
+        dim = orig_shape[i]
+        start = np.unravel_index(cumul_start_idx, orig_shape)
+        end = np.unravel_index(cumul_end_idx, orig_shape)
+        sidx = start[i]
+        eidx = end[i]
+
+        # final dimension case
+        if i == 0 or start[:i] == end[:i]:
+            shape = [-1] + list(orig_shape[i + 1 :])
+            split_tensors.append(remainder.reshape(shape))
+            break
+
+        if sidx % dim != 0:
+            shape = [dim - sidx] + list(orig_shape[i + 1 :])
+            size = prod(shape)
+            split_tensors.append(remainder[:size].reshape(shape))
+            remainder = remainder[size:]
+            cumul_start_idx += size
+
+        if remainder.numel() == 0:
+            break
+
+        if eidx != dim - 1:
+            shape = [eidx + 1] + list(orig_shape[i + 1 :])
+            size = prod(shape)
+            split_tensors.append(remainder[-size:].reshape(shape))
+            remainder = remainder[:-size]
+            cumul_end_idx -= size
+
+        if remainder.numel() == 0:
+            break
+
+    return split_tensors
 
 
 ###### PRECONDITIONER CLASSES ######
