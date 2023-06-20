@@ -9,13 +9,14 @@ LICENSE file in the root directory of this source tree.
 
 import logging
 import os
-from collections import abc as container_abcs, defaultdict
 from copy import deepcopy
-from itertools import chain
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, Iterator, List, Mapping, Tuple, Union
 
 import torch
 import torch.distributed as dist
+
+from distributed_shampoo.optimizer_modules import OptimizerModule
+from distributed_shampoo.shampoo_checkpoint_utils import flatten_state_dict
 
 from distributed_shampoo.shampoo_dist_utils import (
     distribute_buffer_sizes,
@@ -25,14 +26,18 @@ from distributed_shampoo.shampoo_dist_utils import (
 from distributed_shampoo.shampoo_utils import (
     AdagradPreconditioner,
     BlockShampooPreconditioner,
+    CommunicationDType,
     DistributedPreconditioner,
     GraftingType,
     LargeDimMethod,
-    Preconditioner,
     ShampooPreconditioner,
 )
+from torch.nn import Parameter
 
 logger = logging.getLogger(__name__)
+
+# DType mapping for quantized communications.
+dtype_mapping = {0: "DEFAULT", 1: torch.float16, 2: torch.bfloat16, 3: torch.float32}
 
 BETAS = "betas"
 EXP_AVG = "exp_avg"
@@ -62,11 +67,11 @@ class DistributedShampoo(torch.optim.Optimizer):
     with contributions and support from:
 
     Rohan Anil (Google), Adnan Aziz (Meta), Pavan Balaji (Meta), Shuo Chang (Meta), Weiwei Chu (Meta), Assaf Eisenman (Meta),
-    Will Feng (Meta), Zhuobo Feng (Meta), Yizi Gu (Meta), Vineet Gupta (Google), Yuchen Hao (Meta), Yusuo Hu (Meta),
+    Will Feng (Meta), Zhuobo Feng (Meta), Avirup Ghosh (Meta), Yizi Gu (Meta), Vineet Gupta (Google), Yuchen Hao (Meta), Yusuo Hu (Meta),
     Yuxi Hu (Meta), Minhui Huang (Meta), Guna Lakshminarayanan (Meta), Zhijing Li (Meta), Ming Liang (Meta), Wanchao Liang (Meta),
     Ying Liu (Meta), Wenguang Mao (Meta), Dheevatsa Mudigere (NVIDIA), Maxim Naumov (Meta), Jongsoo Park (Meta), Mike Rabbat (Meta),
     Kaushik Rangadurai (Meta), Ke Sang (Meta), Dennis van der Staay (Meta), Fei Tian (Meta), Sanjay Vishwakarma (Meta),
-    Xunnan (Shawn) Xu (Meta), Jiyan Yang (Meta), and Wang Zhou (Meta).
+    Xunnan (Shawn) Xu (Meta), Jiyan Yang (Meta), Iris Zhang (Meta), and Wang Zhou (Meta).
 
     Partly based on the work in:
     - https://arxiv.org/pdf/1802.09568.pdf
@@ -83,6 +88,9 @@ class DistributedShampoo(torch.optim.Optimizer):
     3. CUDA 11.3, 11.4, 12
 
     If one wants to use DTensor which leads to memory savings, please set use_dtensor = True. Requires PyTorch 2 nightly build.
+
+    In order to support checkpointing, one must use torch.distributed.checkpoint and pass the named parameters into state_dict.
+    Note that the standard checkpointing solution by PyTorch is not supported!
 
     Note: We have observed known instabilities with the torch.linalg.eigh operator on CUDA 11.6-11.8, specifically for low-rank
     matrices, which may appear with using a small start_preconditioning_step. Please avoid these versions of CUDA if possible.
@@ -173,19 +181,25 @@ class DistributedShampoo(torch.optim.Optimizer):
         precondition_frequency (int): frequency for computing root inverse preconditioner (Default: 1)
         start_preconditioning_step (int): iteration to start computing inverse preconditioner. If -1, uses
             the same value as precondition_frequency. (Default: -1)
-        exponent_override (int): exponent to use in Shampoo. (Default: 0)
-        exponent_multiplier (float): number to be multiplied to the numerator of the inverse root. (Default: 1.0)
+        exponent_override (int, List[int]): inverse root to use in Shampoo. If a list [l1, l2, ..., lp], then we will
+            use -1 / l1 for 1-D tensor (vectors), -1 / l2 for 2-D tensors (matrices), and so on. If the order of the
+            tensor exceeds the order of the tensor, reverts to the default value. If 0 is used, uses the default inverse
+            root -1 / (2 * o), where o is the order of the tensor. (Default: 0)
+        exponent_multiplier (float): number to be multiplied to the numerator of the inverse root, i.e., eta where the
+            exponent is -eta / (2 * p). (Default: 1.0)
         use_nesterov (bool): uses Nesterov momentum (default: False)
         use_bias_correction (bool): flag for using bias correction (Default: True)
         use_decoupled_weight_decay (bool): Flag for using AdamW-style decoupled weight decay (Default: True)
-        preconditioner_dtype (torch.dtype): data type for preconditioner (Default: torch.float)
-        large_dim_method (LargeDimMethod): method for handling large scale tensors. (Default: LargeDimMethod.BLOCKING)
-        num_trainers_per_group (int): number of GPUs per distributed process group for distributed computation/memory.
-            If num_trainers_per_group = -1 is used, then defaults to using the LOCAL_WORLD_SIZE. (Default: -1)
-        use_merge_dims (bool): merge dimensions if possible while respecting max_preconditioner_dim. (Default: True)
         grafting_type (GraftingType): selects grafting method. (Default: GraftingType.ADAGRAD)
         grafting_epsilon (float): epsilon for grafting method. (Default: 1e-3)
         grafting_beta2 (float): exponential moving average factor for grafting method. (Default: 1.0)
+        large_dim_method (LargeDimMethod): method for handling large scale tensors. (Default: LargeDimMethod.BLOCKING)
+        use_merge_dims (bool): merge dimensions if possible while respecting max_preconditioner_dim. (Default: True)
+        preconditioner_dtype (torch.dtype): data type for preconditioner (Default: torch.float)
+        communication_dtype (CommunicationDType): Datatype for communication between ranks. (Default: DEFAULT)
+        num_trainers_per_group (int): number of GPUs per distributed process group for distributed computation/memory.
+            If num_trainers_per_group = -1 is used, then defaults to using the LOCAL_WORLD_SIZE. (Default: -1)
+        cache_split_params (bool): cache split parameters across iterations. (Default: False)
         use_protected_eigh (bool): Flag for using two guards to prevent failures of torch.linalg.eigh. (Default: True)
             1. Attempts to compute root inverse in preconditioner_dtype precision.
             2. Attempts to recompute the eigendecomposition if using lower-precision fails.
@@ -207,18 +221,20 @@ class DistributedShampoo(torch.optim.Optimizer):
         max_preconditioner_dim: int = 1024,
         precondition_frequency: int = 1,
         start_preconditioning_step: int = -1,
-        exponent_override: int = 0,
+        exponent_override: Union[int, List[int]] = 0,
         exponent_multiplier: float = 1.0,
         use_nesterov: bool = False,
         use_bias_correction: bool = True,
         use_decoupled_weight_decay: bool = True,
-        preconditioner_dtype: torch.dtype = torch.float,
-        large_dim_method: LargeDimMethod = LargeDimMethod.BLOCKING,
-        num_trainers_per_group: int = -1,
-        use_merge_dims: bool = True,
         grafting_type: GraftingType = GraftingType.ADAGRAD,
         grafting_epsilon: float = 1e-3,
         grafting_beta2: float = 1.0,
+        large_dim_method: LargeDimMethod = LargeDimMethod.BLOCKING,
+        use_merge_dims: bool = True,
+        preconditioner_dtype: torch.dtype = torch.float,
+        communication_dtype: CommunicationDType = CommunicationDType.DEFAULT,
+        num_trainers_per_group: int = -1,
+        cache_split_params: bool = False,
         use_protected_eigh: bool = True,
         use_dtensor: bool = True,
         debug_mode: bool = False,
@@ -260,10 +276,16 @@ class DistributedShampoo(torch.optim.Optimizer):
             raise ValueError(
                 f"Invalid number of GPUs per group: {num_trainers_per_group}. Must be >= -1."
             )
-        if not exponent_override >= 0:
-            raise ValueError(
-                f"Invalid exponent override: {exponent_override}. Must be >= 0."
-            )
+        if isinstance(exponent_override, list):
+            if not all([e >= 0 for e in exponent_override]):
+                raise ValueError(
+                    f"Invalid exponent override list: {exponent_override}. All values must be >= 0."
+                )
+        else:
+            if not exponent_override >= 0:
+                raise ValueError(
+                    f"Invalid exponent override: {exponent_override}. Must be >= 0."
+                )
         if not 0.0 < grafting_beta2 <= 1.0:
             raise ValueError(
                 f"Invalid grafting beta parameter: {grafting_beta2}. Must be in (0.0, 1.0]."
@@ -320,6 +342,7 @@ class DistributedShampoo(torch.optim.Optimizer):
         self._exponent_multiplier = exponent_multiplier
         self._num_trainers_per_group = num_trainers_per_group
         self._use_merge_dims = use_merge_dims
+        self._cache_split_params = cache_split_params
         self._large_dim_method = large_dim_method
         self._use_decoupled_weight_decay = use_decoupled_weight_decay
         self._preconditioner_dtype = preconditioner_dtype
@@ -332,6 +355,7 @@ class DistributedShampoo(torch.optim.Optimizer):
         self._use_protected_eigh = use_protected_eigh
         self._use_dtensor = use_dtensor
         self._debug_mode = debug_mode
+        self._communication_dtype = communication_dtype
         if self._use_nesterov and momentum == 0.0:
             logger.warning(
                 "Nesterov flag is enabled but momentum parameter is zero! Continuing without using momentum or Nesterov acceleration..."
@@ -342,6 +366,10 @@ class DistributedShampoo(torch.optim.Optimizer):
             logger.warning(
                 f"start_preconditioning_step set to -1. Setting start_preconditioning_step equal to precondition frequency {precondition_frequency} by default."
             )
+        elif start_preconditioning_step < precondition_frequency:
+            raise ValueError(
+                f"Invalid start_preconditioning_step value: {start_preconditioning_step}. Must be >= {precondition_frequency = }."
+            )
         else:
             self._start_preconditioning_step = start_preconditioning_step
 
@@ -351,11 +379,31 @@ class DistributedShampoo(torch.optim.Optimizer):
         # Initialize Shampoo preconditioners and distributed buffers.
         self._dist_group = None
         buffer_ranks_list = self._assign_preconditioners_to_ranks()
+        self._initialize_exp_avg_and_momentum()
         self._initialize_preconditioners_and_steps(buffer_ranks_list)
 
     @torch.no_grad()
     def _use_distributed(self) -> bool:
         return self._num_trainers_per_group > 1
+
+    @torch.no_grad()
+    def _initialize_exp_avg_and_momentum(self):
+        for group in self.param_groups:
+            momentum_param = group[MOMENTUM]
+            beta1, _ = group[BETAS]
+
+            for p in group[PARAMS]:
+                state = self.state[p]
+
+                # Initialize momentum and exponential moving average of gradient.
+                if momentum_param != 0.0 and MOMENTUM not in state:
+                    state[MOMENTUM] = torch.zeros_like(
+                        p, memory_format=torch.preserve_format
+                    )
+                if beta1 != 0.0 and EXP_AVG not in state:
+                    state[EXP_AVG] = torch.zeros_like(
+                        p, memory_format=torch.preserve_format
+                    )
 
     @torch.no_grad()
     def _initialize_preconditioners_and_steps(
@@ -384,6 +432,7 @@ class DistributedShampoo(torch.optim.Optimizer):
                         dtype=self._preconditioner_dtype,
                         idx=idx,
                         use_merge_dims=self._use_merge_dims,
+                        cache_split_params=self._cache_split_params,
                         start_preconditioning_step=self._start_preconditioning_step,
                         grafting_type=self._grafting_type,
                         grafting_beta2=self._grafting_beta2,
@@ -393,6 +442,7 @@ class DistributedShampoo(torch.optim.Optimizer):
                         dist_buffer_index=preconditioner_count,
                         use_protected_eigh=self._use_protected_eigh,
                         use_dtensor=self._use_dtensor,
+                        communication_dtype=self._communication_dtype,
                     )
                     preconditioner_count += len(
                         state[PRECONDITIONERS].get_split_dist_buffers()
@@ -418,6 +468,7 @@ class DistributedShampoo(torch.optim.Optimizer):
                             group_source_rank=group_source_rank,
                             dist_buffer=dist_buffer,
                             use_dtensor=self._use_dtensor,
+                            communication_dtype=self._communication_dtype,
                         )
                         if torch.any(dims > self._max_preconditioner_dim)
                         else ShampooPreconditioner(
@@ -439,6 +490,7 @@ class DistributedShampoo(torch.optim.Optimizer):
                             dist_buffer=dist_buffer,
                             use_protected_eigh=self._use_protected_eigh,
                             use_dtensor=self._use_dtensor,
+                            communication_dtype=self._communication_dtype,
                         )
                     )
 
@@ -471,6 +523,7 @@ class DistributedShampoo(torch.optim.Optimizer):
                         dist_buffer=dist_buffer,
                         use_protected_eigh=self._use_protected_eigh,
                         use_dtensor=self._use_dtensor,
+                        communication_dtype=self._communication_dtype,
                     )
 
                 else:
@@ -532,13 +585,19 @@ class DistributedShampoo(torch.optim.Optimizer):
                 if self._large_dim_method == LargeDimMethod.BLOCKING:
                     buffer_sizes.extend(
                         BlockShampooPreconditioner.get_dist_buffer_sizes(
-                            p, self._max_preconditioner_dim, self._use_merge_dims
+                            p,
+                            self._max_preconditioner_dim,
+                            self._use_merge_dims,
+                            self._communication_dtype,
                         )
                     )
 
                 else:
                     buffer_sizes.append(
-                        DistributedPreconditioner.get_dist_buffer_size(p)
+                        DistributedPreconditioner.get_dist_buffer_size(
+                            p,
+                            self._communication_dtype,
+                        )
                     )
 
             # Calculate distribution across ranks using obtained buffer sizes.
@@ -568,7 +627,8 @@ class DistributedShampoo(torch.optim.Optimizer):
 
             logger.info(
                 f"Shampoo dist: group size = {self._num_trainers_per_group}, rank = {group_rank}, "
-                + f"total data = {max_buffer_size_sum} [B], buffer size = {total_buffer_size} [B]"
+                + f"total data = {max_buffer_size_sum} [B], buffer size = {total_buffer_size} [B] "
+                + f"(communication_dtype = {dtype_mapping[self._communication_dtype.value]})"
             )
 
             # Split global_dist_buffer into as many local buffers as my_group_size
@@ -682,7 +742,9 @@ class DistributedShampoo(torch.optim.Optimizer):
                         grad.add_(p, alpha=weight_decay)
 
                     # Update each preconditioner using the gradient.
-                    state[PRECONDITIONERS].update_preconditioners(grad, state[STEP])
+                    state[PRECONDITIONERS].update_preconditioners(
+                        grad, state[STEP].item()
+                    )
 
     @torch.no_grad()
     def _init_group(
@@ -690,7 +752,6 @@ class DistributedShampoo(torch.optim.Optimizer):
     ) -> Tuple[List[torch.Tensor], List[torch.Tensor], List[torch.Tensor]]:
         # Set momentum parameter
         momentum_param = group[MOMENTUM]
-        beta1, _ = group[BETAS]
 
         # Instantiate lists for params, grads, and momentum.
         split_params = []
@@ -707,16 +768,6 @@ class DistributedShampoo(torch.optim.Optimizer):
                     "Sparse parameters are not currently supported by Shampoo."
                 )
 
-            # Initialize momentum and exponential moving average of gradient.
-            if momentum_param != 0.0 and MOMENTUM not in state:
-                state[MOMENTUM] = torch.zeros_like(
-                    p.grad, memory_format=torch.preserve_format
-                )
-            if beta1 != 0.0 and EXP_AVG not in state:
-                state[EXP_AVG] = torch.zeros_like(
-                    p.grad, memory_format=torch.preserve_format
-                )
-
             # Generate split lists.
             split_params.extend(state[PRECONDITIONERS].combine_and_split_dims(p))
             split_preconditioned_grads.extend(
@@ -731,11 +782,12 @@ class DistributedShampoo(torch.optim.Optimizer):
         return split_params, split_preconditioned_grads, split_momentum_directions
 
     @torch.no_grad()
-    def _iterate_step(self) -> torch.Tensor:
+    def _iterate_step(self) -> int:
         for group in self.param_groups:
             for p in group[PARAMS]:
                 self.state[p][STEP] += 1
-        return self.state[p][STEP]
+        # pyre-fixme[61]: `p` is undefined, or not always defined.
+        return self.state[p][STEP].item()
 
     @torch.no_grad()
     def reset_preconditioners(self):
@@ -790,16 +842,14 @@ class DistributedShampoo(torch.optim.Optimizer):
 
             for p in group[PARAMS]:
                 state = self.state[p]
-                if p.grad is None or not state[PRECONDITIONERS].on_source_rank:
+                if p.grad is None:
                     continue
 
                 # Incorporate first-moment or filtered gradient estimation.
                 if beta1 != 0:
                     # Compute bias corrections if necessary.
                     bias_correction1 = (
-                        1.0 - beta1**iteration
-                        if self._use_bias_correction
-                        else torch.as_tensor(1.0)
+                        1.0 - beta1**iteration if self._use_bias_correction else 1.0
                     )
 
                     # Compute exponential moving average of the gradient (with
@@ -824,6 +874,24 @@ class DistributedShampoo(torch.optim.Optimizer):
 
             # Set search direction as preconditioned grads.
             split_search_directions = split_preconditioned_grads
+
+            # Compute initial dtype of split_search_directions for quantized communications.
+            if len(split_search_directions) != 0:
+
+                # Getting the data type of the first element in split_search_directions
+                # and assigning it to the variable inital_dtype
+                initial_dtype = split_search_directions[0].dtype
+
+                # Checking if the desired communication_dtype is different from inital_dtype
+                if (
+                    self._communication_dtype != CommunicationDType.DEFAULT
+                    and dtype_mapping[self._communication_dtype.value] != initial_dtype
+                ):
+                    # Converting elements in split_search_directions to the desired communication_dtype
+                    split_search_directions = [
+                        item.to(dtype_mapping[self._communication_dtype.value])
+                        for item in split_search_directions
+                    ]
 
             # Incorporate decoupled weight decay.
             if self._use_decoupled_weight_decay and weight_decay != 0.0:
@@ -858,71 +926,198 @@ class DistributedShampoo(torch.optim.Optimizer):
 
         return loss
 
-    def load_state_dict(self, state_dict):
-        r"""Loads the optimizer state.
-        Args:
-            state_dict (dict): optimizer state. Should be an object returned
-                from a call to :meth:`state_dict`.
+    def _flattened_state(self) -> Dict[str, Any]:
+        """Retrieve flattened state for loading checkpoint.
+
+        Returns:
+            flattened_dict (Dict[str, Any]): Flattened version of parameter states.
+
         """
-        # deepcopy, to be consistent with module API
-        state_dict = deepcopy(state_dict)
-        # Validate the state_dict
-        groups = self.param_groups
-        saved_groups = state_dict["param_groups"]
+        flattened_state = {}
+        for group in self.param_groups:
+            for _, p in enumerate(group[PARAMS]):
+                flattened_state[p] = {}
+                param_state = self.state[p]
 
-        if len(groups) != len(saved_groups):
-            raise ValueError(
-                "loaded state dict has a different number of parameter groups"
-            )
-        param_lens = (len(g[PARAMS]) for g in groups)
-        saved_lens = (len(g[PARAMS]) for g in saved_groups)
-        if any(p_len != s_len for p_len, s_len in zip(param_lens, saved_lens)):
-            raise ValueError(
-                "loaded state dict contains a parameter group "
-                "that doesn't match the size of optimizer's group"
-            )
+                for key, val in param_state.items():
+                    if isinstance(val, OptimizerModule):
+                        flattened_state[p].update(
+                            flatten_state_dict(val.state_dict(), prefix=key)
+                        )
+                    else:
+                        flattened_state[p][key] = val
 
-        # Update the state
-        id_map = {
-            old_id: p
-            for old_id, p in zip(
-                chain.from_iterable((g[PARAMS] for g in saved_groups)),
-                chain.from_iterable((g[PARAMS] for g in groups)),
-            )
-        }
+        return flattened_state
 
-        def cast(param, value, key=None):
-            r"""Make a deep copy of value, casting all tensors to device of param."""
-            if isinstance(value, torch.Tensor):
-                return value
-            elif isinstance(value, dict):
-                return {k: cast(param, v, key=k) for k, v in value.items()}
-            elif isinstance(value, container_abcs.Iterable):
-                return type(value)(cast(param, v) for v in value)
-            # Modified load_state_dict in order to ensure that the preconditioner objects
-            # are casted correctly. This enables us to use generic map_locations when
-            # checkpointing.
-            elif isinstance(value, Preconditioner):
-                value.to(param.device)
-                return value
+    def state_dict(self):
+        raise NotImplementedError(
+            "Distributed Shampoo does not support the standard state_dict() method for checkpointing!"
+        )
+
+    def load_state_dict(self, state_dict: Mapping[str, Any]) -> None:
+        raise NotImplementedError(
+            "Distributed Shampoo does not support the standard load_state_dict method for checkpointing!"
+        )
+
+    def distributed_state_dict(
+        self,
+        key_to_param: Union[Mapping[str, Parameter], Iterator[Tuple[str, Parameter]]],
+        save_param_groups: bool = False,
+    ) -> Dict[str, Any]:
+        """Distributed state dict based on TorchRec's KeyedOptimizer.
+        Compatible with torch.distributed.checkpoint with use_dtensor = True.
+
+        Returned state and param_groups will contain parameter keys
+        instead of parameter indices in torch.Optimizer.
+        This allows for advanced functionality like optimizer re-sharding to be implemented.
+
+        Can also handle classes and supported data structures that follow the PyTorch stateful
+        protocol.
+
+        Args:
+            key_to_param (Union[Mapping[str, Any], Iterator[Tuple[str, Parameter]]]): Maps some FQN to the
+                parameters in the model. If an iterator, will convert to a dictionary.
+            save_param_groups (bool): Flag for saving parameter groups. (Default: False)
+
+        Returns:
+            state_dict (Dict[str, Any]): Dictionary containing the optimizer state and potentially parameter
+                groups.
+
+        """
+
+        state = self.state
+        param_groups = self.param_groups
+        if not isinstance(key_to_param, dict):
+            key_to_param = {key: param for key, param in key_to_param}
+        param_to_key = {param: key for key, param in key_to_param.items()}
+
+        ret_state = {}
+        for param, state_val in state.items():
+            if isinstance(state_val, dict):
+                state_dict = {}
+                for k, v in state_val.items():
+                    if hasattr(v, "state_dict") and callable(v.state_dict):
+                        state_dict[k] = v.state_dict()
+                    else:
+                        state_dict[k] = v
+                ret_state[param_to_key[param]] = flatten_state_dict(state_dict)
             else:
-                return value
+                ret_state[param_to_key[param]] = state_val
 
-        # Copy state assigned to params (and cast tensors to appropriate types).
-        # State that is not assigned to params is copied as is (needed for
-        # backward compatibility).
-        state = defaultdict(dict)
-        for k, v in state_dict["state"].items():
-            if k in id_map:
-                param = id_map[k]
-                state[param] = cast(param, v)
-            else:
-                state[k] = v
+        ret_groups = []
+        for group in param_groups:
+            param_keys = []
+            for param in group["params"]:
+                param_keys.append(param_to_key[param])
+            ret_group = {"params": sorted(param_keys)}
+            for k, v in group.items():
+                if k != "params":
+                    ret_group[k] = deepcopy(v)
+            ret_groups.append(ret_group)
 
-        # Update parameter groups, setting their 'params' value
-        def update_group(group, new_group):
-            new_group[PARAMS] = group[PARAMS]
-            return new_group
+        ret: Dict[str, object] = {"state": ret_state}
+        if save_param_groups:
+            ret["param_groups"] = ret_groups
+        return ret
 
-        param_groups = [update_group(g, ng) for g, ng in zip(groups, saved_groups)]
-        self.__setstate__({"state": state, "param_groups": param_groups})
+    def load_distributed_state_dict(
+        self,
+        state_dict: Mapping[str, Any],
+        key_to_param: Union[Mapping[str, Parameter], Iterator[Tuple[str, Parameter]]],
+        save_param_groups: bool = False,
+    ) -> None:
+        """Load state dict based on TorchRec's KeyedOptimizer.
+        Compatible with torch.distributed.checkpoint.
+
+        This implementation is much stricter than the one in torch.Optimizer:
+        it requires implementations to fully initialize their state during first optimization iteration,
+        and it prohibits loading an empty state into already initialized KeyedOptimizer and vise versa.
+
+        Because of introduced strictness it allows us to:
+            * do compatibility checks for state and param_groups, which improves usability
+            * avoid state duplication by directly copying into state tensors, e.g.
+              optimizer.step()  # make sure optimizer is initialized
+              sd = optimizer.state_dict()
+              load_checkpoint(sd)  # copy state directly into tensors, re-shard if needed
+              optimizer.load_state_dict(sd)  # replace param_groups
+
+        Args:
+            state_dict (Dict[str, Any]): State dictionary to load containing the optimizer state and
+                parameter groups.
+            key_to_param (Union[Mapping[str, Any], Iterator[Tuple[str, Parameter]]]): Maps some FQN to the
+                parameters in the model. If an iterator, will convert to a dictionary.
+            save_param_groups (bool): Flag for saving parameter groups. (Default: False)
+
+        """
+
+        new_state = state_dict["state"]
+        state = self._flattened_state()
+        if not isinstance(key_to_param, dict):
+            key_to_param = {key: param for key, param in key_to_param}
+
+        # Load state
+        if len(state) != len(new_state):
+            raise ValueError(
+                f"Different parameter count: {len(state)} vs {len(new_state)}"
+            )
+        for param_key, param in key_to_param.items():
+            if param not in state:
+                continue
+            if param_key not in new_state:
+                raise ValueError(f"Parameter {param_key} not found")
+            if len(state[param]) != len(new_state[param_key]):
+                raise ValueError(
+                    f"Different state size: {len(state[param])} vs {len(new_state[param_key])}"
+                )
+            for state_key, state_val in state[param].items():
+                if state_key not in new_state[param_key]:
+                    raise ValueError(
+                        f"State key {state_key} not found for param {param_key}"
+                    )
+
+                new_state_val = new_state[param_key][state_key]
+                if isinstance(state_val, torch.Tensor):
+                    assert isinstance(new_state_val, torch.Tensor)
+                    state_val.detach().copy_(new_state_val)
+                elif isinstance(state_val, OptimizerModule):
+                    state_val.load_state_dict(new_state_val)
+                else:
+                    state[param][state_key] = deepcopy(new_state_val)
+
+        # Load param_groups.
+        if save_param_groups:
+            new_param_groups = state_dict["param_groups"]
+            param_groups = self.param_groups
+
+            if len(param_groups) != len(new_param_groups):
+                raise ValueError(
+                    f"Different param_groups count: {len(param_groups)} vs {len(new_param_groups)}"
+                )
+            param_to_key = {param: key for key, param in key_to_param.items()}
+            group_map = {}
+            for group in param_groups:
+                param_keys = []
+                for param in group["params"]:
+                    param_keys.append(param_to_key[param])
+                group_map["/".join(sorted(param_keys))] = group
+            new_group_map = {}
+            for new_group in new_param_groups:
+                param_keys = []
+                for param_key in new_group["params"]:
+                    param_keys.append(param_key)
+                new_group_map["/".join(sorted(param_keys))] = new_group
+            for group_key, group in group_map.items():
+                if group_key not in new_group_map:
+                    raise ValueError(f"Group {group_key} not found")
+                new_group = new_group_map[group_key]
+                if len(group) != len(new_group):
+                    raise ValueError(
+                        f"Different param_group size: {len(group)} vs {len(new_group)}"
+                    )
+                for k in group:
+                    if k not in new_group:
+                        raise ValueError(
+                            f"Group key {k} not found for group {group_key}"
+                        )
+                    if k != "params":
+                        group[k] = deepcopy(new_group[k])

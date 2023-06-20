@@ -9,7 +9,7 @@ LICENSE file in the root directory of this source tree.
 
 import logging
 import math
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Union
 
 import torch
 import torch.distributed as dist
@@ -87,13 +87,14 @@ def distribute_buffer_sizes(
 
 
 def split_local_dist_buffers(
-    buffer_size_ranks: List[Tuple[int, int]], local_dist_buffers: List[torch.Tensor]
+    buffer_size_ranks: List[Tuple[int, int]],
+    local_dist_buffers: Union[Tuple[torch.Tensor], List[torch.Tensor]],
 ) -> List[Tuple[torch.Tensor, int]]:
     """Split given buffers according to a list of pairs of buffer size and an assigned rank.
 
     Args:
         buffer_size_ranks (List[Tuple[int, int]]): a list of pairs of buffer size and an assigned rank.
-        local_dist_buffers (List[torch.Tensor]): a list of tensors to be split
+        local_dist_buffers (Union[Tuple[torch.Tensor], List[torch.Tensor]]): a list of tensors to be split
 
     Returns:
         buffer_ranks (List[Tuple[torch.Tensor, int]]): A list of pairs of a view tensor and an assigned rank

@@ -10,13 +10,15 @@ LICENSE file in the root directory of this source tree.
 import logging
 import os
 import random
-from typing import Tuple, Union
+from typing import Optional, Tuple, Union
 
 import numpy as np
 
 import torch
 import torch.distributed as dist
+import torch.distributed.checkpoint as dist_checkpoint
 
+from distributed_shampoo.distributed_shampoo import DistributedShampoo
 from distributed_shampoo.examples.convnet import ConvNet
 from distributed_shampoo.examples.single_gpu_cifar10_example import (
     DType,
@@ -24,8 +26,8 @@ from distributed_shampoo.examples.single_gpu_cifar10_example import (
     LossMetrics,
     Parser,
 )
-
 from torch import nn
+
 from torchvision import datasets, transforms
 
 logging.basicConfig(
@@ -41,6 +43,7 @@ os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
 LOCAL_RANK = int(os.environ["LOCAL_RANK"])
 WORLD_RANK = int(os.environ["RANK"])
 WORLD_SIZE = int(os.environ["WORLD_SIZE"])
+
 
 def average_gradients(model: nn.Module, world_size: int):
     """Gradient averaging across GPUs via all-reduce."""
@@ -59,6 +62,8 @@ def train_multi_gpu_model(
     device: Union[str, torch.device],
     epochs: int = 1,
     window_size: int = 100,
+    use_distributed_checkpoint: bool = False,
+    checkpoint_dir: Optional[str] = None,
 ) -> Tuple[float, float, int]:
     """Constructs the main training loop.
 
@@ -66,8 +71,40 @@ def train_multi_gpu_model(
 
     """
 
+    # checks for checkpointing
+    if use_distributed_checkpoint and not isinstance(optimizer, DistributedShampoo):
+        raise ValueError(
+            "Distributed checkpointing is only supported with DistributedShampoo!"
+        )
+    if use_distributed_checkpoint and checkpoint_dir is None:
+        raise ValueError(
+            "Trying to use distributed checkpointing but checkpoint directory is not provided!"
+        )
+
     # initialize metrics
     metrics = LossMetrics(window_size=window_size, device=device, world_size=world_size)
+
+    # load optimizer and model checkpoint if using Distributed Shampoo optimizer
+    if (
+        use_distributed_checkpoint
+        and isinstance(optimizer, DistributedShampoo)
+        and os.path.exists(checkpoint_dir + "/.metadata")
+    ):
+        state_dict = {
+            "model": model.state_dict(),
+            "optim": optimizer.distributed_state_dict(
+                key_to_param=model.named_parameters()
+            ),
+        }
+        dist_checkpoint.load_state_dict(
+            state_dict=state_dict,
+            storage_reader=dist_checkpoint.FileSystemReader(checkpoint_dir),
+        )
+
+        model.load_state_dict(state_dict["model"])
+        optimizer.load_distributed_state_dict(
+            state_dict["optim"], key_to_param=model.named_parameters()
+        )
 
     # main training loop
     for epoch in range(epochs):
@@ -88,6 +125,19 @@ def train_multi_gpu_model(
             metrics.update_global_metrics()
             if LOCAL_RANK == 0:
                 metrics.log_global_metrics()
+
+    # checkpoint optimizer and model using distributed checkpointing solution
+    if use_distributed_checkpoint and isinstance(optimizer, DistributedShampoo):
+        state_dict = {
+            "model": model.state_dict(),
+            "optim": optimizer.distributed_state_dict(
+                key_to_param=model.named_parameters()
+            ),
+        }
+        dist_checkpoint.save_state_dict(
+            state_dict=state_dict,
+            storage_writer=dist_checkpoint.FileSystemWriter(checkpoint_dir),
+        )
 
     return metrics._lifetime_loss, metrics._window_loss, metrics._iteration
 
@@ -110,7 +160,9 @@ if __name__ == "__main__":
         torchrun --standalone --nnodes=1 --nproc_per_node=$NUM_TRAINERS -m distributed_shampoo.examples.multi_gpu_cifar10_example --optimizer-type ADAM
 
     Distributed Shampoo (with default Adam grafting, precondition frequency = 100):
-        torchrun --standalone --nnodes=1 --nproc_per_node=$NUM_TRAINERS -m distributed_shampoo.examples.multi_gpu_cifar10_example --optimizer-type DISTRIBUTED_SHAMPOO --precondition-frequency 100 --grafting-type ADAM --num-gpus-per-group -1 --use-bias-correction --use-decoupled-weight-decay
+        torchrun --standalone --nnodes=1 --nproc_per_node=$NUM_TRAINERS -m distributed_shampoo.examples.multi_gpu_cifar10_example --optimizer-type DISTRIBUTED_SHAMPOO --precondition-frequency 100 --grafting-type ADAM --num-trainers-per-group -1 --use-bias-correction --use-decoupled-weight-decay --use-dtensor
+
+    To use distributed checkpointing, append the flag --use-distributed-checkpoint with optional --checkpoint-dir argument.
 
     The script will produce lifetime and window loss values retrieved from the forward pass over the data.
     Guaranteed reproducibility on a single GPU.
@@ -151,7 +203,9 @@ if __name__ == "__main__":
     transform = transforms.Compose(
         [transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))]
     )
-    dataset = datasets.CIFAR10("./data", train=True, download=True, transform=transform)
+    dataset = datasets.CIFAR10(
+        args.data_path, train=True, download=True, transform=transform
+    )
     sampler = torch.utils.data.distributed.DistributedSampler(
         dataset, num_replicas=WORLD_SIZE, rank=WORLD_RANK, shuffle=True
     )
@@ -202,4 +256,6 @@ if __name__ == "__main__":
         device=device,
         epochs=args.epochs,
         window_size=args.window_size,
+        use_distributed_checkpoint=args.use_distributed_checkpoint,
+        checkpoint_dir=args.checkpoint_dir,
     )
