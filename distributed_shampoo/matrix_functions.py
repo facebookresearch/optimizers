@@ -47,7 +47,7 @@ def matrix_inverse_root(
     root: int,
     epsilon: float = 0.0,
     exponent_multiplier: float = 1.0,
-    root_inv_method: RootInvMethod = RootInvMethod.EIGEN,
+    root_inv_method: RootInvMethod = RootInvMethod.PSEUDO_EIGEN,
     max_iterations: int = 1000,
     tolerance: float = 1e-6,
     is_diagonal: Union[Tensor, bool] = False,
@@ -242,7 +242,12 @@ def _matrix_root_eigen(
             raise exception
 
     if use_pseudo_inverse:
-        power_L = torch.where(L <= epsilon, torch.zeros_like(L), L.pow(alpha))
+        # Filter the eigenvalues based on the numerical rank of the matrix
+        # The procedure below mimics the steps described in the documentation of
+        # https://pytorch.org/docs/stable/generated/torch.linalg.matrix_rank.html
+        rtol = L.numel() * torch.finfo(A.dtype).eps
+        spectrum_cutoff = rtol * L.max().relu()
+        power_L = torch.where(L <= spectrum_cutoff, torch.zeros_like(L), L.pow(alpha))
     else:
         lambda_min = torch.min(L)
         # make eigenvalues >= 0 (if necessary)
