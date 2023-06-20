@@ -20,6 +20,7 @@ from distributed_shampoo.matrix_functions import (
     check_diagonal,
     compute_matrix_root_inverse_residuals,
     matrix_inverse_root,
+    RootInvMethod
 )
 from distributed_shampoo.optimizer_modules import OptimizerModule
 from distributed_shampoo.shampoo_dist_utils import (
@@ -277,6 +278,8 @@ class AdagradPreconditioner(DistributedPreconditioner):
 
     Other variants can also be specified.
 
+    # TODO: Enable pseudo-inverse strategy for Adagrad preconditioner.
+
     Args:
         param (Tensor): Parameter of interest.
         beta2 (float): Exponential moving average factor. If beta2 = 1., will use Adagrad update. (Default: 1.0)
@@ -288,7 +291,6 @@ class AdagradPreconditioner(DistributedPreconditioner):
         dist_buffer (Optional[Tensor]): Buffer for distributed computation. (Default: None)
         use_dtensor (bool): Flag for using DTensor. Requires PyTorch 2 nightly. Otherwise, uses Tensor. (Default: True)
         communication_dtype (CommunicationDType): Datatype for communication between ranks. (Default: DEFAULT)
-
     """
 
     def __init__(
@@ -418,6 +420,8 @@ class ShampooPreconditioner(DistributedPreconditioner):
             3. Otherwise, re-uses previous inverse factor matrix when both root inverse computations fail.
         use_dtensor (bool): Flag for using DTensor. Requires PyTorch 2 nightly. Otherwise, uses Tensor. (Default: True)
         communication_dtype (CommunicationDType): Datatype for communication between ranks. (Default: DEFAULT)
+        root_inv_method (RootInvMethod): Strategy for computing (inverse) preconditioner roots. (Default:
+            RootInvMethod.PSEUDO_EIGEN)
 
     """
 
@@ -442,6 +446,7 @@ class ShampooPreconditioner(DistributedPreconditioner):
         use_protected_eigh: bool = True,
         use_dtensor: bool = True,
         communication_dtype: CommunicationDType = CommunicationDType.DEFAULT,
+        root_inv_method: RootInvMethod = RootInvMethod.PSEUDO_EIGEN,
     ):
 
         super(ShampooPreconditioner, self).__init__(
@@ -463,6 +468,7 @@ class ShampooPreconditioner(DistributedPreconditioner):
         self._start_preconditioning_step = start_preconditioning_step
         self._use_protected_eigh = use_protected_eigh
         self._communication_dtype = communication_dtype
+        self._root_inv_method = root_inv_method
 
         # Compute root.
         self._root = self._get_root_from_exponent_override(
@@ -785,6 +791,7 @@ class ShampooPreconditioner(DistributedPreconditioner):
                         exponent_multiplier=self._exponent_multiplier,
                         is_diagonal=preconditioner.is_diagonal,
                         retry_double_precision=self._use_protected_eigh,
+                        root_inv_method=self._root_inv_method,
                     ).to(dtype=self._dtype)
 
                     # check if we encounter NaN or inf values in computed inverse matrix.
@@ -888,6 +895,8 @@ class BlockShampooPreconditioner(DistributedPreconditioner):
             3. Otherwise, re-uses previous inverse factor matrix when both root inverse computations fail.
         use_dtensor (bool): Flag for using DTensor. Requires PyTorch 2 nightly. Otherwise, uses Tensor. (Default: True)
         communication_dtype (CommunicationDType): Datatype for communication between ranks. (Default: DEFAULT)
+        root_inv_method (RootInvMethod): Strategy for computing (inverse) preconditioner roots. (Default:
+            RootInvMethod.PSEUDO_EIGEN)
 
     """
 
@@ -914,6 +923,7 @@ class BlockShampooPreconditioner(DistributedPreconditioner):
         use_protected_eigh: bool = True,
         use_dtensor: bool = True,
         communication_dtype: CommunicationDType = CommunicationDType.DEFAULT,
+        root_inv_method: RootInvMethod = RootInvMethod.PSEUDO_EIGEN,
     ):
         super(BlockShampooPreconditioner, self).__init__(
             param,
@@ -975,6 +985,7 @@ class BlockShampooPreconditioner(DistributedPreconditioner):
                 use_protected_eigh=use_protected_eigh,
                 use_dtensor=use_dtensor,
                 communication_dtype=communication_dtype,
+                root_inv_method=root_inv_method,
             )
             self._split_preconditioners.append(preconditioner)
             self._parameter_count += preconditioner.parameter_count

@@ -31,6 +31,7 @@ from distributed_shampoo.shampoo_utils import (
     GraftingType,
     LargeDimMethod,
     ShampooPreconditioner,
+    RootInvMethod
 )
 from torch.nn import Parameter
 
@@ -62,7 +63,7 @@ class DistributedShampoo(torch.optim.Optimizer):
         Hao-Jun Michael Shi (Meta Platforms, Inc.)
         Tsung-Hsien Lee
         Shintaro Iwasaki (Meta Platforms, Inc.)
-        Jose Gallego-Posada (MILA / Meta Platforms, Inc.)
+        Jose Gallego-Posada (Mila / Meta Platforms, Inc.)
 
     with contributions and support from:
 
@@ -181,6 +182,8 @@ class DistributedShampoo(torch.optim.Optimizer):
         precondition_frequency (int): frequency for computing root inverse preconditioner (Default: 1)
         start_preconditioning_step (int): iteration to start computing inverse preconditioner. If -1, uses
             the same value as precondition_frequency. (Default: -1)
+        root_inv_method (RootInvMethod): Strategy for computing (inverse) preconditioner roots. (Default:
+            RootInvMethod.PSEUDO_EIGEN)
         exponent_override (int, List[int]): inverse root to use in Shampoo. If a list [l1, l2, ..., lp], then we will
             use -1 / l1 for 1-D tensor (vectors), -1 / l2 for 2-D tensors (matrices), and so on. If the order of the
             tensor exceeds the order of the tensor, reverts to the default value. If 0 is used, uses the default inverse
@@ -221,6 +224,7 @@ class DistributedShampoo(torch.optim.Optimizer):
         max_preconditioner_dim: int = 1024,
         precondition_frequency: int = 1,
         start_preconditioning_step: int = -1,
+        root_inv_method: RootInvMethod = RootInvMethod.PSEUDO_EIGEN,
         exponent_override: Union[int, List[int]] = 0,
         exponent_multiplier: float = 1.0,
         use_nesterov: bool = False,
@@ -338,6 +342,7 @@ class DistributedShampoo(torch.optim.Optimizer):
         # Initialize algorithm-related fields.
         self._max_preconditioner_dim = max_preconditioner_dim
         self._precondition_frequency = precondition_frequency
+        self._root_inv_method = root_inv_method
         self._exponent_override = exponent_override
         self._exponent_multiplier = exponent_multiplier
         self._num_trainers_per_group = num_trainers_per_group
@@ -416,7 +421,11 @@ class DistributedShampoo(torch.optim.Optimizer):
             for idx, p in enumerate(group[PARAMS]):
                 state = self.state[p]
                 dims = torch.as_tensor(p.shape)
-                state[STEP] = torch.tensor(0)
+
+                # Initialize step counter at -1 so that first call to `_iterate_step` 
+                # causes the counter to attain 0 and force a preconditioner computation
+                # at the first step. `state[STEP]` was previously initialized at 0.
+                state[STEP] = torch.tensor(-1)
 
                 # Blocks the tensor and applies Shampoo to each block, with block
                 # size equal to the max_preconditioner_dim; see feature above.
@@ -443,6 +452,7 @@ class DistributedShampoo(torch.optim.Optimizer):
                         use_protected_eigh=self._use_protected_eigh,
                         use_dtensor=self._use_dtensor,
                         communication_dtype=self._communication_dtype,
+                        root_inv_method=self._root_inv_method,
                     )
                     preconditioner_count += len(
                         state[PRECONDITIONERS].get_split_dist_buffers()
@@ -457,6 +467,7 @@ class DistributedShampoo(torch.optim.Optimizer):
                         else (None, 0)
                     )
                     preconditioner_count += 1
+                    # TODO: Enable pseudo-inverse strategy for Adagrad
                     state[PRECONDITIONERS] = (
                         AdagradPreconditioner(
                             p,
@@ -491,6 +502,7 @@ class DistributedShampoo(torch.optim.Optimizer):
                             use_protected_eigh=self._use_protected_eigh,
                             use_dtensor=self._use_dtensor,
                             communication_dtype=self._communication_dtype,
+                            root_inv_method=self._root_inv_method,
                         )
                     )
 
@@ -524,6 +536,7 @@ class DistributedShampoo(torch.optim.Optimizer):
                         use_protected_eigh=self._use_protected_eigh,
                         use_dtensor=self._use_dtensor,
                         communication_dtype=self._communication_dtype,
+                        root_inv_method=self._root_inv_method,
                     )
 
                 else:
