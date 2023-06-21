@@ -214,7 +214,7 @@ class FSDPShampoo(torch.optim.Optimizer):
         grafting_epsilon: float = 1e-3,
         grafting_beta2: float = 1.0,
         use_protected_eigh: bool = True,
-        use_dtensor: bool = True,
+        use_dtensor: bool = False,
         debug_mode: bool = False,
     ):
         # Hyperparameter checks.
@@ -343,16 +343,7 @@ class FSDPShampoo(torch.optim.Optimizer):
         else:
             self._start_preconditioning_step = start_preconditioning_step
 
-        # Initialize comms-related fields.
-        self._world_size = dist.get_world_size() if self._use_distributed() else 1
-
-        # Initialize Shampoo preconditioners and distributed buffers.
-        self._dist_group = None
         self._initialize_preconditioners_and_steps()
-
-    @torch.no_grad()
-    def _use_distributed(self) -> bool:
-        return self._num_trainers_per_group > 1
 
     @torch.no_grad()
     def _initialize_preconditioners_and_steps(self):
@@ -494,10 +485,7 @@ class FSDPShampoo(torch.optim.Optimizer):
         for group in self.param_groups:
             for p in group[PARAMS]:
                 # skip parameters not on worker
-                if p.numel() == 0:
-                    continue
-
-                if p.grad is None:
+                if p.numel() == 0 or p.grad is None:
                     continue
 
                 state = self.state[p]
@@ -689,9 +677,6 @@ class FSDPShampoo(torch.optim.Optimizer):
         iteration = self._iterate_step()
         self._update_preconditioners()
 
-        # for debugging
-        current_rank = dist.get_rank()
-
         # Computes root inverse of all preconditioners every self._precondition_frequency
         # after the self._start_preconditioning_step iteration.
         if (
@@ -718,7 +703,7 @@ class FSDPShampoo(torch.optim.Optimizer):
 
             for p in group[PARAMS]:
                 state = self.state[p]
-                if p.grad is None or not state[PRECONDITIONERS].on_source_rank:
+                if p.numel() == 0 or p.grad is None:
                     continue
 
                 # Incorporate first-moment or filtered gradient estimation.
@@ -778,72 +763,3 @@ class FSDPShampoo(torch.optim.Optimizer):
             torch._foreach_add_(split_params, split_search_directions, alpha=-lr)
 
         return loss
-
-    def load_state_dict(self, state_dict):
-        r"""Loads the optimizer state.
-        Args:
-            state_dict (dict): optimizer state. Should be an object returned
-                from a call to :meth:`state_dict`.
-        """
-        # deepcopy, to be consistent with module API
-        state_dict = deepcopy(state_dict)
-        # Validate the state_dict
-        groups = self.param_groups
-        saved_groups = state_dict["param_groups"]
-
-        if len(groups) != len(saved_groups):
-            raise ValueError(
-                "loaded state dict has a different number of parameter groups"
-            )
-        param_lens = (len(g[PARAMS]) for g in groups)
-        saved_lens = (len(g[PARAMS]) for g in saved_groups)
-        if any(p_len != s_len for p_len, s_len in zip(param_lens, saved_lens)):
-            raise ValueError(
-                "loaded state dict contains a parameter group "
-                "that doesn't match the size of optimizer's group"
-            )
-
-        # Update the state
-        id_map = {
-            old_id: p
-            for old_id, p in zip(
-                chain.from_iterable((g[PARAMS] for g in saved_groups)),
-                chain.from_iterable((g[PARAMS] for g in groups)),
-            )
-        }
-
-        def cast(param, value, key=None):
-            r"""Make a deep copy of value, casting all tensors to device of param."""
-            if isinstance(value, torch.Tensor):
-                return value
-            elif isinstance(value, dict):
-                return {k: cast(param, v, key=k) for k, v in value.items()}
-            elif isinstance(value, container_abcs.Iterable):
-                return type(value)(cast(param, v) for v in value)
-            # Modified load_state_dict in order to ensure that the preconditioner objects
-            # are casted correctly. This enables us to use generic map_locations when
-            # checkpointing.
-            elif isinstance(value, Preconditioner):
-                value.to(param.device)
-                return value
-            else:
-                return value
-
-        # Copy state assigned to params (and cast tensors to appropriate types).
-        # State that is not assigned to params is copied as is (needed for
-        # backward compatibility).
-        state = defaultdict(dict)
-        for k, v in state_dict["state"].items():
-            if k in id_map:
-                param = id_map[k]
-                state[param] = cast(param, v)
-            else:
-                state[k] = v
-
-        # Update parameter groups, setting their 'params' value
-        def update_group(group, new_group):
-            new_group[PARAMS] = group[PARAMS]
-            return new_group
-
-        param_groups = [update_group(g, ng) for g, ng in zip(groups, saved_groups)]
-        self.__setstate__({"state": state, "param_groups": param_groups})
