@@ -160,14 +160,14 @@ def convex_split(
         # final dimension case
         if i == 0 or start[:i] == end[:i]:
             shape = [-1] + list(orig_shape[i + 1 :])
-            split_tensors.append(remainder.reshape(shape))
+            split_tensors.append(remainder.view(shape))
             break
 
         if sidx % dim != 0:
             shape = [dim - sidx] + list(orig_shape[i + 1 :])
             size = prod(shape)
-            split_tensors.append(remainder[:size].reshape(shape))
-            remainder = remainder[size:]
+            split_tensors.append(torch.narrow(remainder, 0, 0, size).view(shape))
+            remainder = torch.narrow(remainder, 0, size, len(remainder) - size)
             cumul_start_idx += size
 
         if remainder.numel() == 0:
@@ -176,8 +176,8 @@ def convex_split(
         if eidx != dim - 1:
             shape = [eidx + 1] + list(orig_shape[i + 1 :])
             size = prod(shape)
-            split_tensors.append(remainder[-size:].reshape(shape))
-            remainder = remainder[:-size]
+            split_tensors.append(torch.narrow(remainder, 0, -size, size).view(shape))
+            remainder = torch.narrow(remainder, 0, 0, len(remainder) - size)
             cumul_end_idx -= size
 
         if remainder.numel() == 0:
@@ -1110,6 +1110,258 @@ class BlockShampooPreconditioner(DistributedPreconditioner):
 
     def num_preconditioners(self) -> int:
         return len(self._split_preconditioners)
+
+    def reset_preconditioners(self) -> None:
+        for preconditioner in self._split_preconditioners:
+            preconditioner.reset_preconditioners()
+
+
+class SplitShampooPreconditioner(DistributedPreconditioner):
+    """Shampoo with split function (currently row-wise convex split) applied to the parameters.
+
+    NOTE: Does not support sparse gradients at this time.
+
+    Args:
+        param (Tensor): Parameter of interest.
+        metadata (Tuple): Shard metadata of parameter.
+        large_dim_method (LargeDimMethod): method for handling large scale tensors. (Default: LargeDimMethod.BLOCKING)
+        beta2 (float): Exponential moving average factor. If beta2 = 1., will use Adagrad update. (Default: 1.0)
+        epsilon (float): Epsilon term for regularizing preconditioner to ensure positive definiteness. (Default: 1e-12)
+        exponent_override (int): Exponent override for taking the root of the matrix. If exponent_override = 0, uses
+            2 * order of the tensor. (Default: 0)
+        exponent_multiplier (float): Exponent multiplier to be multiplied to the numerator of the inverse root. (Default: 1.0)
+        use_bias_correction (bool): Flag for using bias correction. (Default: True)
+        block_size (int): Block size for blocking large tensors. (Default: 1024)
+        dtype (torch.dtype): Data type for accumulating and computing root inverse of preconditioners. (Default: torch.float)
+        idx (Union[None, int, str]): Layer index (for logging purposes). (Default: None)
+        use_merge_dims (bool): Denotes whether or not dimensions are merged. (Default: True)
+        start_preconditioning_step (int): initial delay before starting to compute root inverse. Applies grafting method beforehand. (Default: 0)
+        grafting_type (LayerwiseGraftingType): Selects grafting method. (Default: GraftingType.NONE)
+        grafting_beta2 (float): Exponential moving average factor for grafting method. (Default: 1.0)
+        grafting_epsilon (float): Epsilon for grafting method. (Default: 1e-3)
+        use_protected_eigh (bool): Flag for using two guards to prevent failures of torch.linalg.eigh. (Default: True)
+            1. Attempts to compute root inverse in preconditioner_dtype precision.
+            2. Attempts to recompute the eigendecomposition if using lower-precision fails.
+            3. Otherwise, re-uses previous inverse factor matrix when both root inverse computations fail.
+        use_dtensor (bool): Flag for using DTensor. Requires PyTorch 2 nightly. Otherwise, uses Tensor. (Default: True)
+
+    """
+
+    def __init__(
+        self,
+        param,
+        metadata: Tuple,
+        large_dim_method: LargeDimMethod = LargeDimMethod.BLOCKING,
+        beta2: float = 1.0,
+        epsilon: float = 1e-12,
+        exponent_override: int = 0,
+        exponent_multiplier: float = 1.0,
+        use_bias_correction: bool = True,
+        max_preconditioner_dim: int = 1024,
+        dtype: torch.dtype = torch.float,
+        idx: Union[None, int, str] = None,
+        use_merge_dims: bool = True,
+        start_preconditioning_step: int = 0,
+        grafting_type: GraftingType = GraftingType.NONE,
+        grafting_beta2: float = 1.0,
+        grafting_epsilon: float = 1e-3,
+        use_protected_eigh: bool = True,
+        use_dtensor: bool = True,
+    ):
+        super(SplitShampooPreconditioner, self).__init__(
+            param,
+        )
+
+        # Set parameters.
+        self._large_dim_method = large_dim_method
+        self._beta2 = beta2
+        self._epsilon = epsilon
+        self._exponent_override = exponent_override
+        self._exponent_multiplier = exponent_multiplier
+        self._use_bias_correction = use_bias_correction
+        self._max_preconditioner_dim = max_preconditioner_dim
+        self._dtype = dtype
+        self._idx = idx
+        self._start_preconditioning_step = start_preconditioning_step
+        self._use_merge_dims = use_merge_dims
+
+        fqn, orig_shape, orig_numel, shard_param_info = metadata
+        start_idx = shard_param_info.intra_param_start_idx
+        end_idx = shard_param_info.intra_param_end_idx
+        self._orig_shape = orig_shape
+        self._start_idx = start_idx
+        self._end_idx = end_idx
+
+        # Construct multiple preconditioners for each block
+        self._split_preconditioners = []
+
+        split_param = convex_split(param, orig_shape, start_idx, end_idx)
+        for i, p in enumerate(split_param):
+            dims = torch.as_tensor(p.shape)
+            split_idx = str(idx) + "." + str(i)
+
+            # Blocks the tensor and applies Shampoo to each block, with block
+            # size equal to the max_preconditioner_dim; see feature above.
+            if self._large_dim_method == LargeDimMethod.BLOCKING:
+                preconditioner = BlockShampooPreconditioner(
+                    p,
+                    beta2=beta2,
+                    epsilon=epsilon,
+                    exponent_override=exponent_override,
+                    exponent_multiplier=exponent_multiplier,
+                    use_bias_correction=use_bias_correction,
+                    block_size=max_preconditioner_dim,
+                    dtype=dtype,
+                    idx=split_idx,
+                    use_merge_dims=use_merge_dims,
+                    start_preconditioning_step=start_preconditioning_step,
+                    grafting_type=grafting_type,
+                    grafting_beta2=grafting_beta2,
+                    grafting_epsilon=grafting_epsilon,
+                    use_protected_eigh=use_protected_eigh,
+                    use_dtensor=use_dtensor,
+                )
+
+            # Uses Adagrad preconditioner if any dimension is larger than
+            # the max_preconditioner_dim; see features above.
+            elif self._large_dim_method == LargeDimMethod.ADAGRAD:
+                preconditioner = (
+                    AdagradPreconditioner(
+                        p,
+                        beta2=beta2,
+                        epsilon=epsilon,
+                        use_bias_correction=use_bias_correction,
+                        idx=split_idx,
+                        use_dtensor=use_dtensor,
+                    )
+                    if torch.any(dims > self._max_preconditioner_dim)
+                    else ShampooPreconditioner(
+                        p,
+                        beta2=beta2,
+                        epsilon=epsilon,
+                        exponent_override=exponent_override,
+                        exponent_multiplier=exponent_multiplier,
+                        use_bias_correction=use_bias_correction,
+                        diagonal_threshold=max_preconditioner_dim,
+                        dtype=dtype,
+                        idx=split_idx,
+                        start_preconditioning_step=start_preconditioning_step,
+                        grafting_type=grafting_type,
+                        grafting_beta2=grafting_beta2,
+                        grafting_epsilon=grafting_epsilon,
+                        use_protected_eigh=use_protected_eigh,
+                        use_dtensor=use_dtensor,
+                    )
+                )
+
+            # Uses diagonal Shampoo preconditioner in place of full Shampoo
+            # preconditioner if dimension is larger than max_preconditioner_dim; see feature
+            # above.
+            elif self._large_dim_method == LargeDimMethod.DIAGONAL:
+                preconditioner = ShampooPreconditioner(
+                    p,
+                    beta2=beta2,
+                    epsilon=epsilon,
+                    exponent_override=exponent_override,
+                    exponent_multiplier=exponent_multiplier,
+                    use_bias_correction=use_bias_correction,
+                    diagonal_threshold=max_preconditioner_dim,
+                    dtype=dtype,
+                    idx=split_idx,
+                    start_preconditioning_step=start_preconditioning_step,
+                    grafting_type=grafting_type,
+                    grafting_beta2=grafting_beta2,
+                    grafting_epsilon=grafting_epsilon,
+                    use_protected_eigh=use_protected_eigh,
+                    use_dtensor=use_dtensor,
+                )
+
+            else:
+                raise ValueError(
+                    "Large dim method "
+                    + str(self._large_dim_method)
+                    + " is not implemented!"
+                )
+
+            self._split_preconditioners.append(preconditioner)
+            self._parameter_count += preconditioner.parameter_count
+
+    def apply_split(self, tensor: Tensor, full_split: bool = False):
+        initial_split = convex_split(
+            tensor, self._orig_shape, self._start_idx, self._end_idx
+        )
+        if full_split and self._large_dim_method == LargeDimMethod.BLOCKING:
+            # return flattened split
+            assert len(initial_split) == len(self._split_preconditioners)
+            return [
+                p
+                for partition, preconditioner in zip(
+                    initial_split, self._split_preconditioners
+                )
+                for p in preconditioner.combine_and_split_dims(partition)
+            ]
+        else:
+            return initial_split
+
+    def update_preconditioners(self, grad: Tensor, iteration: Tensor):
+        split_grad = self.apply_split(grad)
+        assert len(split_grad) == len(self._split_preconditioners)
+        for p, g in zip(self._split_preconditioners, split_grad):
+            p.update_preconditioners(g, iteration)
+
+    def precondition(
+        self, grad: Tensor, iteration: Tensor, return_split: bool = True
+    ) -> Tensor:
+        split_grad = self.apply_split(grad)
+        assert len(self._split_preconditioners) == len(split_grad)
+        if return_split:
+            # return flattened split
+            split_preconditioned_grad = []
+            for p, g in zip(self._split_preconditioners, split_grad):
+                split_preconditioned_grad.extend(
+                    p.precondition(g, iteration, return_split=True)
+                )
+            return split_preconditioned_grad
+        else:
+            raise NotImplementedError("return_split = False option not yet implemented")
+
+    def compute_root_inverse(self) -> None:
+        for preconditioner in self._split_preconditioners:
+            preconditioner.compute_root_inverse()
+
+    def compute_root_inverse_residuals(
+        self,
+    ) -> Tuple[List[Tensor], List[Tensor]]:
+        relative_errors = []
+        relative_residuals = []
+
+        for preconditioner in self._split_preconditioners:
+            (
+                relative_errors_temp,
+                relative_residuals_temp,
+            ) = preconditioner.compute_root_inverse_residuals()
+
+            relative_errors += relative_errors_temp
+            relative_residuals += relative_residuals_temp
+
+        return (
+            relative_errors,
+            relative_residuals,
+        )
+
+    def compute_norm(self, grad: Tensor, iteration: Tensor) -> Tensor:
+        return torch.linalg.norm(self.precondition(grad, iteration))
+
+    def to(self, device: Union[None, torch.device] = None):
+        if device is not None:
+            for preconditioner in self._split_preconditioners:
+                preconditioner.to(device=device)
+
+    def num_preconditioners(self) -> int:
+        return sum(
+            preconditioner.num_preconditioners()
+            for preconditioner in self._split_preconditioners
+        )
 
     def reset_preconditioners(self) -> None:
         for preconditioner in self._split_preconditioners:

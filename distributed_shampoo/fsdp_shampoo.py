@@ -24,6 +24,7 @@ from distributed_shampoo.shampoo_utils import (
     LargeDimMethod,
     Preconditioner,
     ShampooPreconditioner,
+    SplitShampooPreconditioner,
 )
 
 logger = logging.getLogger(__name__)
@@ -193,6 +194,7 @@ class FSDPShampoo(torch.optim.Optimizer):
     def __init__(
         self,
         params,
+        param_metadata: Dict[torch.nn.Parameter, Tuple],
         lr: float = 1e-2,
         betas: Tuple[float, float] = (0.9, 1.0),
         epsilon: float = 1e-12,
@@ -308,6 +310,7 @@ class FSDPShampoo(torch.optim.Optimizer):
         )
 
         # Initialize algorithm-related fields.
+        self._param_metadata = param_metadata
         self._max_preconditioner_dim = max_preconditioner_dim
         self._precondition_frequency = precondition_frequency
         self._exponent_override = exponent_override
@@ -351,127 +354,36 @@ class FSDPShampoo(torch.optim.Optimizer):
         # current workaround for group_source_rank
         # TODO: try to keep dist_group information
         self._dist_group = None
-        group_rank = 0
-        buffer_ranks = None
 
         for group in self.param_groups:
-            preconditioner_count = 0
             for idx, p in enumerate(group[PARAMS]):
                 # skip parameters not on worker
                 if p.numel() == 0:
                     continue
 
                 state = self.state[p]
-                dims = torch.as_tensor(p.shape)
                 state[STEP] = torch.tensor(0)
 
-                # Blocks the tensor and applies Shampoo to each block, with block
-                # size equal to the max_preconditioner_dim; see feature above.
-                if self._large_dim_method == LargeDimMethod.BLOCKING:
-                    state[PRECONDITIONERS] = BlockShampooPreconditioner(
-                        p,
-                        beta2=group[BETAS][1],
-                        epsilon=group[EPSILON],
-                        exponent_override=self._exponent_override,
-                        exponent_multiplier=self._exponent_multiplier,
-                        use_bias_correction=self._use_bias_correction,
-                        block_size=self._max_preconditioner_dim,
-                        dtype=self._preconditioner_dtype,
-                        idx=idx,
-                        use_merge_dims=self._use_merge_dims,
-                        start_preconditioning_step=self._start_preconditioning_step,
-                        grafting_type=self._grafting_type,
-                        grafting_beta2=self._grafting_beta2,
-                        grafting_epsilon=self._grafting_epsilon,
-                        group=self._dist_group,
-                        dist_buffer_ranks=buffer_ranks,
-                        dist_buffer_index=preconditioner_count,
-                        use_protected_eigh=self._use_protected_eigh,
-                        use_dtensor=self._use_dtensor,
-                    )
-                    preconditioner_count += state[PRECONDITIONERS].num_preconditioners()
-
-                # Uses Adagrad preconditioner if any dimension is larger than
-                # the max_preconditioner_dim; see features above.
-                elif self._large_dim_method == LargeDimMethod.ADAGRAD:
-                    dist_buffer, group_source_rank = (
-                        buffer_ranks[preconditioner_count]
-                        if buffer_ranks
-                        else (None, 0)
-                    )
-                    preconditioner_count += 1
-                    state[PRECONDITIONERS] = (
-                        AdagradPreconditioner(
-                            p,
-                            beta2=group[BETAS][1],
-                            epsilon=group[EPSILON],
-                            use_bias_correction=self._use_bias_correction,
-                            idx=idx,
-                            group=self._dist_group,
-                            group_source_rank=group_source_rank,
-                            dist_buffer=dist_buffer,
-                            use_dtensor=self._use_dtensor,
-                        )
-                        if torch.any(dims > self._max_preconditioner_dim)
-                        else ShampooPreconditioner(
-                            p,
-                            beta2=group[BETAS][1],
-                            epsilon=group[EPSILON],
-                            exponent_override=self._exponent_override,
-                            exponent_multiplier=self._exponent_multiplier,
-                            use_bias_correction=self._use_bias_correction,
-                            diagonal_threshold=self._max_preconditioner_dim,
-                            dtype=self._preconditioner_dtype,
-                            idx=idx,
-                            start_preconditioning_step=self._start_preconditioning_step,
-                            grafting_type=self._grafting_type,
-                            grafting_beta2=self._grafting_beta2,
-                            grafting_epsilon=self._grafting_epsilon,
-                            group=self._dist_group,
-                            group_source_rank=group_source_rank,
-                            dist_buffer=dist_buffer,
-                            use_protected_eigh=self._use_protected_eigh,
-                            use_dtensor=self._use_dtensor,
-                        )
-                    )
-
-                # Uses diagonal Shampoo preconditioner in place of full Shampoo
-                # preconditioner if dimension is larger than max_preconditioner_dim; see feature
-                # above.
-                elif self._large_dim_method == LargeDimMethod.DIAGONAL:
-                    dist_buffer, group_source_rank = (
-                        buffer_ranks[preconditioner_count]
-                        if buffer_ranks
-                        else (None, 0)
-                    )
-                    preconditioner_count += 1
-                    state[PRECONDITIONERS] = ShampooPreconditioner(
-                        p,
-                        beta2=group[BETAS][1],
-                        epsilon=group[EPSILON],
-                        exponent_override=self._exponent_override,
-                        exponent_multiplier=self._exponent_multiplier,
-                        use_bias_correction=self._use_bias_correction,
-                        diagonal_threshold=self._max_preconditioner_dim,
-                        dtype=self._preconditioner_dtype,
-                        idx=idx,
-                        start_preconditioning_step=self._start_preconditioning_step,
-                        grafting_type=self._grafting_type,
-                        grafting_beta2=self._grafting_beta2,
-                        grafting_epsilon=self._grafting_epsilon,
-                        group=self._dist_group,
-                        group_source_rank=group_source_rank,
-                        dist_buffer=dist_buffer,
-                        use_protected_eigh=self._use_protected_eigh,
-                        use_dtensor=self._use_dtensor,
-                    )
-
-                else:
-                    raise ValueError(
-                        "Large dim method "
-                        + str(self._large_dim_method)
-                        + " is not implemented!"
-                    )
+                state[PRECONDITIONERS] = SplitShampooPreconditioner(
+                    p,
+                    self._param_metadata[p],
+                    large_dim_method=self._large_dim_method,
+                    beta2=group[BETAS][1],
+                    epsilon=group[EPSILON],
+                    exponent_override=self._exponent_override,
+                    exponent_multiplier=self._exponent_multiplier,
+                    use_bias_correction=self._use_bias_correction,
+                    max_preconditioner_dim=self._max_preconditioner_dim,
+                    dtype=self._preconditioner_dtype,
+                    idx=idx,
+                    use_merge_dims=self._use_merge_dims,
+                    start_preconditioning_step=self._start_preconditioning_step,
+                    grafting_type=self._grafting_type,
+                    grafting_beta2=self._grafting_beta2,
+                    grafting_epsilon=self._grafting_epsilon,
+                    use_protected_eigh=self._use_protected_eigh,
+                    use_dtensor=self._use_dtensor,
+                )
 
                 # Count parameters from preconditioners for logging purposes.
                 self._parameter_count += state[PRECONDITIONERS].parameter_count
@@ -492,7 +404,11 @@ class FSDPShampoo(torch.optim.Optimizer):
 
                 if isinstance(
                     state[PRECONDITIONERS],
-                    (ShampooPreconditioner, BlockShampooPreconditioner),
+                    (
+                        ShampooPreconditioner,
+                        BlockShampooPreconditioner,
+                        SplitShampooPreconditioner,
+                    ),
                 ):
                     state[PRECONDITIONERS].compute_root_inverse()
 
@@ -526,7 +442,11 @@ class FSDPShampoo(torch.optim.Optimizer):
 
                 if isinstance(
                     state[PRECONDITIONERS],
-                    (ShampooPreconditioner, BlockShampooPreconditioner),
+                    (
+                        ShampooPreconditioner,
+                        BlockShampooPreconditioner,
+                        SplitShampooPreconditioner,
+                    ),
                 ):
                     relative_error, relative_residual = state[
                         PRECONDITIONERS
@@ -567,7 +487,7 @@ class FSDPShampoo(torch.optim.Optimizer):
 
                 grad = p.grad
                 state = self.state[p]
-                if grad is None or not state[PRECONDITIONERS].on_source_rank:
+                if grad is None:
                     continue
 
                 weight_decay = group[WEIGHT_DECAY]
@@ -628,9 +548,9 @@ class FSDPShampoo(torch.optim.Optimizer):
                 )
 
             # Generate split lists.
-            split_params.extend(state[PRECONDITIONERS].combine_and_split_dims(p))
+            split_params.extend(state[PRECONDITIONERS].apply_split(p, full_split=True))
             split_momentum_directions.extend(
-                state[PRECONDITIONERS].combine_and_split_dims(state[MOMENTUM])
+                state[PRECONDITIONERS].apply_split(state[MOMENTUM], full_split=True)
                 if momentum_param != 0.0
                 else []
             )
