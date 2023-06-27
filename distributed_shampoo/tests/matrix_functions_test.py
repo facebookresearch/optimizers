@@ -335,6 +335,19 @@ class EigenRootTest(unittest.TestCase):
                     eig_sols,
                 )
 
+    def test_matrix_root_pseudo_eigen(self):
+        A = torch.tensor([[2.0, 0.0], [0.0, 0.0]])
+        X, L, Q = _matrix_root_eigen(
+            A=A,
+            root=1,
+            epsilon=0.0,
+            make_positive_semidefinite=False,
+            use_pseudo_inverse=True,
+            inverse=True,
+        )
+        target_pseudo_inv = torch.tensor([[0.5, 0.0], [0.0, 0.0]])
+        torch.testing.assert_close(X, target_pseudo_inv)
+
     def test_matrix_root_eigen_nonpositive_root(self):
         A = torch.tensor([[-1.0, 0.0], [0.0, 2.0]])
         root = -1

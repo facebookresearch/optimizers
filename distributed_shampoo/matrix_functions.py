@@ -156,9 +156,6 @@ def matrix_root_diagonal(
 
     """
 
-    if use_pseudo_inverse and not inverse:
-        raise ValueError("Received invalid request to compute pseudoinverse but not calculating an inverse root.")
-
     # check order of tensor
     order = len(A.shape)
     if order == 2:
@@ -216,9 +213,6 @@ def _matrix_root_eigen(
         Q (Tensor): Orthogonal matrix consisting of eigenvectors of A.
 
     """
-
-    if use_pseudo_inverse and not inverse:
-        raise ValueError("Received invalid request to compute pseudoinverse but not calculating an inverse root.")
 
     if root <= 0:
         raise ValueError(f"Root {root} should be positive!")
