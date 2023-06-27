@@ -141,10 +141,13 @@ def convex_split(
         split_tensors (List[Tensor]): List of tensors.
 
     """
-    assert len(tensor.size()) == 1, f"tensor is not flat, shape {tensor.size()}"
+    if len(tensor.size()) != 1:
+        logger.info(
+            f"Input tensor is not flat, has shape {tensor.size()}. Continuing without splitting."
+        )
     assert (
         end_idx - start_idx + 1 == tensor.size()[0]
-    ), f"start/end indices do not match tensor size: start {start_idx} end {end_idx}, tensor size {tensor.size()}"
+    ), f"Start/end indices do not match tensor size: start {start_idx} end {end_idx}, tensor size {tensor.size()}"
 
     split_tensors = []  # TODO: figure out if order matters
     cumul_start_idx = start_idx
@@ -1318,16 +1321,22 @@ class SplitShampooPreconditioner(DistributedPreconditioner):
             # return flattened split
             split_preconditioned_grad = []
             for p, g in zip(self._split_preconditioners, split_grad):
-                split_preconditioned_grad.extend(
-                    p.precondition(g, iteration, return_split=True)
-                )
+                if isinstance(p, BlockShampooPreconditioner):
+                    split_preconditioned_grad.extend(
+                        p.precondition(g, iteration, return_split=True)
+                    )
+                else:
+                    split_preconditioned_grad.append(p.precondition(g, iteration))
             return split_preconditioned_grad
         else:
             raise NotImplementedError("return_split = False option not yet implemented")
 
     def compute_root_inverse(self) -> None:
         for preconditioner in self._split_preconditioners:
-            preconditioner.compute_root_inverse()
+            if isinstance(
+                preconditioner, (ShampooPreconditioner, BlockShampooPreconditioner)
+            ):
+                preconditioner.compute_root_inverse()
 
     def compute_root_inverse_residuals(
         self,
@@ -1336,13 +1345,16 @@ class SplitShampooPreconditioner(DistributedPreconditioner):
         relative_residuals = []
 
         for preconditioner in self._split_preconditioners:
-            (
-                relative_errors_temp,
-                relative_residuals_temp,
-            ) = preconditioner.compute_root_inverse_residuals()
+            if isinstance(
+                preconditioner, (ShampooPreconditioner, BlockShampooPreconditioner)
+            ):
+                (
+                    relative_errors_temp,
+                    relative_residuals_temp,
+                ) = preconditioner.compute_root_inverse_residuals()
 
-            relative_errors += relative_errors_temp
-            relative_residuals += relative_residuals_temp
+                relative_errors += relative_errors_temp
+                relative_residuals += relative_residuals_temp
 
         return (
             relative_errors,
