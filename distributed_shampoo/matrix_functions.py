@@ -138,7 +138,7 @@ def matrix_root_diagonal(
     inverse: bool = True,
     exponent_multiplier: float = 1.0,
     return_full_matrix: bool = False,
-    use_pseudo_inverse: bool = False,
+    use_pseudo_inverse: bool = True,
 ) -> Tensor:
     """Computes matrix inverse root for a diagonal matrix by taking inverse square root of diagonal entries.
 
@@ -175,7 +175,7 @@ def matrix_root_diagonal(
         alpha = -alpha
 
     if use_pseudo_inverse:
-        X = torch.where(A <= epsilon, torch.zeros_like(A), A.pow(alpha))
+        X = torch.where(A <= 0.0, torch.zeros_like(A), A.pow(alpha))
     else:
         X = (A + epsilon).pow(alpha)
 
@@ -190,7 +190,7 @@ def _matrix_root_eigen(
     exponent_multiplier: float = 1.0,
     make_positive_semidefinite: bool = True,
     retry_double_precision: bool = True,
-    use_pseudo_inverse: bool = False,
+    use_pseudo_inverse: bool = True,
 ) -> Tuple[Tensor, Tensor, Tensor]:
     """Compute matrix (inverse) root using eigendecomposition of symmetric positive (semi-)definite matrix.
 
@@ -208,7 +208,7 @@ def _matrix_root_eigen(
         retry_double_precision (bool): Flag for re-trying eigendecomposition with higher precision if lower precision fails due
             to CuSOLVER failure. (Default: True)
         use_pseudo_inverse (bool): Computes the matrix pseudo-inverse root by discarding negative eigenvalues elements.
-            To use this option, `inverse` must be True. (Default: False)
+            To use this option, `inverse` must be True. (Default: True)
 
     Returns:
         X (Tensor): (Inverse) root of matrix. Same dimensions as A.
