@@ -423,11 +423,7 @@ class DistributedShampoo(torch.optim.Optimizer):
             for idx, p in enumerate(group[PARAMS]):
                 state = self.state[p]
                 dims = torch.as_tensor(p.shape)
-
-                # Initialize step counter at -1 so that first call to `_iterate_step` 
-                # causes the counter to attain 0 and force a preconditioner computation
-                # at the first step. `state[STEP]` was previously initialized at 0.
-                state[STEP] = torch.tensor(-1)
+                state[STEP] = torch.tensor(0)
 
                 # Blocks the tensor and applies Shampoo to each block, with block
                 # size equal to the max_preconditioner_dim; see feature above.
@@ -829,10 +825,8 @@ class DistributedShampoo(torch.optim.Optimizer):
 
         # Computes root inverse of all preconditioners every self._precondition_frequency
         # after the self._start_preconditioning_step iteration.
-        if (
-            iteration % self._precondition_frequency == 0
-            and iteration >= self._start_preconditioning_step
-        ):
+        is_precond_step = (iteration == 1) or (iteration % self._precondition_frequency == 0)
+        if (is_precond_step and iteration >= self._start_preconditioning_step):
             self._compute_root_inverse()
 
             if self._debug_mode:
