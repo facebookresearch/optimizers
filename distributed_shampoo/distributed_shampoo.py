@@ -31,6 +31,7 @@ from distributed_shampoo.shampoo_utils import (
     GraftingType,
     LargeDimMethod,
     ShampooPreconditioner,
+    RootInvMethod
 )
 from torch.nn import Parameter
 
@@ -62,7 +63,7 @@ class DistributedShampoo(torch.optim.Optimizer):
         Hao-Jun Michael Shi (Meta Platforms, Inc.)
         Tsung-Hsien Lee
         Shintaro Iwasaki (Meta Platforms, Inc.)
-        Jose Gallego-Posada (MILA / Meta Platforms, Inc.)
+        Jose Gallego-Posada (Mila / Meta Platforms, Inc.)
 
     with contributions and support from:
 
@@ -181,6 +182,8 @@ class DistributedShampoo(torch.optim.Optimizer):
         precondition_frequency (int): frequency for computing root inverse preconditioner (Default: 1)
         start_preconditioning_step (int): iteration to start computing inverse preconditioner. If -1, uses
             the same value as precondition_frequency. (Default: -1)
+        root_inv_method (RootInvMethod): Strategy for computing (inverse) preconditioner roots. (Default:
+            RootInvMethod.PSEUDO_EIGEN)
         exponent_override (int, List[int]): inverse root to use in Shampoo. If a list [l1, l2, ..., lp], then we will
             use -1 / l1 for 1-D tensor (vectors), -1 / l2 for 2-D tensors (matrices), and so on. If the order of the
             tensor exceeds the order of the tensor, reverts to the default value. If 0 is used, uses the default inverse
@@ -221,6 +224,7 @@ class DistributedShampoo(torch.optim.Optimizer):
         max_preconditioner_dim: int = 1024,
         precondition_frequency: int = 1,
         start_preconditioning_step: int = -1,
+        root_inv_method: RootInvMethod = RootInvMethod.PSEUDO_EIGEN,
         exponent_override: Union[int, List[int]] = 0,
         exponent_multiplier: float = 1.0,
         use_nesterov: bool = False,
@@ -338,6 +342,7 @@ class DistributedShampoo(torch.optim.Optimizer):
         # Initialize algorithm-related fields.
         self._max_preconditioner_dim = max_preconditioner_dim
         self._precondition_frequency = precondition_frequency
+        self._root_inv_method = root_inv_method
         self._exponent_override = exponent_override
         self._exponent_multiplier = exponent_multiplier
         self._num_trainers_per_group = num_trainers_per_group
@@ -366,7 +371,9 @@ class DistributedShampoo(torch.optim.Optimizer):
             logger.warning(
                 f"start_preconditioning_step set to -1. Setting start_preconditioning_step equal to precondition frequency {precondition_frequency} by default."
             )
-        elif start_preconditioning_step < precondition_frequency:
+        elif 0 < start_preconditioning_step < precondition_frequency:
+            # If start_preconditioning_step==0, we allow an initial preconditioned update 
+            # with the first estimate of the preconditioner.
             raise ValueError(
                 f"Invalid start_preconditioning_step value: {start_preconditioning_step}. Must be >= {precondition_frequency = }."
             )
@@ -443,6 +450,7 @@ class DistributedShampoo(torch.optim.Optimizer):
                         use_protected_eigh=self._use_protected_eigh,
                         use_dtensor=self._use_dtensor,
                         communication_dtype=self._communication_dtype,
+                        root_inv_method=self._root_inv_method,
                     )
                     preconditioner_count += len(
                         state[PRECONDITIONERS].get_split_dist_buffers()
@@ -469,6 +477,7 @@ class DistributedShampoo(torch.optim.Optimizer):
                             dist_buffer=dist_buffer,
                             use_dtensor=self._use_dtensor,
                             communication_dtype=self._communication_dtype,
+                            root_inv_method=self._root_inv_method,
                         )
                         if torch.any(dims > self._max_preconditioner_dim)
                         else ShampooPreconditioner(
@@ -491,6 +500,7 @@ class DistributedShampoo(torch.optim.Optimizer):
                             use_protected_eigh=self._use_protected_eigh,
                             use_dtensor=self._use_dtensor,
                             communication_dtype=self._communication_dtype,
+                            root_inv_method=self._root_inv_method,
                         )
                     )
 
@@ -524,6 +534,7 @@ class DistributedShampoo(torch.optim.Optimizer):
                         use_protected_eigh=self._use_protected_eigh,
                         use_dtensor=self._use_dtensor,
                         communication_dtype=self._communication_dtype,
+                        root_inv_method=self._root_inv_method,
                     )
 
                 else:
@@ -814,10 +825,8 @@ class DistributedShampoo(torch.optim.Optimizer):
 
         # Computes root inverse of all preconditioners every self._precondition_frequency
         # after the self._start_preconditioning_step iteration.
-        if (
-            iteration % self._precondition_frequency == 0
-            and iteration >= self._start_preconditioning_step
-        ):
+        is_precond_step = (iteration == 1) or (iteration % self._precondition_frequency == 0)
+        if (is_precond_step and iteration >= self._start_preconditioning_step):
             self._compute_root_inverse()
 
             if self._debug_mode:
