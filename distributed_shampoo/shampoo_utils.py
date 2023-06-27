@@ -278,8 +278,6 @@ class AdagradPreconditioner(DistributedPreconditioner):
 
     Other variants can also be specified.
 
-    # TODO: Enable pseudo-inverse strategy for Adagrad preconditioner.
-
     Args:
         param (Tensor): Parameter of interest.
         beta2 (float): Exponential moving average factor. If beta2 = 1., will use Adagrad update. (Default: 1.0)
@@ -291,6 +289,8 @@ class AdagradPreconditioner(DistributedPreconditioner):
         dist_buffer (Optional[Tensor]): Buffer for distributed computation. (Default: None)
         use_dtensor (bool): Flag for using DTensor. Requires PyTorch 2 nightly. Otherwise, uses Tensor. (Default: True)
         communication_dtype (CommunicationDType): Datatype for communication between ranks. (Default: DEFAULT)
+        root_inv_method (RootInvMethod): Strategy for computing (inverse) preconditioner roots. (Default:
+            RootInvMethod.PSEUDO_EIGEN)
     """
 
     def __init__(
@@ -305,9 +305,10 @@ class AdagradPreconditioner(DistributedPreconditioner):
         dist_buffer: Optional[Tensor] = None,
         use_dtensor: bool = True,
         communication_dtype: CommunicationDType = CommunicationDType.DEFAULT,
+        root_inv_method: RootInvMethod = RootInvMethod.PSEUDO_EIGEN,
     ):
         super(AdagradPreconditioner, self).__init__(
-            param, group, group_source_rank, dist_buffer, communication_dtype
+            param, group, group_source_rank, dist_buffer, communication_dtype,
         )
         self._beta2 = beta2
         self._epsilon = epsilon
@@ -322,6 +323,11 @@ class AdagradPreconditioner(DistributedPreconditioner):
         self._use_bias_correction = use_bias_correction
         self._bias_correction2 = 1.0
         self._parameter_count += self._preconditioner.numel()
+
+        if root_inv_method not in [RootInvMethod.EIGEN, RootInvMethod.PSEUDO_EIGEN]:
+            raise ValueError(f"Adagrad preconditioner only supports eigendecomposition variants for `root_inv_method` \
+                              but received {root_inv_method}.")
+        self._root_inv_method = root_inv_method
 
         if self._idx is not None:
             self._preconditioner_idx = str(self._idx) + "." + str(0)
@@ -347,23 +353,30 @@ class AdagradPreconditioner(DistributedPreconditioner):
         if not self._on_source_rank:
             return grad
 
-        denom = (
-            (use_local_tensor(self._preconditioner) / self._bias_correction2)
-            .sqrt()
-            .add_(self._epsilon)
-        )
+        denom = (use_local_tensor(self._preconditioner) / self._bias_correction2).sqrt()
+        if self._root_inv_method == RootInvMethod.PSEUDO_EIGEN:
+            # Put ones in the locations of zero entries so that the later division has no effect
+            torch.where(denom == 0, torch.ones_like(denom), denom, out=denom)
+        else:
+            # If not using pseudoinverse, use epsilon to improve numerical stability
+            denom.add_(self._epsilon)
+
         grad.div_(denom)
+
         return grad
 
     def compute_norm(self, grad: Tensor, iteration: int):
         if not self._on_source_rank:
             return torch.as_tensor(1.0)  # return cheap tensor
 
-        denom = (
-            (use_local_tensor(self._preconditioner) / self._bias_correction2)
-            .sqrt()
-            .add_(self._epsilon)
-        )
+        denom = (use_local_tensor(self._preconditioner) / self._bias_correction2).sqrt()
+        if self._root_inv_method == RootInvMethod.PSEUDO_EIGEN:
+            # Put ones in the locations of zero entries so that the later division has no effect
+            torch.where(denom == 0, torch.ones_like(denom), denom, out=denom)
+        else:
+            # If not using pseudoinverse, use epsilon to improve numerical stability
+            denom.add_(self._epsilon)
+
         adagrad_nrm = torch.linalg.norm(grad / denom)
         return adagrad_nrm
 
@@ -1193,7 +1206,8 @@ class AdagradGrafting(Grafting):
         dist_buffer (Optional[Tensor]): Buffer for distributed computation. (Default: None)
         use_dtensor (bool): Flag for using DTensor. Requires PyTorch 2 nightly. Otherwise, uses Tensor. (Default: True)
         communication_dtype (CommunicationDType): Datatype for communication between ranks. (Default: DEFAULT)
-
+        root_inv_method (RootInvMethod): Strategy for computing (inverse) preconditioner roots. (Default:
+            RootInvMethod.PSEUDO_EIGEN)
     """
 
     def __init__(
@@ -1208,6 +1222,7 @@ class AdagradGrafting(Grafting):
         dist_buffer: Optional[Tensor] = None,
         use_dtensor: bool = True,
         communication_dtype: CommunicationDType = CommunicationDType.DEFAULT,
+        root_inv_method: RootInvMethod = RootInvMethod.PSEUDO_EIGEN,
     ):
         super(AdagradGrafting, self).__init__(param)
         self._preconditioner = AdagradPreconditioner(
@@ -1218,7 +1233,9 @@ class AdagradGrafting(Grafting):
             group=group,
             group_source_rank=group_source_rank,
             dist_buffer=dist_buffer,
+            use_dtensor=use_dtensor,
             communication_dtype=communication_dtype,
+            root_inv_method=root_inv_method,
         )
         self.normalize_gradient = normalize_gradient
         self._parameter_count += self._preconditioner.parameter_count

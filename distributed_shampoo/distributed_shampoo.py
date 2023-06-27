@@ -469,7 +469,6 @@ class DistributedShampoo(torch.optim.Optimizer):
                         else (None, 0)
                     )
                     preconditioner_count += 1
-                    # TODO: Enable pseudo-inverse strategy for Adagrad
                     state[PRECONDITIONERS] = (
                         AdagradPreconditioner(
                             p,
@@ -482,6 +481,7 @@ class DistributedShampoo(torch.optim.Optimizer):
                             dist_buffer=dist_buffer,
                             use_dtensor=self._use_dtensor,
                             communication_dtype=self._communication_dtype,
+                            root_inv_method=self._root_inv_method,
                         )
                         if torch.any(dims > self._max_preconditioner_dim)
                         else ShampooPreconditioner(
