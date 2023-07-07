@@ -129,7 +129,7 @@ def multi_dim_cat(split_tensors: List[Tensor], num_splits: List[int]) -> Tensor:
 def convex_split(
     tensor: Tensor, orig_shape: torch.Size, start_idx: int, end_idx: int
 ) -> List[Tensor]:
-    """Chunks tensor across multiple dimensions to be convex.
+    """Chunks tensor across dimensions row-wise to be convex.
 
     Args:
         tensor (Tensor): Flattened gradient or tensor to split.
@@ -145,6 +145,7 @@ def convex_split(
         logger.info(
             f"Input tensor is not flat, has shape {tensor.size()}. Continuing without splitting."
         )
+        return tensor
     assert (
         end_idx - start_idx + 1 == tensor.size()[0]
     ), f"Start/end indices do not match tensor size: start {start_idx} end {end_idx}, tensor size {tensor.size()}"
@@ -412,6 +413,9 @@ class AdagradPreconditioner(DistributedPreconditioner):
     def to(self, device: Union[None, torch.device] = None):
         if device is not None:
             self._preconditioner = self._preconditioner.to(device=device)
+
+    def num_preconditioners(self) -> int:
+        return 1
 
 
 class ShampooKroneckerFactor(OptimizerModule):
@@ -869,6 +873,9 @@ class ShampooPreconditioner(DistributedPreconditioner):
             if self._grafting is not None:
                 self._grafting.to(device=device)
 
+    def num_preconditioners(self) -> int:
+        return 1
+
     def reset_preconditioners(self) -> None:
         for preconditioner in self._preconditioners:
             preconditioner.factor_matrix.zero_()
@@ -1013,7 +1020,9 @@ class BlockShampooPreconditioner(DistributedPreconditioner):
 
     def update_preconditioners(self, grad: Tensor, iteration: Tensor):
         split_grad = self.combine_and_split_dims(grad)
-        assert len(split_grad) == len(self._split_preconditioners)
+        assert (
+            len(split_grad) == self.num_preconditioners()
+        ), f"block shampoo preconditioner {self._idx} has {self.num_preconditioners()} preconditioners but grad was split into {len(split_grad)}"
         for block_preconditioner, block_grad in zip(
             self._split_preconditioners, split_grad
         ):
@@ -1023,7 +1032,9 @@ class BlockShampooPreconditioner(DistributedPreconditioner):
         self, grad: Tensor, iteration: Tensor, return_split: bool = False
     ) -> Tensor:
         split_grad = self.combine_and_split_dims(grad)
-        assert len(self._split_preconditioners) == len(split_grad)
+        assert self.num_preconditioners() == len(
+            split_grad
+        ), f"block shampoo preconditioner {self._idx} has {self.num_preconditioners()} preconditioners but grad was split into {len(split_grad)}"
         split_preconditioned_grad = [
             p.precondition(g, iteration)
             for p, g in zip(self._split_preconditioners, split_grad)
@@ -1094,7 +1105,9 @@ class BlockShampooPreconditioner(DistributedPreconditioner):
         self, grad: Tensor, iteration: Tensor
     ) -> None:
         split_grads = self.combine_and_split_dims(grad)
-        assert len(self._split_preconditioners) == len(split_grads)
+        assert self.num_preconditioners() == len(
+            split_grads
+        ), f"block shampoo preconditioner {self._idx} has {self.num_preconditioners()} preconditioners but grad was split into {len(split_grads)}"
         for preconditioner, grad in zip(self._split_preconditioners, split_grads):
             preconditioner.preconditioned_grad_to_dist_buffer(grad, iteration)
 
@@ -1120,13 +1133,15 @@ class BlockShampooPreconditioner(DistributedPreconditioner):
 
 
 class SplitShampooPreconditioner(DistributedPreconditioner):
-    """Shampoo with split function (currently row-wise convex split) applied to the parameters.
+    """Shampoo with split function (currently row-wise convex split, see function convex_split) applied to the parameters.
 
     NOTE: Does not support sparse gradients at this time.
 
     Args:
         param (Tensor): Parameter of interest.
-        metadata (Tuple): Shard metadata of parameter.
+        metadata (Tuple): FSDP shard metadata of parameter. Contains fqn, original shape, original numels, and shard param info.
+            See FSDP class FlatParameter for more details.
+            https://github.com/pytorch/pytorch/blob/main/torch/distributed/fsdp/flat_param.py#L190
         large_dim_method (LargeDimMethod): method for handling large scale tensors. (Default: LargeDimMethod.BLOCKING)
         beta2 (float): Exponential moving average factor. If beta2 = 1., will use Adagrad update. (Default: 1.0)
         epsilon (float): Epsilon term for regularizing preconditioner to ensure positive definiteness. (Default: 1e-12)
@@ -1188,7 +1203,7 @@ class SplitShampooPreconditioner(DistributedPreconditioner):
         self._start_preconditioning_step = start_preconditioning_step
         self._use_merge_dims = use_merge_dims
 
-        fqn, orig_shape, orig_numel, shard_param_info = metadata
+        _, orig_shape, _, shard_param_info = metadata
         start_idx = shard_param_info.intra_param_start_idx
         end_idx = shard_param_info.intra_param_end_idx
         self._orig_shape = orig_shape
@@ -1289,12 +1304,13 @@ class SplitShampooPreconditioner(DistributedPreconditioner):
             self._split_preconditioners.append(preconditioner)
             self._parameter_count += preconditioner.parameter_count
 
-    def apply_split(self, tensor: Tensor, full_split: bool = False):
+    def apply_split(self, tensor: Tensor, return_split_blocks: bool = False):
         initial_split = convex_split(
             tensor, self._orig_shape, self._start_idx, self._end_idx
         )
-        if full_split and self._large_dim_method == LargeDimMethod.BLOCKING:
-            # return flattened split
+        if return_split_blocks and self._large_dim_method == LargeDimMethod.BLOCKING:
+            # return flattened recursive split, i.e. if self preconditioners are block preconditioners,
+            # retrieve each one's list of preconditioners and flatten
             assert len(initial_split) == len(self._split_preconditioners)
             return [
                 p
@@ -1308,17 +1324,22 @@ class SplitShampooPreconditioner(DistributedPreconditioner):
 
     def update_preconditioners(self, grad: Tensor, iteration: Tensor):
         split_grad = self.apply_split(grad)
-        assert len(split_grad) == len(self._split_preconditioners)
+        assert len(split_grad) == len(
+            self._split_preconditioners
+        ), f"split shampoo preconditioner {self._idx} has {len(self._split_preconditioners)} preconditioners but grad was split into {len(split_grad)}"
         for p, g in zip(self._split_preconditioners, split_grad):
             p.update_preconditioners(g, iteration)
 
     def precondition(
-        self, grad: Tensor, iteration: Tensor, return_split: bool = True
+        self, grad: Tensor, iteration: Tensor, return_split_blocks: bool = True
     ) -> Tensor:
         split_grad = self.apply_split(grad)
-        assert len(self._split_preconditioners) == len(split_grad)
-        if return_split:
-            # return flattened split
+        assert len(self._split_preconditioners) == len(
+            split_grad
+        ), f"split shampoo preconditioner {self._idx} has {len(self._split_preconditioners)} preconditioners but grad was split into {len(split_grad)}"
+        if return_split_blocks:
+            # return flattened recursive split, i.e. if self preconditioners are block preconditioners,
+            # retrieve each one's list of preconditioners, precondition, and flatten
             split_preconditioned_grad = []
             for p, g in zip(self._split_preconditioners, split_grad):
                 if isinstance(p, BlockShampooPreconditioner):
@@ -1329,7 +1350,9 @@ class SplitShampooPreconditioner(DistributedPreconditioner):
                     split_preconditioned_grad.append(p.precondition(g, iteration))
             return split_preconditioned_grad
         else:
-            raise NotImplementedError("return_split = False option not yet implemented")
+            raise NotImplementedError(
+                "return_split_blocks = False option not yet implemented"
+            )
 
     def compute_root_inverse(self) -> None:
         for preconditioner in self._split_preconditioners:
@@ -1370,6 +1393,7 @@ class SplitShampooPreconditioner(DistributedPreconditioner):
                 preconditioner.to(device=device)
 
     def num_preconditioners(self) -> int:
+        # returns total number of preconditioners (where block preconditioners are considered to contain multiple preconditioners)
         return sum(
             preconditioner.num_preconditioners()
             for preconditioner in self._split_preconditioners
@@ -1482,6 +1506,7 @@ class AdagradGrafting(Grafting):
             group=group,
             group_source_rank=group_source_rank,
             dist_buffer=dist_buffer,
+            use_dtensor=use_dtensor,
         )
         self.normalize_gradient = normalize_gradient
         self._parameter_count += self._preconditioner.parameter_count

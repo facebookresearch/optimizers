@@ -18,12 +18,8 @@ import torch
 import torch.distributed as dist
 
 from distributed_shampoo.shampoo_utils import (
-    AdagradPreconditioner,
-    BlockShampooPreconditioner,
     GraftingType,
     LargeDimMethod,
-    Preconditioner,
-    ShampooPreconditioner,
     SplitShampooPreconditioner,
 )
 
@@ -158,6 +154,9 @@ class FSDPShampoo(torch.optim.Optimizer):
     Args:
         params (iterable): iterable of parameters to optimize or dicts defining
             parameter groups
+        param_metadata (Dict[torch.nn.Parameter, Tuple]): FSDP shard metadata for each parameter consisting of fqn,
+            original shape, original numels, and shard param info. See FSDP class FlatParameter for more details.
+            https://github.com/pytorch/pytorch/blob/main/torch/distributed/fsdp/flat_param.py#L190
         lr (float): learning rate (Default: 1e-2)
         betas (Tuple[float, float]): coefficients used for computing running averages
             of gradient and its square (Default: (0.9, 1.0))
@@ -402,14 +401,7 @@ class FSDPShampoo(torch.optim.Optimizer):
 
                 state = self.state[p]
 
-                if isinstance(
-                    state[PRECONDITIONERS],
-                    (
-                        ShampooPreconditioner,
-                        BlockShampooPreconditioner,
-                        SplitShampooPreconditioner,
-                    ),
-                ):
+                if isinstance(state[PRECONDITIONERS], SplitShampooPreconditioner):
                     state[PRECONDITIONERS].compute_root_inverse()
 
     @torch.no_grad()
@@ -440,14 +432,7 @@ class FSDPShampoo(torch.optim.Optimizer):
 
                 state = self.state[p]
 
-                if isinstance(
-                    state[PRECONDITIONERS],
-                    (
-                        ShampooPreconditioner,
-                        BlockShampooPreconditioner,
-                        SplitShampooPreconditioner,
-                    ),
-                ):
+                if isinstance(state[PRECONDITIONERS], SplitShampooPreconditioner):
                     relative_error, relative_residual = state[
                         PRECONDITIONERS
                     ].compute_root_inverse_residuals()
@@ -548,9 +533,13 @@ class FSDPShampoo(torch.optim.Optimizer):
                 )
 
             # Generate split lists.
-            split_params.extend(state[PRECONDITIONERS].apply_split(p, full_split=True))
+            split_params.extend(
+                state[PRECONDITIONERS].apply_split(p, return_split_blocks=True)
+            )
             split_momentum_directions.extend(
-                state[PRECONDITIONERS].apply_split(state[MOMENTUM], full_split=True)
+                state[PRECONDITIONERS].apply_split(
+                    state[MOMENTUM], return_split_blocks=True
+                )
                 if momentum_param != 0.0
                 else []
             )
@@ -644,7 +633,7 @@ class FSDPShampoo(torch.optim.Optimizer):
                 # Compute preconditioned gradient and update parameters.
                 split_preconditioned_grads.extend(
                     state[PRECONDITIONERS].precondition(
-                        p.grad, iteration, return_split=True
+                        p.grad, iteration, return_split_blocks=True
                     )
                 )
 
