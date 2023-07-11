@@ -131,6 +131,19 @@ def convex_split(
 ) -> List[Tensor]:
     """Chunks tensor across dimensions row-wise to be convex.
 
+    Starting from the leftmost dimension, the largest possible slices in each dimension
+    (with the remaining dimensions on the right retaining the original shape) are split off.
+
+    2D example:
+     _______________                  _______________
+    |       ________|                |       ________|
+    |______|        |                |______|________|
+    |               |                |               |
+    |    shard  ____|       ->       |_______________|
+    |__________|    |                |__________|    |
+    |               |                |               |
+    |_______________|                |_______________|
+
     Args:
         tensor (Tensor): Flattened gradient or tensor to split.
         orig_shape (torch.Size): Shape of original tensor that tensor is a slice of.
@@ -146,46 +159,56 @@ def convex_split(
             f"Input tensor is not flat, has shape {tensor.size()}. Continuing without splitting."
         )
         return tensor
+
+    end_idx += 1  # correct off-by-one (FSDP shard_param_info provides inclusive index)
     assert (
-        end_idx - start_idx + 1 == tensor.size()[0]
+        end_idx - start_idx == tensor.size()[0]
     ), f"Start/end indices do not match tensor size: start {start_idx} end {end_idx}, tensor size {tensor.size()}"
 
-    split_tensors = []  # TODO: figure out if order matters
-    cumul_start_idx = start_idx
-    cumul_end_idx = end_idx
-    remainder = tensor
-    for i in range(len(orig_shape) - 1, -1, -1):
-        dim = orig_shape[i]
-        start = np.unravel_index(cumul_start_idx, orig_shape)
-        end = np.unravel_index(cumul_end_idx, orig_shape)
-        sidx = start[i]
-        eidx = end[i]
+    # current order of results is somewhat arbitrary but consistent; change if order matters
+    split_tensors = []
+    left_idx = None
+    right_idx = None
+    center_partition = False
+    for i in range(1, len(orig_shape) + 1):
+        remaining_size = prod(orig_shape[i:])
+        left_idx_new = int(np.ceil(start_idx / remaining_size)) * remaining_size
+        right_idx_new = end_idx // remaining_size * remaining_size  # floor
 
-        # final dimension case
-        if i == 0 or start[:i] == end[:i]:
-            shape = [-1] + list(orig_shape[i + 1 :])
-            split_tensors.append(remainder.view(shape))
-            break
+        # first iteration (largest convex partition in the center)
+        if not center_partition:
+            if left_idx_new <= right_idx_new:
+                if left_idx_new < right_idx_new:
+                    split_tensors.append(
+                        torch.narrow(
+                            tensor,
+                            0,
+                            left_idx_new - start_idx,
+                            right_idx_new - left_idx_new,
+                        ).view([-1] + list(orig_shape[i:]))
+                    )
+                left_idx = left_idx_new
+                right_idx = right_idx_new
+                center_partition = True
+            continue
 
-        if sidx % dim != 0:
-            shape = [dim - sidx] + list(orig_shape[i + 1 :])
-            size = prod(shape)
-            split_tensors.append(torch.narrow(remainder, 0, 0, size).view(shape))
-            remainder = torch.narrow(remainder, 0, size, len(remainder) - size)
-            cumul_start_idx += size
+        # add partition to left of current partitions
+        if left_idx_new < left_idx:
+            split_tensors.append(
+                torch.narrow(
+                    tensor, 0, left_idx_new - start_idx, left_idx - left_idx_new
+                ).view([-1] + list(orig_shape[i:]))
+            )
+            left_idx = left_idx_new
 
-        if remainder.numel() == 0:
-            break
-
-        if eidx != dim - 1:
-            shape = [eidx + 1] + list(orig_shape[i + 1 :])
-            size = prod(shape)
-            split_tensors.append(torch.narrow(remainder, 0, -size, size).view(shape))
-            remainder = torch.narrow(remainder, 0, 0, len(remainder) - size)
-            cumul_end_idx -= size
-
-        if remainder.numel() == 0:
-            break
+        # add partition to right of current partitions
+        if right_idx < right_idx_new:
+            split_tensors.append(
+                torch.narrow(
+                    tensor, 0, right_idx - start_idx, right_idx_new - right_idx
+                ).view([-1] + list(orig_shape[i:]))
+            )
+            right_idx = right_idx_new
 
     return split_tensors
 

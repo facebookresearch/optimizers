@@ -165,16 +165,18 @@ class MultiDimCatTest(unittest.TestCase):
 
 class ConvexSplitTest(unittest.TestCase):
     def _test_convex_split(self, tensor, split_tensors, start_idx, end_idx) -> None:
-        for idx, t in enumerate(
-            convex_split(
-                tensor.flatten()[start_idx : end_idx + 1],
-                tensor.size(),
-                start_idx,
-                end_idx,
-            )
-        ):
+        split_tensors.sort(key=lambda x: x[(0,) * x.ndim])
+        results = convex_split(
+            tensor.flatten()[start_idx : end_idx + 1],
+            tensor.size(),
+            start_idx,
+            end_idx,
+        )
+        assert len(results) != 0
+        results.sort(key=lambda x: x[(0,) * x.ndim])
+        for idx, t in enumerate(results):
             with self.subTest(f"Test with idx = {idx}"):
-                torch.testing.assert_close(split_tensors[idx], t)
+                torch.testing.assert_close(split_tensors[idx].squeeze(), t.squeeze())
 
     def test_convex_split_for_one_dim(self) -> None:
         tensor = torch.arange(10)
@@ -238,6 +240,12 @@ class ConvexSplitTest(unittest.TestCase):
             torch.arange(9).reshape(3, 3) + 9,
         ]
         self._test_convex_split(tensor, split_tensors, 8, 18)
+
+        split_tensors = [
+            torch.tensor([5]),
+            torch.tensor([6]),
+        ]
+        self._test_convex_split(tensor, split_tensors, 5, 6)
 
     def test_convex_split_for_four_dim(self) -> None:
         tensor = torch.arange(81).reshape(3, 3, 3, 3)
