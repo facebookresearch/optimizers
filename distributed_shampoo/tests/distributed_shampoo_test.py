@@ -11,8 +11,8 @@ import unittest
 from typing import Dict, Tuple
 
 import torch
-from hpc.trainer.distributed_shampoo import DistributedShampoo
-from hpc.trainer.shampoo_utils import CommunicationDType
+from distributed_shampoo.distributed_shampoo import DistributedShampoo
+from distributed_shampoo.shampoo_utils import CommunicationDType
 from torch import nn
 
 
@@ -93,7 +93,7 @@ class DistributedShampooTest(unittest.TestCase):
             set(new_state_dict["state"]["0.weight"].keys()),
         )
         for key in new_state_dict["state"]["0.weight"].keys():
-            torch.testing.assert_allclose(
+            torch.testing.assert_close(
                 old_state_dict["state"]["0.weight"][key],
                 new_state_dict["state"]["0.weight"][key],
             )
