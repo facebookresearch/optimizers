@@ -282,7 +282,8 @@ class AdagradPreconditioner(DistributedPreconditioner):
 
     Args:
         param (Tensor): Parameter of interest.
-        beta2 (float): Exponential moving average factor. If beta2 = 1., will use Adagrad update. (Default: 1.0)
+        beta1 (float): Exponential moving average factor for gradient. (Default: 0.0)
+        beta2 (float): Exponential moving average factor for Shampoo factor matrices. If beta2 = 1., will use unweighted sum. (Default: 1.0)
         epsilon (float): Epsilon term for regularizing preconditioner to ensure positive definiteness. (Default: 1e-10)
         use_bias_correction (bool): Flag for using bias correction. (Default: False)
         idx (Union[None, str, int]): Layer index (for logging purposes). (Default: None)
@@ -297,6 +298,7 @@ class AdagradPreconditioner(DistributedPreconditioner):
     def __init__(
         self,
         param,
+        beta1: float = 0.0,
         beta2: float = 1.0,
         epsilon: float = 1e-10,
         use_bias_correction: bool = True,
@@ -308,8 +310,13 @@ class AdagradPreconditioner(DistributedPreconditioner):
         communication_dtype: CommunicationDType = CommunicationDType.DEFAULT,
     ):
         super(AdagradPreconditioner, self).__init__(
-            param, group, group_source_rank, dist_buffer, communication_dtype
+            param,
+            group,
+            group_source_rank,
+            dist_buffer,
+            communication_dtype,
         )
+        self._beta1 = beta1
         self._beta2 = beta2
         self._epsilon = epsilon
         self._preconditioner = allocate_distributed_tensor(
@@ -323,6 +330,17 @@ class AdagradPreconditioner(DistributedPreconditioner):
         self._use_bias_correction = use_bias_correction
         self._bias_correction2 = 1.0
         self._parameter_count += self._preconditioner.numel()
+        self._filtered_grad = (
+            allocate_distributed_tensor(
+                param.shape,
+                dtype=param.dtype,
+                device=param.device,
+                device_mesh_ranks=self._device_mesh_ranks,
+                use_dtensor=use_dtensor,
+            )
+            if self._beta1 != 0.0
+            else None
+        )
 
         if self._idx is not None:
             self._preconditioner_idx = str(self._idx) + "." + str(0)
@@ -347,6 +365,16 @@ class AdagradPreconditioner(DistributedPreconditioner):
     def precondition(self, grad: Tensor, iteration: int) -> Tensor:
         if not self._on_source_rank:
             return grad
+
+        if self._beta1 != 0.0:
+            # Compute bias corrections.
+            bias_correction1 = (
+                1.0 - self._beta1**iteration if self._use_bias_correction else 1.0
+            )
+            # Compute exponential moving average of the gradient (with potential bias correction).
+            filtered_grad = use_local_tensor(self._filtered_grad)
+            filtered_grad.mul_(self._beta1).add_(grad, alpha=1 - self._beta1)
+            grad.copy_(filtered_grad / bias_correction1)
 
         denom = (
             (use_local_tensor(self._preconditioner) / self._bias_correction2)
@@ -402,7 +430,8 @@ class ShampooPreconditioner(DistributedPreconditioner):
 
     Args:
         param (Tensor): Parameter of interest.
-        beta2 (float): Exponential moving average factor. If beta2 = 1., will use Adagrad update. (Default: 1.0)
+        beta1 (float): Exponential moving average factor for gradient. (Default: 0.0)
+        beta2 (float): Exponential moving average factor for Shampoo factor matrices. If beta2 = 1., will use unweighted sum. (Default: 1.0)
         epsilon (float): Epsilon term for regularizing preconditioner to ensure positive definiteness. (Default: 1e-12)
         exponent_override (int, List[int]): inverse root to use in Shampoo. If a list [l1, l2, ..., lp], then we will
             use -1 / l1 for 1-D tensor (vectors), -1 / l2 for 2-D tensors (matrices), and so on. If the order of the
@@ -434,6 +463,7 @@ class ShampooPreconditioner(DistributedPreconditioner):
     def __init__(
         self,
         param,
+        beta1: float = 0.0,
         beta2: float = 1.0,
         epsilon: float = 1e-12,
         exponent_override: Union[int, List[int]] = 0,
@@ -454,10 +484,15 @@ class ShampooPreconditioner(DistributedPreconditioner):
         communication_dtype: CommunicationDType = CommunicationDType.DEFAULT,
     ):
         super(ShampooPreconditioner, self).__init__(
-            param, group, group_source_rank, dist_buffer, communication_dtype
+            param,
+            group,
+            group_source_rank,
+            dist_buffer,
+            communication_dtype,
         )
 
         # Initialize parameters.
+        self._beta1 = beta1
         self._beta2 = beta2
         self._epsilon = epsilon
         self._exponent_override = exponent_override
@@ -472,6 +507,17 @@ class ShampooPreconditioner(DistributedPreconditioner):
         self._start_preconditioning_step = start_preconditioning_step
         self._use_protected_eigh = use_protected_eigh
         self._communication_dtype = communication_dtype
+        self._filtered_grad = (
+            allocate_distributed_tensor(
+                param.shape,
+                dtype=dtype,
+                device=param.device,
+                device_mesh_ranks=self._device_mesh_ranks,
+                use_dtensor=use_dtensor,
+            )
+            if beta1 != 0.0
+            else None
+        )
 
         # Compute root.
         self._root = self._get_root_from_exponent_override(
@@ -680,8 +726,7 @@ class ShampooPreconditioner(DistributedPreconditioner):
             self._bias_correction2 = 1.0 - self._beta2**iteration
 
     def _shampoo_precondition(self, grad: Tensor, iteration: int) -> Tensor:
-        if not self._on_source_rank:
-            return grad  # An invalid tensor that can be returned at the lowest cost.
+        assert self._on_source_rank
 
         preconditioned_grad = grad.clone()
         for k, preconditioner in enumerate(self._preconditioners):
@@ -733,8 +778,8 @@ class ShampooPreconditioner(DistributedPreconditioner):
         return preconditioned_grad
 
     def _graft_precondition(self, grad: Tensor, iteration: int) -> Tensor:
-        if not self._on_source_rank:
-            return grad  # An invalid tensor that can be returned at the lowest cost.
+        assert self._on_source_rank
+
         return (
             self._grafting.precondition(grad, iteration)
             if self._grafting_type != GraftingType.NONE
@@ -742,6 +787,19 @@ class ShampooPreconditioner(DistributedPreconditioner):
         )
 
     def precondition(self, grad: Tensor, iteration: int) -> Tensor:
+        if not self._on_source_rank:
+            return grad  # An invalid tensor that can be returned at the lowest cost.
+
+        if self._beta1 != 0.0:
+            # Compute bias corrections.
+            bias_correction1 = (
+                1.0 - self._beta1**iteration if self._use_bias_correction else 1.0
+            )
+            # Compute exponential moving average of the gradient (with potential bias correction).
+            filtered_grad = use_local_tensor(self._filtered_grad)
+            filtered_grad.mul_(self._beta1).add_(grad, alpha=1 - self._beta1)
+            grad.copy_(filtered_grad / bias_correction1)
+
         return (
             self._graft_precondition
             if iteration < self._start_preconditioning_step
@@ -876,7 +934,8 @@ class BlockShampooPreconditioner(DistributedPreconditioner):
 
     Args:
         param (Tensor): Parameter of interest.
-        beta2 (float): Exponential moving average factor. If beta2 = 1., will use Adagrad update. (Default: 1.0)
+        beta1 (float): Exponential moving average factor for gradient. (Default: 0.0)
+        beta2 (float): Exponential moving average factor for Shampoo factor matrices. If beta2 = 1., will use unweighted sum. (Default: 1.0)
         epsilon (float): Epsilon term for regularizing preconditioner to ensure positive definiteness. (Default: 1e-12)
         exponent_override (int, List[int]): inverse root to use in Shampoo. If a list [l1, l2, ..., lp], then we will
             use -1 / l1 for 1-D tensor (vectors), -1 / l2 for 2-D tensors (matrices), and so on. If the order of the
@@ -911,6 +970,7 @@ class BlockShampooPreconditioner(DistributedPreconditioner):
     def __init__(
         self,
         param,
+        beta1: float = 0.0,
         beta2: float = 1.0,
         epsilon: float = 1e-12,
         exponent_override: Union[int, List[int]] = 0,
@@ -937,6 +997,7 @@ class BlockShampooPreconditioner(DistributedPreconditioner):
         )
 
         # Set parameters.
+        self._beta1 = beta1
         self._beta2 = beta2
         self._epsilon = epsilon
         self._exponent_override = exponent_override
@@ -975,6 +1036,7 @@ class BlockShampooPreconditioner(DistributedPreconditioner):
             )
             preconditioner = ShampooPreconditioner(
                 p,
+                beta1=beta1,
                 beta2=beta2,
                 epsilon=epsilon,
                 exponent_override=exponent_override,
