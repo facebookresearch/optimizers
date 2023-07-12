@@ -11,8 +11,8 @@ import unittest
 from typing import Dict, Tuple
 
 import torch
-from distributed_shampoo.distributed_shampoo import DistributedShampoo
-from distributed_shampoo.shampoo_utils import CommunicationDType
+from hpc.trainer.distributed_shampoo import DistributedShampoo
+from hpc.trainer.shampoo_utils import CommunicationDType
 from torch import nn
 
 
@@ -58,12 +58,12 @@ class DistributedShampooTest(unittest.TestCase):
         true_keys = {
             "step",
             "preconditioners._split_preconditioners.0._dist_buffer",
+            "preconditioners._split_preconditioners.0._filtered_grad",
             "preconditioners._split_preconditioners.0._preconditioners.0.factor_matrix",
             "preconditioners._split_preconditioners.0._preconditioners.0.inv_factor_matrix",
             "preconditioners._split_preconditioners.0._grafting._preconditioner._dist_buffer",
             "preconditioners._split_preconditioners.0._grafting._preconditioner._preconditioner",
             "preconditioners._split_sizes.0",
-            "exp_avg",
         }
         assert len(state_dict["state"]["0.weight"].keys()) == len(true_keys)
         self.assertEqual(set(state_dict["state"]["0.weight"].keys()), true_keys)

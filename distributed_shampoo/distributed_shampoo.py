@@ -40,7 +40,6 @@ logger = logging.getLogger(__name__)
 dtype_mapping = {0: "DEFAULT", 1: torch.float16, 2: torch.bfloat16, 3: torch.float32}
 
 BETAS = "betas"
-EXP_AVG = "exp_avg"
 EPSILON = "epsilon"
 GRAFTING_BETA2 = "grafting_beta2"
 GRAFTING_EPSILON = "grafting_epsilon"
@@ -379,7 +378,7 @@ class DistributedShampoo(torch.optim.Optimizer):
         # Initialize Shampoo preconditioners and distributed buffers.
         self._dist_group = None
         buffer_ranks_list = self._assign_preconditioners_to_ranks()
-        self._initialize_exp_avg_and_momentum()
+        self._initialize_momentum()
         self._initialize_preconditioners_and_steps(buffer_ranks_list)
 
     @torch.no_grad()
@@ -387,10 +386,9 @@ class DistributedShampoo(torch.optim.Optimizer):
         return self._num_trainers_per_group > 1
 
     @torch.no_grad()
-    def _initialize_exp_avg_and_momentum(self):
+    def _initialize_momentum(self):
         for group in self.param_groups:
             momentum_param = group[MOMENTUM]
-            beta1, _ = group[BETAS]
 
             for p in group[PARAMS]:
                 state = self.state[p]
@@ -398,10 +396,6 @@ class DistributedShampoo(torch.optim.Optimizer):
                 # Initialize momentum and exponential moving average of gradient.
                 if momentum_param != 0.0 and MOMENTUM not in state:
                     state[MOMENTUM] = torch.zeros_like(
-                        p, memory_format=torch.preserve_format
-                    )
-                if beta1 != 0.0 and EXP_AVG not in state:
-                    state[EXP_AVG] = torch.zeros_like(
                         p, memory_format=torch.preserve_format
                     )
 
@@ -423,6 +417,7 @@ class DistributedShampoo(torch.optim.Optimizer):
                 if self._large_dim_method == LargeDimMethod.BLOCKING:
                     state[PRECONDITIONERS] = BlockShampooPreconditioner(
                         p,
+                        beta1=group[BETAS][0],
                         beta2=group[BETAS][1],
                         epsilon=group[EPSILON],
                         exponent_override=self._exponent_override,
@@ -460,6 +455,7 @@ class DistributedShampoo(torch.optim.Optimizer):
                     state[PRECONDITIONERS] = (
                         AdagradPreconditioner(
                             p,
+                            beta1=group[BETAS][0],
                             beta2=group[BETAS][1],
                             epsilon=group[EPSILON],
                             use_bias_correction=self._use_bias_correction,
@@ -473,6 +469,7 @@ class DistributedShampoo(torch.optim.Optimizer):
                         if torch.any(dims > self._max_preconditioner_dim)
                         else ShampooPreconditioner(
                             p,
+                            beta1=group[BETAS][0],
                             beta2=group[BETAS][1],
                             epsilon=group[EPSILON],
                             exponent_override=self._exponent_override,
@@ -506,6 +503,7 @@ class DistributedShampoo(torch.optim.Optimizer):
                     preconditioner_count += 1
                     state[PRECONDITIONERS] = ShampooPreconditioner(
                         p,
+                        beta1=group[BETAS][0],
                         beta2=group[BETAS][1],
                         epsilon=group[EPSILON],
                         exponent_override=self._exponent_override,
@@ -829,7 +827,6 @@ class DistributedShampoo(torch.optim.Optimizer):
             split_preconditioned_grads = []
             split_momentum_directions = []
 
-            beta1, _ = group[BETAS]
             momentum_param = group[MOMENTUM]
             weight_decay = group[WEIGHT_DECAY]
             lr = group[LR]
@@ -842,21 +839,8 @@ class DistributedShampoo(torch.optim.Optimizer):
 
             for p in group[PARAMS]:
                 state = self.state[p]
-                if p.grad is None:
+                if p.grad is None or not state[PRECONDITIONERS].on_source_rank:
                     continue
-
-                # Incorporate first-moment or filtered gradient estimation.
-                if beta1 != 0:
-                    # Compute bias corrections if necessary.
-                    bias_correction1 = (
-                        1.0 - beta1**iteration if self._use_bias_correction else 1.0
-                    )
-
-                    # Compute exponential moving average of the gradient (with
-                    # potential bias correction).
-                    filtered_grad = state[EXP_AVG]
-                    filtered_grad.mul_(beta1).add_(p.grad, alpha=1 - beta1)
-                    p.grad.copy_(filtered_grad / bias_correction1)
 
                 # Compute preconditioned gradient and update parameters.
                 state[PRECONDITIONERS].preconditioned_grad_to_dist_buffer(
