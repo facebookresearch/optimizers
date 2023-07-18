@@ -17,11 +17,9 @@ from typing import Any, Dict, List, Tuple
 import torch
 import torch.distributed as dist
 
-from distributed_shampoo.shampoo_utils import (
-    GraftingType,
-    LargeDimMethod,
-    SplitShampooPreconditioner,
-)
+from distributed_shampoo.shampoo_fsdp_utils import SplitShampooPreconditioner
+
+from distributed_shampoo.shampoo_utils import GraftingType, LargeDimMethod
 
 logger = logging.getLogger(__name__)
 
