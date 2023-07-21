@@ -45,10 +45,25 @@ class ConvexSplitTest(unittest.TestCase):
             end_idx,
         )
         assert len(results) != 0
-        results.sort(key=lambda x: x[(0,) * x.ndim])
         for idx, t in enumerate(results):
             with self.subTest(f"Test with idx = {idx}"):
                 torch.testing.assert_close(split_tensors[idx].squeeze(), t.squeeze())
+
+        results = convex_split(
+            tensor.flatten()[start_idx : end_idx + 1],
+            tensor.size(),
+            start_idx,
+            end_idx,
+            include_placeholder=True,
+        )
+        assert len(results) <= len(tensor.size()) * 2 - 1 and len(results) % 2 == 1
+        idx = 0
+        for t in results:
+            if t.numel() == 0:
+                continue
+            with self.subTest(f"Test with idx = {idx}"):
+                torch.testing.assert_close(split_tensors[idx].squeeze(), t.squeeze())
+            idx += 1
 
     def test_convex_split_for_one_dim(self) -> None:
         tensor = torch.arange(10)
