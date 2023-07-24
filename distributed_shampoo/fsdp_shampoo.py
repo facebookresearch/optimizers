@@ -17,7 +17,12 @@ from typing import Any, Dict, List, Tuple
 import torch
 import torch.distributed as dist
 
-from distributed_shampoo.shampoo_fsdp_utils import SplitShampooPreconditioner
+from distributed_shampoo.shampoo_fsdp_utils import (
+    CommunicationShampooPreconditioner,
+    CommunicationType,
+    ConvexShapeRecoveryMethod,
+    SplitShampooPreconditioner,
+)
 
 from distributed_shampoo.shampoo_utils import GraftingType, LargeDimMethod
 
@@ -185,6 +190,7 @@ class FSDPShampoo(torch.optim.Optimizer):
         use_dtensor (bool): use DTensor. Requires PyTorch 2 nightly. Otherwise, uses Tensor. (Default: True)
         debug_mode (bool): debugging mode. Uses more memory to compute error to fp64 case. Must enable logging level to
             DEBUG. (Default: False)
+        convex_shape_recovery
 
     """
 
@@ -215,6 +221,7 @@ class FSDPShampoo(torch.optim.Optimizer):
         use_protected_eigh: bool = True,
         use_dtensor: bool = False,
         debug_mode: bool = False,
+        convex_shape_recovery: ConvexShapeRecoveryMethod = ConvexShapeRecoveryMethod.SPLIT,
     ):
         # Hyperparameter checks.
         if not lr >= 0.0:
@@ -326,6 +333,7 @@ class FSDPShampoo(torch.optim.Optimizer):
         self._use_protected_eigh = use_protected_eigh
         self._use_dtensor = use_dtensor
         self._debug_mode = debug_mode
+        self._convex_shape_recovery = convex_shape_recovery
         if self._use_nesterov and momentum == 0.0:
             logger.warning(
                 "Nesterov flag is enabled but momentum parameter is zero! Continuing without using momentum or Nesterov acceleration..."
@@ -351,6 +359,7 @@ class FSDPShampoo(torch.optim.Optimizer):
         # current workaround for group_source_rank
         # TODO: try to keep dist_group information
         self._dist_group = None
+        group_rank = dist.get_rank()
 
         for group in self.param_groups:
             for idx, p in enumerate(group[PARAMS]):
@@ -361,26 +370,56 @@ class FSDPShampoo(torch.optim.Optimizer):
                 state = self.state[p]
                 state[STEP] = torch.tensor(0)
 
-                state[PRECONDITIONERS] = SplitShampooPreconditioner(
-                    p,
-                    self._param_metadata[p],
-                    large_dim_method=self._large_dim_method,
-                    beta2=group[BETAS][1],
-                    epsilon=group[EPSILON],
-                    exponent_override=self._exponent_override,
-                    exponent_multiplier=self._exponent_multiplier,
-                    use_bias_correction=self._use_bias_correction,
-                    max_preconditioner_dim=self._max_preconditioner_dim,
-                    dtype=self._preconditioner_dtype,
-                    idx=idx,
-                    use_merge_dims=self._use_merge_dims,
-                    start_preconditioning_step=self._start_preconditioning_step,
-                    grafting_type=self._grafting_type,
-                    grafting_beta2=self._grafting_beta2,
-                    grafting_epsilon=self._grafting_epsilon,
-                    use_protected_eigh=self._use_protected_eigh,
-                    use_dtensor=self._use_dtensor,
-                )
+                if self._convex_shape_recovery == ConvexShapeRecoveryMethod.SPLIT:
+                    state[PRECONDITIONERS] = SplitShampooPreconditioner(
+                        p,
+                        self._param_metadata[p],
+                        large_dim_method=self._large_dim_method,
+                        beta2=group[BETAS][1],
+                        epsilon=group[EPSILON],
+                        exponent_override=self._exponent_override,
+                        exponent_multiplier=self._exponent_multiplier,
+                        use_bias_correction=self._use_bias_correction,
+                        max_preconditioner_dim=self._max_preconditioner_dim,
+                        dtype=self._preconditioner_dtype,
+                        idx=idx,
+                        use_merge_dims=self._use_merge_dims,
+                        start_preconditioning_step=self._start_preconditioning_step,
+                        grafting_type=self._grafting_type,
+                        grafting_beta2=self._grafting_beta2,
+                        grafting_epsilon=self._grafting_epsilon,
+                        use_protected_eigh=self._use_protected_eigh,
+                        use_dtensor=self._use_dtensor,
+                    )
+                elif self._convex_shape_recovery == ConvexShapeRecoveryMethod.COMM:
+                    state[PRECONDITIONERS] = CommunicationShampooPreconditioner(
+                        p,
+                        self._param_metadata[p],
+                        large_dim_method=self._large_dim_method,
+                        beta2=group[BETAS][1],
+                        epsilon=group[EPSILON],
+                        exponent_override=self._exponent_override,
+                        exponent_multiplier=self._exponent_multiplier,
+                        use_bias_correction=self._use_bias_correction,
+                        max_preconditioner_dim=self._max_preconditioner_dim,
+                        dtype=self._preconditioner_dtype,
+                        idx=idx,
+                        use_merge_dims=self._use_merge_dims,
+                        start_preconditioning_step=self._start_preconditioning_step,
+                        grafting_type=self._grafting_type,
+                        grafting_beta2=self._grafting_beta2,
+                        grafting_epsilon=self._grafting_epsilon,
+                        use_protected_eigh=self._use_protected_eigh,
+                        use_dtensor=self._use_dtensor,
+                        left_comm=CommunicationType.NONE
+                        if group_rank == 0
+                        else CommunicationType.RECV,
+                        right_comm=CommunicationType.NONE
+                        if group_rank == dist.get_world_size() - 1
+                        else CommunicationType.SEND,
+                    )
+                else:
+                    raise NotImplementedError("invalid convex shape recovery method")
 
                 # Count parameters from preconditioners for logging purposes.
                 self._parameter_count += state[PRECONDITIONERS].parameter_count
@@ -399,7 +438,10 @@ class FSDPShampoo(torch.optim.Optimizer):
 
                 state = self.state[p]
 
-                if isinstance(state[PRECONDITIONERS], SplitShampooPreconditioner):
+                if isinstance(
+                    state[PRECONDITIONERS],
+                    (SplitShampooPreconditioner, CommunicationShampooPreconditioner),
+                ):
                     state[PRECONDITIONERS].compute_root_inverse()
 
     @torch.no_grad()
@@ -430,7 +472,10 @@ class FSDPShampoo(torch.optim.Optimizer):
 
                 state = self.state[p]
 
-                if isinstance(state[PRECONDITIONERS], SplitShampooPreconditioner):
+                if isinstance(
+                    state[PRECONDITIONERS],
+                    (SplitShampooPreconditioner, CommunicationShampooPreconditioner),
+                ):
                     relative_error, relative_residual = state[
                         PRECONDITIONERS
                     ].compute_root_inverse_residuals()
@@ -455,11 +500,32 @@ class FSDPShampoo(torch.optim.Optimizer):
         )
 
     @torch.no_grad()
+    def _apply_weight_decay(self):
+        """Incorporate weight decay into the gradient if we are not using decoupled weight decay.
+
+        Equivalent to adding an L2-regularization term:
+          F(w) + lambda * ||w||^2.
+        """
+        for group in self.param_groups:
+            weight_decay = group[WEIGHT_DECAY]
+            for p in group[PARAMS]:
+                # skip parameters not on worker
+                if p.numel() == 0:
+                    continue
+
+                grad = p.grad
+                if grad is None:
+                    continue
+
+                if weight_decay != 0:
+                    grad.add_(p, alpha=weight_decay)
+
+    @torch.no_grad()
     def _update_preconditioners(self):
         """Updates preconditioners.
 
-        Note: If using L2-regularization/weight decay, it is computed within this function and
-        therefore should not be recomputed elsewhere.
+        Note: If using L2-regularization/weight decay, it is NOT computed within this function and
+        therefore should be computed elsewhere beforehand.
 
         """
         for group in self.param_groups:
@@ -473,8 +539,6 @@ class FSDPShampoo(torch.optim.Optimizer):
                 if grad is None:
                     continue
 
-                weight_decay = group[WEIGHT_DECAY]
-
                 # TODO: Sparse case still not supported.
                 if p.grad.is_sparse:
                     raise Exception(
@@ -482,14 +546,6 @@ class FSDPShampoo(torch.optim.Optimizer):
                     )
 
                 else:
-                    # Incorporate weight decay into the gradient
-                    # if we are not using decoupled weight decay.
-                    #
-                    # Equivalent to adding an L2-regularization term:
-                    #   F(w) + lambda * ||w||^2.
-                    if not self._use_decoupled_weight_decay and weight_decay != 0:
-                        grad.add_(p, alpha=weight_decay)
-
                     # Update each preconditioner using the gradient.
                     state[PRECONDITIONERS].update_preconditioners(grad, state[STEP])
 
@@ -582,6 +638,10 @@ class FSDPShampoo(torch.optim.Optimizer):
                 loss = closure()
 
         iteration = self._iterate_step()
+
+        if not self._use_decoupled_weight_decay:
+            self._apply_weight_decay()
+
         self._update_preconditioners()
 
         # Computes root inverse of all preconditioners every self._precondition_frequency
@@ -615,18 +675,10 @@ class FSDPShampoo(torch.optim.Optimizer):
 
                 # Incorporate first-moment or filtered gradient estimation.
                 if beta1 != 0:
-                    # Compute bias corrections if necessary.
-                    bias_correction1 = (
-                        1.0 - beta1**iteration
-                        if self._use_bias_correction
-                        else torch.as_tensor(1.0)
+                    filtered_grad = state[PRECONDITIONERS].update_exp_avg(
+                        p.grad, iteration, beta1
                     )
-
-                    # Compute exponential moving average of the gradient (with
-                    # potential bias correction).
-                    filtered_grad = state[EXP_AVG]
-                    filtered_grad.mul_(beta1).add_(p.grad, alpha=1 - beta1)
-                    p.grad.copy_(filtered_grad / bias_correction1)
+                    p.grad.copy_(filtered_grad)
 
                 # Compute preconditioned gradient and update parameters.
                 split_preconditioned_grads.extend(

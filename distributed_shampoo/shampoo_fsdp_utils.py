@@ -219,6 +219,10 @@ class SplitShampooPreconditioner(DistributedPreconditioner):
         self._start_idx = start_idx
         self._end_idx = end_idx
 
+        # Initialize exponential moving average
+        self.bias_correction1 = torch.as_tensor(1.0)
+        self.exp_avg = torch.zeros_like(param, memory_format=torch.preserve_format)
+
         # Construct multiple preconditioners for each block
         self._split_preconditioners = []
 
@@ -312,6 +316,21 @@ class SplitShampooPreconditioner(DistributedPreconditioner):
 
             self._split_preconditioners.append(preconditioner)
             self._parameter_count += preconditioner.parameter_count
+
+    def update_exp_avg(
+        self,
+        grad: Tensor,
+        iteration: Tensor,
+        beta1: float,
+    ) -> Tensor:
+        # Compute bias corrections if necessary.
+        if self._use_bias_correction:
+            self.bias_correction1 = 1.0 - beta1**iteration
+        # Compute exponential moving average of the gradient (with
+        # potential bias correction).
+        self.exp_avg.mul_(beta1).add_(grad, alpha=1 - beta1)
+
+        return self.exp_avg / self.bias_correction1
 
     def apply_split(self, tensor: Tensor, return_split_blocks: bool = False):
         initial_split = convex_split(
@@ -501,26 +520,86 @@ class CommunicationShampooPreconditioner(DistributedPreconditioner):
         self._left_comm = left_comm
         self._right_comm = right_comm
 
-        # Construct multiple preconditioners for each block
-        self._split_preconditioners = []
+        # Initialize exponential moving average
+        self.bias_correction1 = torch.as_tensor(1.0)
+        self.exp_avg = torch.zeros_like(param, memory_format=torch.preserve_format)
 
-        self.left_buffer = None
-        self.right_buffer = None
+        # Initialize communication buffers
+        # setting to None for easier debugging, can remove later
+        self.left_send_buffer = None
+        self.right_send_buffer = None
+        self.left_recv_buffer = None
+        self.right_recv_buffer = None
+        forward_ops = []
+        backward_ops = []
         split_param = convex_split(param, orig_shape, start_idx, end_idx)
 
         if left_comm == CommunicationType.SEND:
+            self.left_send_buffer = torch.zeros_like(split_param[0])
+            # TODO: may need to pass rank into the class
+            forward_ops.append(
+                dist.P2POp(
+                    dist.isend, self.left_send_buffer, dist.get_rank() - 1, tag=idx
+                )
+            )
+            backward_ops.append(
+                dist.P2POp(
+                    dist.irecv, self.left_send_buffer, dist.get_rank() - 1, tag=idx
+                )
+            )
             split_param = split_param[1:]
         elif left_comm == CommunicationType.RECV:
             # TODO: write more complex merging function
-            self.left_buffer = torch.zeros(orig_shape[-1] - split_param[0].size()[0])
-            split_param[0] = torch.cat([self.left_buffer, split_param[0]])
+            self.left_recv_buffer = torch.zeros(
+                orig_shape[-1] - split_param[0].size()[0]
+            )
+            self.left_recv_buffer_exp_avg = torch.zeros_like(self.left_recv_buffer)
+            forward_ops.append(
+                dist.P2POp(
+                    dist.irecv, self.left_recv_buffer, dist.get_rank() - 1, tag=idx
+                )
+            )
+            backward_ops.append(
+                dist.P2POp(
+                    dist.isend, self.left_recv_buffer, dist.get_rank() - 1, tag=idx
+                )
+            )
+            split_param[0] = torch.cat([self.left_recv_buffer, split_param[0]])
 
         if right_comm == CommunicationType.SEND:
+            self.right_send_buffer = torch.zeros_like(split_param[-1])
+            # TODO: may need to pass rank into the class
+            forward_ops.append(
+                dist.P2POp(
+                    dist.isend, self.right_send_buffer, dist.get_rank() + 1, tag=idx
+                )
+            )
+            backward_ops.append(
+                dist.P2POp(
+                    dist.irecv, self.right_send_buffer, dist.get_rank() + 1, tag=idx
+                )
+            )
             split_param = split_param[:-1]
         elif right_comm == CommunicationType.RECV:
             # TODO: write more complex merging function
-            self.right_buffer = torch.zeros(orig_shape[-1] - split_param[-1].size()[0])
-            split_param[-1] = torch.cat([split_param[-1], self.right_buffer])
+            self.right_recv_buffer = torch.zeros(
+                orig_shape[-1] - split_param[-1].size()[0]
+            )
+            self.right_recv_buffer_exp_avg = torch.zeros_like(self.right_recv_buffer)
+            forward_ops.append(
+                dist.P2POp(
+                    dist.irecv, self.right_recv_buffer, dist.get_rank() + 1, tag=idx
+                )
+            )
+            backward_ops.append(
+                dist.P2POp(
+                    dist.isend, self.right_recv_buffer, dist.get_rank() + 1, tag=idx
+                )
+            )
+            split_param[-1] = torch.cat([split_param[-1], self.right_recv_buffer])
+
+        # Construct multiple preconditioners for each block
+        self._split_preconditioners = []
 
         for i, p in enumerate(split_param):
             dims = torch.as_tensor(p.shape)
@@ -612,6 +691,41 @@ class CommunicationShampooPreconditioner(DistributedPreconditioner):
             self._split_preconditioners.append(preconditioner)
             self._parameter_count += preconditioner.parameter_count
 
+    def update_exp_avg(
+        self,
+        grad: Tensor,
+        iteration: Tensor,
+        beta1: float,
+    ) -> Tensor:
+        # Compute bias corrections if necessary.
+        if self._use_bias_correction:
+            self.bias_correction1 = 1.0 - beta1**iteration
+        # Compute exponential moving average of the gradient (with
+        # potential bias correction).
+        self.exp_avg.mul_(beta1).add_(grad, alpha=1 - beta1)
+        if self.left_recv_buffer is not None:
+            self.left_recv_buffer_exp_avg.mul_(beta1).add_(
+                self.left_recv_buffer, alpha=1 - beta1
+            )
+            self.left_recv_buffer.copy_(
+                self.left_recv_buffer_exp_avg / self.bias_correction1
+            )
+        if self.right_recv_buffer is not None:
+            self.right_recv_buffer_exp_avg.mul_(beta1).add_(
+                self.right_recv_buffer, alpha=1 - beta1
+            )
+            self.right_recv_buffer.copy_(
+                self.right_recv_buffer_exp_avg / self.bias_correction1
+            )
+
+        return self.exp_avg / self.bias_correction1
+
+    def get_forward_ops(self):
+        return self.forward_ops
+
+    def get_backward_ops(self):
+        return self.backward_ops
+
     def apply_split_and_merge_buffer(
         self, tensor: Tensor, return_split_blocks: bool = False
     ):
@@ -622,13 +736,13 @@ class CommunicationShampooPreconditioner(DistributedPreconditioner):
             initial_split = initial_split[1:]
         elif self._left_comm == CommunicationType.RECV:
             # TODO: write more complex merging function
-            initial_split[0] = torch.cat([self.left_buffer, initial_split[0]])
+            initial_split[0] = torch.cat([self.left_recv_buffer, initial_split[0]])
 
         if self._right_comm == CommunicationType.SEND:
             initial_split = initial_split[:-1]
         elif self._right_comm == CommunicationType.RECV:
             # TODO: write more complex merging function
-            initial_split[-1] = torch.cat([initial_split[-1], self.right_buffer])
+            initial_split[-1] = torch.cat([initial_split[-1], self.right_recv_buffer])
 
         if return_split_blocks and self._large_dim_method == LargeDimMethod.BLOCKING:
             # return flattened recursive split, i.e. if self preconditioners are block preconditioners,
