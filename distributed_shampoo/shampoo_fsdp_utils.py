@@ -41,6 +41,11 @@ class CommunicationType(enum.Enum):
     NONE = 2
 
 
+class CommunicationDirection(enum.Enum):
+    FORWARD = 0
+    BACKWARD = 1
+
+
 def convex_split(
     tensor: Tensor,
     orig_shape: torch.Size,
@@ -106,10 +111,12 @@ def convex_split(
                             0,
                             left_idx_new - start_idx,
                             right_idx_new - left_idx_new,
-                        ).view([-1] + list(orig_shape[i:]))
+                        )
+                        .view([-1] + list(orig_shape[i:]))
+                        .squeeze()
                     )
                 elif include_placeholder:
-                    split_tensors_left.append(torch.tensor([]))
+                    split_tensors_left.append(torch.tensor([]).to(tensor.device))
                 left_idx = left_idx_new
                 right_idx = right_idx_new
                 center_partition = True
@@ -120,22 +127,26 @@ def convex_split(
             split_tensors_left.append(
                 torch.narrow(
                     tensor, 0, left_idx_new - start_idx, left_idx - left_idx_new
-                ).view([-1] + list(orig_shape[i:]))
+                )
+                .view([-1] + list(orig_shape[i:]))
+                .squeeze()
             )
             left_idx = left_idx_new
         elif left_idx_new == left_idx and include_placeholder:
-            split_tensors_left.append(torch.tensor([]))
+            split_tensors_left.append(torch.tensor([]).to(tensor.device))
 
         # add partition to right of current partitions
         if right_idx < right_idx_new:
             split_tensors_right.append(
                 torch.narrow(
                     tensor, 0, right_idx - start_idx, right_idx_new - right_idx
-                ).view([-1] + list(orig_shape[i:]))
+                )
+                .view([-1] + list(orig_shape[i:]))
+                .squeeze()
             )
             right_idx = right_idx_new
         elif right_idx == right_idx_new and include_placeholder:
-            split_tensors_right.append(torch.tensor([]))
+            split_tensors_right.append(torch.tensor([]).to(tensor.device))
 
     split_tensors_left.reverse()
     return split_tensors_left + split_tensors_right
@@ -510,7 +521,7 @@ class CommunicationShampooPreconditioner(DistributedPreconditioner):
         self._start_preconditioning_step = start_preconditioning_step
         self._use_merge_dims = use_merge_dims
 
-        _, orig_shape, _, shard_param_info = metadata
+        _, orig_shape, orig_numels, shard_param_info = metadata
         start_idx = shard_param_info.intra_param_start_idx
         end_idx = shard_param_info.intra_param_end_idx
         self._orig_shape = orig_shape
@@ -525,85 +536,146 @@ class CommunicationShampooPreconditioner(DistributedPreconditioner):
         self.exp_avg = torch.zeros_like(param, memory_format=torch.preserve_format)
 
         # Initialize communication buffers
-        # setting to None for easier debugging, can remove later
+        # setting to None for easier debugging, can remove later (update: maybe don't remove if left_comm and right_comm aren't updated)
         self.left_send_buffer = None
         self.right_send_buffer = None
         self.left_recv_buffer = None
         self.right_recv_buffer = None
-        forward_ops = []
-        backward_ops = []
-        split_param = convex_split(param, orig_shape, start_idx, end_idx)
+        self.forward_send_ops = []
+        self.forward_recv_ops = []
+        self.backward_send_ops = []
+        self.backward_recv_ops = []
+        split_param = convex_split(
+            param, orig_shape, start_idx, end_idx, include_placeholder=True
+        )
 
-        if left_comm == CommunicationType.SEND:
-            self.left_send_buffer = torch.zeros_like(split_param[0])
+        if (
+            left_comm == CommunicationType.SEND
+            # and orig_shape[-1] - split_param[0].size()[0] != 0
+            and start_idx != 0
+            and split_param[0].numel() != 0
+        ):
+            self.left_send_buffer = torch.zeros_like(split_param[0]).to(param.device)
             # TODO: may need to pass rank into the class
-            forward_ops.append(
+            self.forward_send_ops.append(
                 dist.P2POp(
                     dist.isend, self.left_send_buffer, dist.get_rank() - 1, tag=idx
                 )
             )
-            backward_ops.append(
+            self.backward_recv_ops.append(
                 dist.P2POp(
-                    dist.irecv, self.left_send_buffer, dist.get_rank() - 1, tag=idx
+                    dist.irecv,
+                    self.left_send_buffer,
+                    dist.get_rank() - 1,
+                    tag=idx,
                 )
             )
             split_param = split_param[1:]
-        elif left_comm == CommunicationType.RECV:
+            # print(
+            #     f"param {idx} on rank {dist.get_rank()} sending left, size {self.left_send_buffer.size()}"
+            # )
+        elif (
+            left_comm == CommunicationType.RECV
+            # and orig_shape[-1] - split_param[0].size()[0] != 0
+            and start_idx != 0
+            and split_param[0].numel() != 0
+        ):
             # TODO: write more complex merging function
             self.left_recv_buffer = torch.zeros(
                 orig_shape[-1] - split_param[0].size()[0]
-            )
+            ).to(param.device)
             self.left_recv_buffer_exp_avg = torch.zeros_like(self.left_recv_buffer)
-            forward_ops.append(
+            self.forward_recv_ops.append(
                 dist.P2POp(
-                    dist.irecv, self.left_recv_buffer, dist.get_rank() - 1, tag=idx
+                    dist.irecv,
+                    self.left_recv_buffer,
+                    dist.get_rank() - 1,
+                    tag=idx,
                 )
             )
-            backward_ops.append(
+            self.backward_send_ops.append(
                 dist.P2POp(
-                    dist.isend, self.left_recv_buffer, dist.get_rank() - 1, tag=idx
+                    dist.isend,
+                    self.left_recv_buffer,
+                    dist.get_rank() - 1,
+                    tag=idx,
                 )
             )
             split_param[0] = torch.cat([self.left_recv_buffer, split_param[0]])
+            # print(
+            #     f"param {idx} on rank {dist.get_rank()} receiving left, size {self.left_recv_buffer.size()}"
+            # )
 
-        if right_comm == CommunicationType.SEND:
-            self.right_send_buffer = torch.zeros_like(split_param[-1])
+        # TODO: come up with better unique tags
+        if (
+            right_comm == CommunicationType.SEND
+            # and orig_shape[-1] - split_param[-1].size()[0] != 0
+            and end_idx != orig_numels - 1
+            and split_param[-1].numel() != 0
+        ):
+            self.right_send_buffer = torch.zeros_like(split_param[-1]).to(param.device)
             # TODO: may need to pass rank into the class
-            forward_ops.append(
+            self.forward_send_ops.append(
                 dist.P2POp(
-                    dist.isend, self.right_send_buffer, dist.get_rank() + 1, tag=idx
+                    dist.isend,
+                    self.right_send_buffer,
+                    dist.get_rank() + 1,
+                    tag=idx,
                 )
             )
-            backward_ops.append(
+            self.backward_recv_ops.append(
                 dist.P2POp(
-                    dist.irecv, self.right_send_buffer, dist.get_rank() + 1, tag=idx
+                    dist.irecv,
+                    self.right_send_buffer,
+                    dist.get_rank() + 1,
+                    tag=idx,
                 )
             )
             split_param = split_param[:-1]
-        elif right_comm == CommunicationType.RECV:
+            # print(
+            #     f"param {idx} on rank {dist.get_rank()} sending right, size {self.right_send_buffer.size()}"
+            # )
+        elif (
+            right_comm == CommunicationType.RECV
+            # and orig_shape[-1] - split_param[-1].size()[0] != 0
+            and end_idx != orig_numels - 1
+            and split_param[-1].numel() != 0
+        ):
             # TODO: write more complex merging function
             self.right_recv_buffer = torch.zeros(
                 orig_shape[-1] - split_param[-1].size()[0]
-            )
+            ).to(param.device)
             self.right_recv_buffer_exp_avg = torch.zeros_like(self.right_recv_buffer)
-            forward_ops.append(
+            self.forward_recv_ops.append(
                 dist.P2POp(
-                    dist.irecv, self.right_recv_buffer, dist.get_rank() + 1, tag=idx
+                    dist.irecv,
+                    self.right_recv_buffer,
+                    dist.get_rank() + 1,
+                    tag=idx,
                 )
             )
-            backward_ops.append(
+            self.backward_send_ops.append(
                 dist.P2POp(
-                    dist.isend, self.right_recv_buffer, dist.get_rank() + 1, tag=idx
+                    dist.isend,
+                    self.right_recv_buffer,
+                    dist.get_rank() + 1,
+                    tag=idx,
                 )
             )
             split_param[-1] = torch.cat([split_param[-1], self.right_recv_buffer])
+            # print(
+            #     f"param {idx} on rank {dist.get_rank()} receiving right, size {self.right_recv_buffer.size()}"
+            # )
 
         # Construct multiple preconditioners for each block
         self._split_preconditioners = []
+        self._split_preconditioned_grad = None
 
         for i, p in enumerate(split_param):
             dims = torch.as_tensor(p.shape)
             split_idx = str(idx) + "." + str(i)
+            if p.numel() == 0:
+                continue
 
             # Blocks the tensor and applies Shampoo to each block, with block
             # size equal to the max_preconditioner_dim; see feature above.
@@ -703,6 +775,7 @@ class CommunicationShampooPreconditioner(DistributedPreconditioner):
         # Compute exponential moving average of the gradient (with
         # potential bias correction).
         self.exp_avg.mul_(beta1).add_(grad, alpha=1 - beta1)
+        # if self._left_comm == CommunicationType.RECV:
         if self.left_recv_buffer is not None:
             self.left_recv_buffer_exp_avg.mul_(beta1).add_(
                 self.left_recv_buffer, alpha=1 - beta1
@@ -710,6 +783,7 @@ class CommunicationShampooPreconditioner(DistributedPreconditioner):
             self.left_recv_buffer.copy_(
                 self.left_recv_buffer_exp_avg / self.bias_correction1
             )
+        # if self._right_comm == CommunicationType.RECV:
         if self.right_recv_buffer is not None:
             self.right_recv_buffer_exp_avg.mul_(beta1).add_(
                 self.right_recv_buffer, alpha=1 - beta1
@@ -720,46 +794,57 @@ class CommunicationShampooPreconditioner(DistributedPreconditioner):
 
         return self.exp_avg / self.bias_correction1
 
-    def get_forward_ops(self):
-        return self.forward_ops
+    def get_forward_ops(self, grad):
+        split_grad = convex_split(
+            grad,
+            self._orig_shape,
+            self._start_idx,
+            self._end_idx,
+            include_placeholder=True,
+        )
+
+        if self.left_send_buffer is not None:
+            self.left_send_buffer.copy_(split_grad[0])
+        if self.right_send_buffer is not None:
+            self.right_send_buffer.copy_(split_grad[-1])
+
+        return self.forward_send_ops, self.forward_recv_ops
 
     def get_backward_ops(self):
-        return self.backward_ops
+        # NOTE: recv buffers should be filled from precondition_and_store already!
+        return self.backward_send_ops, self.backward_recv_ops
 
-    def apply_split_and_merge_buffer(
-        self, tensor: Tensor, return_split_blocks: bool = False
-    ):
-        initial_split = convex_split(
-            tensor, self._orig_shape, self._start_idx, self._end_idx
+    def apply_split(self, tensor: Tensor, merge_buffer: bool = False):
+        split = convex_split(
+            tensor,
+            self._orig_shape,
+            self._start_idx,
+            self._end_idx,
+            include_placeholder=True,
         )
-        if self._left_comm == CommunicationType.SEND:
-            initial_split = initial_split[1:]
-        elif self._left_comm == CommunicationType.RECV:
-            # TODO: write more complex merging function
-            initial_split[0] = torch.cat([self.left_recv_buffer, initial_split[0]])
 
-        if self._right_comm == CommunicationType.SEND:
-            initial_split = initial_split[:-1]
-        elif self._right_comm == CommunicationType.RECV:
-            # TODO: write more complex merging function
-            initial_split[-1] = torch.cat([initial_split[-1], self.right_recv_buffer])
+        if merge_buffer:
+            # if self._left_comm == CommunicationType.SEND:
+            if self.left_send_buffer is not None:
+                split = split[1:]
+            # elif self._left_comm == CommunicationType.RECV:
+            elif self.left_recv_buffer is not None:
+                # TODO: write more complex merging function
+                split[0] = torch.cat([self.left_recv_buffer, split[0]])
 
-        if return_split_blocks and self._large_dim_method == LargeDimMethod.BLOCKING:
-            # return flattened recursive split, i.e. if self preconditioners are block preconditioners,
-            # retrieve each one's list of preconditioners and flatten
-            assert len(initial_split) == len(self._split_preconditioners)
-            return [
-                p
-                for partition, preconditioner in zip(
-                    initial_split, self._split_preconditioners
-                )
-                for p in preconditioner.combine_and_split_dims(partition)
-            ]
-        else:
-            return initial_split
+            # if self._right_comm == CommunicationType.SEND:
+            if self.right_send_buffer is not None:
+                split = split[:-1]
+            # elif self._right_comm == CommunicationType.RECV:
+            elif self.right_recv_buffer is not None:
+                # TODO: write more complex merging function
+                split[-1] = torch.cat([split[-1], self.right_recv_buffer])
+
+        split = [t for t in split if t.numel() != 0]
+        return split
 
     def update_preconditioners(self, grad: Tensor, iteration: Tensor):
-        split_grad = self.apply_split(grad)
+        split_grad = self.apply_split(grad, merge_buffer=True)
         assert len(split_grad) == len(
             self._split_preconditioners
         ), f"split shampoo preconditioner {self._idx} has {len(self._split_preconditioners)} preconditioners but grad was split into {len(split_grad)}"
@@ -769,31 +854,50 @@ class CommunicationShampooPreconditioner(DistributedPreconditioner):
     def precondition(
         self, grad: Tensor, iteration: Tensor, return_split_blocks: bool = True
     ) -> Tensor:
-        split_grad = self.apply_split(grad)
+        raise NotImplementedError
+
+    def precondition_and_store(self, grad: Tensor, iteration: Tensor) -> None:
+        split_grad = self.apply_split(grad, merge_buffer=True)
         assert len(self._split_preconditioners) == len(
             split_grad
         ), f"split shampoo preconditioner {self._idx} has {len(self._split_preconditioners)} preconditioners but grad was split into {len(split_grad)}"
-        if return_split_blocks:
-            # return flattened recursive split, i.e. if self preconditioners are block preconditioners,
-            # retrieve each one's list of preconditioners, precondition, and flatten
-            split_preconditioned_grad = []
-            for p, g in zip(self._split_preconditioners, split_grad):
-                if isinstance(p, BlockShampooPreconditioner):
-                    split_preconditioned_grad.extend(
-                        p.precondition(g, iteration, return_split=True)
-                    )
-                else:
-                    split_preconditioned_grad.append(p.precondition(g, iteration))
-            return split_preconditioned_grad
-        else:
-            raise NotImplementedError(
-                "return_split_blocks = False option not yet implemented"
-            )
 
-    def precondition_and_store(
-        self, grad: Tensor, iteration: Tensor, return_split_blocks: bool = True
-    ) -> Tensor:
-        raise NotImplementedError
+        split_preconditioned_grad = []
+        for p, g in zip(self._split_preconditioners, split_grad):
+            split_preconditioned_grad.append(p.precondition(g, iteration))
+
+        # if self._left_comm == CommunicationType.RECV:
+        if self.left_recv_buffer is not None:
+            self.left_recv_buffer.copy_(
+                split_preconditioned_grad[0][: self.left_recv_buffer.size()[0]]
+            )
+            split_preconditioned_grad[0] = split_preconditioned_grad[0][
+                self.left_recv_buffer.size()[0] :
+            ]
+
+        # if self._right_comm == CommunicationType.RECV:
+        if self.right_recv_buffer is not None:
+            self.right_recv_buffer.copy_(
+                split_preconditioned_grad[-1][-self.right_recv_buffer.size()[0] :]
+            )
+            split_preconditioned_grad[-1] = split_preconditioned_grad[-1][
+                : -self.right_recv_buffer.size()[0]
+            ]
+
+        self._split_preconditioned_grad = split_preconditioned_grad
+
+    def retrieve_preconditioned_grad(self) -> Tensor:
+        # left = (
+        #     [self.left_send_buffer] if self._left_comm == CommunicationType.SEND else []
+        # )
+        left = [self.left_send_buffer] if self.left_send_buffer is not None else []
+        # right = (
+        #     [self.right_send_buffer]
+        #     if self._right_comm == CommunicationType.SEND
+        #     else []
+        # )
+        right = [self.right_send_buffer] if self.right_send_buffer is not None else []
+        return left + self._split_preconditioned_grad + right
 
     def compute_root_inverse(self) -> None:
         for preconditioner in self._split_preconditioners:
