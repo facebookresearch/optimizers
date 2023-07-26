@@ -336,7 +336,7 @@ class SplitShampooPreconditioner(DistributedPreconditioner):
         grad: Tensor,
         iteration: Tensor,
         beta1: float,
-    ) -> Tensor:
+    ) -> None:
         # TODO: maybe this could be moved to a lower level preconditioner class, but not sure about efficiency of passing everything
 
         # Compute bias corrections if necessary.
@@ -347,7 +347,7 @@ class SplitShampooPreconditioner(DistributedPreconditioner):
         # potential bias correction).
         self.exp_avg.mul_(beta1).add_(grad, alpha=1 - beta1)
 
-        return self.exp_avg / self.bias_correction1
+        grad.copy_(self.exp_avg / self.bias_correction1)
 
     def apply_split(self, tensor: Tensor):
         return convex_split(tensor, self._orig_shape, self._start_idx, self._end_idx)
@@ -733,7 +733,7 @@ class CommunicationShampooPreconditioner(DistributedPreconditioner):
         grad: Tensor,
         iteration: Tensor,
         beta1: float,
-    ) -> Tensor:
+    ) -> None:
         # TODO: maybe this could be moved to a lower preconditioner class, but not sure about efficiency of passing everything
 
         # Compute bias corrections if necessary.
@@ -743,6 +743,8 @@ class CommunicationShampooPreconditioner(DistributedPreconditioner):
         # Compute exponential moving average of the gradient (with
         # potential bias correction).
         self.exp_avg.mul_(beta1).add_(grad, alpha=1 - beta1)
+        grad.copy_(self.exp_avg / self.bias_correction1)
+
         if self.left_recv_buffer is not None:
             self.left_recv_buffer_exp_avg.mul_(beta1).add_(
                 self.left_recv_buffer, alpha=1 - beta1
@@ -757,10 +759,6 @@ class CommunicationShampooPreconditioner(DistributedPreconditioner):
             self.right_recv_buffer.copy_(
                 self.right_recv_buffer_exp_avg / self.bias_correction1
             )
-
-        # TODO: an alternative to passing this back is to also store this within the class
-        # however, this may take up some more memory, since this gets copied to p.grad in main
-        return self.exp_avg / self.bias_correction1
 
     def get_forward_ops(self, grad):
         split_grad = convex_split(

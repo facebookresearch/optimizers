@@ -753,10 +753,7 @@ class FSDPShampoo(torch.optim.Optimizer):
 
                 # Incorporate first-moment or filtered gradient estimation.
                 if beta1 != 0:
-                    filtered_grad = state[PRECONDITIONERS].update_exp_avg(
-                        p.grad, iteration, beta1
-                    )
-                    p.grad.copy_(filtered_grad)
+                    state[PRECONDITIONERS].update_exp_avg(p.grad, iteration, beta1)
 
                 # Compute preconditioned gradient and update parameters.
                 split_preconditioned_grads.extend(
@@ -843,12 +840,8 @@ class FSDPShampoo(torch.optim.Optimizer):
 
                 # Incorporate first-moment or filtered gradient estimation.
                 # TODO: maybe this can be moved inside the precondition function, unsure if that would be clean
-                # TODO: does the result need to be copied to p.grad? note potential minor memory savings
                 if beta1 != 0:
-                    filtered_grad = state[PRECONDITIONERS].update_exp_avg(
-                        p.grad, iteration, beta1
-                    )
-                    p.grad.copy_(filtered_grad)
+                    state[PRECONDITIONERS].update_exp_avg(p.grad, iteration, beta1)
 
                 # Compute preconditioned gradient and store within class/buffers.
                 state[PRECONDITIONERS].precondition_and_store(p.grad, iteration)
