@@ -191,7 +191,8 @@ class FSDPShampoo(torch.optim.Optimizer):
         use_dtensor (bool): use DTensor. Requires PyTorch 2 nightly. Otherwise, uses Tensor. (Default: True)
         debug_mode (bool): debugging mode. Uses more memory to compute error to fp64 case. Must enable logging level to
             DEBUG. (Default: False)
-        convex_shape_recovery
+        convex_shape_recovery (ConvexShapeRecoveryMethod): method for convex shape recovery.
+            (Default: ConvexShapeRecoveryMethod.COMM) NOTE: change default in the future after experimenting
 
     """
 
@@ -415,6 +416,7 @@ class FSDPShampoo(torch.optim.Optimizer):
                         grafting_epsilon=self._grafting_epsilon,
                         use_protected_eigh=self._use_protected_eigh,
                         use_dtensor=self._use_dtensor,
+                        # TODO: can do more complex assignment here
                         left_comm=CommunicationType.NONE
                         if group_rank == 0
                         else CommunicationType.RECV,
@@ -428,12 +430,12 @@ class FSDPShampoo(torch.optim.Optimizer):
                 # Count parameters from preconditioners for logging purposes.
                 self._parameter_count += state[PRECONDITIONERS].parameter_count
 
-        # print(f"rank {dist.get_rank()} idxs (len {len(idx_list)}) {idx_list}")
         # Logs total number of parameters for optimizer.
         logger.info(f"Total Parameter Count: {self._parameter_count}")
 
     @torch.no_grad()
     def _send_grad(self, direction: CommunicationDirection):
+        # Get communication ops from all of the preconditioners.
         send_ops = []
         recv_ops = []
         for group in self.param_groups:
@@ -452,6 +454,8 @@ class FSDPShampoo(torch.optim.Optimizer):
                     send_ops.extend(send)
                     recv_ops.extend(recv)
 
+        # Order ops to align across ranks.
+        # TODO: play around with ordering of ops to see whether all these lists are necessary
         if dist.get_rank() % 2 == 0:
             ops = send_ops + recv_ops
         else:
@@ -459,6 +463,7 @@ class FSDPShampoo(torch.optim.Optimizer):
 
         reqs = dist.batch_isend_irecv(ops)
         for req in reqs:
+            # Wait for communication to complete before resuming computation.
             req.wait()
 
     @torch.no_grad()
@@ -539,6 +544,7 @@ class FSDPShampoo(torch.optim.Optimizer):
 
         Equivalent to adding an L2-regularization term:
           F(w) + lambda * ||w||^2.
+
         """
         for group in self.param_groups:
             weight_decay = group[WEIGHT_DECAY]
@@ -630,6 +636,7 @@ class FSDPShampoo(torch.optim.Optimizer):
         return split_params, split_preconditioned_grads, split_momentum_directions
 
     def _reconstruct_group(self, group):
+        # TODO: can probably consolidate with _init_group once return_split_blocks is removed
         # Set momentum parameter
         momentum_param = group[MOMENTUM]
 
@@ -694,6 +701,8 @@ class FSDPShampoo(torch.optim.Optimizer):
 
     @torch.no_grad()
     def step(self, closure=None):
+        # step functions for different convex shape recovery methods are separated for easy debugging now
+        # can potentially be consolidated in the future, especially if _init_group and _reconstruct_group are consolidated and moved outside the loop
         if self._convex_shape_recovery == ConvexShapeRecoveryMethod.SPLIT:
             return self.step_split(closure)
         elif self._convex_shape_recovery == ConvexShapeRecoveryMethod.COMM:
@@ -819,9 +828,7 @@ class FSDPShampoo(torch.optim.Optimizer):
             self._apply_weight_decay()
 
         self._send_grad(CommunicationDirection.FORWARD)
-        print("forward comm complete")
         self._update_preconditioners()
-        print("preconditioner update complete")
 
         # Computes root inverse of all preconditioners every self._precondition_frequency
         # after the self._start_preconditioning_step iteration.
@@ -833,7 +840,6 @@ class FSDPShampoo(torch.optim.Optimizer):
 
             if self._debug_mode:
                 self._compute_and_log_root_inverse_residuals()
-        print("root inverse complete")
 
         # Loops over all parameter groups and parameters to perform update.
         for group in self.param_groups:
@@ -845,7 +851,8 @@ class FSDPShampoo(torch.optim.Optimizer):
                     continue
 
                 # Incorporate first-moment or filtered gradient estimation.
-                # TODO: can this be moved inside precondition? does the result need to be copied to p.grad?
+                # TODO: maybe this can be moved inside the precondition function, unsure if that would be clean
+                # TODO: does the result need to be copied to p.grad? note potential minor memory savings
                 if beta1 != 0:
                     filtered_grad = state[PRECONDITIONERS].update_exp_avg(
                         p.grad, iteration, beta1
@@ -854,10 +861,8 @@ class FSDPShampoo(torch.optim.Optimizer):
 
                 # Compute preconditioned gradient and store within class/buffers.
                 state[PRECONDITIONERS].precondition_and_store(p.grad, iteration)
-        print("preconditioning grad complete")
 
         self._send_grad(CommunicationDirection.BACKWARD)
-        print("backward comm complete")
 
         for group in self.param_groups:
             momentum_param = group[MOMENTUM]

@@ -30,6 +30,9 @@ from distributed_shampoo.shampoo_utils import (
 logger = logging.getLogger(__name__)
 
 
+# TODO: think about enum names
+
+
 class ConvexShapeRecoveryMethod(enum.Enum):
     SPLIT = 0
     COMM = 1
@@ -334,9 +337,12 @@ class SplitShampooPreconditioner(DistributedPreconditioner):
         iteration: Tensor,
         beta1: float,
     ) -> Tensor:
+        # TODO: maybe this could be moved to a lower level preconditioner class, but not sure about efficiency of passing everything
+
         # Compute bias corrections if necessary.
         if self._use_bias_correction:
             self.bias_correction1 = 1.0 - beta1**iteration
+
         # Compute exponential moving average of the gradient (with
         # potential bias correction).
         self.exp_avg.mul_(beta1).add_(grad, alpha=1 - beta1)
@@ -376,6 +382,7 @@ class SplitShampooPreconditioner(DistributedPreconditioner):
         assert len(self._split_preconditioners) == len(
             split_grad
         ), f"split shampoo preconditioner {self._idx} has {len(self._split_preconditioners)} preconditioners but grad was split into {len(split_grad)}"
+        # TODO: return_split_blocks may be unnecessary; refactor after comparing wall time
         if return_split_blocks:
             # return flattened recursive split, i.e. if self preconditioners are block preconditioners,
             # retrieve each one's list of preconditioners, precondition, and flatten
@@ -445,7 +452,7 @@ class SplitShampooPreconditioner(DistributedPreconditioner):
 
 class CommunicationShampooPreconditioner(DistributedPreconditioner):
     """Shampoo with communication of small partitions of the parameters for convex shape recovery with FSDP.
-    Currently assumes all sending is from left to right in terms of rank number.
+    Currently only tested on the case where sending is from left to right in terms of rank number.
     TODO: come up with a better name
 
     NOTE: Does not support sparse gradients at this time.
@@ -475,9 +482,8 @@ class CommunicationShampooPreconditioner(DistributedPreconditioner):
             2. Attempts to recompute the eigendecomposition if using lower-precision fails.
             3. Otherwise, re-uses previous inverse factor matrix when both root inverse computations fail.
         use_dtensor (bool): Flag for using DTensor. Requires PyTorch 2 nightly. Otherwise, uses Tensor. (Default: True)
-
-        left_comm
-        right_comm
+        left_comm (CommunicationType): Indicates how param should communicate left side. (Default: CommunicationType.NONE)
+        right_comm (CommunicationType): Indicates how param should communicate right side. (Default: CommunicationType.NONE)
 
     """
 
@@ -536,11 +542,13 @@ class CommunicationShampooPreconditioner(DistributedPreconditioner):
         self.exp_avg = torch.zeros_like(param, memory_format=torch.preserve_format)
 
         # Initialize communication buffers
-        # setting to None for easier debugging, can remove later (update: maybe don't remove if left_comm and right_comm aren't updated)
+        # TODO: decide whether to keep checks on Nones or update left_comm and right_comm
         self.left_send_buffer = None
         self.right_send_buffer = None
         self.left_recv_buffer = None
         self.right_recv_buffer = None
+        # TODO: play around with ordering of ops in batch to see whether all these lists are necessary
+        # if they are necessary, there may be a cleaner way of keeping track of them than lists
         self.forward_send_ops = []
         self.forward_recv_ops = []
         self.backward_send_ops = []
@@ -551,12 +559,13 @@ class CommunicationShampooPreconditioner(DistributedPreconditioner):
 
         if (
             left_comm == CommunicationType.SEND
-            # and orig_shape[-1] - split_param[0].size()[0] != 0
+            # TODO: these checks could be moved into the main optimizer, but that may get messy
+            # reconsider if a more complex assignment function is written
             and start_idx != 0
             and split_param[0].numel() != 0
         ):
             self.left_send_buffer = torch.zeros_like(split_param[0]).to(param.device)
-            # TODO: may need to pass rank into the class
+            # TODO: not sure if calling dist.get_rank() is good practice; may need to pass rank into the class
             self.forward_send_ops.append(
                 dist.P2POp(
                     dist.isend, self.left_send_buffer, dist.get_rank() - 1, tag=idx
@@ -571,12 +580,8 @@ class CommunicationShampooPreconditioner(DistributedPreconditioner):
                 )
             )
             split_param = split_param[1:]
-            # print(
-            #     f"param {idx} on rank {dist.get_rank()} sending left, size {self.left_send_buffer.size()}"
-            # )
         elif (
             left_comm == CommunicationType.RECV
-            # and orig_shape[-1] - split_param[0].size()[0] != 0
             and start_idx != 0
             and split_param[0].numel() != 0
         ):
@@ -602,19 +607,14 @@ class CommunicationShampooPreconditioner(DistributedPreconditioner):
                 )
             )
             split_param[0] = torch.cat([self.left_recv_buffer, split_param[0]])
-            # print(
-            #     f"param {idx} on rank {dist.get_rank()} receiving left, size {self.left_recv_buffer.size()}"
-            # )
 
-        # TODO: come up with better unique tags
         if (
             right_comm == CommunicationType.SEND
-            # and orig_shape[-1] - split_param[-1].size()[0] != 0
             and end_idx != orig_numels - 1
             and split_param[-1].numel() != 0
         ):
             self.right_send_buffer = torch.zeros_like(split_param[-1]).to(param.device)
-            # TODO: may need to pass rank into the class
+            # TODO: not sure if calling dist.get_rank() is good practice; may need to pass rank into the class
             self.forward_send_ops.append(
                 dist.P2POp(
                     dist.isend,
@@ -632,12 +632,8 @@ class CommunicationShampooPreconditioner(DistributedPreconditioner):
                 )
             )
             split_param = split_param[:-1]
-            # print(
-            #     f"param {idx} on rank {dist.get_rank()} sending right, size {self.right_send_buffer.size()}"
-            # )
         elif (
             right_comm == CommunicationType.RECV
-            # and orig_shape[-1] - split_param[-1].size()[0] != 0
             and end_idx != orig_numels - 1
             and split_param[-1].numel() != 0
         ):
@@ -663,9 +659,6 @@ class CommunicationShampooPreconditioner(DistributedPreconditioner):
                 )
             )
             split_param[-1] = torch.cat([split_param[-1], self.right_recv_buffer])
-            # print(
-            #     f"param {idx} on rank {dist.get_rank()} receiving right, size {self.right_recv_buffer.size()}"
-            # )
 
         # Construct multiple preconditioners for each block
         self._split_preconditioners = []
@@ -769,13 +762,15 @@ class CommunicationShampooPreconditioner(DistributedPreconditioner):
         iteration: Tensor,
         beta1: float,
     ) -> Tensor:
+        # TODO: maybe this could be moved to a lower preconditioner class, but not sure about efficiency of passing everything
+
         # Compute bias corrections if necessary.
         if self._use_bias_correction:
             self.bias_correction1 = 1.0 - beta1**iteration
+
         # Compute exponential moving average of the gradient (with
         # potential bias correction).
         self.exp_avg.mul_(beta1).add_(grad, alpha=1 - beta1)
-        # if self._left_comm == CommunicationType.RECV:
         if self.left_recv_buffer is not None:
             self.left_recv_buffer_exp_avg.mul_(beta1).add_(
                 self.left_recv_buffer, alpha=1 - beta1
@@ -783,7 +778,6 @@ class CommunicationShampooPreconditioner(DistributedPreconditioner):
             self.left_recv_buffer.copy_(
                 self.left_recv_buffer_exp_avg / self.bias_correction1
             )
-        # if self._right_comm == CommunicationType.RECV:
         if self.right_recv_buffer is not None:
             self.right_recv_buffer_exp_avg.mul_(beta1).add_(
                 self.right_recv_buffer, alpha=1 - beta1
@@ -792,6 +786,8 @@ class CommunicationShampooPreconditioner(DistributedPreconditioner):
                 self.right_recv_buffer_exp_avg / self.bias_correction1
             )
 
+        # TODO: an alternative to passing this back is to also store this within the class
+        # however, this may take up some more memory, since this gets copied to p.grad in main
         return self.exp_avg / self.bias_correction1
 
     def get_forward_ops(self, grad):
@@ -824,18 +820,14 @@ class CommunicationShampooPreconditioner(DistributedPreconditioner):
         )
 
         if merge_buffer:
-            # if self._left_comm == CommunicationType.SEND:
             if self.left_send_buffer is not None:
                 split = split[1:]
-            # elif self._left_comm == CommunicationType.RECV:
             elif self.left_recv_buffer is not None:
                 # TODO: write more complex merging function
                 split[0] = torch.cat([self.left_recv_buffer, split[0]])
 
-            # if self._right_comm == CommunicationType.SEND:
             if self.right_send_buffer is not None:
                 split = split[:-1]
-            # elif self._right_comm == CommunicationType.RECV:
             elif self.right_recv_buffer is not None:
                 # TODO: write more complex merging function
                 split[-1] = torch.cat([split[-1], self.right_recv_buffer])
@@ -851,12 +843,7 @@ class CommunicationShampooPreconditioner(DistributedPreconditioner):
         for p, g in zip(self._split_preconditioners, split_grad):
             p.update_preconditioners(g, iteration)
 
-    def precondition(
-        self, grad: Tensor, iteration: Tensor, return_split_blocks: bool = True
-    ) -> Tensor:
-        raise NotImplementedError
-
-    def precondition_and_store(self, grad: Tensor, iteration: Tensor) -> None:
+    def precondition(self, grad: Tensor, iteration: Tensor) -> Tensor:
         split_grad = self.apply_split(grad, merge_buffer=True)
         assert len(self._split_preconditioners) == len(
             split_grad
@@ -866,7 +853,13 @@ class CommunicationShampooPreconditioner(DistributedPreconditioner):
         for p, g in zip(self._split_preconditioners, split_grad):
             split_preconditioned_grad.append(p.precondition(g, iteration))
 
-        # if self._left_comm == CommunicationType.RECV:
+        return split_preconditioned_grad
+
+    def precondition_and_store(self, grad: Tensor, iteration: Tensor) -> None:
+        # TODO: come up with a better name for this function
+        # might not want to use preconditioned_grad_to_buffer since that's used by DDP Shampoo?
+        split_preconditioned_grad = self.precondition(grad, iteration)
+
         if self.left_recv_buffer is not None:
             self.left_recv_buffer.copy_(
                 split_preconditioned_grad[0][: self.left_recv_buffer.size()[0]]
@@ -875,7 +868,6 @@ class CommunicationShampooPreconditioner(DistributedPreconditioner):
                 self.left_recv_buffer.size()[0] :
             ]
 
-        # if self._right_comm == CommunicationType.RECV:
         if self.right_recv_buffer is not None:
             self.right_recv_buffer.copy_(
                 split_preconditioned_grad[-1][-self.right_recv_buffer.size()[0] :]
@@ -887,15 +879,7 @@ class CommunicationShampooPreconditioner(DistributedPreconditioner):
         self._split_preconditioned_grad = split_preconditioned_grad
 
     def retrieve_preconditioned_grad(self) -> Tensor:
-        # left = (
-        #     [self.left_send_buffer] if self._left_comm == CommunicationType.SEND else []
-        # )
         left = [self.left_send_buffer] if self.left_send_buffer is not None else []
-        # right = (
-        #     [self.right_send_buffer]
-        #     if self._right_comm == CommunicationType.SEND
-        #     else []
-        # )
         right = [self.right_send_buffer] if self.right_send_buffer is not None else []
         return left + self._split_preconditioned_grad + right
 
