@@ -964,9 +964,7 @@ class BlockShampooPreconditioner(DistributedPreconditioner):
         ):
             block_preconditioner.update_preconditioners(block_grad, iteration)
 
-    def precondition(
-        self, grad: Tensor, iteration: Tensor, return_split: bool = False
-    ) -> Tensor:
+    def precondition(self, grad: Tensor, iteration: Tensor) -> Tensor:
         split_grad = self.combine_and_split_dims(grad)
         assert self.num_preconditioners() == len(
             split_grad
@@ -975,17 +973,12 @@ class BlockShampooPreconditioner(DistributedPreconditioner):
             p.precondition(g, iteration)
             for p, g in zip(self._split_preconditioners, split_grad)
         ]
-        if return_split:
-            return split_preconditioned_grad
-        else:
-            preconditioned_grad = multi_dim_cat(
-                split_preconditioned_grad, self._num_splits
-            )
-            return (
-                preconditioned_grad.view(self._original_dims)
-                if self._use_merge_dims
-                else preconditioned_grad
-            )
+        preconditioned_grad = multi_dim_cat(split_preconditioned_grad, self._num_splits)
+        return (
+            preconditioned_grad.view(self._original_dims)
+            if self._use_merge_dims
+            else preconditioned_grad
+        )
 
     def compute_root_inverse(self) -> None:
         for preconditioner in self._split_preconditioners:

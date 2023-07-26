@@ -349,23 +349,8 @@ class SplitShampooPreconditioner(DistributedPreconditioner):
 
         return self.exp_avg / self.bias_correction1
 
-    def apply_split(self, tensor: Tensor, return_split_blocks: bool = False):
-        initial_split = convex_split(
-            tensor, self._orig_shape, self._start_idx, self._end_idx
-        )
-        if return_split_blocks and self._large_dim_method == LargeDimMethod.BLOCKING:
-            # return flattened recursive split, i.e. if self preconditioners are block preconditioners,
-            # retrieve each one's list of preconditioners and flatten
-            assert len(initial_split) == len(self._split_preconditioners)
-            return [
-                p
-                for partition, preconditioner in zip(
-                    initial_split, self._split_preconditioners
-                )
-                for p in preconditioner.combine_and_split_dims(partition)
-            ]
-        else:
-            return initial_split
+    def apply_split(self, tensor: Tensor):
+        return convex_split(tensor, self._orig_shape, self._start_idx, self._end_idx)
 
     def update_preconditioners(self, grad: Tensor, iteration: Tensor):
         split_grad = self.apply_split(grad)
@@ -375,30 +360,17 @@ class SplitShampooPreconditioner(DistributedPreconditioner):
         for p, g in zip(self._split_preconditioners, split_grad):
             p.update_preconditioners(g, iteration)
 
-    def precondition(
-        self, grad: Tensor, iteration: Tensor, return_split_blocks: bool = True
-    ) -> Tensor:
+    def precondition(self, grad: Tensor, iteration: Tensor) -> Tensor:
         split_grad = self.apply_split(grad)
         assert len(self._split_preconditioners) == len(
             split_grad
         ), f"split shampoo preconditioner {self._idx} has {len(self._split_preconditioners)} preconditioners but grad was split into {len(split_grad)}"
-        # TODO: return_split_blocks may be unnecessary; refactor after comparing wall time
-        if return_split_blocks:
-            # return flattened recursive split, i.e. if self preconditioners are block preconditioners,
-            # retrieve each one's list of preconditioners, precondition, and flatten
-            split_preconditioned_grad = []
-            for p, g in zip(self._split_preconditioners, split_grad):
-                if isinstance(p, BlockShampooPreconditioner):
-                    split_preconditioned_grad.extend(
-                        p.precondition(g, iteration, return_split=True)
-                    )
-                else:
-                    split_preconditioned_grad.append(p.precondition(g, iteration))
-            return split_preconditioned_grad
-        else:
-            raise NotImplementedError(
-                "return_split_blocks = False option not yet implemented"
-            )
+
+        split_preconditioned_grad = []
+        for p, g in zip(self._split_preconditioners, split_grad):
+            split_preconditioned_grad.append(p.precondition(g, iteration))
+
+        return split_preconditioned_grad
 
     def compute_root_inverse(self) -> None:
         for preconditioner in self._split_preconditioners:

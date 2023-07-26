@@ -364,7 +364,6 @@ class FSDPShampoo(torch.optim.Optimizer):
         group_rank = dist.get_rank()
 
         for group in self.param_groups:
-            idx_list = []
             for idx, p in enumerate(group[PARAMS]):
                 # skip parameters not on worker
                 if p.numel() == 0:
@@ -372,8 +371,6 @@ class FSDPShampoo(torch.optim.Optimizer):
 
                 state = self.state[p]
                 state[STEP] = torch.tensor(0)
-
-                idx_list.append(idx)
 
                 if self._convex_shape_recovery == ConvexShapeRecoveryMethod.SPLIT:
                     state[PRECONDITIONERS] = SplitShampooPreconditioner(
@@ -622,13 +619,9 @@ class FSDPShampoo(torch.optim.Optimizer):
                 )
 
             # Generate split lists.
-            split_params.extend(
-                state[PRECONDITIONERS].apply_split(p, return_split_blocks=True)
-            )
+            split_params.extend(state[PRECONDITIONERS].apply_split(p))
             split_momentum_directions.extend(
-                state[PRECONDITIONERS].apply_split(
-                    state[MOMENTUM], return_split_blocks=True
-                )
+                state[PRECONDITIONERS].apply_split(state[MOMENTUM])
                 if momentum_param != 0.0
                 else []
             )
@@ -767,9 +760,7 @@ class FSDPShampoo(torch.optim.Optimizer):
 
                 # Compute preconditioned gradient and update parameters.
                 split_preconditioned_grads.extend(
-                    state[PRECONDITIONERS].precondition(
-                        p.grad, iteration, return_split_blocks=True
-                    )
+                    state[PRECONDITIONERS].precondition(p.grad, iteration)
                 )
 
             # Set search direction as preconditioned grads.
