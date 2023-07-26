@@ -446,10 +446,11 @@ class FSDPShampoo(torch.optim.Optimizer):
                 else:  # backward
                     ops.extend(state[PRECONDITIONERS].get_backward_ops())
 
-        reqs = dist.batch_isend_irecv(ops)
-        for req in reqs:
-            # Wait for communication to complete before resuming computation.
-            req.wait()
+        if len(ops) > 0:
+            reqs = dist.batch_isend_irecv(ops)
+            for req in reqs:
+                # Wait for communication to complete before resuming computation.
+                req.wait()
 
     @torch.no_grad()
     def _compute_root_inverse(self):
@@ -576,7 +577,7 @@ class FSDPShampoo(torch.optim.Optimizer):
 
     @torch.no_grad()
     def _init_group(
-        self, group: Dict[str, Any]
+        self, group: Dict[str, Any], grad_is_preconditioned: bool = False
     ) -> Tuple[List[torch.Tensor], List[torch.Tensor], List[torch.Tensor]]:
         # Set momentum parameter
         momentum_param = group[MOMENTUM]
@@ -608,53 +609,16 @@ class FSDPShampoo(torch.optim.Optimizer):
 
             # Generate split lists.
             split_params.extend(state[PRECONDITIONERS].apply_split(p))
+            if grad_is_preconditioned:
+                split_preconditioned_grads.extend(
+                    state[PRECONDITIONERS].retrieve_preconditioned_grad()
+                )
             split_momentum_directions.extend(
                 state[PRECONDITIONERS].apply_split(state[MOMENTUM])
                 if momentum_param != 0.0
                 else []
             )
 
-        return split_params, split_preconditioned_grads, split_momentum_directions
-
-    def _reconstruct_group(self, group):
-        # TODO: can probably consolidate with _init_group once return_split_blocks is removed
-        # Set momentum parameter
-        momentum_param = group[MOMENTUM]
-
-        split_params = []
-        split_preconditioned_grads = []
-        split_momentum_directions = []
-
-        for p in group[PARAMS]:
-            # skip parameters not on worker
-            if p.numel() == 0:
-                continue
-
-            state = self.state[p]
-            if p.grad is None:
-                continue
-
-            if p.grad.is_sparse:
-                raise Exception(
-                    "Sparse parameters are not currently supported by Shampoo."
-                )
-
-            # Initialize momentum of gradient.
-            if momentum_param != 0.0 and MOMENTUM not in state:
-                state[MOMENTUM] = torch.zeros_like(
-                    p.grad, memory_format=torch.preserve_format
-                )
-
-            # Generate split lists.
-            split_params.extend(state[PRECONDITIONERS].apply_split(p))
-            split_preconditioned_grads.extend(
-                state[PRECONDITIONERS].retrieve_preconditioned_grad()
-            )
-            split_momentum_directions.extend(
-                state[PRECONDITIONERS].apply_split(state[MOMENTUM])
-                if momentum_param != 0.0
-                else []
-            )
         return split_params, split_preconditioned_grads, split_momentum_directions
 
     @torch.no_grad()
@@ -683,7 +647,7 @@ class FSDPShampoo(torch.optim.Optimizer):
     @torch.no_grad()
     def step(self, closure=None):
         # step functions for different convex shape recovery methods are separated for easy debugging now
-        # can potentially be consolidated in the future, especially if _init_group and _reconstruct_group are consolidated and moved outside the loop
+        # can potentially be consolidated in the future, especially if _init_group is moved outside the loop
         if self._convex_shape_recovery == ConvexShapeRecoveryMethod.SPLIT:
             return self.step_split(closure)
         elif self._convex_shape_recovery == ConvexShapeRecoveryMethod.COMM:
@@ -845,7 +809,7 @@ class FSDPShampoo(torch.optim.Optimizer):
                 split_params,
                 split_preconditioned_grads,
                 split_momentum_directions,
-            ) = self._reconstruct_group(group)
+            ) = self._init_group(group, grad_is_preconditioned=True)
 
             # Set search direction as preconditioned grads.
             split_search_directions = split_preconditioned_grads
