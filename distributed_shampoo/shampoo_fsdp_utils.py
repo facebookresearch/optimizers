@@ -519,12 +519,9 @@ class CommunicationShampooPreconditioner(DistributedPreconditioner):
         self.right_send_buffer = None
         self.left_recv_buffer = None
         self.right_recv_buffer = None
-        # TODO: play around with ordering of ops in batch to see whether all these lists are necessary
-        # if they are necessary, there may be a cleaner way of keeping track of them than lists
-        self.forward_send_ops = []
-        self.forward_recv_ops = []
-        self.backward_send_ops = []
-        self.backward_recv_ops = []
+        # TODO: is there a cleaner way of keeping track of ops than these lists? len of each list is at most 2
+        self.forward_ops = []
+        self.backward_ops = []
         split_param = convex_split(
             param, orig_shape, start_idx, end_idx, include_placeholder=True
         )
@@ -538,12 +535,12 @@ class CommunicationShampooPreconditioner(DistributedPreconditioner):
         ):
             self.left_send_buffer = torch.zeros_like(split_param[0]).to(param.device)
             # TODO: not sure if calling dist.get_rank() is good practice; may need to pass rank into the class
-            self.forward_send_ops.append(
+            self.forward_ops.append(
                 dist.P2POp(
                     dist.isend, self.left_send_buffer, dist.get_rank() - 1, tag=idx
                 )
             )
-            self.backward_recv_ops.append(
+            self.backward_ops.append(
                 dist.P2POp(
                     dist.irecv,
                     self.left_send_buffer,
@@ -562,7 +559,7 @@ class CommunicationShampooPreconditioner(DistributedPreconditioner):
                 orig_shape[-1] - split_param[0].size()[0]
             ).to(param.device)
             self.left_recv_buffer_exp_avg = torch.zeros_like(self.left_recv_buffer)
-            self.forward_recv_ops.append(
+            self.forward_ops.append(
                 dist.P2POp(
                     dist.irecv,
                     self.left_recv_buffer,
@@ -570,7 +567,7 @@ class CommunicationShampooPreconditioner(DistributedPreconditioner):
                     tag=idx,
                 )
             )
-            self.backward_send_ops.append(
+            self.backward_ops.append(
                 dist.P2POp(
                     dist.isend,
                     self.left_recv_buffer,
@@ -587,7 +584,7 @@ class CommunicationShampooPreconditioner(DistributedPreconditioner):
         ):
             self.right_send_buffer = torch.zeros_like(split_param[-1]).to(param.device)
             # TODO: not sure if calling dist.get_rank() is good practice; may need to pass rank into the class
-            self.forward_send_ops.append(
+            self.forward_ops.append(
                 dist.P2POp(
                     dist.isend,
                     self.right_send_buffer,
@@ -595,7 +592,7 @@ class CommunicationShampooPreconditioner(DistributedPreconditioner):
                     tag=idx,
                 )
             )
-            self.backward_recv_ops.append(
+            self.backward_ops.append(
                 dist.P2POp(
                     dist.irecv,
                     self.right_send_buffer,
@@ -614,7 +611,7 @@ class CommunicationShampooPreconditioner(DistributedPreconditioner):
                 orig_shape[-1] - split_param[-1].size()[0]
             ).to(param.device)
             self.right_recv_buffer_exp_avg = torch.zeros_like(self.right_recv_buffer)
-            self.forward_recv_ops.append(
+            self.forward_ops.append(
                 dist.P2POp(
                     dist.irecv,
                     self.right_recv_buffer,
@@ -622,7 +619,7 @@ class CommunicationShampooPreconditioner(DistributedPreconditioner):
                     tag=idx,
                 )
             )
-            self.backward_send_ops.append(
+            self.backward_ops.append(
                 dist.P2POp(
                     dist.isend,
                     self.right_recv_buffer,
@@ -774,11 +771,11 @@ class CommunicationShampooPreconditioner(DistributedPreconditioner):
         if self.right_send_buffer is not None:
             self.right_send_buffer.copy_(split_grad[-1])
 
-        return self.forward_send_ops, self.forward_recv_ops
+        return self.forward_ops
 
     def get_backward_ops(self):
         # NOTE: recv buffers should be filled from precondition_and_store already!
-        return self.backward_send_ops, self.backward_recv_ops
+        return self.backward_ops
 
     def apply_split(self, tensor: Tensor, merge_buffer: bool = False):
         split = convex_split(

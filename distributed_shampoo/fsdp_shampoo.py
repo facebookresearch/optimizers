@@ -433,8 +433,7 @@ class FSDPShampoo(torch.optim.Optimizer):
     @torch.no_grad()
     def _send_grad(self, direction: CommunicationDirection):
         # Get communication ops from all of the preconditioners.
-        send_ops = []
-        recv_ops = []
+        ops = []
         for group in self.param_groups:
             for p in group[PARAMS]:
                 # skip parameters not on worker
@@ -443,20 +442,9 @@ class FSDPShampoo(torch.optim.Optimizer):
                 state = self.state[p]
 
                 if direction == CommunicationDirection.FORWARD:
-                    send, recv = state[PRECONDITIONERS].get_forward_ops(p.grad)
-                    send_ops.extend(send)
-                    recv_ops.extend(recv)
+                    ops.extend(state[PRECONDITIONERS].get_forward_ops(p.grad))
                 else:  # backward
-                    send, recv = state[PRECONDITIONERS].get_backward_ops()
-                    send_ops.extend(send)
-                    recv_ops.extend(recv)
-
-        # Order ops to align across ranks.
-        # TODO: play around with ordering of ops to see whether all these lists are necessary
-        if dist.get_rank() % 2 == 0:
-            ops = send_ops + recv_ops
-        else:
-            ops = recv_ops + send_ops
+                    ops.extend(state[PRECONDITIONERS].get_backward_ops())
 
         reqs = dist.batch_isend_irecv(ops)
         for req in reqs:
