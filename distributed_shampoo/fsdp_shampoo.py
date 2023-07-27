@@ -422,7 +422,7 @@ class FSDPShampoo(torch.optim.Optimizer):
                         else CommunicationType.SEND,
                     )
                 else:
-                    raise NotImplementedError("invalid convex shape recovery method")
+                    raise NotImplementedError(f"Invalid convex shape recovery method {self._convex_shape_recovery}!")
 
                 # Count parameters from preconditioners for logging purposes.
                 self._parameter_count += state[PRECONDITIONERS].parameter_count
@@ -443,8 +443,10 @@ class FSDPShampoo(torch.optim.Optimizer):
 
                 if direction == CommunicationDirection.FORWARD:
                     ops.extend(state[PRECONDITIONERS].get_forward_ops(p.grad))
-                else:  # backward
+                elif direction == CommunicationDirection.BACKWARD:
                     ops.extend(state[PRECONDITIONERS].get_backward_ops())
+                else:
+                    logger.warning(f"Communication direction {CommunicationDirection} is not valid! Continuing...")
 
         if len(ops) > 0:
             reqs = dist.batch_isend_irecv(ops)
@@ -536,12 +538,9 @@ class FSDPShampoo(torch.optim.Optimizer):
             weight_decay = group[WEIGHT_DECAY]
             for p in group[PARAMS]:
                 # skip parameters not on worker
-                if p.numel() == 0:
+                if p.numel() == 0 or p.grad is None:
                     continue
-
                 grad = p.grad
-                if grad is None:
-                    continue
 
                 if weight_decay != 0:
                     grad.add_(p, alpha=weight_decay)

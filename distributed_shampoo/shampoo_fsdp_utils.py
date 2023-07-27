@@ -91,7 +91,7 @@ def convex_split(
     end_idx += 1  # correct off-by-one (FSDP shard_param_info provides inclusive index)
     assert (
         end_idx - start_idx == tensor.size()[0]
-    ), f"Start/end indices do not match tensor size: start {start_idx} end {end_idx}, tensor size {tensor.size()}"
+    ), f"Start/end indices do not match tensor size: start {start_idx}, end {end_idx}, tensor size {tensor.size()}!"
 
     # maintains the order that partitions had in the flat tensor
     split_tensors_left = []
@@ -99,12 +99,13 @@ def convex_split(
     left_idx = None
     right_idx = None
     center_partition = False
+    
     for i in range(1, len(orig_shape) + 1):
         remaining_size = prod(orig_shape[i:])
         left_idx_new = int(np.ceil(start_idx / remaining_size)) * remaining_size
         right_idx_new = end_idx // remaining_size * remaining_size  # floor
 
-        # first iteration (largest convex partition in the center)
+        # handle largest convex partition in the center
         if not center_partition:
             if left_idx_new <= right_idx_new:
                 if left_idx_new < right_idx_new:
@@ -118,11 +119,16 @@ def convex_split(
                         .view([-1] + list(orig_shape[i:]))
                         .squeeze()
                     )
+                
+                # stores empty tensor if including placeholder
                 elif include_placeholder:
                     split_tensors_left.append(torch.tensor([]).to(tensor.device))
+                
+                # update left and right idx
                 left_idx = left_idx_new
                 right_idx = right_idx_new
                 center_partition = True
+                
             continue
 
         # add partition to left of current partitions
