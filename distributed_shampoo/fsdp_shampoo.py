@@ -18,11 +18,10 @@ import torch
 import torch.distributed as dist
 
 from distributed_shampoo.shampoo_fsdp_utils import (
-    CommunicationDirection,
-    CommunicationShampooPreconditioner,
+    CommunicatedSplitShampooPreconditioner,
     CommunicationType,
-    ConvexShapeRecoveryMethod,
     SplitShampooPreconditioner,
+    TensorBlockRecoveryMethod,
 )
 
 from distributed_shampoo.shampoo_utils import GraftingType, LargeDimMethod
@@ -191,8 +190,8 @@ class FSDPShampoo(torch.optim.Optimizer):
         use_dtensor (bool): use DTensor. Requires PyTorch 2 nightly. Otherwise, uses Tensor. (Default: True)
         debug_mode (bool): debugging mode. Uses more memory to compute error to fp64 case. Must enable logging level to
             DEBUG. (Default: False)
-        convex_shape_recovery (ConvexShapeRecoveryMethod): method for convex shape recovery.
-            (Default: ConvexShapeRecoveryMethod.COMM) NOTE: change default in the future after experimenting
+        tensor_block_recovery (TensorBlockRecoveryMethod): method for tensor block recovery.
+            (Default: TensorBlockRecoveryMethod.COMM) NOTE: change default in the future after experimenting
 
     """
 
@@ -223,7 +222,7 @@ class FSDPShampoo(torch.optim.Optimizer):
         use_protected_eigh: bool = True,
         use_dtensor: bool = False,
         debug_mode: bool = False,
-        convex_shape_recovery: ConvexShapeRecoveryMethod = ConvexShapeRecoveryMethod.COMM,
+        tensor_block_recovery: TensorBlockRecoveryMethod = TensorBlockRecoveryMethod.COMM,
     ):
         # Hyperparameter checks.
         if not lr >= 0.0:
@@ -335,7 +334,7 @@ class FSDPShampoo(torch.optim.Optimizer):
         self._use_protected_eigh = use_protected_eigh
         self._use_dtensor = use_dtensor
         self._debug_mode = debug_mode
-        self._convex_shape_recovery = convex_shape_recovery
+        self._tensor_block_recovery = tensor_block_recovery
         if self._use_nesterov and momentum == 0.0:
             logger.warning(
                 "Nesterov flag is enabled but momentum parameter is zero! Continuing without using momentum or Nesterov acceleration..."
@@ -372,11 +371,12 @@ class FSDPShampoo(torch.optim.Optimizer):
                 state = self.state[p]
                 state[STEP] = torch.tensor(0)
 
-                if self._convex_shape_recovery == ConvexShapeRecoveryMethod.SPLIT:
+                if self._tensor_block_recovery == TensorBlockRecoveryMethod.SPLIT:
                     state[PRECONDITIONERS] = SplitShampooPreconditioner(
                         p,
                         self._param_metadata[p],
                         large_dim_method=self._large_dim_method,
+                        beta1=group[BETAS][0],
                         beta2=group[BETAS][1],
                         epsilon=group[EPSILON],
                         exponent_override=self._exponent_override,
@@ -393,11 +393,24 @@ class FSDPShampoo(torch.optim.Optimizer):
                         use_protected_eigh=self._use_protected_eigh,
                         use_dtensor=self._use_dtensor,
                     )
-                elif self._convex_shape_recovery == ConvexShapeRecoveryMethod.COMM:
-                    state[PRECONDITIONERS] = CommunicationShampooPreconditioner(
+                elif self._tensor_block_recovery == TensorBlockRecoveryMethod.COMM:
+                    # TODO: can do more complex assignment here
+                    left_comm = (
+                        CommunicationType.NONE
+                        if group_rank == 0
+                        else CommunicationType.RECV
+                    )
+                    right_comm = (
+                        CommunicationType.NONE
+                        if group_rank == dist.get_world_size() - 1
+                        else CommunicationType.SEND
+                    )
+
+                    state[PRECONDITIONERS] = CommunicatedSplitShampooPreconditioner(
                         p,
                         self._param_metadata[p],
                         large_dim_method=self._large_dim_method,
+                        beta1=group[BETAS][0],
                         beta2=group[BETAS][1],
                         epsilon=group[EPSILON],
                         exponent_override=self._exponent_override,
@@ -413,16 +426,13 @@ class FSDPShampoo(torch.optim.Optimizer):
                         grafting_epsilon=self._grafting_epsilon,
                         use_protected_eigh=self._use_protected_eigh,
                         use_dtensor=self._use_dtensor,
-                        # TODO: can do more complex assignment here
-                        left_comm=CommunicationType.NONE
-                        if group_rank == 0
-                        else CommunicationType.RECV,
-                        right_comm=CommunicationType.NONE
-                        if group_rank == dist.get_world_size() - 1
-                        else CommunicationType.SEND,
+                        left_comm=left_comm,
+                        right_comm=right_comm,
                     )
                 else:
-                    raise NotImplementedError(f"Invalid convex shape recovery method {self._convex_shape_recovery}!")
+                    raise NotImplementedError(
+                        f"Invalid convex shape recovery method {self._convex_shape_recovery}!"
+                    )
 
                 # Count parameters from preconditioners for logging purposes.
                 self._parameter_count += state[PRECONDITIONERS].parameter_count
@@ -431,7 +441,7 @@ class FSDPShampoo(torch.optim.Optimizer):
         logger.info(f"Total Parameter Count: {self._parameter_count}")
 
     @torch.no_grad()
-    def _send_grad(self, direction: CommunicationDirection):
+    def _send_grad(self, forward_direction: True):
         # Get communication ops from all of the preconditioners.
         ops = []
         for group in self.param_groups:
@@ -441,12 +451,10 @@ class FSDPShampoo(torch.optim.Optimizer):
                     continue
                 state = self.state[p]
 
-                if direction == CommunicationDirection.FORWARD:
+                if forward_direction:
                     ops.extend(state[PRECONDITIONERS].get_forward_ops(p.grad))
-                elif direction == CommunicationDirection.BACKWARD:
+                else:  # backward
                     ops.extend(state[PRECONDITIONERS].get_backward_ops())
-                else:
-                    logger.warning(f"Communication direction {CommunicationDirection} is not valid! Continuing...")
 
         if len(ops) > 0:
             reqs = dist.batch_isend_irecv(ops)
@@ -467,7 +475,10 @@ class FSDPShampoo(torch.optim.Optimizer):
 
                 if isinstance(
                     state[PRECONDITIONERS],
-                    (SplitShampooPreconditioner, CommunicationShampooPreconditioner),
+                    (
+                        SplitShampooPreconditioner,
+                        CommunicatedSplitShampooPreconditioner,
+                    ),
                 ):
                     state[PRECONDITIONERS].compute_root_inverse()
 
@@ -501,7 +512,10 @@ class FSDPShampoo(torch.optim.Optimizer):
 
                 if isinstance(
                     state[PRECONDITIONERS],
-                    (SplitShampooPreconditioner, CommunicationShampooPreconditioner),
+                    (
+                        SplitShampooPreconditioner,
+                        CommunicatedSplitShampooPreconditioner,
+                    ),
                 ):
                     relative_error, relative_residual = state[
                         PRECONDITIONERS
@@ -542,6 +556,12 @@ class FSDPShampoo(torch.optim.Optimizer):
                     continue
                 grad = p.grad
 
+                # TODO: Sparse case still not supported.
+                if grad.is_sparse:
+                    raise Exception(
+                        "Sparse parameters are not currently supported by Shampoo."
+                    )
+
                 if weight_decay != 0:
                     grad.add_(p, alpha=weight_decay)
 
@@ -576,7 +596,7 @@ class FSDPShampoo(torch.optim.Optimizer):
 
     @torch.no_grad()
     def _init_group(
-        self, group: Dict[str, Any], grad_is_preconditioned: bool = False
+        self, group: Dict[str, Any]
     ) -> Tuple[List[torch.Tensor], List[torch.Tensor], List[torch.Tensor]]:
         # Set momentum parameter
         momentum_param = group[MOMENTUM]
@@ -608,7 +628,7 @@ class FSDPShampoo(torch.optim.Optimizer):
 
             # Generate split lists.
             split_params.extend(state[PRECONDITIONERS].apply_split(p))
-            if grad_is_preconditioned:
+            if self._tensor_block_recovery == TensorBlockRecoveryMethod.COMM:
                 split_preconditioned_grads.extend(
                     state[PRECONDITIONERS].retrieve_preconditioned_grad()
                 )
@@ -645,11 +665,11 @@ class FSDPShampoo(torch.optim.Optimizer):
 
     @torch.no_grad()
     def step(self, closure=None):
-        # step functions for different convex shape recovery methods are separated for easy debugging now
+        # step functions for different tensor block recovery methods are separated for easy debugging now
         # can potentially be consolidated in the future, especially if _init_group is moved outside the loop
-        if self._convex_shape_recovery == ConvexShapeRecoveryMethod.SPLIT:
+        if self._tensor_block_recovery == TensorBlockRecoveryMethod.SPLIT:
             return self.step_split(closure)
-        elif self._convex_shape_recovery == ConvexShapeRecoveryMethod.COMM:
+        elif self._tensor_block_recovery == TensorBlockRecoveryMethod.COMM:
             return self.step_comm(closure)
 
     @torch.no_grad()
@@ -686,7 +706,6 @@ class FSDPShampoo(torch.optim.Optimizer):
 
         # Loops over all parameter groups and parameters to perform update.
         for group in self.param_groups:
-            beta1, _ = group[BETAS]
             momentum_param = group[MOMENTUM]
             weight_decay = group[WEIGHT_DECAY]
             lr = group[LR]
@@ -703,8 +722,7 @@ class FSDPShampoo(torch.optim.Optimizer):
                     continue
 
                 # Incorporate first-moment or filtered gradient estimation.
-                if beta1 != 0:
-                    state[PRECONDITIONERS].update_exp_avg(p.grad, iteration, beta1)
+                state[PRECONDITIONERS].update_exp_avg(p.grad, iteration)
 
                 # Compute preconditioned gradient and update parameters.
                 split_preconditioned_grads.extend(
@@ -766,7 +784,7 @@ class FSDPShampoo(torch.optim.Optimizer):
         if not self._use_decoupled_weight_decay:
             self._apply_weight_decay()
 
-        self._send_grad(CommunicationDirection.FORWARD)
+        self._send_grad(forward_direction=True)
         self._update_preconditioners()
 
         # Computes root inverse of all preconditioners every self._precondition_frequency
@@ -782,8 +800,6 @@ class FSDPShampoo(torch.optim.Optimizer):
 
         # Loops over all parameter groups and parameters to perform update.
         for group in self.param_groups:
-            beta1, _ = group[BETAS]
-
             for p in group[PARAMS]:
                 state = self.state[p]
                 if p.numel() == 0 or p.grad is None:
@@ -791,13 +807,12 @@ class FSDPShampoo(torch.optim.Optimizer):
 
                 # Incorporate first-moment or filtered gradient estimation.
                 # TODO: maybe this can be moved inside the precondition function, unsure if that would be clean
-                if beta1 != 0:
-                    state[PRECONDITIONERS].update_exp_avg(p.grad, iteration, beta1)
+                state[PRECONDITIONERS].update_exp_avg(p.grad, iteration)
 
                 # Compute preconditioned gradient and store within class/buffers.
                 state[PRECONDITIONERS].precondition_and_store(p.grad, iteration)
 
-        self._send_grad(CommunicationDirection.BACKWARD)
+        self._send_grad(forward_direction=False)
 
         for group in self.param_groups:
             momentum_param = group[MOMENTUM]
@@ -808,7 +823,7 @@ class FSDPShampoo(torch.optim.Optimizer):
                 split_params,
                 split_preconditioned_grads,
                 split_momentum_directions,
-            ) = self._init_group(group, grad_is_preconditioned=True)
+            ) = self._init_group(group)
 
             # Set search direction as preconditioned grads.
             split_search_directions = split_preconditioned_grads

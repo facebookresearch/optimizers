@@ -30,10 +30,7 @@ from distributed_shampoo.shampoo_utils import (
 logger = logging.getLogger(__name__)
 
 
-# TODO: think about enum names
-
-
-class ConvexShapeRecoveryMethod(enum.Enum):
+class TensorBlockRecoveryMethod(enum.Enum):
     SPLIT = 0
     COMM = 1
 
@@ -42,11 +39,6 @@ class CommunicationType(enum.Enum):
     SEND = 0
     RECV = 1
     NONE = 2
-
-
-class CommunicationDirection(enum.Enum):
-    FORWARD = 0
-    BACKWARD = 1
 
 
 def convex_split(
@@ -199,6 +191,7 @@ class SplitShampooPreconditioner(DistributedPreconditioner):
         param,
         metadata: Tuple,
         large_dim_method: LargeDimMethod = LargeDimMethod.BLOCKING,
+        beta1: float = 0.9,
         beta2: float = 1.0,
         epsilon: float = 1e-12,
         exponent_override: int = 0,
@@ -221,6 +214,7 @@ class SplitShampooPreconditioner(DistributedPreconditioner):
 
         # Set parameters.
         self._large_dim_method = large_dim_method
+        self._beta1 = beta1
         self._beta2 = beta2
         self._epsilon = epsilon
         self._exponent_override = exponent_override
@@ -341,17 +335,18 @@ class SplitShampooPreconditioner(DistributedPreconditioner):
         self,
         grad: Tensor,
         iteration: Tensor,
-        beta1: float,
     ) -> None:
         # TODO: maybe this could be moved to a lower level preconditioner class, but not sure about efficiency of passing everything
+        if self._beta1 == 0:
+            return
 
         # Compute bias corrections if necessary.
         if self._use_bias_correction:
-            self.bias_correction1 = 1.0 - beta1**iteration
+            self.bias_correction1 = 1.0 - self._beta1**iteration
 
         # Compute exponential moving average of the gradient (with
         # potential bias correction).
-        self.exp_avg.mul_(beta1).add_(grad, alpha=1 - beta1)
+        self.exp_avg.mul_(self._beta1).add_(grad, alpha=1 - self._beta1)
 
         grad.copy_(self.exp_avg / self.bias_correction1)
 
@@ -428,7 +423,7 @@ class SplitShampooPreconditioner(DistributedPreconditioner):
             preconditioner.reset_preconditioners()
 
 
-class CommunicationShampooPreconditioner(DistributedPreconditioner):
+class CommunicatedSplitShampooPreconditioner(DistributedPreconditioner):
     """Shampoo with communication of small partitions of the parameters for convex shape recovery with FSDP.
     Currently only tested on the case where sending is from left to right in terms of rank number.
     TODO: come up with a better name
@@ -470,6 +465,7 @@ class CommunicationShampooPreconditioner(DistributedPreconditioner):
         param,
         metadata: Tuple,
         large_dim_method: LargeDimMethod = LargeDimMethod.BLOCKING,
+        beta1: float = 0.9,
         beta2: float = 1.0,
         epsilon: float = 1e-12,
         exponent_override: int = 0,
@@ -488,12 +484,13 @@ class CommunicationShampooPreconditioner(DistributedPreconditioner):
         left_comm: CommunicationType = CommunicationType.NONE,
         right_comm: CommunicationType = CommunicationType.NONE,
     ):
-        super(CommunicationShampooPreconditioner, self).__init__(
+        super(CommunicatedSplitShampooPreconditioner, self).__init__(
             param,
         )
 
         # Set parameters.
         self._large_dim_method = large_dim_method
+        self._beta1 = beta1
         self._beta2 = beta2
         self._epsilon = epsilon
         self._exponent_override = exponent_override
@@ -554,7 +551,7 @@ class CommunicationShampooPreconditioner(DistributedPreconditioner):
                     tag=idx,
                 )
             )
-            split_param = split_param[1:]
+            split_param.pop(0)
         elif (
             left_comm == CommunicationType.RECV
             and start_idx != 0
@@ -606,7 +603,7 @@ class CommunicationShampooPreconditioner(DistributedPreconditioner):
                     tag=idx,
                 )
             )
-            split_param = split_param[:-1]
+            split_param.pop(-1)
         elif (
             right_comm == CommunicationType.RECV
             and end_idx != orig_numels - 1
@@ -735,29 +732,30 @@ class CommunicationShampooPreconditioner(DistributedPreconditioner):
         self,
         grad: Tensor,
         iteration: Tensor,
-        beta1: float,
     ) -> None:
         # TODO: maybe this could be moved to a lower preconditioner class, but not sure about efficiency of passing everything
+        if self._beta1 == 0:
+            return
 
         # Compute bias corrections if necessary.
         if self._use_bias_correction:
-            self.bias_correction1 = 1.0 - beta1**iteration
+            self.bias_correction1 = 1.0 - self._beta1**iteration
 
         # Compute exponential moving average of the gradient (with
         # potential bias correction).
-        self.exp_avg.mul_(beta1).add_(grad, alpha=1 - beta1)
+        self.exp_avg.mul_(self._beta1).add_(grad, alpha=1 - self._beta1)
         grad.copy_(self.exp_avg / self.bias_correction1)
 
         if self.left_recv_buffer is not None:
-            self.left_recv_buffer_exp_avg.mul_(beta1).add_(
-                self.left_recv_buffer, alpha=1 - beta1
+            self.left_recv_buffer_exp_avg.mul_(self._beta1).add_(
+                self.left_recv_buffer, alpha=1 - self._beta1
             )
             self.left_recv_buffer.copy_(
                 self.left_recv_buffer_exp_avg / self.bias_correction1
             )
         if self.right_recv_buffer is not None:
-            self.right_recv_buffer_exp_avg.mul_(beta1).add_(
-                self.right_recv_buffer, alpha=1 - beta1
+            self.right_recv_buffer_exp_avg.mul_(self._beta1).add_(
+                self.right_recv_buffer, alpha=1 - self._beta1
             )
             self.right_recv_buffer.copy_(
                 self.right_recv_buffer_exp_avg / self.bias_correction1
