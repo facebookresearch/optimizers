@@ -91,7 +91,7 @@ def convex_split(
     left_idx = None
     right_idx = None
     center_partition = False
-    
+
     for i in range(1, len(orig_shape) + 1):
         remaining_size = prod(orig_shape[i:])
         left_idx_new = int(np.ceil(start_idx / remaining_size)) * remaining_size
@@ -111,16 +111,16 @@ def convex_split(
                         .view([-1] + list(orig_shape[i:]))
                         .squeeze()
                     )
-                
+
                 # stores empty tensor if including placeholder
                 elif include_placeholder:
                     split_tensors_left.append(torch.tensor([]).to(tensor.device))
-                
+
                 # update left and right idx
                 left_idx = left_idx_new
                 right_idx = right_idx_new
                 center_partition = True
-                
+
             continue
 
         # add partition to left of current partitions
@@ -233,9 +233,10 @@ class SplitShampooPreconditioner(DistributedPreconditioner):
         self._start_idx = start_idx
         self._end_idx = end_idx
 
-        # Initialize exponential moving average
-        self.bias_correction1 = torch.as_tensor(1.0)
-        self.exp_avg = torch.zeros_like(param, memory_format=torch.preserve_format)
+        if self._beta1 != 0:
+            # Initialize exponential moving average
+            self.bias_correction1 = torch.as_tensor(1.0)
+            self.exp_avg = torch.zeros_like(param, memory_format=torch.preserve_format)
 
         # Construct multiple preconditioners for each block
         self._split_preconditioners = []
@@ -512,9 +513,10 @@ class CommunicatedSplitShampooPreconditioner(DistributedPreconditioner):
         self._left_comm = left_comm
         self._right_comm = right_comm
 
-        # Initialize exponential moving average
-        self.bias_correction1 = torch.as_tensor(1.0)
-        self.exp_avg = torch.zeros_like(param, memory_format=torch.preserve_format)
+        if beta1 != 0:
+            # Initialize exponential moving average
+            self.bias_correction1 = torch.as_tensor(1.0)
+            self.exp_avg = torch.zeros_like(param, memory_format=torch.preserve_format)
 
         # Initialize communication buffers
         # TODO: decide whether to keep checks on Nones or update left_comm and right_comm
@@ -557,7 +559,6 @@ class CommunicatedSplitShampooPreconditioner(DistributedPreconditioner):
             and start_idx != 0
             and split_param[0].numel() != 0
         ):
-            # TODO: write more complex merging function
             self.left_recv_buffer = torch.zeros(
                 orig_shape[-1] - split_param[0].size()[0]
             ).to(param.device)
@@ -578,7 +579,7 @@ class CommunicatedSplitShampooPreconditioner(DistributedPreconditioner):
                     tag=idx,
                 )
             )
-            split_param[0] = torch.cat([self.left_recv_buffer, split_param[0]])
+            self.merge_buffer(self.left_recv_buffer, split_param, on_left=True)
 
         if (
             right_comm == CommunicationType.SEND
@@ -609,7 +610,6 @@ class CommunicatedSplitShampooPreconditioner(DistributedPreconditioner):
             and end_idx != orig_numels - 1
             and split_param[-1].numel() != 0
         ):
-            # TODO: write more complex merging function
             self.right_recv_buffer = torch.zeros(
                 orig_shape[-1] - split_param[-1].size()[0]
             ).to(param.device)
@@ -630,7 +630,7 @@ class CommunicatedSplitShampooPreconditioner(DistributedPreconditioner):
                     tag=idx,
                 )
             )
-            split_param[-1] = torch.cat([split_param[-1], self.right_recv_buffer])
+            self.merge_buffer(self.right_recv_buffer, split_param, on_left=False)
 
         # Construct multiple preconditioners for each block
         self._split_preconditioners = []
@@ -794,17 +794,50 @@ class CommunicatedSplitShampooPreconditioner(DistributedPreconditioner):
             if self.left_send_buffer is not None:
                 split = split[1:]
             elif self.left_recv_buffer is not None:
-                # TODO: write more complex merging function
-                split[0] = torch.cat([self.left_recv_buffer, split[0]])
+                self.merge_buffer(self.left_recv_buffer, split, on_left=True)
 
             if self.right_send_buffer is not None:
                 split = split[:-1]
             elif self.right_recv_buffer is not None:
-                # TODO: write more complex merging function
-                split[-1] = torch.cat([split[-1], self.right_recv_buffer])
+                self.merge_buffer(self.right_recv_buffer, split, on_left=False)
 
         split = [t for t in split if t.numel() != 0]
         return split
+
+    def merge_buffer(self, buffer, param_list, on_left: bool):
+        if on_left:
+            tensor1d = param_list.pop(0)
+            merged_tensor = torch.cat([buffer, tensor1d])
+            if len(param_list) > 0:
+                tensor2d = param_list.pop(0)
+                merged_tensor = torch.cat([merged_tensor.reshape(1, -1), tensor2d])
+            param_list.insert(0, merged_tensor)
+        else:  # on right
+            tensor1d = param_list.pop(-1)
+            merged_tensor = torch.cat([tensor1d, buffer])
+            if len(param_list) > 0:
+                tensor2d = param_list.pop(-1)
+                merged_tensor = torch.cat([tensor2d, merged_tensor.reshape(1, -1)])
+            param_list.append(merged_tensor)
+
+    def unmerge_buffer(self, merged_tensor: Tensor, on_left: bool):
+        if on_left:
+            buffer_size = self.left_recv_buffer.size()[0]
+            if merged_tensor.dim() == 1:
+                buffer = merged_tensor[:buffer_size]
+                remainder = [merged_tensor[buffer_size:]]
+            else:
+                buffer = merged_tensor[0, :buffer_size]
+                remainder = [merged_tensor[0, buffer_size:], merged_tensor[1:]]
+        else:  # on right
+            buffer_size = self.right_recv_buffer.size()[0]
+            if merged_tensor.dim() == 1:
+                buffer = merged_tensor[-buffer_size:]
+                remainder = [merged_tensor[:-buffer_size]]
+            else:
+                buffer = merged_tensor[-1, -buffer_size:]
+                remainder = [merged_tensor[:-1], merged_tensor[-1, :-buffer_size]]
+        return buffer, remainder
 
     def update_preconditioners(self, grad: Tensor, iteration: Tensor):
         split_grad = self.apply_split(grad, merge_buffer=True)
@@ -832,20 +865,20 @@ class CommunicatedSplitShampooPreconditioner(DistributedPreconditioner):
         split_preconditioned_grad = self.precondition(grad, iteration)
 
         if self.left_recv_buffer is not None:
-            self.left_recv_buffer.copy_(
-                split_preconditioned_grad[0][: self.left_recv_buffer.size()[0]]
+            buffer, remainder = self.unmerge_buffer(
+                split_preconditioned_grad[0], on_left=True
             )
-            split_preconditioned_grad[0] = split_preconditioned_grad[0][
-                self.left_recv_buffer.size()[0] :
-            ]
+            self.left_recv_buffer.copy_(buffer)
+            # remove first element and add remainder to front
+            split_preconditioned_grad[:1] = remainder
 
         if self.right_recv_buffer is not None:
-            self.right_recv_buffer.copy_(
-                split_preconditioned_grad[-1][-self.right_recv_buffer.size()[0] :]
+            buffer, remainder = self.unmerge_buffer(
+                split_preconditioned_grad[-1], on_left=False
             )
-            split_preconditioned_grad[-1] = split_preconditioned_grad[-1][
-                : -self.right_recv_buffer.size()[0]
-            ]
+            self.right_recv_buffer.copy_(buffer)
+            # remove last element and add remainder to back
+            split_preconditioned_grad[-1:] = remainder
 
         self._split_preconditioned_grad = split_preconditioned_grad
 

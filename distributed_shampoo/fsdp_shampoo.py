@@ -441,7 +441,7 @@ class FSDPShampoo(torch.optim.Optimizer):
         logger.info(f"Total Parameter Count: {self._parameter_count}")
 
     @torch.no_grad()
-    def _send_grad(self, forward_direction: True):
+    def _send_grad(self, forward_direction: bool):
         # Get communication ops from all of the preconditioners.
         ops = []
         for group in self.param_groups:
