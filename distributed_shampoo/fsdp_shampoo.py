@@ -12,7 +12,7 @@ import os
 from collections import abc as container_abcs, defaultdict
 from copy import deepcopy
 from itertools import chain
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 import torch.distributed as dist
@@ -223,6 +223,7 @@ class FSDPShampoo(torch.optim.Optimizer):
         use_dtensor: bool = False,
         debug_mode: bool = False,
         tensor_block_recovery: TensorBlockRecoveryMethod = TensorBlockRecoveryMethod.COMM,
+        dist_group: Optional[dist.ProcessGroup] = None,
     ):
         # Hyperparameter checks.
         if not lr >= 0.0:
@@ -335,6 +336,7 @@ class FSDPShampoo(torch.optim.Optimizer):
         self._use_dtensor = use_dtensor
         self._debug_mode = debug_mode
         self._tensor_block_recovery = tensor_block_recovery
+        self._dist_group = dist_group
         if self._use_nesterov and momentum == 0.0:
             logger.warning(
                 "Nesterov flag is enabled but momentum parameter is zero! Continuing without using momentum or Nesterov acceleration..."
@@ -357,10 +359,8 @@ class FSDPShampoo(torch.optim.Optimizer):
     @torch.no_grad()
     def _initialize_preconditioners_and_steps(self):
         """Initialize Shampoo preconditioners and inverse preconditioners."""
-        # current workaround for group_source_rank
-        # TODO: try to keep dist_group information
-        self._dist_group = None
-        group_rank = dist.get_rank()
+        group_rank = dist.get_rank(group=self._dist_group)
+        group_size = dist.get_world_size(group=self._dist_group)
 
         for group in self.param_groups:
             for idx, p in enumerate(group[PARAMS]):
@@ -402,7 +402,7 @@ class FSDPShampoo(torch.optim.Optimizer):
                     )
                     right_comm = (
                         CommunicationType.NONE
-                        if group_rank == dist.get_world_size() - 1
+                        if group_rank == group_size - 1
                         else CommunicationType.SEND
                     )
 
