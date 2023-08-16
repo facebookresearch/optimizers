@@ -9,6 +9,7 @@ LICENSE file in the root directory of this source tree.
 
 import enum
 import logging
+from collections import namedtuple
 from copy import deepcopy
 from math import prod
 from typing import List, Tuple, Union
@@ -39,6 +40,9 @@ class CommunicationType(enum.Enum):
     SEND = 0
     RECV = 1
     NONE = 2
+
+
+BufferTuple = namedtuple("BufferTuple", ["buffer", "buffer_exp_avg"])
 
 
 def convex_split(
@@ -519,118 +523,64 @@ class CommunicatedSplitShampooPreconditioner(DistributedPreconditioner):
             self.exp_avg = torch.zeros_like(param, memory_format=torch.preserve_format)
 
         # Initialize communication buffers
-        # TODO: decide whether to keep checks on Nones or update left_comm and right_comm
-        self.left_send_buffer = None
-        self.right_send_buffer = None
-        self.left_recv_buffer = None
-        self.right_recv_buffer = None
-        # TODO: is there a cleaner way of keeping track of ops than these lists? len of each list is at most 2
         self.forward_ops = []
         self.backward_ops = []
         split_param = convex_split(
             param, orig_shape, start_idx, end_idx, include_placeholder=True
         )
 
-        if (
-            left_comm == CommunicationType.SEND
-            # TODO: these checks could be moved into the main optimizer, but that may get messy
-            # reconsider if a more complex assignment function is written
-            and start_idx != 0
-            and split_param[0].numel() != 0
-        ):
-            self.left_send_buffer = torch.zeros_like(split_param[0]).to(param.device)
-            # TODO: not sure if calling dist.get_rank() is good practice; may need to pass rank into the class
-            self.forward_ops.append(
-                dist.P2POp(
-                    dist.isend, self.left_send_buffer, dist.get_rank() - 1, tag=idx
-                )
-            )
-            self.backward_ops.append(
-                dist.P2POp(
-                    dist.irecv,
-                    self.left_send_buffer,
-                    dist.get_rank() - 1,
-                    tag=idx,
-                )
-            )
-            split_param.pop(0)
-        elif (
-            left_comm == CommunicationType.RECV
-            and start_idx != 0
-            and split_param[0].numel() != 0
-        ):
-            self.left_recv_buffer = torch.zeros(
-                orig_shape[-1] - split_param[0].size()[0]
-            ).to(param.device)
-            self.left_recv_buffer_exp_avg = torch.zeros_like(self.left_recv_buffer)
-            self.forward_ops.append(
-                dist.P2POp(
-                    dist.irecv,
-                    self.left_recv_buffer,
-                    dist.get_rank() - 1,
-                    tag=idx,
-                )
-            )
-            self.backward_ops.append(
-                dist.P2POp(
-                    dist.isend,
-                    self.left_recv_buffer,
-                    dist.get_rank() - 1,
-                    tag=idx,
-                )
-            )
-            self.merge_buffer(self.left_recv_buffer, split_param, on_left=True)
+        def create_buffer_tuple(comm, on_left):
+            if comm == CommunicationType.NONE:
+                return None
 
-        if (
-            right_comm == CommunicationType.SEND
-            and end_idx != orig_numels - 1
-            and split_param[-1].numel() != 0
-        ):
-            self.right_send_buffer = torch.zeros_like(split_param[-1]).to(param.device)
-            # TODO: not sure if calling dist.get_rank() is good practice; may need to pass rank into the class
-            self.forward_ops.append(
-                dist.P2POp(
-                    dist.isend,
-                    self.right_send_buffer,
-                    dist.get_rank() + 1,
-                    tag=idx,
+            if on_left:
+                border_check = start_idx != 0
+                param_piece = split_param[0]
+                comm_rank = dist.get_rank() - 1
+            else:  # right
+                border_check = end_idx != orig_numels - 1
+                param_piece = split_param[-1]
+                comm_rank = dist.get_rank() + 1
+
+            if comm == CommunicationType.SEND:
+                forward_direction = dist.isend
+                backward_direction = dist.irecv
+                buffer_size = param_piece.size()[0]
+            elif comm == CommunicationType.RECV:
+                forward_direction = dist.irecv
+                backward_direction = dist.isend
+                buffer_size = orig_shape[-1] - param_piece.size()[0]
+            else:
+                raise ValueError(f"Invalid communication type: {comm}")
+
+            if border_check and param_piece.numel() != 0:
+                buffer = torch.zeros(buffer_size).to(param.device)
+                buffer_exp_avg = (
+                    torch.zeros_like(buffer)
+                    if self._beta1 != 0 and comm == CommunicationType.RECV
+                    else None
                 )
-            )
-            self.backward_ops.append(
-                dist.P2POp(
-                    dist.irecv,
-                    self.right_send_buffer,
-                    dist.get_rank() + 1,
-                    tag=idx,
-                )
-            )
-            split_param.pop(-1)
-        elif (
-            right_comm == CommunicationType.RECV
-            and end_idx != orig_numels - 1
-            and split_param[-1].numel() != 0
-        ):
-            self.right_recv_buffer = torch.zeros(
-                orig_shape[-1] - split_param[-1].size()[0]
-            ).to(param.device)
-            self.right_recv_buffer_exp_avg = torch.zeros_like(self.right_recv_buffer)
-            self.forward_ops.append(
-                dist.P2POp(
-                    dist.irecv,
-                    self.right_recv_buffer,
-                    dist.get_rank() + 1,
-                    tag=idx,
-                )
-            )
-            self.backward_ops.append(
-                dist.P2POp(
-                    dist.isend,
-                    self.right_recv_buffer,
-                    dist.get_rank() + 1,
-                    tag=idx,
-                )
-            )
-            self.merge_buffer(self.right_recv_buffer, split_param, on_left=False)
+
+                buffer_tuple = BufferTuple(buffer, buffer_exp_avg)
+
+                forward_op = dist.P2POp(forward_direction, buffer, comm_rank, tag=idx)
+                self.forward_ops.append(forward_op)
+                backward_op = dist.P2POp(backward_direction, buffer, comm_rank, tag=idx)
+                self.backward_ops.append(backward_op)
+
+                if comm == CommunicationType.SEND:
+                    split_param.pop(0 if on_left else -1)
+                elif comm == CommunicationType.RECV:
+                    self.merge_buffer(buffer, split_param, on_left=on_left)
+                else:
+                    raise ValueError(f"Invalid communication type: {comm}")
+
+                return buffer_tuple
+            else:
+                return None
+
+        self.left_buffer = create_buffer_tuple(left_comm, on_left=True)
+        self.right_buffer = create_buffer_tuple(right_comm, on_left=False)
 
         # Construct multiple preconditioners for each block
         self._split_preconditioners = []
@@ -746,19 +696,19 @@ class CommunicatedSplitShampooPreconditioner(DistributedPreconditioner):
         self.exp_avg.mul_(self._beta1).add_(grad, alpha=1 - self._beta1)
         grad.copy_(self.exp_avg / self.bias_correction1)
 
-        if self.left_recv_buffer is not None:
-            self.left_recv_buffer_exp_avg.mul_(self._beta1).add_(
-                self.left_recv_buffer, alpha=1 - self._beta1
+        if self._left_comm == CommunicationType.RECV and self.left_buffer is not None:
+            self.left_buffer.buffer_exp_avg.mul_(self._beta1).add_(
+                self.left_buffer.buffer, alpha=1 - self._beta1
             )
-            self.left_recv_buffer.copy_(
-                self.left_recv_buffer_exp_avg / self.bias_correction1
+            self.left_buffer.buffer.copy_(
+                self.left_buffer.buffer_exp_avg / self.bias_correction1
             )
-        if self.right_recv_buffer is not None:
-            self.right_recv_buffer_exp_avg.mul_(self._beta1).add_(
-                self.right_recv_buffer, alpha=1 - self._beta1
+        if self._right_comm == CommunicationType.RECV and self.right_buffer is not None:
+            self.right_buffer.buffer_exp_avg.mul_(self._beta1).add_(
+                self.right_buffer.buffer, alpha=1 - self._beta1
             )
-            self.right_recv_buffer.copy_(
-                self.right_recv_buffer_exp_avg / self.bias_correction1
+            self.right_buffer.buffer.copy_(
+                self.right_buffer.buffer_exp_avg / self.bias_correction1
             )
 
     def get_forward_ops(self, grad):
@@ -770,10 +720,10 @@ class CommunicatedSplitShampooPreconditioner(DistributedPreconditioner):
             include_placeholder=True,
         )
 
-        if self.left_send_buffer is not None:
-            self.left_send_buffer.copy_(split_grad[0])
-        if self.right_send_buffer is not None:
-            self.right_send_buffer.copy_(split_grad[-1])
+        if self._left_comm == CommunicationType.SEND and self.left_buffer is not None:
+            self.left_buffer.buffer.copy_(split_grad[0])
+        if self._right_comm == CommunicationType.SEND and self.right_buffer is not None:
+            self.right_buffer.buffer.copy_(split_grad[-1])
 
         return self.forward_ops
 
@@ -791,15 +741,17 @@ class CommunicatedSplitShampooPreconditioner(DistributedPreconditioner):
         )
 
         if merge_buffer:
-            if self.left_send_buffer is not None:
-                split = split[1:]
-            elif self.left_recv_buffer is not None:
-                self.merge_buffer(self.left_recv_buffer, split, on_left=True)
+            if self.left_buffer is not None:
+                if self._left_comm == CommunicationType.SEND:
+                    split = split[1:]
+                elif self._left_comm == CommunicationType.RECV:
+                    self.merge_buffer(self.left_buffer.buffer, split, on_left=True)
 
-            if self.right_send_buffer is not None:
-                split = split[:-1]
-            elif self.right_recv_buffer is not None:
-                self.merge_buffer(self.right_recv_buffer, split, on_left=False)
+            if self.right_buffer is not None:
+                if self._right_comm == CommunicationType.SEND:
+                    split = split[:-1]
+                elif self._right_comm == CommunicationType.RECV:
+                    self.merge_buffer(self.right_buffer.buffer, split, on_left=False)
 
         split = [t for t in split if t.numel() != 0]
         return split
@@ -822,7 +774,7 @@ class CommunicatedSplitShampooPreconditioner(DistributedPreconditioner):
 
     def unmerge_buffer(self, merged_tensor: Tensor, on_left: bool):
         if on_left:
-            buffer_size = self.left_recv_buffer.size()[0]
+            buffer_size = self.left_buffer.buffer.size()[0]
             if merged_tensor.dim() == 1:
                 buffer = merged_tensor[:buffer_size]
                 remainder = [merged_tensor[buffer_size:]]
@@ -830,7 +782,7 @@ class CommunicatedSplitShampooPreconditioner(DistributedPreconditioner):
                 buffer = merged_tensor[0, :buffer_size]
                 remainder = [merged_tensor[0, buffer_size:], merged_tensor[1:]]
         else:  # on right
-            buffer_size = self.right_recv_buffer.size()[0]
+            buffer_size = self.right_buffer.buffer.size()[0]
             if merged_tensor.dim() == 1:
                 buffer = merged_tensor[-buffer_size:]
                 remainder = [merged_tensor[:-buffer_size]]
@@ -864,27 +816,37 @@ class CommunicatedSplitShampooPreconditioner(DistributedPreconditioner):
         # might not want to use preconditioned_grad_to_buffer since that's used by DDP Shampoo?
         split_preconditioned_grad = self.precondition(grad, iteration)
 
-        if self.left_recv_buffer is not None:
+        if self._left_comm == CommunicationType.RECV and self.left_buffer is not None:
             buffer, remainder = self.unmerge_buffer(
                 split_preconditioned_grad[0], on_left=True
             )
-            self.left_recv_buffer.copy_(buffer)
+            self.left_buffer.buffer.copy_(buffer)
             # remove first element and add remainder to front
             split_preconditioned_grad[:1] = remainder
 
-        if self.right_recv_buffer is not None:
+        if self._right_comm == CommunicationType.RECV and self.right_buffer is not None:
             buffer, remainder = self.unmerge_buffer(
                 split_preconditioned_grad[-1], on_left=False
             )
-            self.right_recv_buffer.copy_(buffer)
+            self.right_buffer.buffer.copy_(buffer)
             # remove last element and add remainder to back
             split_preconditioned_grad[-1:] = remainder
 
         self._split_preconditioned_grad = split_preconditioned_grad
 
     def retrieve_preconditioned_grad(self) -> Tensor:
-        left = [self.left_send_buffer] if self.left_send_buffer is not None else []
-        right = [self.right_send_buffer] if self.right_send_buffer is not None else []
+        left = (
+            [self.left_buffer.buffer]
+            if self._left_comm == CommunicationType.SEND
+            and self.left_buffer is not None
+            else []
+        )
+        right = (
+            [self.right_buffer.buffer]
+            if self._right_comm == CommunicationType.SEND
+            and self.right_buffer is not None
+            else []
+        )
         return left + self._split_preconditioned_grad + right
 
     def compute_root_inverse(self) -> None:
