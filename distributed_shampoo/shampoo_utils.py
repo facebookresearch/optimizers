@@ -15,6 +15,7 @@ from typing import List, Optional, Tuple, Union
 
 import torch
 import torch.distributed as dist
+from torch import Tensor
 
 from distributed_shampoo.matrix_functions import (
     check_diagonal,
@@ -27,9 +28,9 @@ from distributed_shampoo.shampoo_dist_utils import (
     get_dtype_size,
     use_local_tensor,
 )
-from torch import Tensor
 
 logger = logging.getLogger(__name__)
+
 
 ###### ENUM CLASSES ######
 class PreconditionerType(enum.Enum):
@@ -393,6 +394,13 @@ class AdagradPreconditioner(DistributedPreconditioner):
         adagrad_nrm = torch.linalg.norm(grad / denom)
         return adagrad_nrm
 
+    def to(self, device: Union[None, torch.device] = None):
+        if device is not None:
+            self._preconditioner = self._preconditioner.to(device=device)
+
+    def num_preconditioners(self) -> int:
+        return 1
+
 
 class ShampooKroneckerFactor(OptimizerModule):
     """Shampoo Kronecker Factor Matrix / Preconditioner data class."""
@@ -726,7 +734,6 @@ class ShampooPreconditioner(DistributedPreconditioner):
 
             # To handle diagonal case, requires not transposing the tensor.
             if self._diagonal_threshold is not None:
-
                 # Precondition using diagonal preconditioner.
                 if preconditioner.preconditioner_type == PreconditionerType.DIAGONAL:
                     denom = (factor_matrix / self._bias_correction2).add_(self._epsilon)
@@ -808,7 +815,6 @@ class ShampooPreconditioner(DistributedPreconditioner):
 
             # Check that this is a full Shampoo preconditioner.
             if preconditioner.preconditioner_type == PreconditionerType.FULL:
-
                 # For tracking diagonality of the preconditioner.
                 # Checks if the preconditioner is currently diagonal, then checks whether or not
                 # the update matrix is diagonal.
@@ -903,6 +909,16 @@ class ShampooPreconditioner(DistributedPreconditioner):
 
     def compute_norm(self, grad: Tensor, iteration: int) -> Tensor:
         return torch.linalg.norm(self.precondition(grad, iteration))
+
+    def to(self, device: Union[None, torch.device] = None):
+        if device is not None:
+            for preconditioner in self._preconditioners:
+                preconditioner.to(device)
+            if self._grafting is not None:
+                self._grafting.to(device=device)
+
+    def num_preconditioners(self) -> int:
+        return 1
 
     def reset_preconditioners(self) -> None:
         for preconditioner in self._preconditioners:
@@ -1062,7 +1078,9 @@ class BlockShampooPreconditioner(DistributedPreconditioner):
 
     def update_preconditioners(self, grad: Tensor, iteration: int):
         split_grad = self.combine_and_split_dims(grad)
-        assert len(split_grad) == len(self._split_preconditioners)
+        assert (
+            len(split_grad) == self.num_preconditioners()
+        ), f"block shampoo preconditioner {self._idx} has {self.num_preconditioners()} preconditioners but grad was split into {len(split_grad)}"
         for block_preconditioner, block_grad in zip(
             self._split_preconditioners, split_grad
         ):
@@ -1070,7 +1088,9 @@ class BlockShampooPreconditioner(DistributedPreconditioner):
 
     def precondition(self, grad: Tensor, iteration: int) -> Tensor:
         split_grad = self.combine_and_split_dims(grad)
-        assert len(self._split_preconditioners) == len(split_grad)
+        assert self.num_preconditioners() == len(
+            split_grad
+        ), f"block shampoo preconditioner {self._idx} has {self.num_preconditioners()} preconditioners but grad was split into {len(split_grad)}"
         split_preconditioned_grad = [
             p.precondition(g, iteration)
             for p, g in zip(self._split_preconditioners, split_grad)
@@ -1132,7 +1152,9 @@ class BlockShampooPreconditioner(DistributedPreconditioner):
 
     def preconditioned_grad_to_dist_buffer(self, grad: Tensor, iteration: int) -> None:
         split_grads = self.combine_and_split_dims(grad)
-        assert len(self._split_preconditioners) == len(split_grads)
+        assert self.num_preconditioners() == len(
+            split_grads
+        ), f"block shampoo preconditioner {self._idx} has {self.num_preconditioners()} preconditioners but grad was split into {len(split_grads)}"
         for preconditioner, grad in zip(self._split_preconditioners, split_grads):
             preconditioner.preconditioned_grad_to_dist_buffer(grad, iteration)
 
@@ -1148,6 +1170,9 @@ class BlockShampooPreconditioner(DistributedPreconditioner):
             preconditioner._dist_buffer
             for preconditioner in self._split_preconditioners
         ]
+
+    def num_preconditioners(self) -> int:
+        return len(self._split_preconditioners)
 
     def get_split_parameters(self, param: Tensor) -> List[Tensor]:
         if self._cache_split_params:
@@ -1268,6 +1293,7 @@ class AdagradGrafting(Grafting):
             group=group,
             group_source_rank=group_source_rank,
             dist_buffer=dist_buffer,
+            use_dtensor=use_dtensor,
             communication_dtype=communication_dtype,
         )
         self.normalize_gradient = normalize_gradient

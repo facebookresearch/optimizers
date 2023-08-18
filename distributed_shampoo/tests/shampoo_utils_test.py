@@ -27,6 +27,8 @@ except ImportError:
 
 import unittest.mock as mock
 
+from torch.testing._internal.common_distributed import spawn_threads_and_init_comms
+
 from distributed_shampoo.shampoo_dist_utils import use_local_tensor
 from distributed_shampoo.shampoo_utils import (
     AdagradGrafting,
@@ -36,6 +38,7 @@ from distributed_shampoo.shampoo_utils import (
     AdamNormalizedGrafting,
     BlockShampooPreconditioner,
     CommunicationDType,
+    convex_split,
     DistributedPreconditioner,
     GraftingType,
     merge_small_dims,
@@ -48,7 +51,6 @@ from distributed_shampoo.shampoo_utils import (
     SGDGrafting,
     ShampooPreconditioner,
 )
-from torch.testing._internal.common_distributed import spawn_threads_and_init_comms
 
 logger: logging.Logger = logging.getLogger(__name__)
 
