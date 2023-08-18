@@ -429,9 +429,10 @@ class SplitShampooPreconditioner(DistributedPreconditioner):
 
 
 class CommunicatedSplitShampooPreconditioner(DistributedPreconditioner):
-    """Shampoo with communication of small partitions of the parameters for convex shape recovery with FSDP.
-    Currently only tested on the case where sending is from left to right in terms of rank number.
-    TODO: come up with a better name
+    """Shampoo with communication of small partitions of the parameters for tensor block recovery with FSDP.
+    Currently uses row-wise convex split. This is the recommended method of splitting.
+    Currently only tested on the case where sending is only in one direction, e.g. from left to right or right to left in terms of rank number.
+    TODO: Consider generalization to higher order tensors, i.e. enable communication of more than 1D slices.
 
     NOTE: Does not support sparse gradients at this time.
 
@@ -533,6 +534,7 @@ class CommunicatedSplitShampooPreconditioner(DistributedPreconditioner):
             if comm == CommunicationType.NONE:
                 return None
 
+            # set variables dependent on left/right side
             if on_left:
                 border_check = start_idx != 0
                 param_piece = split_param[0]
@@ -542,6 +544,7 @@ class CommunicatedSplitShampooPreconditioner(DistributedPreconditioner):
                 param_piece = split_param[-1]
                 comm_rank = dist.get_rank() + 1
 
+            # set variables dependent on send/recv direction
             if comm == CommunicationType.SEND:
                 forward_direction = dist.isend
                 backward_direction = dist.irecv
@@ -553,7 +556,9 @@ class CommunicatedSplitShampooPreconditioner(DistributedPreconditioner):
             else:
                 raise ValueError(f"Invalid communication type: {comm}")
 
+            # check if communication is applicable
             if border_check and param_piece.numel() != 0:
+                # create buffer
                 buffer = torch.zeros(buffer_size).to(param.device)
                 buffer_exp_avg = (
                     torch.zeros_like(buffer)
@@ -563,11 +568,13 @@ class CommunicatedSplitShampooPreconditioner(DistributedPreconditioner):
 
                 buffer_tuple = BufferTuple(buffer, buffer_exp_avg)
 
+                # create p2p ops
                 forward_op = dist.P2POp(forward_direction, buffer, comm_rank, tag=idx)
                 self.forward_ops.append(forward_op)
                 backward_op = dist.P2POp(backward_direction, buffer, comm_rank, tag=idx)
                 self.backward_ops.append(backward_op)
 
+                # modify split_param as applicable (pop piece if being used in send, merge piece if used in recv)
                 if comm == CommunicationType.SEND:
                     split_param.pop(0 if on_left else -1)
                 elif comm == CommunicationType.RECV:
@@ -582,7 +589,7 @@ class CommunicatedSplitShampooPreconditioner(DistributedPreconditioner):
         self.left_buffer = create_buffer_tuple(left_comm, on_left=True)
         self.right_buffer = create_buffer_tuple(right_comm, on_left=False)
 
-        # Construct multiple preconditioners for each block
+        # Construct multiple preconditioners for each slice
         self._split_preconditioners = []
         self._split_preconditioned_grad = None
 
@@ -691,11 +698,11 @@ class CommunicatedSplitShampooPreconditioner(DistributedPreconditioner):
         if self._use_bias_correction:
             self.bias_correction1 = 1.0 - self._beta1**iteration
 
-        # Compute exponential moving average of the gradient (with
-        # potential bias correction).
+        # Compute exponential moving average of the full gradient (with potential bias correction), i.e. including parts added to buffers.
         self.exp_avg.mul_(self._beta1).add_(grad, alpha=1 - self._beta1)
         grad.copy_(self.exp_avg / self.bias_correction1)
 
+        # update buffer exponential moving averages if applicable
         if self._left_comm == CommunicationType.RECV and self.left_buffer is not None:
             self.left_buffer.buffer_exp_avg.mul_(self._beta1).add_(
                 self.left_buffer.buffer, alpha=1 - self._beta1
@@ -720,6 +727,7 @@ class CommunicatedSplitShampooPreconditioner(DistributedPreconditioner):
             include_placeholder=True,
         )
 
+        # fill buffers before forward communication
         if self._left_comm == CommunicationType.SEND and self.left_buffer is not None:
             self.left_buffer.buffer.copy_(split_grad[0])
         if self._right_comm == CommunicationType.SEND and self.right_buffer is not None:
@@ -757,6 +765,7 @@ class CommunicatedSplitShampooPreconditioner(DistributedPreconditioner):
         return split
 
     def merge_buffer(self, buffer, param_list, on_left: bool):
+        # merge 1D slices together, then to 2D slice if applicable
         if on_left:
             tensor1d = param_list.pop(0)
             merged_tensor = torch.cat([buffer, tensor1d])
@@ -773,6 +782,7 @@ class CommunicatedSplitShampooPreconditioner(DistributedPreconditioner):
             param_list.append(merged_tensor)
 
     def unmerge_buffer(self, merged_tensor: Tensor, on_left: bool):
+        # extract 1D slice to buffer, then separate remainder into 1D and 2D convex slices
         if on_left:
             buffer_size = self.left_buffer.buffer.size()[0]
             if merged_tensor.dim() == 1:
@@ -812,6 +822,7 @@ class CommunicatedSplitShampooPreconditioner(DistributedPreconditioner):
         return split_preconditioned_grad
 
     def precondition_and_store(self, grad: Tensor, iteration: Tensor) -> None:
+        # precondition gradient and store in buffers if applicable, then the rest in class variable
         # TODO: come up with a better name for this function
         # might not want to use preconditioned_grad_to_buffer since that's used by DDP Shampoo?
         split_preconditioned_grad = self.precondition(grad, iteration)

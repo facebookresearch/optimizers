@@ -192,6 +192,8 @@ class FSDPShampoo(torch.optim.Optimizer):
             DEBUG. (Default: False)
         tensor_block_recovery (TensorBlockRecoveryMethod): method for tensor block recovery.
             (Default: TensorBlockRecoveryMethod.COMM) NOTE: change default in the future after experimenting
+        dist_group (Optional[dist.ProcessGroup]): Process group for distributed computation. Only relevant if HSDP is
+            used. (Default: None)
 
     """
 
@@ -686,6 +688,7 @@ class FSDPShampoo(torch.optim.Optimizer):
         if not self._use_decoupled_weight_decay:
             self._apply_weight_decay()
 
+        # If applicable, send gradient slices forward.
         if self._tensor_block_recovery == TensorBlockRecoveryMethod.COMM:
             self._send_grad(forward_direction=True)
 
@@ -702,7 +705,7 @@ class FSDPShampoo(torch.optim.Optimizer):
             if self._debug_mode:
                 self._compute_and_log_root_inverse_residuals()
 
-        # Loops over all parameter groups and parameters to perform update.
+        # Loops over all parameter groups and parameters to compute exponential moving average and, if applicable, preconditioned gradients.
         for group in self.param_groups:
             for p in group[PARAMS]:
                 state = self.state[p]
@@ -717,14 +720,17 @@ class FSDPShampoo(torch.optim.Optimizer):
                     # Compute preconditioned gradient and store within class/buffers.
                     state[PRECONDITIONERS].precondition_and_store(p.grad, iteration)
 
+        # If applicable, send gradient slices backward.
         if self._tensor_block_recovery == TensorBlockRecoveryMethod.COMM:
             self._send_grad(forward_direction=False)
 
+        # Loops over all parameter groups and parameters to perform update.
         for group in self.param_groups:
             momentum_param = group[MOMENTUM]
             weight_decay = group[WEIGHT_DECAY]
             lr = group[LR]
 
+            # Compute/retrieve preconditioned gradients and momentum.
             (
                 split_params,
                 split_preconditioned_grads,
