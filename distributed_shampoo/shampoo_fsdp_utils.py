@@ -10,7 +10,6 @@ LICENSE file in the root directory of this source tree.
 import enum
 import logging
 from collections import namedtuple
-from copy import deepcopy
 from math import prod
 from typing import List, Tuple, Union
 

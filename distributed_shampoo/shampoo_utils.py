@@ -11,10 +11,8 @@ import enum
 import logging
 import math
 from copy import deepcopy
-from math import prod
 from typing import List, Optional, Tuple, Union
 
-import numpy as np
 import torch
 import torch.distributed as dist
 from torch import Tensor

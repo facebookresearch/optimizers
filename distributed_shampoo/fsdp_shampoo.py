@@ -9,9 +9,6 @@ LICENSE file in the root directory of this source tree.
 
 import logging
 import os
-from collections import abc as container_abcs, defaultdict
-from copy import deepcopy
-from itertools import chain
 from typing import Any, Dict, List, Optional, Tuple
 
 import torch

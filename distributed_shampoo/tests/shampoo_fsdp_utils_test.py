@@ -10,29 +10,11 @@ LICENSE file in the root directory of this source tree.
 import logging
 import unittest
 
-import numpy as np
-
 import torch
-import torch.distributed as dist
-
-try:
-    # DTensor requires PyTorch 2.1 nightly build.
-    import torch.distributed._tensor as dtensor
-
-    ENABLE_DTENSOR = True
-except ImportError:
-    ENABLE_DTENSOR = False
-
-from torch.testing._internal.common_distributed import spawn_threads_and_init_comms
 
 from distributed_shampoo.shampoo_fsdp_utils import convex_split
 
 logger: logging.Logger = logging.getLogger(__name__)
-
-if not ENABLE_DTENSOR:
-    logger.warning(
-        "DTensor is not available and was not imported. Continuing with Tensor..."
-    )
 
 
 class ConvexSplitTest(unittest.TestCase):
