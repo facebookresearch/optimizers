@@ -29,8 +29,8 @@ import unittest.mock as mock
 
 from torch.testing._internal.common_distributed import spawn_threads_and_init_comms
 
-from distributed_shampoo.shampoo_dist_utils import use_local_tensor
-from distributed_shampoo.shampoo_utils import (
+from distributed_shampoo.utils.shampoo_dist_utils import use_local_tensor
+from distributed_shampoo.utils.shampoo_utils import (
     AdagradGrafting,
     AdagradNormalizedGrafting,
     AdagradPreconditioner,
@@ -38,7 +38,6 @@ from distributed_shampoo.shampoo_utils import (
     AdamNormalizedGrafting,
     BlockShampooPreconditioner,
     CommunicationDType,
-    convex_split,
     DistributedPreconditioner,
     GraftingType,
     merge_small_dims,
@@ -736,7 +735,7 @@ class ShampooPreconditionerTest(unittest.TestCase):
                     )
                 )
 
-    @mock.patch("distributed_shampoo.shampoo_utils.matrix_inverse_root")
+    @mock.patch("distributed_shampoo.utils.shampoo_utils.matrix_inverse_root")
     def test_use_protected_eigh_disabled(self, mock_matrix_root: mock.Mock):
         _, _, _, shampoo = self._setup_test(
             beta2=1.0,
@@ -749,7 +748,7 @@ class ShampooPreconditionerTest(unittest.TestCase):
             shampoo.compute_root_inverse()
         mock_matrix_root.assert_called_once()
 
-    @mock.patch("distributed_shampoo.shampoo_utils.matrix_inverse_root")
+    @mock.patch("distributed_shampoo.utils.shampoo_utils.matrix_inverse_root")
     def test_use_protected_eigh_enabled(self, mock_matrix_root: mock.Mock):
         _, _, _, shampoo = self._setup_test(
             beta2=1.0,
@@ -768,7 +767,7 @@ class ShampooPreconditionerTest(unittest.TestCase):
             )
         self.assertEqual(mock_matrix_root.call_count, 2)
 
-    @mock.patch("distributed_shampoo.shampoo_utils.matrix_inverse_root")
+    @mock.patch("distributed_shampoo.utils.shampoo_utils.matrix_inverse_root")
     def test_raise_inf_in_compute_root_inverse(self, mock_matrix_root: mock.Mock):
         _, _, _, shampoo = self._setup_test(
             beta2=1.0,
@@ -782,7 +781,7 @@ class ShampooPreconditionerTest(unittest.TestCase):
             shampoo.compute_root_inverse()
         mock_matrix_root.assert_called_once()
 
-    @mock.patch("distributed_shampoo.shampoo_utils.matrix_inverse_root")
+    @mock.patch("distributed_shampoo.utils.shampoo_utils.matrix_inverse_root")
     def test_raise_nan_in_compute_root_inverse(self, mock_matrix_root: mock.Mock):
         _, _, _, shampoo = self._setup_test(
             beta2=1.0,

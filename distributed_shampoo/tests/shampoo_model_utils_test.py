@@ -15,7 +15,7 @@ from typing import cast
 import torch
 import torch.nn as nn
 
-from distributed_shampoo.shampoo_model_utils import CombinedLinear
+from distributed_shampoo.utils.shampoo_model_utils import CombinedLinear
 
 
 class CombinedLinearTest(unittest.TestCase):

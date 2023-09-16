@@ -14,14 +14,14 @@ from typing import Any, Dict, List, Optional, Tuple
 import torch
 import torch.distributed as dist
 
-from distributed_shampoo.shampoo_fsdp_utils import (
+from distributed_shampoo.utils.shampoo_fsdp_utils import (
     CommunicatedSplitShampooPreconditioner,
     CommunicationType,
     SplitShampooPreconditioner,
     TensorBlockRecoveryMethod,
 )
 
-from distributed_shampoo.shampoo_utils import GraftingType, LargeDimMethod
+from distributed_shampoo.utils.shampoo_utils import GraftingType, LargeDimMethod
 
 logger = logging.getLogger(__name__)
 
@@ -37,31 +37,20 @@ PARAMS = "params"
 PRECONDITIONERS = "preconditioners"
 STEP = "step"
 WEIGHT_DECAY = "weight_decay"
-DIST_BUFFER = "dist_buffer"
-MY_DIST_BUFFER = "my_dist_buffer"
 
 
 class FSDPShampoo(torch.optim.Optimizer):
-    """Implements distributed Shampoo algorithm.
+    """Prototype distributed Shampoo algorithm for Fully Sharded Data Parallel training.
+
+    Under development. Built on previous prototype of DDP Distributed Shampoo.
 
     Developers:
+        Anna Cai (Meta Platforms, Inc.)
         Hao-Jun Michael Shi (Meta Platforms, Inc.)
         Tsung-Hsien Lee
         Shintaro Iwasaki (Meta Platforms, Inc.)
-        Jose Gallego-Posada (MILA / Meta Platforms, Inc.)
 
-    with contributions and support from:
-
-    Rohan Anil (Google), Adnan Aziz (Meta), Pavan Balaji (Meta), Shuo Chang (Meta), Weiwei Chu (Meta), Assaf Eisenman (Meta),
-    Will Feng (Meta), Zhuobo Feng (Meta), Yizi Gu (Meta), Vineet Gupta (Google), Yuchen Hao (Meta), Yusuo Hu (Meta),
-    Yuxi Hu (Meta), Minhui Huang (Meta), Guna Lakshminarayanan (Meta), Zhijing Li (Meta), Ming Liang (Meta), Wanchao Liang (Meta),
-    Ying Liu (Meta), Wenguang Mao (Meta), Dheevatsa Mudigere (NVIDIA), Maxim Naumov (Meta), Jongsoo Park (Meta), Mike Rabbat (Meta),
-    Kaushik Rangadurai (Meta), Ke Sang (Meta), Dennis van der Staay (Meta), Fei Tian (Meta), Sanjay Vishwakarma (Meta),
-    Xunnan (Shawn) Xu (Meta), Jiyan Yang (Meta), and Wang Zhou (Meta).
-
-    Partly based on the work in:
-    - https://arxiv.org/pdf/1802.09568.pdf
-    - https://arxiv.org/pdf/2002.09018.pdf
+    with support from Andrew Gu (Meta), Wanchao Liang (Meta), and Mike Rabbat (Meta).
 
     Uses infinity norm to evaluate residuals and errors. By default, grafts from Adagrad.
 
@@ -69,14 +58,15 @@ class FSDPShampoo(torch.optim.Optimizer):
     Requirements
     ------------
 
-    1. PyTorch >= 1.13
+    1. PyTorch >= 2.0
     2. Python >= 3.8
-    3. CUDA 11.3, 11.4, 12
+    3. CUDA 11.3, 11.4, 12.2+
 
     If one wants to use DTensor which leads to memory savings, please set use_dtensor = True. Requires PyTorch 2 nightly build.
 
-    Note: We have observed known instabilities with the torch.linalg.eigh operator on CUDA 11.6-11.8, specifically for low-rank
+    Note: We have observed known instabilities with the torch.linalg.eigh operator on CUDA 11.6-12.1, specifically for low-rank
     matrices, which may appear with using a small start_preconditioning_step. Please avoid these versions of CUDA if possible.
+    See: https://github.com/pytorch/pytorch/issues/94772.
 
     --------
     Features
@@ -140,16 +130,6 @@ class FSDPShampoo(torch.optim.Optimizer):
 
             Computational cost = O(mn)
             Memory cost = m + n
-
-    3. Distributed Memory and Computation: Supports multi-GPU data-parallel training via torch.distributed by setting
-        num_trainers_per_group > 1. Distributes the computation required for Shampoo (updating of the preconditioners, computation
-        of the root inverse, preconditioning of the gradients, etc.) across multiple GPUs. The memory is similarly distributed
-        using DTensor. num_trainers_per_group specifies the number of GPUs used per distributed group. The computation is
-        replicated across different groups.
-
-        Requirements:
-        - torch.distributed must be initialized in advance.
-        - Only supports homogeneous hardware architectures.
 
     Args:
         params (iterable): iterable of parameters to optimize or dicts defining
@@ -224,6 +204,10 @@ class FSDPShampoo(torch.optim.Optimizer):
         tensor_block_recovery: TensorBlockRecoveryMethod = TensorBlockRecoveryMethod.COMM,
         dist_group: Optional[dist.ProcessGroup] = None,
     ):
+        logger.info(
+            "FSDP Shampoo is experimental and still under development! Checkpointing is not currently supported."
+        )
+
         # Hyperparameter checks.
         if not lr >= 0.0:
             raise ValueError(f"Invalid learning rate: {lr}. Must be >= 0.0.")
@@ -370,6 +354,11 @@ class FSDPShampoo(torch.optim.Optimizer):
                 state = self.state[p]
                 state[STEP] = torch.tensor(0)
 
+                if p not in self._param_metadata:
+                    raise RuntimeError(
+                        f"Parameter {p} not found in metadata. Please make sure that the module containing this parameter has been wrapped with FSDP."
+                    )
+
                 if self._tensor_block_recovery == TensorBlockRecoveryMethod.SPLIT:
                     state[PRECONDITIONERS] = SplitShampooPreconditioner(
                         p,
@@ -430,7 +419,7 @@ class FSDPShampoo(torch.optim.Optimizer):
                     )
                 else:
                     raise NotImplementedError(
-                        f"Invalid convex shape recovery method {self._convex_shape_recovery}!"
+                        f"Invalid tensor block recovery method {self._tensor_block_recovery}!"
                     )
 
                 # Count parameters from preconditioners for logging purposes.

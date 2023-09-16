@@ -10,20 +10,20 @@ LICENSE file in the root directory of this source tree.
 import logging
 import os
 from copy import deepcopy
-from typing import Any, Dict, Iterator, List, Mapping, Tuple, Union
+from typing import Any, Dict, Iterator, List, Mapping, Optional, Tuple, Union
 
 import torch
 import torch.distributed as dist
 
-from distributed_shampoo.optimizer_modules import OptimizerModule
-from distributed_shampoo.shampoo_checkpoint_utils import flatten_state_dict
+from distributed_shampoo.utils.optimizer_modules import OptimizerModule
+from distributed_shampoo.utils.shampoo_checkpoint_utils import flatten_state_dict
 
-from distributed_shampoo.shampoo_dist_utils import (
+from distributed_shampoo.utils.shampoo_dist_utils import (
     distribute_buffer_sizes,
     split_local_dist_buffers,
 )
 
-from distributed_shampoo.shampoo_utils import (
+from distributed_shampoo.utils.shampoo_utils import (
     AdagradPreconditioner,
     BlockShampooPreconditioner,
     CommunicationDType,
@@ -32,6 +32,7 @@ from distributed_shampoo.shampoo_utils import (
     LargeDimMethod,
     ShampooPreconditioner,
 )
+from torch.autograd import profiler
 from torch.nn import Parameter
 
 logger = logging.getLogger(__name__)
@@ -39,6 +40,7 @@ logger = logging.getLogger(__name__)
 # DType mapping for quantized communications.
 dtype_mapping = {0: "DEFAULT", 1: torch.float16, 2: torch.bfloat16, 3: torch.float32}
 
+# Keys used by group and state
 BETAS = "betas"
 EPSILON = "epsilon"
 GRAFTING_BETA2 = "grafting_beta2"
@@ -53,6 +55,28 @@ WEIGHT_DECAY = "weight_decay"
 DIST_BUFFER = "dist_buffer"
 MY_DIST_BUFFER = "my_dist_buffer"
 
+# Keys used by _optimizer_info
+# The number of parameters
+NUM_PARAMS = "num_params"
+# The total number of parameter elements
+NUM_PARAM_ELEMS = "num_param_elems"
+# A list of the total numbers of parameter elements per order (i.e., tensor dimension)
+PER_ORDER_NUM_PARAM_ELEMS = "num_param_elems_per_order"
+# Total size of parameter elements (bytes)
+PARAM_NUM_BYTES = "param_bytes"
+# A list of the numbers of leaf preconditioners associated with each rank
+NUM_PRECONDITIONERS = "num_preconditioners"
+# A list of total sizes of preconditioners of each rank (bytes)
+PRECONDITIONER_NUM_BYTES = "preconditioner_bytes"
+# A list of distributed buffer sizes associated with each rank (bytes)
+DIST_BUFFER_SIZE_LIST_PER_RANK = "dist_buffer_size_list_per_rank"
+# Total size of distributed buffer size allocated on every rank (bytes)
+TOTAL_DIST_BUFFER_SIZE = "total_dist_buffer_size"
+# A list of total sizes of local distributed buffer size allocated with each rank (bytes)
+LOCAL_DIST_BUFFER_SIZES = "local_dist_buffer_sizes"
+# A list of total memory size used by Shampoo on each rank
+SHAMPOO_MEMORY_USAGE = "shampoo_memory_usage"
+
 
 class DistributedShampoo(torch.optim.Optimizer):
     """Implements distributed Shampoo algorithm.
@@ -61,16 +85,18 @@ class DistributedShampoo(torch.optim.Optimizer):
         Hao-Jun Michael Shi (Meta Platforms, Inc.)
         Tsung-Hsien Lee
         Shintaro Iwasaki (Meta Platforms, Inc.)
-        Jose Gallego-Posada (MILA / Meta Platforms, Inc.)
 
     with contributions and support from:
 
     Rohan Anil (Google), Adnan Aziz (Meta), Pavan Balaji (Meta), Shuo Chang (Meta), Weiwei Chu (Meta), Assaf Eisenman (Meta),
-    Will Feng (Meta), Zhuobo Feng (Meta), Avirup Ghosh (Meta), Yizi Gu (Meta), Vineet Gupta (Google), Yuchen Hao (Meta), Yusuo Hu (Meta),
-    Yuxi Hu (Meta), Minhui Huang (Meta), Guna Lakshminarayanan (Meta), Zhijing Li (Meta), Ming Liang (Meta), Wanchao Liang (Meta),
-    Ying Liu (Meta), Wenguang Mao (Meta), Dheevatsa Mudigere (NVIDIA), Maxim Naumov (Meta), Jongsoo Park (Meta), Mike Rabbat (Meta),
-    Kaushik Rangadurai (Meta), Ke Sang (Meta), Dennis van der Staay (Meta), Fei Tian (Meta), Sanjay Vishwakarma (Meta),
-    Xunnan (Shawn) Xu (Meta), Jiyan Yang (Meta), Iris Zhang (Meta), and Wang Zhou (Meta).
+    Will Feng (Meta), Zhuobo Feng (Meta), Jose Gallego-Posada (Mila / Meta Platforms, Inc.), Avirup Ghosh (Meta), Yizi Gu (Meta),
+    Vineet Gupta (Google), Yuchen Hao (Meta), Yusuo Hu (Meta), Yuxi Hu (Meta), Minhui Huang (Meta), Guna Lakshminarayanan (Meta),
+    Zhijing Li (Meta), Ming Liang (Meta), Wanchao Liang (Meta), Ying Liu (Meta), Wenguang Mao (Meta), Dheevatsa Mudigere (NVIDIA),
+    Maxim Naumov (Meta), Jongsoo Park (Meta), Mike Rabbat (Meta), Kaushik Rangadurai (Meta), Ke Sang (Meta), Dennis van der Staay (Meta),
+    Fei Tian (Meta), Sanjay Vishwakarma (Meta), Xunnan (Shawn) Xu (Meta), Jiyan Yang (Meta), Chunxing Yin (Meta), Iris Zhang (Meta),
+    and Wang Zhou (Meta).
+
+    Details in: https://arxiv.org/pdf/2309.06497.pdf.
 
     Partly based on the work in:
     - https://arxiv.org/pdf/1802.09568.pdf
@@ -82,17 +108,18 @@ class DistributedShampoo(torch.optim.Optimizer):
     Requirements
     ------------
 
-    1. PyTorch >= 1.13
+    1. PyTorch >= 2.0
     2. Python >= 3.8
-    3. CUDA 11.3, 11.4, 12
+    3. CUDA 11.3, 11.4, 12.2+
 
     If one wants to use DTensor which leads to memory savings, please set use_dtensor = True. Requires PyTorch 2 nightly build.
 
     In order to support checkpointing, one must use torch.distributed.checkpoint and pass the named parameters into state_dict.
     Note that the standard checkpointing solution by PyTorch is not supported!
 
-    Note: We have observed known instabilities with the torch.linalg.eigh operator on CUDA 11.6-11.8, specifically for low-rank
+    Note: We have observed known instabilities with the torch.linalg.eigh operator on CUDA 11.6-12.1, specifically for low-rank
     matrices, which may appear with using a small start_preconditioning_step. Please avoid these versions of CUDA if possible.
+    See: https://github.com/pytorch/pytorch/issues/94772.
 
     --------
     Features
@@ -114,6 +141,8 @@ class DistributedShampoo(torch.optim.Optimizer):
             - GraftingType.ADAGRAD_NORMALIZED: Grafts the Adagrad method with normalized gradients.
             - GraftingType.RMSPROP_NORMALIZED: Grafts the RMSProp method with normalized gradients.
             - GraftingType.ADAM_NORMALIZED: Grafts the Adam method with normalized gradients.
+            - GraftingType.LARS: Grafts the LARS method.
+            - GraftingType.LAMB: Grafts the LAMB method.
 
         NOTE: These methods do not graft the first-moment component - it is entirely based upon grafting using the
         diagonal preconditioner. If using an exponential moving average of the gradient (or gradient filtering), we
@@ -199,6 +228,7 @@ class DistributedShampoo(torch.optim.Optimizer):
         num_trainers_per_group (int): number of GPUs per distributed process group for distributed computation/memory.
             If num_trainers_per_group = -1 is used, then defaults to using the LOCAL_WORLD_SIZE. (Default: -1)
         cache_split_params (bool): cache split parameters across iterations. (Default: False)
+        max_grad_norm (Optional[float]): maximum gradient norm for gradient clipping. (Default: None)
         use_protected_eigh (bool): Flag for using two guards to prevent failures of torch.linalg.eigh. (Default: True)
             1. Attempts to compute root inverse in preconditioner_dtype precision.
             2. Attempts to recompute the eigendecomposition if using lower-precision fails.
@@ -234,6 +264,7 @@ class DistributedShampoo(torch.optim.Optimizer):
         communication_dtype: CommunicationDType = CommunicationDType.DEFAULT,
         num_trainers_per_group: int = -1,
         cache_split_params: bool = False,
+        max_grad_norm: Optional[float] = None,
         use_protected_eigh: bool = True,
         use_dtensor: bool = True,
         debug_mode: bool = False,
@@ -276,7 +307,7 @@ class DistributedShampoo(torch.optim.Optimizer):
                 f"Invalid number of GPUs per group: {num_trainers_per_group}. Must be >= -1."
             )
         if isinstance(exponent_override, list):
-            if not all([e >= 0 for e in exponent_override]):
+            if not all(e >= 0 for e in exponent_override):
                 raise ValueError(
                     f"Invalid exponent override list: {exponent_override}. All values must be >= 0."
                 )
@@ -292,6 +323,10 @@ class DistributedShampoo(torch.optim.Optimizer):
         if not grafting_epsilon > 0.0:
             raise ValueError(
                 f"Invalid epsilon value: {grafting_epsilon}. Must be > 0.0."
+            )
+        if max_grad_norm is not None and not max_grad_norm > 0.0:
+            raise ValueError(
+                f"Invalid maximum gradient norm for clipping: {max_grad_norm}. Must be > 0.0."
             )
 
         # Distributed checks.
@@ -349,12 +384,13 @@ class DistributedShampoo(torch.optim.Optimizer):
         self._grafting_type = grafting_type
         self._grafting_epsilon = grafting_epsilon
         self._grafting_beta2 = grafting_beta2
-        self._parameter_count = 0
         self._use_nesterov = use_nesterov
         self._use_protected_eigh = use_protected_eigh
         self._use_dtensor = use_dtensor
         self._debug_mode = debug_mode
         self._communication_dtype = communication_dtype
+        self._max_grad_norm = max_grad_norm
+
         if self._use_nesterov and momentum == 0.0:
             logger.warning(
                 "Nesterov flag is enabled but momentum parameter is zero! Continuing without using momentum or Nesterov acceleration..."
@@ -375,11 +411,36 @@ class DistributedShampoo(torch.optim.Optimizer):
         # Initialize comms-related fields.
         self._world_size = dist.get_world_size() if self._use_distributed() else 1
 
-        # Initialize Shampoo preconditioners and distributed buffers.
+        # Initialize distributed buffers.
         self._dist_group = None
         buffer_ranks_list = self._assign_preconditioners_to_ranks()
+
+        # Initialize Shampoo debug and logging info.
+        self._on_logging_rank = (not self._use_distributed()) or dist.get_rank(
+            group=self._dist_group
+        ) == 0
+        self._optimizer_log = ""
+        self._optimizer_info = [
+            {
+                NUM_PARAMS: 0,
+                NUM_PARAM_ELEMS: 0,
+                PER_ORDER_NUM_PARAM_ELEMS: [0]
+                * (self._max_order(self.param_groups[group_idx][PARAMS]) + 1),
+                PARAM_NUM_BYTES: 0,
+                NUM_PRECONDITIONERS: [0] * self._num_trainers_per_group,
+                PRECONDITIONER_NUM_BYTES: [0] * self._num_trainers_per_group,
+            }
+            for group_idx in range(len(self.param_groups))
+        ]
+
+        # Initialize Shampoo preconditioners.
         self._initialize_momentum()
         self._initialize_preconditioners_and_steps(buffer_ranks_list)
+
+        # Print self._optimizer_log
+        if self._on_logging_rank:
+            for line in self._optimizer_log.split("\n"):
+                logger.info(line)
 
     @torch.no_grad()
     def _use_distributed(self) -> bool:
@@ -400,12 +461,18 @@ class DistributedShampoo(torch.optim.Optimizer):
                     )
 
     @torch.no_grad()
+    def _max_order(self, params) -> int:
+        return max([0] + [p.dim() for p in params])
+
+    @torch.no_grad()
     def _initialize_preconditioners_and_steps(
         self, buffer_ranks_list: List[List[Tuple[torch.Tensor, int]]]
     ):
         """Initialize Shampoo preconditioners and inverse preconditioners."""
 
-        for group, buffer_ranks in zip(self.param_groups, buffer_ranks_list):
+        for group_idx, (group, buffer_ranks) in enumerate(
+            zip(self.param_groups, buffer_ranks_list)
+        ):
             preconditioner_count = 0
             for idx, p in enumerate(group[PARAMS]):
                 state = self.state[p]
@@ -531,11 +598,84 @@ class DistributedShampoo(torch.optim.Optimizer):
                         + " is not implemented!"
                     )
 
-                # Count parameters from preconditioners for logging purposes.
-                self._parameter_count += state[PRECONDITIONERS].parameter_count
+                if self._on_logging_rank:
+                    self._log_precond_info(p, state[PRECONDITIONERS], group_idx)
 
-        # Logs total number of parameters for optimizer.
-        logger.info(f"Total Parameter Count: {self._parameter_count}")
+            if self._on_logging_rank:
+                self._log_buffer_rank_info(buffer_ranks, group_idx)
+                self._log_optimizer_info(group_idx)
+
+    @torch.no_grad()
+    def _log_precond_info(
+        self,
+        param: torch.Tensor,
+        preconditioner: DistributedPreconditioner,
+        group_idx: int,
+    ):
+        # Update optimizer logging.
+        precond_info = preconditioner.get_debug_info()
+        self._optimizer_log += f"{precond_info['name']}(group_idx={group_idx}, {', '.join([f'{key}={val}' for key, val in precond_info.items() if key != 'name'])})\n"
+
+        # Log metrics into optimizer info.
+        optimizer_info = self._optimizer_info[group_idx]
+        optimizer_info[NUM_PARAMS] += 1
+        optimizer_info[PARAM_NUM_BYTES] += param.nelement() * param.element_size()
+        optimizer_info[NUM_PARAM_ELEMS] += param.nelement()
+        optimizer_info[PER_ORDER_NUM_PARAM_ELEMS][param.dim()] += param.nelement()
+        for group_rank in range(self._num_trainers_per_group):
+            optimizer_info[PRECONDITIONER_NUM_BYTES][
+                group_rank
+            ] += preconditioner.get_num_bytes(group_rank=group_rank)
+
+    @torch.no_grad()
+    def _log_buffer_rank_info(
+        self, buffer_ranks: List[Tuple[torch.Tensor, int]], group_idx: int
+    ):
+        optimizer_info = self._optimizer_info[group_idx]
+        # Lists of distributed buffer sizes associated with each rank.
+        optimizer_info[DIST_BUFFER_SIZE_LIST_PER_RANK] = [
+            [
+                buffer.nelement() * buffer.element_size()
+                for buffer, rank in buffer_ranks
+                if rank == group_rank
+            ]
+            for group_rank in range(self._num_trainers_per_group)
+        ]
+        # Sizes of "local" distributed buffers associated with each rank.
+        optimizer_info[LOCAL_DIST_BUFFER_SIZES] = [
+            sum(dist_buffer_sizes)
+            for dist_buffer_sizes in optimizer_info[DIST_BUFFER_SIZE_LIST_PER_RANK]
+        ]
+        # Total size of distributed buffer allocated per rank.
+        optimizer_info[TOTAL_DIST_BUFFER_SIZE] = (
+            max(optimizer_info[LOCAL_DIST_BUFFER_SIZES]) * self._num_trainers_per_group
+        )
+        # The number of local buffers, which is equal to the number of leaf preconditioners of each rank
+        optimizer_info[NUM_PRECONDITIONERS] = [
+            len(dist_buffer_sizes)
+            for dist_buffer_sizes in optimizer_info[DIST_BUFFER_SIZE_LIST_PER_RANK]
+        ]
+
+    @torch.no_grad()
+    def _log_optimizer_info(self, group_idx: int):
+        M = int(1e6)
+        optimizer_info = self._optimizer_info[group_idx]
+        optimizer_info[SHAMPOO_MEMORY_USAGE] = [
+            (
+                optimizer_info[TOTAL_DIST_BUFFER_SIZE]
+                + optimizer_info[PRECONDITIONER_NUM_BYTES][rank]
+            )
+            for rank in range(self._num_trainers_per_group)
+        ]
+        self._optimizer_log += f"""
+Distributed Shampoo ParamGroup {group_idx}:
+  {PARAM_NUM_BYTES} = {optimizer_info[PARAM_NUM_BYTES] // M} MB ({NUM_PARAMS}: {optimizer_info[NUM_PARAMS]}, {NUM_PARAM_ELEMS}: {optimizer_info[NUM_PARAM_ELEMS]} ({PER_ORDER_NUM_PARAM_ELEMS}: {optimizer_info[PER_ORDER_NUM_PARAM_ELEMS]}))
+  {TOTAL_DIST_BUFFER_SIZE} = {optimizer_info[TOTAL_DIST_BUFFER_SIZE] // M} MB (group_size = {self._num_trainers_per_group})
+  {LOCAL_DIST_BUFFER_SIZES} = {{max: {max(optimizer_info[LOCAL_DIST_BUFFER_SIZES]) // M} MB, min: {min(optimizer_info[LOCAL_DIST_BUFFER_SIZES]) // M} MB, avg: {sum(optimizer_info[LOCAL_DIST_BUFFER_SIZES]) // len(optimizer_info[LOCAL_DIST_BUFFER_SIZES]) // M} MB}}
+  {PRECONDITIONER_NUM_BYTES} = {{max: {max(optimizer_info[PRECONDITIONER_NUM_BYTES]) // M} MB, min: {min(optimizer_info[PRECONDITIONER_NUM_BYTES]) // M} MB, avg: {sum(optimizer_info[PRECONDITIONER_NUM_BYTES]) // len(optimizer_info[PRECONDITIONER_NUM_BYTES]) // M} MB}}
+  {NUM_PRECONDITIONERS} = {{max: {max(optimizer_info[NUM_PRECONDITIONERS])}, min: {min(optimizer_info[NUM_PRECONDITIONERS])}, avg: {sum(optimizer_info[NUM_PRECONDITIONERS]) // len(optimizer_info[NUM_PRECONDITIONERS])}}}
+  {SHAMPOO_MEMORY_USAGE} = max: {max(optimizer_info[SHAMPOO_MEMORY_USAGE]) // M} MB per rank
+"""
 
     @torch.no_grad()
     def _assign_preconditioners_to_ranks(self) -> List[List[Tuple[torch.Tensor, int]]]:
@@ -623,12 +763,6 @@ class DistributedShampoo(torch.optim.Optimizer):
             )
             group[DIST_BUFFER] = global_dist_buffer
 
-            logger.info(
-                f"Shampoo dist: group size = {self._num_trainers_per_group}, rank = {group_rank}, "
-                + f"total data = {max_buffer_size_sum} [B], buffer size = {total_buffer_size} [B] "
-                + f"(communication_dtype = {dtype_mapping[self._communication_dtype.value]})"
-            )
-
             # Split global_dist_buffer into as many local buffers as my_group_size
             local_dist_buffers = torch.split(global_dist_buffer, max_buffer_size_sum)
             group[MY_DIST_BUFFER] = local_dist_buffers[group_rank]
@@ -654,7 +788,10 @@ class DistributedShampoo(torch.optim.Optimizer):
                     state[PRECONDITIONERS],
                     (ShampooPreconditioner, BlockShampooPreconditioner),
                 ):
-                    state[PRECONDITIONERS].compute_root_inverse()
+                    with profiler.record_function(
+                        "## distshampoo:compute_root_inverse ##"
+                    ):
+                        state[PRECONDITIONERS].compute_root_inverse()
 
     @torch.no_grad()
     def _compute_and_log_root_inverse_residuals(
@@ -731,18 +868,57 @@ class DistributedShampoo(torch.optim.Optimizer):
                     )
 
                 else:
-                    # Incorporate weight decay into the gradient
-                    # if we are not using decoupled weight decay.
-                    #
-                    # Equivalent to adding an L2-regularization term:
-                    #   F(w) + lambda * ||w||^2.
-                    if not self._use_decoupled_weight_decay and weight_decay != 0:
-                        grad.add_(p, alpha=weight_decay)
+                    with profiler.record_function(
+                        "## distshampoo:update_preconditioners ##"
+                    ):
+                        # Incorporate weight decay into the gradient
+                        # if we are not using decoupled weight decay.
+                        #
+                        # Equivalent to adding an L2-regularization term:
+                        #   F(w) + lambda * ||w||^2.
+                        if not self._use_decoupled_weight_decay and weight_decay != 0:
+                            grad.add_(p, alpha=weight_decay)
 
-                    # Update each preconditioner using the gradient.
-                    state[PRECONDITIONERS].update_preconditioners(
-                        grad, state[STEP].item()
+                        # Update each preconditioner using the gradient.
+                        state[PRECONDITIONERS].update_preconditioners(
+                            grad, state[STEP].item()
+                        )
+
+    @torch.no_grad()
+    def _clip_gradients(self):
+        global_grad_norm = 0.0
+        for group in self.param_groups:
+            for p in group[PARAMS]:
+                grad = p.grad
+                if grad is None:
+                    continue
+
+                if p.grad.is_sparse:
+                    raise Exception(
+                        "Sparse parameters are not currently supported by Shampoo."
                     )
+
+                assert not torch.isnan(torch.norm(p.grad))
+                global_grad_norm += torch.norm(p.grad) ** 2
+
+        global_grad_norm = torch.sqrt(global_grad_norm)
+        clipped_grad_norm = (
+            1.0
+            if global_grad_norm <= self._max_grad_norm
+            else global_grad_norm / self._max_grad_norm
+        )
+
+        for group in self.param_groups:
+            for p in group[PARAMS]:
+                grad = p.grad
+                if grad is None:
+                    continue
+
+                if p.grad.is_sparse:
+                    raise Exception(
+                        "Sparse parameters are not currently supported by Shampoo."
+                    )
+                p.grad.div_(clipped_grad_norm)
 
     @torch.no_grad()
     def _init_group(
@@ -767,7 +943,7 @@ class DistributedShampoo(torch.optim.Optimizer):
                 )
 
             # Generate split lists.
-            split_params.extend(state[PRECONDITIONERS].combine_and_split_dims(p))
+            split_params.extend(state[PRECONDITIONERS].get_split_parameters(p))
             split_preconditioned_grads.extend(
                 state[PRECONDITIONERS].get_split_dist_buffers()
             )
@@ -778,6 +954,52 @@ class DistributedShampoo(torch.optim.Optimizer):
             )
 
         return split_params, split_preconditioned_grads, split_momentum_directions
+
+    @torch.no_grad()
+    def _compute_param_norm_rescalings(
+        self, group: Dict[str, Any], split_preconditioned_grad: List[torch.Tensor]
+    ) -> List[torch.Tensor]:
+
+        # Instantiate list for split parameter norm rescalings (for LARS and LAMB-style updates).
+        split_param_norm_rescalings = []
+        block_idx = 0
+
+        for p in group[PARAMS]:
+            state = self.state[p]
+            if p.grad is None:
+                continue
+
+            if p.grad.is_sparse:
+                raise Exception(
+                    "Sparse parameters are not currently supported by Shampoo."
+                )
+
+            # Get block count.
+            block_count = state[PRECONDITIONERS].block_count
+
+            # Compute parameter rescaling and append to list.
+            param_norm = torch.norm(p)
+            search_direction_norm = (
+                torch.cat(
+                    [
+                        (torch.norm(split_preconditioned_grad[i]) ** 2).reshape(1)
+                        for i in range(block_idx, block_idx + block_count)
+                    ]
+                )
+                .sum()
+                .sqrt()
+            )
+            param_rescaling = (
+                param_norm / search_direction_norm
+                if param_norm != 0.0 and search_direction_norm != 0.0
+                else torch.ones_like(param_norm)
+            )
+            split_param_norm_rescalings.extend([param_rescaling] * block_count)
+
+            # Update block index.
+            block_idx += block_count
+
+        return split_param_norm_rescalings
 
     @torch.no_grad()
     def _iterate_step(self) -> int:
@@ -808,6 +1030,8 @@ class DistributedShampoo(torch.optim.Optimizer):
                 loss = closure()
 
         iteration = self._iterate_step()
+        if self._max_grad_norm is not None:
+            self._clip_gradients()
         self._update_preconditioners()
 
         # Computes root inverse of all preconditioners every self._precondition_frequency
@@ -842,10 +1066,11 @@ class DistributedShampoo(torch.optim.Optimizer):
                 if p.grad is None or not state[PRECONDITIONERS].on_source_rank:
                     continue
 
-                # Compute preconditioned gradient and update parameters.
-                state[PRECONDITIONERS].preconditioned_grad_to_dist_buffer(
-                    p.grad, iteration
-                )
+                with profiler.record_function("## distshampoo:precondition ##"):
+                    # Compute preconditioned gradient and update parameters.
+                    state[PRECONDITIONERS].preconditioned_grad_to_dist_buffer(
+                        p.grad, iteration
+                    )
 
             # Perform all-gather to obtain search direction.
             if self._use_distributed():
@@ -859,28 +1084,13 @@ class DistributedShampoo(torch.optim.Optimizer):
             # Set search direction as preconditioned grads.
             split_search_directions = split_preconditioned_grads
 
-            # Compute initial dtype of split_search_directions for quantized communications.
-            if len(split_search_directions) != 0:
-
-                # Getting the data type of the first element in split_search_directions
-                # and assigning it to the variable inital_dtype
-                initial_dtype = split_search_directions[0].dtype
-
-                # Checking if the desired communication_dtype is different from inital_dtype
-                if (
-                    self._communication_dtype != CommunicationDType.DEFAULT
-                    and dtype_mapping[self._communication_dtype.value] != initial_dtype
-                ):
-                    # Converting elements in split_search_directions to the desired communication_dtype
-                    split_search_directions = [
-                        item.to(dtype_mapping[self._communication_dtype.value])
-                        for item in split_search_directions
-                    ]
-
             # Incorporate decoupled weight decay.
             if self._use_decoupled_weight_decay and weight_decay != 0.0:
                 # Decoupled weight decay (no momentum case)
-                if momentum_param == 0.0:
+                if momentum_param == 0.0 and self._grafting_type not in [
+                    GraftingType.LARS,
+                    GraftingType.LAMB,
+                ]:
                     torch._foreach_mul_(split_params, 1.0 - lr * weight_decay)
 
                 # Decoupled weight decay (momentum case)
@@ -889,6 +1099,14 @@ class DistributedShampoo(torch.optim.Optimizer):
                         split_search_directions, split_params, alpha=weight_decay
                     )
 
+                # Compute rescaling factor when using param norm to scale weight decay and search direction.
+                if self._grafting_type in [GraftingType.LARS, GraftingType.LAMB]:
+                    split_param_norm_rescalings = self._compute_param_norm_rescalings(
+                        group, split_search_directions
+                    )
+                    torch._foreach_mul_(
+                        split_search_directions, split_param_norm_rescalings
+                    )
             # Update momentum.
             if momentum_param != 0.0:
                 torch._foreach_mul_(split_momentum_directions, momentum_param)
@@ -907,7 +1125,6 @@ class DistributedShampoo(torch.optim.Optimizer):
 
             # Updates weights.
             torch._foreach_add_(split_params, split_search_directions, alpha=-lr)
-
         return loss
 
     def _flattened_state(self) -> Dict[str, Any]:

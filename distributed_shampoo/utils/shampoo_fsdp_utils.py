@@ -16,9 +16,8 @@ from typing import List, Tuple, Union
 import numpy as np
 import torch
 import torch.distributed as dist
-from torch import Tensor
 
-from distributed_shampoo.shampoo_utils import (
+from distributed_shampoo.utils.shampoo_utils import (
     AdagradPreconditioner,
     BlockShampooPreconditioner,
     DistributedPreconditioner,
@@ -26,8 +25,9 @@ from distributed_shampoo.shampoo_utils import (
     LargeDimMethod,
     ShampooPreconditioner,
 )
+from torch import Tensor
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 class TensorBlockRecoveryMethod(enum.Enum):
@@ -81,7 +81,7 @@ def convex_split(
         logger.info(
             f"Input tensor is not flat, has shape {tensor.size()}. Continuing without splitting."
         )
-        return tensor
+        return [tensor]
 
     end_idx += 1  # correct off-by-one (FSDP shard_param_info provides inclusive index)
     assert (
@@ -91,8 +91,8 @@ def convex_split(
     # maintains the order that partitions had in the flat tensor
     split_tensors_left = []
     split_tensors_right = []
-    left_idx = None
-    right_idx = None
+    left_idx = 0
+    right_idx = -1
     center_partition = False
 
     for i in range(1, len(orig_shape) + 1):
@@ -357,7 +357,7 @@ class SplitShampooPreconditioner(DistributedPreconditioner):
     def apply_split(self, tensor: Tensor):
         return convex_split(tensor, self._orig_shape, self._start_idx, self._end_idx)
 
-    def update_preconditioners(self, grad: Tensor, iteration: Tensor):
+    def update_preconditioners(self, grad: Tensor, iteration: int):
         split_grad = self.apply_split(grad)
         assert len(split_grad) == len(
             self._split_preconditioners
@@ -365,7 +365,7 @@ class SplitShampooPreconditioner(DistributedPreconditioner):
         for p, g in zip(self._split_preconditioners, split_grad):
             p.update_preconditioners(g, iteration)
 
-    def precondition(self, grad: Tensor, iteration: Tensor) -> Tensor:
+    def precondition(self, grad: Tensor, iteration: int) -> List[Tensor]:
         split_grad = self.apply_split(grad)
         assert len(self._split_preconditioners) == len(
             split_grad
@@ -407,7 +407,7 @@ class SplitShampooPreconditioner(DistributedPreconditioner):
             relative_residuals,
         )
 
-    def compute_norm(self, grad: Tensor, iteration: Tensor) -> Tensor:
+    def compute_norm(self, grad: Tensor, iteration: int) -> Tensor:
         return torch.linalg.norm(self.precondition(grad, iteration))
 
     def to(self, device: Union[None, torch.device] = None):
@@ -800,7 +800,7 @@ class CommunicatedSplitShampooPreconditioner(DistributedPreconditioner):
                 remainder = [merged_tensor[:-1], merged_tensor[-1, :-buffer_size]]
         return buffer, remainder
 
-    def update_preconditioners(self, grad: Tensor, iteration: Tensor):
+    def update_preconditioners(self, grad: Tensor, iteration: int):
         split_grad = self.apply_split(grad, merge_buffer=True)
         assert len(split_grad) == len(
             self._split_preconditioners
@@ -808,7 +808,7 @@ class CommunicatedSplitShampooPreconditioner(DistributedPreconditioner):
         for p, g in zip(self._split_preconditioners, split_grad):
             p.update_preconditioners(g, iteration)
 
-    def precondition(self, grad: Tensor, iteration: Tensor) -> Tensor:
+    def precondition(self, grad: Tensor, iteration: int) -> List[Tensor]:
         split_grad = self.apply_split(grad, merge_buffer=True)
         assert len(self._split_preconditioners) == len(
             split_grad
@@ -820,7 +820,7 @@ class CommunicatedSplitShampooPreconditioner(DistributedPreconditioner):
 
         return split_preconditioned_grad
 
-    def precondition_and_store(self, grad: Tensor, iteration: Tensor) -> None:
+    def precondition_and_store(self, grad: Tensor, iteration: int) -> None:
         # precondition gradient and store in buffers if applicable, then the rest in class variable
         # TODO: come up with a better name for this function
         # might not want to use preconditioned_grad_to_buffer since that's used by DDP Shampoo?
@@ -844,7 +844,7 @@ class CommunicatedSplitShampooPreconditioner(DistributedPreconditioner):
 
         self._split_preconditioned_grad = split_preconditioned_grad
 
-    def retrieve_preconditioned_grad(self) -> Tensor:
+    def retrieve_preconditioned_grad(self) -> List[Tensor]:
         left = (
             [self.left_buffer.buffer]
             if self._left_comm == CommunicationType.SEND
@@ -889,7 +889,7 @@ class CommunicatedSplitShampooPreconditioner(DistributedPreconditioner):
             relative_residuals,
         )
 
-    def compute_norm(self, grad: Tensor, iteration: Tensor) -> Tensor:
+    def compute_norm(self, grad: Tensor, iteration: int) -> Tensor:
         return torch.linalg.norm(self.precondition(grad, iteration))
 
     def to(self, device: Union[None, torch.device] = None):

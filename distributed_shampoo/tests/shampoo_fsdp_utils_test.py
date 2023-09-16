@@ -12,7 +12,7 @@ import unittest
 
 import torch
 
-from distributed_shampoo.shampoo_fsdp_utils import convex_split
+from distributed_shampoo.utils.shampoo_fsdp_utils import convex_split
 
 logger: logging.Logger = logging.getLogger(__name__)
 

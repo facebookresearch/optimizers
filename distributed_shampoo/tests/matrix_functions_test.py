@@ -15,7 +15,7 @@ import numpy as np
 
 import torch
 
-from distributed_shampoo.matrix_functions import (
+from distributed_shampoo.utils.matrix_functions import (
     _matrix_inverse_root_newton,
     _matrix_root_eigen,
     check_diagonal,

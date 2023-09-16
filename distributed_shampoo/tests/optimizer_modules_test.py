@@ -11,7 +11,7 @@ import unittest
 from typing import Dict, List, Optional, Tuple, Union
 
 import torch
-from distributed_shampoo.optimizer_modules import are_states_equal, OptimizerModule
+from distributed_shampoo.utils.optimizer_modules import are_states_equal, OptimizerModule
 
 
 class AreStatesEqualTest(unittest.TestCase):

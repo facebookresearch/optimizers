@@ -23,7 +23,7 @@ import torch.distributed as dist
 from distributed_shampoo.distributed_shampoo import DistributedShampoo
 
 from distributed_shampoo.examples.convnet import ConvNet
-from distributed_shampoo.shampoo_utils import GraftingType, LargeDimMethod
+from distributed_shampoo.utils.shampoo_utils import GraftingType, LargeDimMethod
 from torch import nn
 from torchvision import datasets, transforms
 

@@ -13,7 +13,7 @@ import torch
 import torch.distributed as dist
 import torch.distributed._tensor as dtensor
 
-from distributed_shampoo.shampoo_dist_utils import (
+from distributed_shampoo.utils.shampoo_dist_utils import (
     allocate_distributed_tensor,
     distribute_buffer_sizes,
     get_dtype_size,
