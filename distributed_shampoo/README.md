@@ -93,7 +93,7 @@ we would instead use:
 ```
 import torch
 from distributed_shampoo.distributed_shampoo import DistributedShampoo
-from distributed_shampoo.shampoo_utils import GraftingType
+from distributed_shampoo.utils.shampoo_utils import GraftingType
 
 model = instantiate_model()
 
@@ -132,7 +132,7 @@ we would instead use:
 ```
 import torch
 from distributed_shampoo.distributed_shampoo import DistributedShampoo
-from distributed_shampoo.shampoo_utils import GraftingType
+from distributed_shampoo.utils.shampoo_utils import GraftingType
 
 model = instantiate_model()
 
@@ -171,7 +171,7 @@ we would instead use:
 ```
 import torch
 from distributed_shampoo.distributed_shampoo import DistributedShampoo
-from distributed_shampoo.shampoo_utils import GraftingType
+from distributed_shampoo.utils.shampoo_utils import GraftingType
 
 model = instantiate_model()
 
@@ -210,7 +210,7 @@ we would instead use:
 ```
 import torch
 from distributed_shampoo.distributed_shampoo import DistributedShampoo
-from distributed_shampoo.shampoo_utils import GraftingType
+from distributed_shampoo.utils.shampoo_utils import GraftingType
 
 model = instantiate_model()
 
