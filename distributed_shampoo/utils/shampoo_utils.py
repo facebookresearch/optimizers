@@ -900,13 +900,15 @@ class ShampooPreconditioner(DistributedPreconditioner):
                 bias_corrected_preconditioner = factor_matrix / self._bias_correction2
 
                 # Check for nan or inf values.
-                if torch.any(torch.isnan(bias_corrected_preconditioner)):
-                    logger.warning(
-                        f"Encountered nan values in preconditioner {self._idx}.{k}!"
+                if torch.isnan(bias_corrected_preconditioner).any():
+                    raise ValueError(
+                        f"Encountered nan values in bias-corrected factor matrix {self._idx}.{k}! To mitigate, check if nan inputs are being passed into the network or nan gradients are being passed to the optimizer."
+                        f"For debugging purposes, factor_matrix {self._idx}.{k}: {torch.min(factor_matrix)=}, {torch.max(factor_matrix)=}, {factor_matrix.isinf().any()=}, {factor_matrix.isnan().any()=}."
                     )
-                elif torch.any(torch.isinf(bias_corrected_preconditioner)):
-                    logger.warning(
-                        f"Encountered inf values in preconditioner {self._idx}.{k}!"
+                if torch.isinf(bias_corrected_preconditioner).any():
+                    raise ValueError(
+                        f"Encountered inf values in bias-corrected factor matrix {self._idx}.{k}! In some cases, this may be due to divergence of the algorithm. To mitigate, try decreasing the learning rate or increasing grafting epsilon."
+                        f"For debugging purposes, factor_matrix {self._idx}.{k}: {torch.min(factor_matrix)=}, {torch.max(factor_matrix)=}, {factor_matrix.isinf().any()=}, {factor_matrix.isnan().any()=}."
                     )
 
                 # Compute inverse preconditioner.
@@ -922,14 +924,14 @@ class ShampooPreconditioner(DistributedPreconditioner):
                         retry_double_precision=self._use_protected_eigh,
                     ).to(dtype=self._dtype)
 
-                    # check if we encounter NaN or inf values in computed inverse matrix.
-                    if torch.any(torch.isnan(computed_inv_factor_matrix)):
+                    # Check if we encounter NaN or inf values in computed inverse matrix.
+                    if (
+                        torch.isnan(computed_inv_factor_matrix).any()
+                        or torch.isinf(computed_inv_factor_matrix).any()
+                    ):
+                        torch.set_printoptions(threshold=100_000)
                         raise ValueError(
-                            f"Encountered nan values in root inv preconditioner {self._idx}.{k}!"
-                        )
-                    elif torch.any(torch.isinf(computed_inv_factor_matrix)):
-                        raise ValueError(
-                            f"Encountered inf values in root inv preconditioner {self._idx}.{k}!"
+                            f"Encountered nan or inf values in inverse factor matrix {self._idx}.{k}! To mitigate, check factor matrix before matrix inverse root computation: {bias_corrected_preconditioner=}"
                         )
 
                     inv_factor_matrix.copy_(computed_inv_factor_matrix)
@@ -937,7 +939,8 @@ class ShampooPreconditioner(DistributedPreconditioner):
                 except Exception as exception:
                     if (
                         not self._use_protected_eigh
-                        or "values in root inv preconditioner" in str(exception)
+                        or "Encountered nan or inf values in inverse factor matrix"
+                        in str(exception)
                     ):
                         raise exception
                     else:

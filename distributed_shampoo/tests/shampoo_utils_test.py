@@ -767,33 +767,69 @@ class ShampooPreconditionerTest(unittest.TestCase):
             )
         self.assertEqual(mock_matrix_root.call_count, 2)
 
-    @mock.patch("distributed_shampoo.utils.shampoo_utils.matrix_inverse_root")
-    def test_raise_inf_in_compute_root_inverse(self, mock_matrix_root: mock.Mock):
+    @mock.patch("distributed_shampoo.utils.shampoo_utils.use_local_tensor")
+    def test_raise_inf_in_factor_matrix_compute_root_inverse(
+        self, mock_use_local_tensor: mock.Mock
+    ):
         _, _, _, shampoo = self._setup_test(
             beta2=1.0,
             epsilon=0.0,
             use_dtensor=False,
         )
-        mock_matrix_root.side_effect = torch.tensor([torch.inf])
+        mock_use_local_tensor.return_value = torch.tensor([[torch.inf]])
         with self.assertRaisesRegex(
-            ValueError, "Encountered inf values in root inv preconditioner"
+            ValueError, "Encountered inf values in bias-corrected factor matrix"
         ):
             shampoo.compute_root_inverse()
-        mock_matrix_root.assert_called_once()
+        mock_use_local_tensor.assert_called()
+
+    @mock.patch("distributed_shampoo.utils.shampoo_utils.use_local_tensor")
+    def test_raise_nan_in_factor_matrix_compute_root_inverse(
+        self, mock_use_local_tensor: mock.Mock
+    ):
+        _, _, _, shampoo = self._setup_test(
+            beta2=1.0,
+            epsilon=0.0,
+            use_dtensor=False,
+        )
+        mock_use_local_tensor.return_value = torch.tensor([[torch.nan]])
+        with self.assertRaisesRegex(
+            ValueError, "Encountered nan values in bias-corrected factor matrix"
+        ):
+            shampoo.compute_root_inverse()
+        mock_use_local_tensor.assert_called()
 
     @mock.patch("distributed_shampoo.utils.shampoo_utils.matrix_inverse_root")
-    def test_raise_nan_in_compute_root_inverse(self, mock_matrix_root: mock.Mock):
+    def test_raise_inf_in_inv_factor_matrix_compute_root_inverse(
+        self, mock_matrix_inverse_root: mock.Mock
+    ):
         _, _, _, shampoo = self._setup_test(
             beta2=1.0,
             epsilon=0.0,
             use_dtensor=False,
         )
-        mock_matrix_root.side_effect = torch.tensor([torch.nan])
+        mock_matrix_inverse_root.side_effect = torch.tensor([torch.inf])
         with self.assertRaisesRegex(
-            ValueError, "Encountered nan values in root inv preconditioner"
+            ValueError, "Encountered nan or inf values in inverse factor matrix"
         ):
             shampoo.compute_root_inverse()
-        mock_matrix_root.assert_called_once()
+        mock_matrix_inverse_root.assert_called_once()
+
+    @mock.patch("distributed_shampoo.utils.shampoo_utils.matrix_inverse_root")
+    def test_raise_nan_in_inv_factor_matrix_compute_root_inverse(
+        self, mock_matrix_inverse_root: mock.Mock
+    ):
+        _, _, _, shampoo = self._setup_test(
+            beta2=1.0,
+            epsilon=0.0,
+            use_dtensor=False,
+        )
+        mock_matrix_inverse_root.side_effect = torch.tensor([torch.nan])
+        with self.assertRaisesRegex(
+            ValueError, "Encountered nan or inf values in inverse factor matrix"
+        ):
+            shampoo.compute_root_inverse()
+        mock_matrix_inverse_root.assert_called_once()
 
     def test_get_root_from_exponent_override(self):
         with self.subTest("Test integer case:"):
