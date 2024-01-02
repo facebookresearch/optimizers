@@ -135,7 +135,3 @@ class CombinedLinearTest(unittest.TestCase):
                     torch.testing.assert_close(
                         original_linear.weight, combined_linear.combined_weight
                     )
-
-
-if __name__ == "__main__":
-    unittest.main()
