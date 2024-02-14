@@ -20,12 +20,12 @@ import torch.distributed.checkpoint as dist_checkpoint
 
 from distributed_shampoo.distributed_shampoo import DistributedShampoo
 from distributed_shampoo.examples.convnet import ConvNet
-from distributed_shampoo.examples.single_gpu_cifar10_example import (
-    DType,
+from distributed_shampoo.examples.trainer_utils import (
     instantiate_optimizer,
     LossMetrics,
     Parser,
 )
+from distributed_shampoo.shampoo_types import DDPShampooConfig
 from torch import nn
 
 from torchvision import datasets, transforms
@@ -45,14 +45,7 @@ WORLD_RANK = int(os.environ["RANK"])
 WORLD_SIZE = int(os.environ["WORLD_SIZE"])
 
 
-def average_gradients(model: nn.Module, world_size: int):
-    """Gradient averaging across GPUs via all-reduce."""
-    for param in model.parameters():
-        dist.all_reduce(param.grad.data, op=dist.reduce_op.SUM)
-        param.grad.data /= float(world_size)
-
-
-def train_multi_gpu_model(
+def train_ddp_model(
     model: nn.Module,
     world_size: int,
     loss_function: nn.Module,
@@ -117,7 +110,6 @@ def train_multi_gpu_model(
             output = model(inputs)
             loss = loss_function(output, labels)
             loss.backward()
-            average_gradients(model, world_size)
 
             optimizer.step()
             metrics.update(loss)
@@ -154,13 +146,13 @@ if __name__ == "__main__":
     To run this training script with a single node, one can run from the optimizers directory:
 
     SGD (with learning rate = 1e-2, momentum = 0.9):
-        torchrun --standalone --nnodes=1 --nproc_per_node=$NUM_TRAINERS -m distributed_shampoo.examples.multi_gpu_cifar10_example --optimizer-type SGD --lr 1e-2 --momentum 0.9
+        torchrun --standalone --nnodes=1 --nproc_per_node=$NUM_TRAINERS -m distributed_shampoo.examples.ddp_cifar10_example --optimizer-type SGD --lr 1e-2 --momentum 0.9
 
     Adam (with default parameters):
-        torchrun --standalone --nnodes=1 --nproc_per_node=$NUM_TRAINERS -m distributed_shampoo.examples.multi_gpu_cifar10_example --optimizer-type ADAM
+        torchrun --standalone --nnodes=1 --nproc_per_node=$NUM_TRAINERS -m distributed_shampoo.examples.ddp_cifar10_example --optimizer-type ADAM
 
     Distributed Shampoo (with default Adam grafting, precondition frequency = 100):
-        torchrun --standalone --nnodes=1 --nproc_per_node=$NUM_TRAINERS -m distributed_shampoo.examples.multi_gpu_cifar10_example --optimizer-type DISTRIBUTED_SHAMPOO --precondition-frequency 100 --grafting-type ADAM --num-trainers-per-group -1 --use-bias-correction --use-decoupled-weight-decay --use-dtensor
+        torchrun --standalone --nnodes=1 --nproc_per_node=$NUM_TRAINERS -m distributed_shampoo.examples.ddp_cifar10_example --optimizer-type DISTRIBUTED_SHAMPOO --precondition-frequency 100 --grafting-type ADAM --num-trainers-per-group -1 --use-bias-correction --use-decoupled-weight-decay --use-merge-dims
 
     To use distributed checkpointing, append the flag --use-distributed-checkpoint with optional --checkpoint-dir argument.
 
@@ -228,25 +220,28 @@ if __name__ == "__main__":
         max_preconditioner_dim=args.max_preconditioner_dim,
         precondition_frequency=args.precondition_frequency,
         start_preconditioning_step=args.start_preconditioning_step,
-        exponent_override=args.exponent_override,
+        inv_root_override=args.inv_root_override,
+        exponent_multiplier=args.exponent_multiplier,
         use_nesterov=args.use_nesterov,
         use_bias_correction=args.use_bias_correction,
         use_decoupled_weight_decay=args.use_decoupled_weight_decay,
-        preconditioner_dtype=torch.float
-        if args.preconditioner_dtype == DType.FLOAT
-        else torch.float64,
-        large_dim_method=args.large_dim_method,
-        num_trainers_per_group=args.num_trainers_per_group,
         grafting_type=args.grafting_type,
-        grafting_epsilon=args.grafting_epsilon,
         grafting_beta2=args.grafting_beta2,
+        grafting_epsilon=args.grafting_epsilon,
+        use_merge_dims=args.use_merge_dims,
+        use_pytorch_compile=args.use_pytorch_compile,
+        distributed_config=DDPShampooConfig(
+            communication_dtype=args.communication_dtype,
+            num_trainers_per_group=args.num_trainers_per_group,
+            communicate_params=args.communicate_params,
+        ),
+        preconditioner_dtype=args.preconditioner_dtype,
         use_protected_eigh=args.use_protected_eigh,
-        use_dtensor=args.use_dtensor,
-        debug_mode=args.debug_mode,
+        track_root_inv_residuals=args.track_root_inv_residuals,
     )
 
     # train model
-    train_multi_gpu_model(
+    train_ddp_model(
         model,
         WORLD_SIZE,
         loss_function,
@@ -259,3 +254,6 @@ if __name__ == "__main__":
         use_distributed_checkpoint=args.use_distributed_checkpoint,
         checkpoint_dir=args.checkpoint_dir,
     )
+
+    # clean up process group
+    dist.destroy_process_group()

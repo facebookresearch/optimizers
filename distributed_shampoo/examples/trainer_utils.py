@@ -10,22 +10,23 @@ LICENSE file in the root directory of this source tree.
 import argparse
 import enum
 import logging
-import os
-import random
-from abc import ABC
-from typing import Tuple
-
-import numpy as np
+from abc import ABC, abstractmethod
+from typing import Optional, Tuple
 
 import torch
 import torch.distributed as dist
 
 from distributed_shampoo.distributed_shampoo import DistributedShampoo
-
-from distributed_shampoo.examples.convnet import ConvNet
-from distributed_shampoo.utils.shampoo_utils import GraftingType, LargeDimMethod
+from distributed_shampoo.shampoo_types import (
+    AdaGradGraftingConfig,
+    AdamGraftingConfig,
+    CommunicationDType,
+    DistributedConfig,
+    GraftingConfig,
+    RMSpropGraftingConfig,
+    SGDGraftingConfig,
+)
 from torch import nn
-from torchvision import datasets, transforms
 
 logging.basicConfig(
     format="[%(filename)s:%(lineno)d] %(levelname)s: %(message)s",
@@ -33,20 +34,29 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# for reproducibility, set environmental variable for CUBLAS
-os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
-
+# create default device
+default_device = torch.device("cpu")
 
 ###### ENUM CLASSES ######
 class DType(enum.Enum):
-    FLOAT = 0
-    FLOAT64 = 1
+    BF16 = torch.bfloat16
+    FP16 = torch.float16
+    FP32 = torch.float32
+    FP64 = torch.float64
 
 
 class OptimizerType(enum.Enum):
     SGD = 0
     ADAM = 1
     DISTRIBUTED_SHAMPOO = 2
+
+
+class GraftingType(enum.Enum):
+    NONE = 0
+    SGD = 1
+    ADAGRAD = 2
+    RMSPROP = 3
+    ADAM = 4
 
 
 ###### ARGPARSER ######
@@ -64,7 +74,7 @@ class Parser:
     def get_args():
         parser = argparse.ArgumentParser(description="Arguments for Shampoo run.")
 
-        # arguments for training script
+        # Arguments for training script.
         parser.add_argument(
             "--optimizer-type",
             type=lambda t: enum_type_parse(t, OptimizerType),
@@ -77,7 +87,7 @@ class Parser:
         )
         parser.add_argument("--seed", type=int, default=2022, help="Seed.")
 
-        # arguments for optimizer
+        # Arguments for optimizer.
         parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate.")
         parser.add_argument(
             "--beta1", type=float, default=0.9, help="Beta1 for gradient filtering."
@@ -92,16 +102,18 @@ class Parser:
             "--epsilon", type=float, default=1e-12, help="Epsilon for Adam and Shampoo."
         )
         parser.add_argument(
+            "--weight-decay",
+            type=float,
+            default=0.0,
+            help="Weight decay.",
+        )
+
+        # Arguments for Shampoo.
+        parser.add_argument(
             "--momentum",
             type=float,
             default=0.0,
             help="Momentum parameter for SGD and Shampoo.",
-        )
-        parser.add_argument(
-            "--weight_decay",
-            type=float,
-            default=0.0,
-            help="Weight decay.",
         )
         parser.add_argument(
             "--max-preconditioner-dim",
@@ -122,10 +134,16 @@ class Parser:
             help="Start preconditioning step for Shampoo.",
         )
         parser.add_argument(
-            "--exponent-override",
+            "--inv-root-override",
             type=int,
             default=0,
-            help="Exponent override for Shampoo root inverse.",
+            help="Inverse root override for Shampoo root inverse.",
+        )
+        parser.add_argument(
+            "--exponent-multiplier",
+            type=float,
+            default=1.0,
+            help="Exponent multiplier for Shampoo root inverse.",
         )
         parser.add_argument(
             "--use-nesterov",
@@ -141,18 +159,6 @@ class Parser:
             "--use-decoupled-weight-decay",
             action="store_true",
             help="Use decoupled weight decay for Adam and Shampoo.",
-        )
-        parser.add_argument(
-            "--preconditioner-dtype",
-            type=lambda t: enum_type_parse(t, DType),
-            default=DType.FLOAT,
-            help="Preconditioner dtype for Shampoo.",
-        )
-        parser.add_argument(
-            "--large-dim-method",
-            type=lambda t: enum_type_parse(t, LargeDimMethod),
-            default=LargeDimMethod.BLOCKING,
-            help="Large dimensional method for Shampoo.",
         )
         parser.add_argument(
             "--grafting-type",
@@ -173,21 +179,52 @@ class Parser:
             help="Grafting beta2 parameter for Shampoo.",
         )
         parser.add_argument(
+            "--use-merge-dims",
+            action="store_true",
+            help="Use merge dims for Shampoo.",
+        )
+        parser.add_argument(
+            "--use-pytorch-compile",
+            action="store_true",
+            help="Use PyTorch compile for Shampoo.",
+        )
+        parser.add_argument(
+            "--preconditioner-dtype",
+            type=lambda t: enum_type_parse(t, DType),
+            default=DType.FP32,
+            help="Preconditioner dtype for Shampoo.",
+        )
+        parser.add_argument(
             "--use-protected-eigh",
             action="store_true",
             help="Uses protected eigendecomposition.",
         )
         parser.add_argument(
-            "--use-dtensor", action="store_true", help="Use DTensor if available."
-        )
-        parser.add_argument(
-            "--debug-mode",
+            "--track-root-inv-residuals",
             action="store_true",
             help="Use debug mode for examining root inverse residuals.",
         )
 
-        # arguments for distributed training
-        # not used if using single GPU training
+        # Arguments for DDP Shampoo.
+        parser.add_argument(
+            "--communication-dtype",
+            type=lambda t: enum_type_parse(t, CommunicationDType),
+            default=CommunicationDType.FP32,
+            help="Communication dtype for Shampoo.",
+        )
+        parser.add_argument(
+            "--num-trainers-per-group",
+            type=int,
+            default=-1,
+            help="Number of GPUs per distributed process group.",
+        )
+        parser.add_argument(
+            "--communicate-params",
+            action="store_true",
+            help="Communicate parameters for Shampoo.",
+        )
+
+        # Arguments for Distributed Training.
         parser.add_argument(
             "--local-batch-size", type=int, default=128, help="Local batch size."
         )
@@ -200,12 +237,6 @@ class Parser:
             default="nccl",
             choices=["nccl", "gloo"],
             help="Distributed backend.",
-        )
-        parser.add_argument(
-            "--num-trainers-per-group",
-            type=int,
-            default=-1,
-            help="Number of GPUs per distributed process group.",
         )
         parser.add_argument(
             "--data-path",
@@ -230,26 +261,30 @@ class Parser:
 
 ###### METRICS CLASSES ######
 class Metrics(ABC):
+    @abstractmethod
     def log(self):
-        pass
+        ...
 
+    @abstractmethod
     def reset(self):
-        pass
+        ...
 
+    @abstractmethod
     def update(self):
-        pass
+        ...
 
 
 class LossMetrics(Metrics):
     def __init__(
         self,
         window_size: int = 100,
-        device: torch.device = torch.device("cpu"),
+        device: torch.device = default_device,
         world_size: int = 0,
     ):
         super().__init__()
         self._world_size = world_size
         self._window_size = window_size
+        self._device = device
         self._epoch = 0
         self._iteration = 0
         self._window_losses = []
@@ -265,9 +300,9 @@ class LossMetrics(Metrics):
         self._epoch = 0
         self._iteration = 0
         self._window_losses = []
-        self._window_loss = torch.tensor(0.0, device=device)
-        self._accumulated_loss = torch.tensor(0.0, device=device)
-        self._lifetime_loss = torch.tensor(0.0, device=device)
+        self._window_loss = torch.tensor(0.0, device=self._device)
+        self._accumulated_loss = torch.tensor(0.0, device=self._device)
+        self._lifetime_loss = torch.tensor(0.0, device=self._device)
 
     def update(self, loss: torch.Tensor):
         self._iteration += 1
@@ -313,19 +348,20 @@ def instantiate_optimizer(
     max_preconditioner_dim: int,
     precondition_frequency: int,
     start_preconditioning_step: int,
-    exponent_override: int,
+    inv_root_override: int,
+    exponent_multiplier: float,
     use_nesterov: bool,
     use_bias_correction: bool,
     use_decoupled_weight_decay: bool,
-    preconditioner_dtype: DType,
-    large_dim_method: LargeDimMethod,
-    num_trainers_per_group: int,
     grafting_type: GraftingType,
-    grafting_epsilon: float,
     grafting_beta2: float,
+    grafting_epsilon: float,
+    use_merge_dims: bool,
+    use_pytorch_compile: bool,
+    distributed_config: Optional[DistributedConfig],
+    preconditioner_dtype: DType,
     use_protected_eigh: bool,
-    use_dtensor: bool,
-    debug_mode: bool,
+    track_root_inv_residuals: bool,
 ) -> torch.optim.Optimizer:
     if optimizer_type == OptimizerType.SGD:
         optimizer = torch.optim.SGD(
@@ -363,19 +399,20 @@ def instantiate_optimizer(
             max_preconditioner_dim=max_preconditioner_dim,
             precondition_frequency=precondition_frequency,
             start_preconditioning_step=start_preconditioning_step,
-            exponent_override=exponent_override,
+            inv_root_override=inv_root_override,
+            exponent_multiplier=exponent_multiplier,
             use_nesterov=use_nesterov,
             use_bias_correction=use_bias_correction,
             use_decoupled_weight_decay=use_decoupled_weight_decay,
-            preconditioner_dtype=preconditioner_dtype,
-            large_dim_method=large_dim_method,
-            num_trainers_per_group=num_trainers_per_group,
-            grafting_type=grafting_type,
-            grafting_epsilon=grafting_epsilon,
-            grafting_beta2=grafting_beta2,
+            grafting_config=instantiate_grafting_config(
+                grafting_type, grafting_beta2, grafting_epsilon
+            ),
+            use_merge_dims=use_merge_dims,
+            use_pytorch_compile=use_pytorch_compile,
+            distributed_config=distributed_config,
+            preconditioner_dtype=preconditioner_dtype.value,
             use_protected_eigh=use_protected_eigh,
-            use_dtensor=use_dtensor,
-            debug_mode=debug_mode,
+            track_root_inv_residuals=track_root_inv_residuals,
         )
     else:
         raise ValueError(f"Invalid OptimizerType {optimizer_type}!")
@@ -383,128 +420,31 @@ def instantiate_optimizer(
     return optimizer
 
 
-###### TRAINING LOOP ######
-def train_single_gpu_model(
-    model: nn.Module,
-    loss_function: nn.Module,
-    data_loader: torch.utils.data.DataLoader,
-    optimizer: torch.optim.Optimizer,
-    device: str,
-    epochs: int = 1,
-    window_size: int = 100,
-) -> Tuple[float, float, int]:
-    """Constructs the main training loop."""
-
-    # initialize metrics
-    metrics = LossMetrics(window_size=window_size, device=device)
-
-    # main training loop
-    for epoch in range(epochs):
-        metrics._epoch = epoch
-        for inputs, labels in data_loader:
-            inputs, labels = inputs.to(device), labels.to(device)
-            optimizer.zero_grad()
-            output = model(inputs)
-            loss = loss_function(output, labels)
-            loss.backward()
-            optimizer.step()
-            metrics.update(loss)
-            metrics.log()
-
-    return metrics._lifetime_loss, metrics._window_loss, metrics._iteration
-
-
-if __name__ == "__main__":
-    """Single GPU CIFAR-10 Training Example Script
-
-    Trains a simple convolutional network with a single GPU.
-
-    Requirements:
-        - Python 3.8 or above
-        - PyTorch / TorchVision
-
-    To run this simple training script, one can run from the optimizers directory:
-
-    SGD (with learning rate = 1e-2, momentum = 0.9):
-        python -m distributed_shampoo.examples.single_gpu_cifar10_example --optimizer-type SGD --lr 1e-2 --momentum 0.9
-
-    Adam (with default parameters):
-        python -m distributed_shampoo.examples.single_gpu_cifar10_example --optimizer-type ADAM
-
-    Distributed Shampoo (with default Adam grafting and precondition frequency = 100):
-        python -m distributed_shampoo.examples.single_gpu_cifar10_example --optimizer-type DISTRIBUTED_SHAMPOO --precondition-frequency 100 --grafting-type ADAM --use-bias-correction --use-decoupled-weight-decay
-
-    The script will produce lifetime and window loss values retrieved from the forward pass over the data.
-    Guaranteed reproducibility on a single GPU.
-
-    """
-
-    # parse arguments
-    args = Parser.get_args()
-
-    # set seed for reproducibility
-    torch.manual_seed(args.seed)
-    np.random.seed(args.seed)
-    random.seed(args.seed)
-    torch.use_deterministic_algorithms(True)
-
-    # check cuda availability and set device
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-
-    # instantiate model and loss function
-    model = ConvNet(32, 32, 3).to(device)
-    loss_function = nn.CrossEntropyLoss()
-
-    # instantiate data loader
-    transform = transforms.Compose(
-        [transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))]
-    )
-    dataset = datasets.CIFAR10(
-        args.data_path, train=True, download=True, transform=transform
-    )
-    data_loader = torch.utils.data.DataLoader(
-        dataset,
-        batch_size=args.batch_size,
-        shuffle=True,
-        num_workers=2,
-    )
-
-    # instantiate optimizer (SGD, Adam, DistributedShampoo)
-    optimizer = instantiate_optimizer(
-        args.optimizer_type,
-        model,
-        lr=args.lr,
-        betas=(args.beta1, args.beta2),
-        epsilon=args.epsilon,
-        momentum=args.momentum,
-        weight_decay=args.weight_decay,
-        max_preconditioner_dim=args.max_preconditioner_dim,
-        precondition_frequency=args.precondition_frequency,
-        start_preconditioning_step=args.start_preconditioning_step,
-        exponent_override=args.exponent_override,
-        use_nesterov=args.use_nesterov,
-        use_bias_correction=args.use_bias_correction,
-        use_decoupled_weight_decay=args.use_decoupled_weight_decay,
-        preconditioner_dtype=torch.float
-        if args.preconditioner_dtype == DType.FLOAT
-        else torch.float64,
-        large_dim_method=args.large_dim_method,
-        num_trainers_per_group=0,
-        grafting_type=args.grafting_type,
-        grafting_epsilon=args.grafting_epsilon,
-        grafting_beta2=args.grafting_beta2,
-        use_protected_eigh=args.use_protected_eigh,
-        use_dtensor=args.use_dtensor,
-        debug_mode=args.debug_mode,
-    )
-
-    # train model
-    train_single_gpu_model(
-        model,
-        loss_function,
-        data_loader,
-        optimizer,
-        device,
-        epochs=args.epochs,
-        window_size=args.window_size,
-    )
+def instantiate_grafting_config(
+    grafting_type: GraftingType,
+    grafting_beta2: float,
+    grafting_epsilon: float,
+) -> Optional[GraftingConfig]:
+    if grafting_type == GraftingType.NONE:
+        return None
+    elif grafting_type == GraftingType.ADAGRAD:
+        return AdaGradGraftingConfig(
+            epsilon=grafting_epsilon,
+        )
+    elif grafting_type == GraftingType.ADAM:
+        return AdamGraftingConfig(
+            beta2=grafting_beta2,
+            epsilon=grafting_epsilon,
+        )
+    elif grafting_type == GraftingType.RMSPROP:
+        return RMSpropGraftingConfig(
+            beta2=grafting_beta2,
+            epsilon=grafting_epsilon,
+        )
+    elif grafting_type == GraftingType.SGD:
+        return SGDGraftingConfig(
+            beta2=grafting_beta2,
+            epsilon=grafting_epsilon,
+        )
+    else:
+        raise ValueError(f"Invalid GraftingType {grafting_type}!")
