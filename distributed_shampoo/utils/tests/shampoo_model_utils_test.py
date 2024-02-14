@@ -10,7 +10,7 @@ LICENSE file in the root directory of this source tree.
 import itertools
 import unittest
 from math import sqrt
-from typing import cast
+from typing import cast, Union
 
 import torch
 import torch.nn as nn
@@ -19,14 +19,14 @@ from distributed_shampoo.utils.shampoo_model_utils import CombinedLinear
 
 
 class CombinedLinearTest(unittest.TestCase):
-    def _init_weights(self, m, seed) -> None:
+    def _init_weights(self, m: Union[nn.Linear, CombinedLinear], seed: int) -> None:
         torch.random.manual_seed(seed)
-        if type(m) == nn.Linear:
+        if isinstance(m, nn.Linear):
             bound = 1 / sqrt(m.in_features)
             torch.nn.init.uniform_(m.weight, -bound, bound)
             if m.bias is not None:
                 torch.nn.init.uniform_(m.bias, -bound, bound)
-        elif type(m) == CombinedLinear:
+        elif isinstance(m, CombinedLinear):
             bound = 1 / sqrt(m.in_features)
             if m.bias:
                 torch.nn.init.uniform_(m.combined_weight[:, :-1], -bound, bound)
@@ -76,9 +76,7 @@ class CombinedLinearTest(unittest.TestCase):
             if bias:
                 torch.testing.assert_close(
                     cast(torch.Tensor, original_linear.weight.grad),
-                    cast(torch.Tensor, combined_linear.combined_weight.grad)[
-                        :, :-1
-                    ],
+                    cast(torch.Tensor, combined_linear.combined_weight.grad)[:, :-1],
                 )
                 torch.testing.assert_close(
                     cast(torch.Tensor, original_linear.bias.grad),
@@ -90,7 +88,7 @@ class CombinedLinearTest(unittest.TestCase):
                     cast(torch.Tensor, combined_linear.combined_weight.grad),
                 )
 
-    def test_linear_forward_backward(self):
+    def test_linear_forward_backward(self) -> None:
         dims = [2, 10]
         biases = [False, True]
         seeds = [920, 2022]
@@ -107,7 +105,7 @@ class CombinedLinearTest(unittest.TestCase):
                     feature_vector, in_features, out_features, bias, seed
                 )
 
-    def test_initialization(self):
+    def test_initialization(self) -> None:
         in_features = 10
         out_features = 20
         biases = [False, True]
@@ -135,3 +133,18 @@ class CombinedLinearTest(unittest.TestCase):
                     torch.testing.assert_close(
                         original_linear.weight, combined_linear.combined_weight
                     )
+
+    def test_extra_repr(self) -> None:
+        in_features = 10
+        out_features = 20
+        combined_linear = CombinedLinear(in_features, out_features, bias=True)
+        self.assertEqual(
+            combined_linear.extra_repr(),
+            "self.in_features=10, self.out_features=20, self.in_features_with_bias=11",
+        )
+
+        combined_linear = CombinedLinear(in_features, out_features, bias=False)
+        self.assertEqual(
+            combined_linear.extra_repr(),
+            "self.in_features=10, self.out_features=20, self.in_features_with_bias=10",
+        )

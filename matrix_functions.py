@@ -14,7 +14,7 @@ from typing import Tuple, Union
 import torch
 from torch import Tensor
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 class NewtonConvergenceFlag(enum.Enum):
@@ -27,18 +27,18 @@ class RootInvMethod(enum.Enum):
     NEWTON = 1
 
 
-def check_diagonal(A: Tensor) -> Tensor:
-    """Checks if symmetric matrix is diagonal."""
+def check_diagonal(A: Tensor) -> bool:
+    """Checks if symmetric matrix is diagonal. Throw if the input is not a square matrix."""
 
     A_shape = A.shape
     if len(A_shape) != 2:
-        raise ValueError("Matrix is not 2-dimensional!")
+        raise ValueError(f"Matrix is not 2-dimensional! {A_shape=}")
 
-    m, n = A_shape
-    if m != n:
-        raise ValueError("Matrix is not square!")
+    if A_shape[0] != A_shape[1]:
+        raise ValueError(f"Matrix is not square! {A_shape=}")
 
-    return ~torch.any(A.reshape(-1)[:-1].reshape(m - 1, n + 1)[:, 1:].bool())
+    # Check both upper triangular part and lower triangular part are all zeros.
+    return not A.triu(diagonal=1).any() and not A.tril(diagonal=-1).any()
 
 
 def matrix_inverse_root(
@@ -120,9 +120,7 @@ def matrix_inverse_root(
             )
     else:
         raise NotImplementedError(
-            "Root inverse method is not implemented! Specified root inverse method is "
-            + str(root_inv_method)
-            + "."
+            f"Root inverse method is not implemented! Specified root inverse method is {str(root_inv_method)}."
         )
 
     return X
@@ -240,7 +238,7 @@ def _matrix_root_eigen(
 
 
 def _matrix_inverse_root_newton(
-    A,
+    A: Tensor,
     root: int,
     epsilon: float = 0.0,
     max_iterations: int = 1000,
@@ -291,7 +289,6 @@ def _matrix_inverse_root_newton(
     z = (root + 1) / (2 * A_nrm)
     X = z ** (-alpha) * identity
     M = z * A
-    # pyre-fixme[6]: For 1st param expected `Tensor` but got `float`.
     error = torch.dist(M, identity, p=torch.inf)
 
     # main for loop

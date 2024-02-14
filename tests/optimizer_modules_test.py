@@ -7,80 +7,24 @@ LICENSE file in the root directory of this source tree.
 
 """
 
+#!/usr/bin/env fbpython
+# (c) Meta Platforms, Inc. and affiliates. Confidential and proprietary.
+
 import unittest
+from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple, Union
 
 import torch
-from distributed_shampoo.utils.optimizer_modules import are_states_equal, OptimizerModule
+from optimizer_modules import OptimizerModule
 
 
-class AreStatesEqualTest(unittest.TestCase):
-    def test_are_states_equal_true(self) -> None:
-        prev_state_dict = {
-            "hello": 42,
-            "goodbye": torch.tensor(24),
-            "dict": {"tensor": torch.tensor(0.0)},
-        }
-        new_state_dict = {
-            "hello": 42,
-            "goodbye": torch.tensor(24),
-            "dict": {"tensor": torch.tensor(0.0)},
-        }
-        self.assertTrue(are_states_equal(prev_state_dict, new_state_dict))
-
-    def test_are_states_equal_false_with_different_types(self) -> None:
-        prev_state_dict = {
-            "hello": 42,
-            "goodbye": torch.tensor(24),
-            "dict": {"tensor": torch.tensor(0.0)},
-        }
-        new_state_dict = {
-            "hello": torch.tensor(42),
-            "goodbye": torch.tensor(24),
-            "dict": {"tensor": torch.tensor(0.0)},
-        }
-        self.assertFalse(are_states_equal(prev_state_dict, new_state_dict))
-
-    def test_are_states_equal_false_with_different_lengths(self) -> None:
-        prev_state_dict = {
-            "hello": 42,
-            "goodbye": torch.tensor(24),
-            "dict": {"tensor": torch.tensor(0.0)},
-        }
-        new_state_dict = {
-            "goodbye": torch.tensor(24),
-            "dict": {"tensor": torch.tensor(0.0)},
-        }
-        self.assertFalse(are_states_equal(prev_state_dict, new_state_dict))
-
-    def test_are_states_equal_false_with_different_values(self) -> None:
-        prev_state_dict = {
-            "hello": 42,
-            "goodbye": torch.tensor(24),
-            "dict": {"tensor": torch.tensor(0.0)},
-        }
-        new_state_dict = {
-            "hello": 42,
-            "goodbye": torch.tensor(24),
-            "dict": {"tensor": torch.tensor(1.0)},
-        }
-        self.assertFalse(are_states_equal(prev_state_dict, new_state_dict))
-
-
+@dataclass
 class OptimizerTestModule(OptimizerModule):
-    def __init__(
-        self,
-        attribute: Union[torch.Tensor, int],
-        list_of_values: Optional[List[Union[OptimizerModule, torch.Tensor]]] = None,
-        tuple_of_values: Optional[Tuple[float, ...]] = None,
-        dictionary_of_values: Optional[Dict[str, torch.Tensor]] = None,
-        other_module: Optional[OptimizerModule] = None,
-    ) -> None:
-        self.attribute = attribute
-        self.list_of_values = list_of_values
-        self.tuple_of_values = tuple_of_values
-        self.dictionary_of_values = dictionary_of_values
-        self.other_module = other_module
+    attribute: Union[torch.Tensor, int]
+    list_of_values: Optional[List[Union[OptimizerModule, torch.Tensor]]] = None
+    tuple_of_values: Optional[Tuple[float, ...]] = None
+    dictionary_of_values: Optional[Dict[str, torch.Tensor]] = None
+    other_module: Optional[OptimizerModule] = None
 
 
 class OptimizerModulesTest(unittest.TestCase):

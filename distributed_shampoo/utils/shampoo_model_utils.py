@@ -71,8 +71,7 @@ class CombinedLinear(torch.nn.Module):
         device: Optional[torch.device] = None,
         dtype: Optional[torch.dtype] = None,
     ) -> None:
-        factory_kwargs = {"device": device, "dtype": dtype}
-        super(CombinedLinear, self).__init__()
+        super().__init__()
         self.in_features = in_features
         self.out_features = out_features
         self.in_features_with_bias: int = in_features + 1 if bias else in_features
@@ -80,7 +79,8 @@ class CombinedLinear(torch.nn.Module):
         self.combined_weight = Parameter(
             torch.empty(
                 (self.out_features, self.in_features_with_bias),
-                **factory_kwargs,  # pyre-ignore[6]
+                device=device,
+                dtype=dtype,
             )
         )
         self.reset_parameters()
@@ -108,8 +108,6 @@ class CombinedLinear(torch.nn.Module):
             return torch.nn.functional.linear(input, self.combined_weight, None)
 
     def extra_repr(self) -> str:
-        return "in_features={}, out_features={}, in_features_with_bias={}".format(
-            self.in_features,
-            self.out_features,
-            self.in_features_with_bias,
+        return (
+            f"{self.in_features=}, {self.out_features=}, {self.in_features_with_bias=}"
         )
