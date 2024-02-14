@@ -248,11 +248,32 @@ We support:
 
 To use DDP Shampoo, simply configure the `distributed_config` as `DDPShampooConfig`:
 ```
+import os
+
 import torch
+import torch.distributed as dist
+
 from distributed_shampoo.distributed_shampoo import DistributedShampoo
 from distributed_shampoo.shampoo_types import AdamGraftingConfig, DDPShampooConfig
+from torch import nn
 
-model = instantiate_model()
+LOCAL_RANK = int(os.environ["LOCAL_RANK"])
+WORLD_RANK = int(os.environ["RANK"])
+WORLD_SIZE = int(os.environ["WORLD_SIZE"])
+
+dist.init_process_group(
+    backend=args.backend,
+    init_method="env://",
+    rank=WORLD_RANK,
+    world_size=WORLD_SIZE,
+)
+device = torch.device("cuda:{}".format(LOCAL_RANK))
+torch.cuda.set_device(LOCAL_RANK)
+
+model = instantiate_model().to(device)
+model = nn.parallel.DistributedDataParallel(
+    model, device_ids=[LOCAL_RANK], output_device=LOCAL_RANK
+)
 
 optimizer = DistributedShampoo(
     model.parameters(),
@@ -274,20 +295,38 @@ optimizer = DistributedShampoo(
     ),
 )
 ```
+Please see `ddp_cifar10_example.py` as an example.
 
 ### FSDP Training Support
 
 FSDP training will create flattened parameters by flattening and concatenating all parameters within each FSDP module. By default, this removes all information about each parameter's tensor shape that Shampoo aims to exploit. Therefore, in order to support FSDP training, we have to use additional FSDP metadata in order to recover valid tensor blocks of the original parameters.
 
 Note that we only support PyTorch FSDP with the `use_orig_params=True` option.
-
 ```
+import os
+
 import torch
+import torch.distributed as dist
+from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+
 from distributed_shampoo.distributed_shampoo import DistributedShampoo
 from distributed_shampoo.shampoo_types import AdamGraftingConfig, FSDPShampooConfig
 from distributed_shampoo.utils.shampoo_fsdp_utils import compile_fsdp_parameter_metadata
 
-model = instantiate_model()
+LOCAL_RANK = int(os.environ["LOCAL_RANK"])
+WORLD_RANK = int(os.environ["RANK"])
+WORLD_SIZE = int(os.environ["WORLD_SIZE"])
+
+dist.init_process_group(
+    backend=args.backend,
+    init_method="env://",
+    rank=WORLD_RANK,
+    world_size=WORLD_SIZE,
+)
+device = torch.device("cuda:{}".format(LOCAL_RANK))
+
+model = instantiate_model().to(device)
+model = FSDP(model, use_orig_params=True)
 
 optimizer = DistributedShampoo(
     model.parameters(),
@@ -307,6 +346,7 @@ optimizer = DistributedShampoo(
     ),
 )
 ```
+Please see `fsdp_cifar10_example.py` as an example.
 
 ## Checkpointing Support
 
