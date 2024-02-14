@@ -1,6 +1,6 @@
 # PyTorch Distributed Shampoo
 
-Distributed Shampoo is a preconditioned stochastic gradient optimizer in the adaptive gradient (Adagrad) family of methods [1, 2]. It converges faster by leveraging neural network-specific structures to achieve comparable model quality/accuracy in fewer iterations or epochs at the cost of additional FLOPs and memory. In order to make this practical, our implementation distributes the computation and memory (via `DTensor`) in order to lower both Shampoo's memory requirements and its per-iteration wall-clock time at the cost of additional (`AllGather`) communication.
+Distributed Shampoo is a preconditioned stochastic gradient optimizer in the adaptive gradient (Adagrad) family of methods [1, 2]. It converges faster by leveraging neural network-specific structures to achieve comparable model quality/accuracy in fewer iterations or epochs at the cost of additional FLOPs and memory, or achieve higher model quality in the same number of iterations or epochs. Our implementation offers specialized support for serial, [Distributed Data Parallel (DDP)](https://pytorch.org/tutorials/intermediate/ddp_tutorial.html), and [Fully Sharded Data Parallel (FSDP)](https://pytorch.org/tutorials/intermediate/FSDP_tutorial.html) training.
 
 Distributed Shampoo currently only supports dense parameters.
 
@@ -9,39 +9,40 @@ The key to tuning this optimizer is to balance accuracy, performance, and memory
 Developers:
 - Hao-Jun Michael Shi (Meta Platforms, Inc.)
 - Tsung-Hsien Lee
+- Anna Cai (Meta Platforms, Inc.)
 - Shintaro Iwasaki (Meta Platforms, Inc.)
+- Ke Sang (Meta Platforms, Inc.)
+- Wang Zhou (Meta Platforms, Inc.)
 
 with contributions and support from:
 
-Rohan Anil (Google), Adnan Aziz (Meta), Pavan Balaji (Meta), Shuo Chang (Meta), Weiwei Chu (Meta), Assaf Eisenman (Meta), Will Feng (Meta), Zhuobo Feng (Meta), Jose Gallego-Posada (Mila / Meta Platforms, Inc.), Avirup Ghosh (Meta), Yizi Gu (Meta), Vineet Gupta (Google), Yuchen Hao (Meta), Yusuo Hu (Meta), Yuxi Hu (Meta), Minhui Huang (Meta), Guna Lakshminarayanan (Meta), Zhijing Li (Meta), Ming Liang (Meta), Wanchao Liang (Meta), Ying Liu (Meta), Wenguang Mao (Meta), Dheevatsa Mudigere (NVIDIA), Maxim Naumov (Meta), Jongsoo Park (Meta), Mike Rabbat (Meta), Kaushik Rangadurai (Meta), Ke Sang (Meta), Dennis van der Staay (Meta), Fei Tian (Meta), Sanjay Vishwakarma (Meta), Xunnan (Shawn) Xu (Meta), Jiyan Yang (Meta), Chunxing Yin (Meta), Iris Zhang (Meta), and Wang Zhou (Meta).
+Rohan Anil (Google), Adnan Aziz (Meta), Pavan Balaji (Meta), Shuo Chang (Meta), Weiwei Chu (Meta), Assaf Eisenman (Meta), Will Feng (Meta), Zhuobo Feng (Meta), Jose Gallego-Posada (Mila / Meta Platforms, Inc.), Avirup Ghosh (Meta), Yizi Gu (Meta), Vineet Gupta (Google), Yuchen Hao (Meta), Brian Hirsh (Meta), Yusuo Hu (Meta), Yuxi Hu (Meta), Minhui Huang (Meta), Guna Lakshminarayanan (Meta), Michael Lazos (Meta), Zhijing Li (Meta), Ming Liang (Meta), Wanchao Liang (Meta), Ying Liu (Meta), Wenguang Mao (Meta), Dheevatsa Mudigere (NVIDIA), Maxim Naumov (Meta), Jongsoo Park (Meta), Mike Rabbat (Meta), Kaushik Rangadurai (Meta), Dennis van der Staay (Meta), Fei Tian (Meta), Sanjay Vishwakarma (Meta), Xunnan (Shawn) Xu (Meta), Jiyan Yang (Meta), Chunxing Yin (Meta), and Iris Zhang (Meta).
+
+## Updates
+- (2/14/24) We have released our Distributed Shampoo v2.0.0 implementation, a ground-up re-write of our PyTorch Shampoo implementation. Our v2.0.0 implementation includes:
+  - Incorporates new performance optimizations, such as the usage of `torch._foreach_*` operators and PyTorch 2 compile.
+  - Shared support and enablement of DDP and FSDP Shampoo, via the specification of the `distributed_config` field.
+  - Cleaner API for configuring grafting methods through specifying the `grafting_config` field.
+  - Deprecation of handling large tensors by diagonalizing the Shampoo preconditioners and using standard diagonal Adagrad.
+  - While we do not currently support LAMB/LARS grafting, we intend to add support for this in the future.
+  - We will update our [ArXiv paper](https://arxiv.org/pdf/2309.06497.pdf) to reflect our implementation changes.
 
 ## Features
 
 Key distinctives of this implementation include:
+- Homogeneous multi-node multi-GPU support in PyTorch.
 - Learning rate grafting [3]. Our version of grafting only grafts the second moment/diagonal preconditioner. Momentum/first moment updates are performed separate from grafting. Supports the methods:
     - SGD
     - Adagrad
     - RMSProp
     - Adam
-    - Normalized Adagrad
-    - Normalized RMSProp
-    - Normalized Adam
-    - LARS
-    - LAMB
-- Supports both normal and AdamW weight decay.
+- Supports both normal and AdamW (decoupled) weight decay.
 - Incorporates exponential moving averaging (with or without bias correction) to the estimate the first moment (akin to Adam).
 - Incorporates momentum and Nesterov acceleration.
-- Distributes computation across different GPUs for the data-parallel setting. Supports data-parallel multi-node, multi-GPU training using `torch.nn.parallel.DistributedDataParallel`. `AllGather` is performed using `torch.dist`.
-- Distributes memory using `DTensor` data structure.
-- Offers different options to handle large-dimensional tensors, including:
-    - Diagonalizing the Shampoo preconditioners.
-    - Using standard diagonal Adagrad.
-    - Blocking the tensor and applying Shampoo to each block.
 - Offers multiple approaches for computing the root inverse, including:
     - Using symmetric eigendecomposition (used by default).
     - Coupled inverse Newton iteration [4].
 - Choice of precision for preconditioner accumulation and root inverse computation.
-- Option for quantized (or low-precision) communications using BF16, FP16, or FP32 communications.
 - Ability to cache split parameters.
 - Merging of small dimensions.
 
@@ -93,7 +94,7 @@ we would instead use:
 ```
 import torch
 from distributed_shampoo.distributed_shampoo import DistributedShampoo
-from distributed_shampoo.utils.shampoo_utils import GraftingType
+from distributed_shampoo.shampoo_types import SGDGraftingConfig
 
 model = instantiate_model()
 
@@ -106,7 +107,7 @@ optimizer = DistributedShampoo(
     weight_decay=1e-05,
     max_preconditioner_dim=8192,
     precondition_frequency=100,
-    grafting_type=GraftingType.SGD,
+    grafting_config=SGDGraftingConfig(),
 )
 ```
 
@@ -132,7 +133,7 @@ we would instead use:
 ```
 import torch
 from distributed_shampoo.distributed_shampoo import DistributedShampoo
-from distributed_shampoo.utils.shampoo_utils import GraftingType
+from distributed_shampoo.shampoo_types import AdamGraftingConfig
 
 model = instantiate_model()
 
@@ -145,9 +146,10 @@ optimizer = DistributedShampoo(
     max_preconditioner_dim=8192,
     precondition_frequency=100,
     use_decoupled_weight_decay=False,
-    grafting_type=GraftingType.ADAM,
-    grafting_epsilon=1e-08,
-    grafting_beta2=0.999,
+    grafting_config=AdamGraftingConfig(
+        beta2=0.999,
+        epsilon=1e-08,
+    ),
 )
 ```
 
@@ -171,7 +173,7 @@ we would instead use:
 ```
 import torch
 from distributed_shampoo.distributed_shampoo import DistributedShampoo
-from distributed_shampoo.utils.shampoo_utils import GraftingType
+from distributed_shampoo.shampoo_types import AdaGradGraftingConfig
 
 model = instantiate_model()
 
@@ -184,8 +186,9 @@ optimizer = DistributedShampoo(
     max_preconditioner_dim=8192,
     precondition_frequency=100,
     use_decoupled_weight_decay=False,
-    grafting_type=GraftingType.ADAGRAD,
-    grafting_epsilon=1e-10,
+    grafting_config=AdaGradGraftingConfig(
+        epsilon=1e-10,
+    ),
 )
 ```
 
@@ -210,7 +213,7 @@ we would instead use:
 ```
 import torch
 from distributed_shampoo.distributed_shampoo import DistributedShampoo
-from distributed_shampoo.utils.shampoo_utils import GraftingType
+from distributed_shampoo.shampoo_types import AdamGraftingConfig
 
 model = instantiate_model()
 
@@ -223,9 +226,85 @@ optimizer = DistributedShampoo(
     max_preconditioner_dim=8192,
     precondition_frequency=100,
     use_decoupled_weight_decay=True,
-    grafting_type=GraftingType.ADAM,
-    grafting_epsilon=1e-08,
-    grafting_beta2=0.999,
+    grafting_config=AdamGraftingConfig(
+        beta2=0.999,
+        epsilon=1e-12,
+    ),
+)
+```
+
+## Distributed Training Support
+
+Our implementation offers specialized compatibility and performance optimizations for different distributed training paradigms, including Distributed Data Parallel (DDP) and Fully Sharded Data Parallel (FSDP) training. Note that Distributed Shampoo will work out of the box for DDP training, but not for FSDP training.
+
+### DDP Training Support
+
+In order to support fast DDP training, our implementation offers ZeRO-1 support, which distributes the computation and memory (via `DTensor`) in order to lower both Shampoo's memory requirements and its per-iteration wall-clock time at the cost of additional (`AllGather`) communication. Our DDP Shampoo implementation can either: (1) communicate the updated parameters; or (2) communicate the parameter updates.
+
+We support:
+- Quantized (or low-precision) communications using BF16, FP16, or FP32 communications.
+- Specification of the number of trainers within each process group to distribute compute and memory. This trades off the amount of communication and compute each trainer is responsible for.
+- Option to communicate updated parameters.
+
+To use DDP Shampoo, simply configure the `distributed_config` as `DDPShampooConfig`:
+```
+import torch
+from distributed_shampoo.distributed_shampoo import DistributedShampoo
+from distributed_shampoo.shampoo_types import AdamGraftingConfig, DDPShampooConfig
+
+model = instantiate_model()
+
+optimizer = DistributedShampoo(
+    model.parameters(),
+    lr=0.001,
+    betas=(0.9, 0.999),
+    epsilon=1e-12,
+    weight_decay=1e-05,
+    max_preconditioner_dim=8192,
+    precondition_frequency=100,
+    use_decoupled_weight_decay=True,
+    grafting_config=AdamGraftingConfig(
+        beta2=0.999,
+        epsilon=1e-12,
+    ),
+    distributed_config=DDPShampooConfig(
+        communication_dtype=CommunicationDType.FP32,
+        num_trainers_per_group=8,
+        communicate_params=False,
+    ),
+)
+```
+
+### FSDP Training Support
+
+FSDP training will create flattened parameters by flattening and concatenating all parameters within each FSDP module. By default, this removes all information about each parameter's tensor shape that Shampoo aims to exploit. Therefore, in order to support FSDP training, we have to use additional FSDP metadata in order to recover valid tensor blocks of the original parameters.
+
+Note that we only support PyTorch FSDP with the `use_orig_params=True` option.
+
+```
+import torch
+from distributed_shampoo.distributed_shampoo import DistributedShampoo
+from distributed_shampoo.shampoo_types import AdamGraftingConfig, FSDPShampooConfig
+from distributed_shampoo.utils.shampoo_fsdp_utils import compile_fsdp_parameter_metadata
+
+model = instantiate_model()
+
+optimizer = DistributedShampoo(
+    model.parameters(),
+    lr=0.001,
+    betas=(0.9, 0.999),
+    epsilon=1e-12,
+    weight_decay=1e-05,
+    max_preconditioner_dim=8192,
+    precondition_frequency=100,
+    use_decoupled_weight_decay=True,
+    grafting_config=AdamGraftingConfig(
+        beta2=0.999,
+        epsilon=1e-12,
+    ),
+    distributed_config=FSDPShampooConfig(
+        param_to_metadata=compile_fsdp_parameter_metadata(model),
+    ),
 )
 ```
 
@@ -259,7 +338,7 @@ model.load_state_dict(state_dict["model"])
 optimizer.load_distributed_state_dict(state_dict["optim"], key_to_param=model.named_parameters())
 ```
 
-You can also refer to `multi_gpu_cifar10_example.py` as an example.
+You can also refer to `ddp_cifar10_example.py` as an example.
 
 ## Hyperparameter Tuning
 
@@ -292,7 +371,7 @@ With the inclusion of learning rate grafting, we can extract a good learning rat
         momentum=0.9,
         weight_decay=0.01,
         max_preconditioner_dim=4096,
-        grafting_type=GraftingType.SGD,
+        grafting_config=SGDGraftingConfig(),
     )
     ```
 
@@ -313,7 +392,7 @@ With the inclusion of learning rate grafting, we can extract a good learning rat
         momentum=0.9,
         weight_decay=0.01,
         precondition_frequency=100,
-        grafting_type=GraftingType.SGD,
+        grafting_config=SGDGraftingConfig(),
     )
     ```
 
@@ -332,21 +411,25 @@ With the inclusion of learning rate grafting, we can extract a good learning rat
         momentum=0.9,
         weight_decay=0.01,
         start_preconditioning_step=300,
-        grafting_type=GraftingType.SGD,
+        grafting_config=SGDGraftingConfig(),
     )
     ```
 
-4. To fine-tune for better model quality, one can tune:
+4. To tune for better model quality, one can tune:
 
     * **Learning Rate** (`lr`): One can change the learning rate schedule, and potentially use a larger learning rate.
+    * **Nesterov Momentum** (`momentum`, `use_nesterov`): In some cases, we have found using Nesterov momentum to substantially improve model quality. To use this, we recommend setting `momentum` to 0.5 or 0.9 and setting `use_nesterov` to True. The learning rate needs to be re-tuned with respect to this hyperparameter.
     * **Epsilon Regularization** (`epsilon`): One should typically search for a value in $\{10^{−12},10^{−11},...,10^{−2},10^{−1}\}$.
     * **Exponential Moving Average Parameters** (`betas`): One can tune the `betas = (beta1, beta2)` parameters as is typical for Adam(W).
-    * **Exponent Override and Multiplier** (`exponent_override`, `exponent_multiplier`): In general, we have found that using `exponent_override = 2` or `exponent_multiplier = 1.82` works well in practice, particularly for models dominated by fully-connected layers.
-    * **MTML Task Weights**: Task weights often need to be re-tuned as Distributed Shampoo will better exploit certain imbalances between different task losses.
+    * **Inverse Root Override and Multiplier** (`inv_root_override`, `exponent_multiplier`): In general, we have found that using `inv_root_override = 2` xor `exponent_multiplier = 1.82` works well in practice, particularly for models dominated by fully-connected layers, such as in ranking and recommendation models.
+    * **Preconditioner Data Type** (`preconditioner_dtype`): For certain models, it is necessary to use higher precision to accumulate the Shampoo factor matrices and compute its eigendecomposition to obtain high enough numerical accuracy. In those cases, one can specify this as `torch.float64`. (Note that this will use more memory.)
+    * **MTML Task Weights**: Task weights may need to be re-tuned as Distributed Shampoo will better exploit certain imbalances between different task losses.
 
-5. To fine-tune for performance, one should tune:
+5. If enabling DDP Shampoo, you can tune for performance:
 
     * **Process Group Size** (`num_trainers_per_group`): For large-scale distributed jobs, this hyperparameter allows us to trade off computational and communication costs. Assuming the number of GPUs per node is 8, one should search for a value in $\{8,16,32,64\}$. This hyperparameter has no impact on model quality.
+    * **Quantized Communications** (`communication_dtype`): One can enable quantized communications by setting the `communication_dtype`. We have found that using `CommunicationDType.FP16` works well in practice (with `communicate_params = False`).
+    * **Communicate Updated Parameters** (`communicate_params`): If one does not enable quantized communications, one can possibly obtain better performance by communicating the updated parameters by setting this to `True`.
 
 ## References
 

@@ -30,18 +30,19 @@ After installation, basic usage looks like:
 ```
 import torch
 from distributed_shampoo.distributed_shampoo import DistributedShampoo
-from distributed_shampoo.shampoo_utils import GraftingType
+from distributed_shampoo.shampoo_types import AdamGraftingConfig
 
-model = ...  # Instantiate model 
+model = ...  # Instantiate model
 
 optim = DistributedShampoo(
     model.parameters(),
     lr=1e-3,
     betas=(0.9, 0.999),
     epsilon=1e-8,
-    grafting_type=GraftingType.Adam,
-    grafting_epsilon=1e-8,
-    grafting_beta2=0.999
+    grafting_config=AdamGraftingConfig(
+        beta2=0.999,
+        epsilon=1e-8,
+    ),
 )
 ```
 
