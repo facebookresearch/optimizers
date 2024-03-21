@@ -41,9 +41,9 @@ class DistributedShampooInitTest(unittest.TestCase):
         with mock.patch.object(
             distributed_shampoo,
             "isinstance",
-            side_effect=lambda object, classinfo: False
-            if classinfo == SGDGraftingConfig
-            else None,
+            side_effect=lambda object, classinfo: (
+                False if classinfo == SGDGraftingConfig else None
+            ),
         ), self.assertRaisesRegex(
             NotImplementedError,
             re.escape(
@@ -162,9 +162,11 @@ class DistributedShampooInitTest(unittest.TestCase):
         ), mock.patch.object(
             distributed_shampoo,
             "isinstance",
-            side_effect=lambda object, classinfo: False
-            if classinfo == DDPShampooConfig
-            else isinstance(object, classinfo),
+            side_effect=lambda object, classinfo: (
+                False
+                if classinfo == DDPShampooConfig
+                else isinstance(object, classinfo)
+            ),
         ):
             DistributedShampoo(
                 params=self._model.parameters(),

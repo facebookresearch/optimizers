@@ -16,10 +16,7 @@ from typing import Any, DefaultDict, Sequence, Tuple, Union
 
 import torch
 from distributed_shampoo.utils.shampoo_block_info import BlockInfo
-from distributed_shampoo.utils.shampoo_utils import (
-    compress_list,
-    get_dtype_size,
-)
+from distributed_shampoo.utils.shampoo_utils import compress_list, get_dtype_size
 
 from matrix_functions import (
     check_diagonal,
@@ -61,18 +58,17 @@ class PreconditionerList(ABC):
         self,
         masked_grad_list: Tuple[Tensor, ...],
         step: Tensor,
-    ) -> None:
-        ...
+    ) -> None: ...
 
     @abstractmethod
-    def precondition(self, masked_grad_list: Tuple[Tensor, ...]) -> Tuple[Tensor, ...]:
-        ...
+    def precondition(
+        self, masked_grad_list: Tuple[Tensor, ...]
+    ) -> Tuple[Tensor, ...]: ...
 
     @abstractmethod
     def compress_preconditioner_list(
         self, local_grad_selector: Tuple[bool, ...]
-    ) -> None:
-        ...
+    ) -> None: ...
 
     @property
     def numel_list(self) -> Tuple[int, ...]:
@@ -196,9 +192,9 @@ class AdagradPreconditionerList(PreconditionerList):
         self._local_preconditioner_list: Tuple[Tensor, ...] = compress_list(
             preconditioner_list, distributor_selector
         )
-        self._masked_preconditioner_list: Tuple[
-            Tensor, ...
-        ] = self._local_preconditioner_list
+        self._masked_preconditioner_list: Tuple[Tensor, ...] = (
+            self._local_preconditioner_list
+        )
 
         # Construct lists of bytes and numels for logging purposes.
         self._numel_list: Tuple[int, ...] = tuple(
@@ -403,9 +399,9 @@ class ShampooPreconditionerList(PreconditionerList):
 
         # Initialize local lists.
         local_block_list = compress_list(block_list, distributor_selector)
-        self._local_kronecker_factors_list: Tuple[
-            ShampooKroneckerFactors, ...
-        ] = compress_list(kronecker_factors_list, distributor_selector)
+        self._local_kronecker_factors_list: Tuple[ShampooKroneckerFactors, ...] = (
+            compress_list(kronecker_factors_list, distributor_selector)
+        )
         self._local_order_list: Tuple[int, ...] = tuple(
             block.dim() for block in local_block_list
         )
@@ -416,9 +412,9 @@ class ShampooPreconditionerList(PreconditionerList):
         # Masked lists are the list of active preconditioners or values after filtering out gradients with None.
         self._masked_order_list: Tuple[int, ...] = self._local_order_list
         self._masked_root_list: Tuple[int, ...] = self._local_root_list
-        self._masked_kronecker_factors_list: Tuple[
-            ShampooKroneckerFactors, ...
-        ] = self._local_kronecker_factors_list
+        self._masked_kronecker_factors_list: Tuple[ShampooKroneckerFactors, ...] = (
+            self._local_kronecker_factors_list
+        )
 
         # Construct lists of bytes and numels for logging purposes.
         # NOTE: These lists are constructed across all blocked parameters.
@@ -456,9 +452,11 @@ class ShampooPreconditionerList(PreconditionerList):
         """
         if isinstance(inv_root_override, Sequence):
             return tuple(
-                2 * order
-                if order >= len(inv_root_override)
-                else inv_root_override[order]
+                (
+                    2 * order
+                    if order >= len(inv_root_override)
+                    else inv_root_override[order]
+                )
                 for order in order_list
             )
         else:
@@ -646,9 +644,9 @@ class ShampooPreconditionerList(PreconditionerList):
             self._masked_root_list = compress_list(
                 self._local_root_list, local_grad_selector
             )
-            self._masked_kronecker_factors_list: Tuple[
-                ShampooKroneckerFactors, ...
-            ] = compress_list(self._local_kronecker_factors_list, local_grad_selector)
+            self._masked_kronecker_factors_list: Tuple[ShampooKroneckerFactors, ...] = (
+                compress_list(self._local_kronecker_factors_list, local_grad_selector)
+            )
 
     def compute_root_inverse_residuals(
         self,

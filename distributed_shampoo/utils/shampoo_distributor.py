@@ -69,8 +69,7 @@ class DistributorInterface(ABC):
     def update_params(
         self,
         masked_blocked_search_directions: Tuple[Tensor, ...],
-    ) -> None:
-        ...
+    ) -> None: ...
 
     @property
     def global_blocked_params(self) -> Tuple[Tensor, ...]:
@@ -107,9 +106,13 @@ class DistributorInterface(ABC):
 
         # Merge dimensions for each parameter.
         self._global_merged_dims_list: Tuple[Tuple[int, ...], ...] = tuple(
-            merge_small_dims(param.size(), self._param_group[MAX_PRECONDITIONER_DIM])
-            if self._param_group[USE_MERGE_DIMS]
-            else param.size()
+            (
+                merge_small_dims(
+                    param.size(), self._param_group[MAX_PRECONDITIONER_DIM]
+                )
+                if self._param_group[USE_MERGE_DIMS]
+                else param.size()
+            )
             for param in self._param_group[PARAMS]
         )
 
@@ -143,8 +146,7 @@ class DistributorInterface(ABC):
     @abstractmethod
     def merge_and_block_gradients(
         self,
-    ) -> Tuple[Tensor, ...]:
-        ...
+    ) -> Tuple[Tensor, ...]: ...
 
     def _merge_and_block_gradients(
         self,
@@ -218,12 +220,12 @@ class Distributor(DistributorInterface):
             self._global_blocked_params
         )
         self._distributor_selector: Tuple[bool, ...] = self._local_grad_selector
-        self._local_masked_blocked_params: Tuple[
-            Tensor, ...
-        ] = self._global_blocked_params
-        self._local_blocked_params: Tuple[
-            Tensor, ...
-        ] = self._local_masked_blocked_params
+        self._local_masked_blocked_params: Tuple[Tensor, ...] = (
+            self._global_blocked_params
+        )
+        self._local_blocked_params: Tuple[Tensor, ...] = (
+            self._local_masked_blocked_params
+        )
 
     @torch.no_grad()
     def update_params(

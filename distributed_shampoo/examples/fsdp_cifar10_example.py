@@ -16,17 +16,17 @@ import numpy as np
 
 import torch
 import torch.distributed as dist
-from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
-
-from distributed_shampoo.shampoo_types import FSDPShampooConfig
-from distributed_shampoo.utils.shampoo_fsdp_utils import compile_fsdp_parameter_metadata
 from distributed_shampoo.examples.convnet import ConvNet
 from distributed_shampoo.examples.trainer_utils import (
     instantiate_optimizer,
     LossMetrics,
     Parser,
 )
+
+from distributed_shampoo.shampoo_types import FSDPShampooConfig
+from distributed_shampoo.utils.shampoo_fsdp_utils import compile_fsdp_parameter_metadata
 from torch import nn
+from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 
 from torchvision import datasets, transforms
 

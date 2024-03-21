@@ -19,9 +19,7 @@ from distributed_shampoo.shampoo_types import (
     USE_MERGE_DIMS,
 )
 from distributed_shampoo.utils.shampoo_block_info import BlockInfo
-from distributed_shampoo.utils.shampoo_distributor import (
-    DistributorInterface,
-)
+from distributed_shampoo.utils.shampoo_distributor import DistributorInterface
 from distributed_shampoo.utils.shampoo_utils import (
     compress_list,
     generate_pairwise_indices,
@@ -50,9 +48,9 @@ class FSDPDistributor(DistributorInterface):
         param_group: Dict[str, Any],
         distributed_config: FSDPShampooConfig,
     ) -> None:
-        self._param_to_metadata: Dict[
-            Parameter, FSDPParameterMetadata
-        ] = distributed_config.param_to_metadata
+        self._param_to_metadata: Dict[Parameter, FSDPParameterMetadata] = (
+            distributed_config.param_to_metadata
+        )
         self._global_num_splits_per_param: Tuple[int, ...] = ()
         self._global_num_blocks_per_split_param: Tuple[int, ...] = ()
 
@@ -64,9 +62,9 @@ class FSDPDistributor(DistributorInterface):
             self._global_blocked_params
         )
         self._distributor_selector: Tuple[bool, ...] = self._local_grad_selector
-        self._local_masked_blocked_params: Tuple[
-            Tensor, ...
-        ] = self._global_blocked_params
+        self._local_masked_blocked_params: Tuple[Tensor, ...] = (
+            self._global_blocked_params
+        )
         self._local_blocked_params: Tuple[Tensor, ...] = self._global_blocked_params
 
     @torch.no_grad()

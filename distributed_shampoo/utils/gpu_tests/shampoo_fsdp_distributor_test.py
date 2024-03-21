@@ -14,13 +14,8 @@ from typing import Callable, Iterable, List, Optional, Tuple
 
 import torch
 from distributed_shampoo.distributed_shampoo import DistributedShampoo
-from distributed_shampoo.shampoo_types import (
-    AdaGradGraftingConfig,
-    FSDPShampooConfig,
-)
-from distributed_shampoo.utils.shampoo_fsdp_utils import (
-    compile_fsdp_parameter_metadata,
-)
+from distributed_shampoo.shampoo_types import AdaGradGraftingConfig, FSDPShampooConfig
+from distributed_shampoo.utils.shampoo_fsdp_utils import compile_fsdp_parameter_metadata
 from distributed_shampoo.utils.shampoo_preconditioner_list import SHAMPOO
 
 from torch import distributed as dist, nn
@@ -154,7 +149,10 @@ class ShampooFSDPDistributorTest(FSDPTest):
     @staticmethod
     def _shampoo_optim_factory(
         distributed_config: Optional[FSDPShampooConfig],
-    ) -> Callable[[Iterable[Parameter]], torch.optim.Optimizer,]:
+    ) -> Callable[
+        [Iterable[Parameter]],
+        torch.optim.Optimizer,
+    ]:
         return lambda parameters: (
             lambda distributed_config: DistributedShampoo(
                 parameters,

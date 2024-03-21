@@ -23,9 +23,9 @@ from torch.nn.parameter import Parameter
 
 class DistributedShampooPytorchCompileTest(unittest.TestCase):
     @staticmethod
-    def _construct_quadratic() -> Tuple[
-        nn.Module, nn.Module, torch.Tensor, torch.Tensor
-    ]:
+    def _construct_quadratic() -> (
+        Tuple[nn.Module, nn.Module, torch.Tensor, torch.Tensor]
+    ):
         data = torch.arange(10, dtype=torch.float, device=torch.device("cuda"))
         data /= torch.norm(data)
         model = nn.Sequential(

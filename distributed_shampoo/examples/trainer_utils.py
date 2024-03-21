@@ -37,6 +37,7 @@ logger = logging.getLogger(__name__)
 # create default device
 default_device = torch.device("cpu")
 
+
 ###### ENUM CLASSES ######
 class DType(enum.Enum):
     BF16 = torch.bfloat16
@@ -262,16 +263,13 @@ class Parser:
 ###### METRICS CLASSES ######
 class Metrics(ABC):
     @abstractmethod
-    def log(self):
-        ...
+    def log(self): ...
 
     @abstractmethod
-    def reset(self):
-        ...
+    def reset(self): ...
 
     @abstractmethod
-    def update(self):
-        ...
+    def update(self): ...
 
 
 class LossMetrics(Metrics):

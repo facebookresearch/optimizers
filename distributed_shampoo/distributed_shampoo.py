@@ -70,13 +70,9 @@ from distributed_shampoo.utils.shampoo_checkpoint_utils import (
     unflatten,
     update_param_state_dict_object,
 )
-from distributed_shampoo.utils.shampoo_ddp_distributor import (
-    DDPDistributor,
-)
+from distributed_shampoo.utils.shampoo_ddp_distributor import DDPDistributor
 from distributed_shampoo.utils.shampoo_distributor import Distributor
-from distributed_shampoo.utils.shampoo_fsdp_distributor import (
-    FSDPDistributor,
-)
+from distributed_shampoo.utils.shampoo_fsdp_distributor import FSDPDistributor
 
 from distributed_shampoo.utils.shampoo_preconditioner_list import (
     AdagradPreconditionerList,
@@ -481,9 +477,11 @@ class DistributedShampoo(torch.optim.Optimizer):
                     state=self.state,
                     block_info_list=state_lists[DISTRIBUTOR].global_block_info_list,
                     distributor_selector=state_lists[DISTRIBUTOR].distributor_selector,
-                    beta2=1.0
-                    if isinstance(group[GRAFTING_CONFIG], AdaGradGraftingConfig)
-                    else group[GRAFTING_CONFIG].beta2,
+                    beta2=(
+                        1.0
+                        if isinstance(group[GRAFTING_CONFIG], AdaGradGraftingConfig)
+                        else group[GRAFTING_CONFIG].beta2
+                    ),
                     epsilon=group[GRAFTING_CONFIG].epsilon,
                     use_bias_correction=isinstance(
                         group[GRAFTING_CONFIG], AdamGraftingConfig
