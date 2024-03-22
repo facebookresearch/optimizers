@@ -20,9 +20,7 @@ from distributed_shampoo.shampoo_types import (
     PARAMS,
 )
 from distributed_shampoo.utils.shampoo_block_info import DDPBlockInfo
-from distributed_shampoo.utils.shampoo_distributor import (
-    DistributorInterface,
-)
+from distributed_shampoo.utils.shampoo_distributor import DistributorInterface
 from distributed_shampoo.utils.shampoo_utils import (
     compress_list,
     generate_pairwise_indices,
@@ -60,9 +58,9 @@ class DDPDistributor(DistributorInterface):
             )
 
         # Construct global masked blocked parameters (which is DDP-specific).
-        self._global_masked_blocked_params: Tuple[
-            Tensor, ...
-        ] = self._global_blocked_params
+        self._global_masked_blocked_params: Tuple[Tensor, ...] = (
+            self._global_blocked_params
+        )
 
         # Check num_trainers_per_group and get global and group sizes.
         # NOTE: If num_trainers_per_group = -1, then we use the global world size.
@@ -107,9 +105,9 @@ class DDPDistributor(DistributorInterface):
 
         # Initialize _dist_group and _group_rank.
         if self._group_size == self._global_size:
-            self._dist_group: Optional[
-                dist.ProcessGroup
-            ] = dist.distributed_c10d.GroupMember.WORLD
+            self._dist_group: Optional[dist.ProcessGroup] = (
+                dist.distributed_c10d.GroupMember.WORLD
+            )
             self._group_rank: int = dist.get_rank()
         else:
             for group_ranks in [
@@ -144,9 +142,9 @@ class DDPDistributor(DistributorInterface):
         self._local_blocked_params: Tuple[Tensor, ...] = compress_list(
             self._global_blocked_params, self._distributor_selector
         )
-        self._local_masked_blocked_params: Tuple[
-            Tensor, ...
-        ] = self._local_blocked_params
+        self._local_masked_blocked_params: Tuple[Tensor, ...] = (
+            self._local_blocked_params
+        )
         self._local_grad_selector: Tuple[bool, ...] = (True,) * len(
             self._local_blocked_params
         )
@@ -301,9 +299,11 @@ class DDPDistributor(DistributorInterface):
                     self._allocate_zeros_distributed_tensor,
                     group_source_rank=group_source_rank,
                 ),
-                get_tensor=lambda input_tensor: input_tensor.to_local()
-                if isinstance(input_tensor, dtensor.DTensor)
-                else input_tensor,
+                get_tensor=lambda input_tensor: (
+                    input_tensor.to_local()
+                    if isinstance(input_tensor, dtensor.DTensor)
+                    else input_tensor
+                ),
                 group_source_rank=group_source_rank,
             )
             for (

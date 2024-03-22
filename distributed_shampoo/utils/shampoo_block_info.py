@@ -45,9 +45,9 @@ class BlockInfo:
 
     param: Tensor
     composable_block_ids: Tuple[int, str]
-    allocate_zeros_tensor: Callable[
-        ..., Tensor
-    ] = lambda shape, dtype, device: torch.zeros(size=shape, dtype=dtype, device=device)
+    allocate_zeros_tensor: Callable[..., Tensor] = (
+        lambda shape, dtype, device: torch.zeros(size=shape, dtype=dtype, device=device)
+    )
     get_tensor: Callable[..., Tensor] = lambda tensor_obj: tensor_obj
 
 

@@ -59,6 +59,7 @@ class CombinedLinear(torch.nn.Module):
         >>> print(output.size())
         torch.Size([128, 30])
     """
+
     __constants__ = ["in_features", "out_features"]
     in_features: int
     out_features: int

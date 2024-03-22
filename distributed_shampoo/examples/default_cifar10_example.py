@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 # for reproducibility, set environmental variable for CUBLAS
 os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
 
+
 ###### TRAINING LOOP ######
 def train_default_model(
     model: nn.Module,

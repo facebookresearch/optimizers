@@ -50,9 +50,11 @@ def compile_fsdp_parameter_metadata(
                 shape=shape,
                 numel=numel,
                 start_idx=shard_param_info.intra_param_start_idx or 0,
-                end_idx=shard_param_info.intra_param_end_idx + 1
-                if shard_param_info.intra_param_end_idx is not None
-                else 0,
+                end_idx=(
+                    shard_param_info.intra_param_end_idx + 1
+                    if shard_param_info.intra_param_end_idx is not None
+                    else 0
+                ),
             )
             for param, fqn, shape, numel, shard_param_info in zip(
                 params,

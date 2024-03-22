@@ -158,16 +158,18 @@ class OptimizerModule:
                 }
             elif isinstance(old_state, (list, tuple, set)):
                 old_state = type(old_state)(
-                    load_from_new_state_to_old_state(
-                        old_state=old_value,
-                        new_state=new_state[i],
+                    (
+                        load_from_new_state_to_old_state(
+                            old_state=old_value,
+                            new_state=new_state[i],
+                        )
+                        if store_non_tensors
+                        or isinstance(
+                            old_value,
+                            (torch.Tensor, dict, list, tuple, set, OptimizerModule),
+                        )
+                        else old_value
                     )
-                    if store_non_tensors
-                    or isinstance(
-                        old_value,
-                        (torch.Tensor, dict, list, tuple, set, OptimizerModule),
-                    )
-                    else old_value
                     for i, old_value in enumerate(old_state)
                 )
             elif store_non_tensors:

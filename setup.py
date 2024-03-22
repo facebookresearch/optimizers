@@ -7,7 +7,7 @@ LICENSE file in the root directory of this source tree.
 
 """
 
-from setuptools import setup, find_packages
+from setuptools import find_packages, setup
 
 if __name__ == "__main__":
     setup(
