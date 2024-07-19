@@ -7,9 +7,6 @@ LICENSE file in the root directory of this source tree.
 
 """
 
-#!/usr/bin/env fbpython
-# (c) Meta Platforms, Inc. and affiliates. Confidential and proprietary.
-
 import re
 import unittest
 from typing import List

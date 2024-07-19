@@ -9,7 +9,7 @@ LICENSE file in the root directory of this source tree.
 
 import heapq
 import logging
-from functools import lru_cache, partial
+from functools import cache, partial
 from typing import Any, Dict, Optional, Tuple
 
 import torch
@@ -151,7 +151,7 @@ class DDPDistributor(DistributorInterface):
 
         self._construct_distributed_buffers(buffer_size_ranks)
 
-    # Note: Remove this function once PT2 supports all_gather with functional collective
+    # NOTE: Remove this function once PT2 supports all_gather with functional collective
     @torch.no_grad()
     @torch.compiler.disable
     def all_gather_into_tensor(self) -> None:
@@ -484,7 +484,7 @@ class DDPDistributor(DistributorInterface):
         device: torch.device,
         group_source_rank: int,
     ) -> torch.Tensor:
-        """Instantiates distributed tensor using Tensor or DTensor.
+        """Instantiates distributed tensor using DTensor.
 
         Args:
             shape (shape type accepted by torch.zeros() including Tuple[int, ...]):
@@ -496,7 +496,7 @@ class DDPDistributor(DistributorInterface):
             group_source_rank (int): Desired source rank of allocated zeros tensor within the process group.
 
         Returns:
-            out (Tensor): Desired tensor or DTensor.
+            out (Tensor): Desired DTensor.
 
         """
         device_mesh_ranks = tuple(
@@ -507,11 +507,9 @@ class DDPDistributor(DistributorInterface):
             )
         )
 
-        # Note: Use functools.lru_cache instead of functools.cache because cache is available after Python 3.9.
-        # functools.lru_cache(maxsize=None) is identical to functools.cache.
-        @lru_cache(maxsize=None)
+        @cache
         def get_device_mesh(device_mesh_ranks: Tuple[int, ...]) -> dtensor.DeviceMesh:
-            """Returns device mesh from provided ranks. This functon will cache previous meshes according to the input ranks.
+            """Returns device mesh from provided ranks. This function will cache previous meshes according to the input ranks.
 
             Args:
                 device_mesh_ranks ([Tuple[int, ...]): Ranks to use in device mesh of desired tensor.

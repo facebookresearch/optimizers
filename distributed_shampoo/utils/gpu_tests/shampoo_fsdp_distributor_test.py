@@ -9,6 +9,7 @@ LICENSE file in the root directory of this source tree.
 
 #!/usr/bin/env python3
 
+
 from functools import partial
 from typing import Callable, Iterable, List, Optional, Tuple
 
@@ -195,16 +196,16 @@ class ShampooFSDPDistributorTest(FSDPTest):
     def test_fsdp_shampoo_against_default_shampoo(self) -> None:
         fsdp_config = FSDPShampooConfig(param_to_metadata={})
         ShampooFSDPDistributorTest._test_two_configs(
-            self._shampoo_optim_factory(
+            ShampooFSDPDistributorTest._shampoo_optim_factory(
                 None,
             ),
-            self._model_factory(
+            ShampooFSDPDistributorTest._model_factory(
                 None,
             ),
-            self._shampoo_optim_factory(
+            ShampooFSDPDistributorTest._shampoo_optim_factory(
                 fsdp_config,
             ),
-            self._model_factory(
+            ShampooFSDPDistributorTest._model_factory(
                 fsdp_config,
             ),
             device=torch.device("cuda"),

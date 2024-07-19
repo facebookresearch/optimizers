@@ -119,23 +119,3 @@ class GeneratePairwiseIndicesTest(unittest.TestCase):
         self.assertListEqual(
             list(generate_pairwise_indices(input_tuple)), expected_pairwise_indices
         )
-
-    def test_generate_pairwise_indices_without_itertools_pairwise(self) -> None:
-        def import_mock(
-            name: str,
-            globals: Optional[Mapping[str, object]],
-            locals: Optional[Mapping[str, object]],
-            fromlist: Sequence[str],
-            level: int,
-        ) -> None:
-            # Hijack the line of "from itertools import pairwise" to simulate the situation of using pre Python 3.10.
-            # This simulates the environments of codes that are using pre Python 3.10.
-            if name == "itertools" and fromlist == ("pairwise",):
-                raise ImportError
-
-        with mock.patch.object(builtins, "__import__", side_effect=import_mock):
-            input_tuple = (1, 3, 2)
-            expected_pairwise_indices = [(0, 1), (1, 4), (4, 6)]
-            self.assertListEqual(
-                list(generate_pairwise_indices(input_tuple)), expected_pairwise_indices
-            )

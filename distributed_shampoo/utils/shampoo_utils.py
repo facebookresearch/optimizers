@@ -8,7 +8,7 @@ LICENSE file in the root directory of this source tree.
 """
 
 import math
-from itertools import accumulate, chain, compress, tee
+from itertools import accumulate, chain, compress, pairwise
 from typing import Iterator, Sequence, Tuple, TypeVar
 
 import torch
@@ -108,12 +108,4 @@ def generate_pairwise_indices(input_list: Sequence[int]) -> Iterator[Tuple[int, 
             the start and the ending indices of each partition specified in the input_list.
 
     """
-    try:
-        # Since pairwise isn't supported until Python 3.10, we provide two implementations.
-        from itertools import pairwise
-
-        return pairwise(accumulate(chain([0], input_list)))
-    except ImportError:
-        a, b = tee(accumulate(chain([0], input_list)))
-        next(b, None)
-        return zip(a, b)
+    return pairwise(accumulate(chain([0], input_list)))

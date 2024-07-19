@@ -16,9 +16,16 @@ Developers:
 
 with contributions and support from:
 
-Rohan Anil (Google), Adnan Aziz (Meta), Pavan Balaji (Meta), Shuo Chang (Meta), Weiwei Chu (Meta), Assaf Eisenman (Meta), Will Feng (Meta), Zhuobo Feng (Meta), Jose Gallego-Posada (Mila / Meta Platforms, Inc.), Avirup Ghosh (Meta), Yizi Gu (Meta), Vineet Gupta (Google), Yuchen Hao (Meta), Brian Hirsh (Meta), Yusuo Hu (Meta), Yuxi Hu (Meta), Minhui Huang (Meta), Guna Lakshminarayanan (Meta), Michael Lazos (Meta), Zhijing Li (Meta), Ming Liang (Meta), Wanchao Liang (Meta), Ying Liu (Meta), Wenguang Mao (Meta), Dheevatsa Mudigere (NVIDIA), Maxim Naumov (Meta), Jongsoo Park (Meta), Mike Rabbat (Meta), Kaushik Rangadurai (Meta), Dennis van der Staay (Meta), Fei Tian (Meta), Sanjay Vishwakarma (Meta), Xunnan (Shawn) Xu (Meta), Jiyan Yang (Meta), Chunxing Yin (Meta), and Iris Zhang (Meta).
+Ganesh Ajjanagadde (Meta), Rohan Anil (Google), Adnan Aziz (Meta), Pavan Balaji (Meta), Shuo Chang (Meta), Weiwei Chu (Meta), Assaf Eisenman (Meta), Will Feng (Meta), Zhuobo Feng (Meta), Jose Gallego-Posada (Mila / Meta Platforms, Inc.), Avirup Ghosh (Meta), Yizi Gu (Meta), Vineet Gupta (Google), Yuchen Hao (Meta), Brian Hirsh (Meta), Yusuo Hu (Meta), Yuxi Hu (Meta), Minhui Huang (Meta), Guna Lakshminarayanan (Meta), Michael Lazos (Meta), Zhijing Li (Meta), Ming Liang (Meta), Wanchao Liang (Meta), Ying Liu (Meta), Wenguang Mao (Meta), Dheevatsa Mudigere (NVIDIA), Maxim Naumov (Meta), Jongsoo Park (Meta), Mike Rabbat (Meta), Kaushik Rangadurai (Meta), Dennis van der Staay (Meta), Fei Tian (Meta), Rohan Varma (Meta), Sanjay Vishwakarma (Meta), Xunnan (Shawn) Xu (Meta), Jiyan Yang (Meta), Chunxing Yin (Meta), Iris Zhang (Meta), and Will Zou (Meta).
 
 ## Updates
+- (7/18/24) This update contains
+  - PyTorch 2 compile bug fixes.
+  - HSDP Shampoo via `HSDPDistributor`.
+  - Mixed-precision optimizer states.
+  - Higher-order coupled iterations, with relative epsilon based on estimate of largest eigenvalue.
+  - Further modularization of Shampoo step function.
+  - Other simplifications.
 - (2/14/24) We have released our Distributed Shampoo v2.0.0 implementation, a ground-up re-write of our PyTorch Shampoo implementation. Our v2.0.0 implementation includes:
   - Incorporates new performance optimizations, such as the usage of `torch._foreach_*` operators and PyTorch 2 compile.
   - Shared support and enablement of DDP and FSDP Shampoo, via the specification of the `distributed_config` field.
@@ -42,6 +49,7 @@ Key distinctives of this implementation include:
 - Offers multiple approaches for computing the root inverse, including:
     - Using symmetric eigendecomposition (used by default).
     - Coupled inverse Newton iteration [4].
+    - Higher-order coupled iterations with relative epsilon based on estimate of largest eigenvalue.
 - Choice of precision for preconditioner accumulation and root inverse computation.
 - Ability to cache split parameters.
 - Merging of small dimensions.
@@ -55,8 +63,6 @@ We have tested this implementation on the following versions of PyTorch:
 - CUDA 11.3-11.4; 12.2+;
 - [expecttest](https://github.com/ezyang/expecttest) (for distributed unit tests);
 - [hypothesis](https://github.com/HypothesisWorks/hypothesis) (for distributed unit tests).
-
-If one wants to use `DTensor` which leads to memory savings, please set the hidden default `use_dtensor = True` under `allocate_distributed_tensor` in `shampoo_dist_utils.py`. (This is on by default.) Requires PyTorch 2 nightly build.
 
 Note: We have observed known instabilities with the torch.linalg.eigh operator on CUDA 11.6-12.1, specifically for low-rank matrices, which may appear with using a small start_preconditioning_step. Please avoid these versions of CUDA if possible. See: https://github.com/pytorch/pytorch/issues/94772.
 

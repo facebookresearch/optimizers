@@ -7,9 +7,6 @@ LICENSE file in the root directory of this source tree.
 
 """
 
-#!/usr/bin/env fbpython
-# (c) Meta Platforms, Inc. and affiliates. Confidential and proprietary.
-
 import copy
 import re
 import unittest
@@ -23,11 +20,17 @@ from distributed_shampoo.distributed_shampoo import DistributedShampoo
 from distributed_shampoo.shampoo_types import (
     AdaGradGraftingConfig,
     DDPShampooConfig,
+    GRAFTING_PRECONDITIONER_LIST,
+    MASKED_FILTERED_GRAD_LIST,
+    MASKED_MOMENTUM_LIST,
+    PrecisionConfig,
     SGDGraftingConfig,
+    SHAMPOO_PRECONDITIONER_LIST,
 )
 from distributed_shampoo.utils.shampoo_preconditioner_list import (
     ShampooPreconditionerList,
 )
+from distributed_shampoo.utils.shampoo_quantization import QuantizedTensorList
 from torch import nn
 
 
@@ -243,7 +246,7 @@ class DistributedShampooStateDictTest(unittest.TestCase):
             "state": {
                 "0.weight": {
                     '["step"]': torch.tensor(0),
-                    '["block_0", "shampoo", "factor_matrices", 0]': torch.tensor(
+                    '["block_0", "shampoo", "factor_matrices", 0, "quantized_values"]': torch.tensor(
                         [
                             [0.0, 0.0, 0.0, 0.0, 0.0],
                             [0.0, 0.0, 0.0, 0.0, 0.0],
@@ -252,7 +255,7 @@ class DistributedShampooStateDictTest(unittest.TestCase):
                             [0.0, 0.0, 0.0, 0.0, 0.0],
                         ]
                     ),
-                    '["block_0", "shampoo", "factor_matrices", 1]': torch.tensor(
+                    '["block_0", "shampoo", "factor_matrices", 1, "quantized_values"]': torch.tensor(
                         [
                             [0.0, 0.0, 0.0, 0.0, 0.0],
                             [0.0, 0.0, 0.0, 0.0, 0.0],
@@ -261,7 +264,7 @@ class DistributedShampooStateDictTest(unittest.TestCase):
                             [0.0, 0.0, 0.0, 0.0, 0.0],
                         ]
                     ),
-                    '["block_0", "shampoo", "inv_factor_matrices", 0]': torch.tensor(
+                    '["block_0", "shampoo", "inv_factor_matrices", 0, "quantized_values"]': torch.tensor(
                         [
                             [0.0, 0.0, 0.0, 0.0, 0.0],
                             [0.0, 0.0, 0.0, 0.0, 0.0],
@@ -270,7 +273,7 @@ class DistributedShampooStateDictTest(unittest.TestCase):
                             [0.0, 0.0, 0.0, 0.0, 0.0],
                         ]
                     ),
-                    '["block_0", "shampoo", "inv_factor_matrices", 1]': torch.tensor(
+                    '["block_0", "shampoo", "inv_factor_matrices", 1, "quantized_values"]': torch.tensor(
                         [
                             [0.0, 0.0, 0.0, 0.0, 0.0],
                             [0.0, 0.0, 0.0, 0.0, 0.0],
@@ -285,7 +288,7 @@ class DistributedShampooStateDictTest(unittest.TestCase):
                     '["block_0", "shampoo", "is_factor_matrices_diagonal", 1]': torch.tensor(
                         True
                     ),
-                    '["block_1", "shampoo", "factor_matrices", 0]': torch.tensor(
+                    '["block_1", "shampoo", "factor_matrices", 0, "quantized_values"]': torch.tensor(
                         [
                             [0.0, 0.0, 0.0, 0.0, 0.0],
                             [0.0, 0.0, 0.0, 0.0, 0.0],
@@ -294,7 +297,7 @@ class DistributedShampooStateDictTest(unittest.TestCase):
                             [0.0, 0.0, 0.0, 0.0, 0.0],
                         ]
                     ),
-                    '["block_1", "shampoo", "factor_matrices", 1]': torch.tensor(
+                    '["block_1", "shampoo", "factor_matrices", 1, "quantized_values"]': torch.tensor(
                         [
                             [0.0, 0.0, 0.0, 0.0, 0.0],
                             [0.0, 0.0, 0.0, 0.0, 0.0],
@@ -303,7 +306,7 @@ class DistributedShampooStateDictTest(unittest.TestCase):
                             [0.0, 0.0, 0.0, 0.0, 0.0],
                         ]
                     ),
-                    '["block_1", "shampoo", "inv_factor_matrices", 0]': torch.tensor(
+                    '["block_1", "shampoo", "inv_factor_matrices", 0, "quantized_values"]': torch.tensor(
                         [
                             [0.0, 0.0, 0.0, 0.0, 0.0],
                             [0.0, 0.0, 0.0, 0.0, 0.0],
@@ -312,7 +315,7 @@ class DistributedShampooStateDictTest(unittest.TestCase):
                             [0.0, 0.0, 0.0, 0.0, 0.0],
                         ]
                     ),
-                    '["block_1", "shampoo", "inv_factor_matrices", 1]': torch.tensor(
+                    '["block_1", "shampoo", "inv_factor_matrices", 1, "quantized_values"]': torch.tensor(
                         [
                             [0.0, 0.0, 0.0, 0.0, 0.0],
                             [0.0, 0.0, 0.0, 0.0, 0.0],
@@ -327,7 +330,7 @@ class DistributedShampooStateDictTest(unittest.TestCase):
                     '["block_1", "shampoo", "is_factor_matrices_diagonal", 1]': torch.tensor(
                         True
                     ),
-                    '["block_0", "adagrad"]': torch.tensor(
+                    '["block_0", "adagrad", "quantized_values"]': torch.tensor(
                         [
                             [0.0, 0.0, 0.0, 0.0, 0.0],
                             [0.0, 0.0, 0.0, 0.0, 0.0],
@@ -336,7 +339,7 @@ class DistributedShampooStateDictTest(unittest.TestCase):
                             [0.0, 0.0, 0.0, 0.0, 0.0],
                         ]
                     ),
-                    '["block_1", "adagrad"]': torch.tensor(
+                    '["block_1", "adagrad", "quantized_values"]': torch.tensor(
                         [
                             [0.0, 0.0, 0.0, 0.0, 0.0],
                             [0.0, 0.0, 0.0, 0.0, 0.0],
@@ -345,7 +348,7 @@ class DistributedShampooStateDictTest(unittest.TestCase):
                             [0.0, 0.0, 0.0, 0.0, 0.0],
                         ]
                     ),
-                    '["block_0", "filtered_grad"]': torch.tensor(
+                    '["block_0", "filtered_grad", "quantized_values"]': torch.tensor(
                         [
                             [0.0, 0.0, 0.0, 0.0, 0.0],
                             [0.0, 0.0, 0.0, 0.0, 0.0],
@@ -354,7 +357,7 @@ class DistributedShampooStateDictTest(unittest.TestCase):
                             [0.0, 0.0, 0.0, 0.0, 0.0],
                         ]
                     ),
-                    '["block_1", "filtered_grad"]': torch.tensor(
+                    '["block_1", "filtered_grad", "quantized_values"]': torch.tensor(
                         [
                             [0.0, 0.0, 0.0, 0.0, 0.0],
                             [0.0, 0.0, 0.0, 0.0, 0.0],
@@ -384,7 +387,8 @@ class DistributedShampooStateDictTest(unittest.TestCase):
                         epsilon=0.001,
                     ),
                     "use_merge_dims": True,
-                    "preconditioner_dtype": torch.float32,
+                    "preconditioner_dtype": None,
+                    "precision_config": PrecisionConfig(),
                 }
             },
         }
@@ -563,7 +567,14 @@ class DistributedShampooTrackRootInvResidualsTest(unittest.TestCase):
             params=model.parameters(),
             precondition_frequency=2,
             start_preconditioning_step=2,
-            preconditioner_dtype=dtype,
+            precision_config=PrecisionConfig(
+                computation_dtype=dtype,
+                factor_matrix_dtype=dtype,
+                inv_factor_matrix_dtype=dtype,
+                filtered_grad_dtype=dtype,
+                momentum_dtype=dtype,
+                grafting_state_dtype=dtype,
+            ),
             track_root_inv_residuals=True,
         )
 
@@ -598,3 +609,136 @@ class DistributedShampooTrackRootInvResidualsTest(unittest.TestCase):
                 "Expected relative error/residual not supported for precision lower than float32."
             ],
         )
+
+
+class DistributedShampooPrecisionTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self._model = nn.Sequential(
+            nn.Linear(5, 10, bias=False),
+        )
+
+    def _instantiate_optimizer(
+        self, precision_config: PrecisionConfig
+    ) -> DistributedShampoo:
+        return DistributedShampoo(
+            self._model.parameters(),
+            lr=0.01,
+            betas=(0.9, 1.0),
+            epsilon=1e-12,
+            momentum=0.99,
+            weight_decay=0.0,
+            max_preconditioner_dim=5,
+            precondition_frequency=1,
+            start_preconditioning_step=1,
+            distributed_config=None,
+            grafting_config=AdaGradGraftingConfig(
+                epsilon=0.001,
+            ),
+            precision_config=precision_config,
+        )
+
+    def _assert_equal_state_dtype(
+        self,
+        quantized_tensor_list: QuantizedTensorList,
+        computation_dtype: torch.dtype,
+        quantized_dtype: torch.dtype,
+    ) -> None:
+        self.assertEqual(quantized_tensor_list.computation_dtype, computation_dtype)
+        self.assertEqual(quantized_tensor_list.quantized_dtype, quantized_dtype)
+        self.assertIsNone(quantized_tensor_list.dequantized_value_list)
+
+    def _assert_state_list_dtype(
+        self, state_list: Dict[str, Any], precision_config: PrecisionConfig
+    ) -> None:
+        # TODO: is it possible to avoid accessing private field _masked_kronecker_factors_list?
+        for kronecker_factor in state_list[
+            SHAMPOO_PRECONDITIONER_LIST
+        ]._masked_kronecker_factors_list:
+            self._assert_equal_state_dtype(
+                kronecker_factor.factor_matrices,
+                precision_config.computation_dtype,
+                precision_config.factor_matrix_dtype,
+            )
+            self._assert_equal_state_dtype(
+                kronecker_factor.inv_factor_matrices,
+                precision_config.computation_dtype,
+                precision_config.inv_factor_matrix_dtype,
+            )
+        self._assert_equal_state_dtype(
+            state_list[GRAFTING_PRECONDITIONER_LIST]._masked_preconditioner_list,
+            precision_config.computation_dtype,
+            precision_config.grafting_state_dtype,
+        )
+        self._assert_equal_state_dtype(
+            state_list[MASKED_FILTERED_GRAD_LIST],
+            precision_config.computation_dtype,
+            precision_config.filtered_grad_dtype,
+        )
+        self._assert_equal_state_dtype(
+            state_list[MASKED_MOMENTUM_LIST],
+            precision_config.computation_dtype,
+            precision_config.momentum_dtype,
+        )
+
+    def test_precision_configs(self) -> None:
+        precision_configs = [
+            PrecisionConfig(computation_dtype=torch.float16),
+            PrecisionConfig(factor_matrix_dtype=torch.float16),
+            PrecisionConfig(inv_factor_matrix_dtype=torch.float16),
+            PrecisionConfig(filtered_grad_dtype=torch.float16),
+            PrecisionConfig(momentum_dtype=torch.float16),
+            PrecisionConfig(grafting_state_dtype=torch.float16),
+            PrecisionConfig(
+                factor_matrix_dtype=torch.float16, inv_factor_matrix_dtype=torch.float16
+            ),
+            PrecisionConfig(
+                factor_matrix_dtype=torch.float16,
+                inv_factor_matrix_dtype=torch.float16,
+                grafting_state_dtype=torch.float16,
+                filtered_grad_dtype=torch.float16,
+                momentum_dtype=torch.float16,
+            ),
+        ]
+
+        for precision_config in precision_configs:
+            with self.subTest(precision_config=precision_config):
+                optimizer = self._instantiate_optimizer(
+                    precision_config=precision_config
+                )
+                for state_list in optimizer._per_group_state_lists:
+                    self._assert_state_list_dtype(state_list, precision_config)
+
+                for _ in range(2):
+                    optimizer.step()
+                    for state_list in optimizer._per_group_state_lists:
+                        self._assert_state_list_dtype(state_list, precision_config)
+
+    def test_setting_both_preconditioner_dtype_and_precision_config(self) -> None:
+        with self.assertRaisesRegex(
+            ValueError,
+            re.escape(
+                "Both preconditioner_dtype and precision_config are provided. Please use only precision_config as preconditioner_dtype is deprecated."
+            ),
+        ):
+            DistributedShampoo(
+                self._model.parameters(),
+                lr=0.01,
+                preconditioner_dtype=torch.float16,
+                precision_config=PrecisionConfig(),
+            )
+
+    def test_setting_preconditioner_dtype_only(self) -> None:
+        with self.assertLogs(
+            level="WARNING",
+        ) as cm:
+            DistributedShampoo(
+                self._model.parameters(),
+                lr=0.01,
+                preconditioner_dtype=torch.float16,
+                precision_config=None,
+            )
+
+            self.assertIn(
+                "preconditioner_dtype is deprecated. Please use precision_config instead.",
+                [r.msg for r in cm.records],
+            )

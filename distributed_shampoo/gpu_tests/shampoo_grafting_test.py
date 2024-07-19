@@ -7,9 +7,6 @@ LICENSE file in the root directory of this source tree.
 
 """
 
-#!/usr/bin/env fbpython
-# (c) Meta Platforms, Inc. and affiliates. Confidential and proprietary.
-
 import unittest
 from functools import partial
 from itertools import product
@@ -45,7 +42,6 @@ class DistributedShampooGraftingTest(unittest.TestCase):
         ).to(device=device)
         model[0].weight.data.fill_(1.0)
         model[1].weight.data.fill_(1.0)
-        model[1].requires_grad = False
         loss = nn.MSELoss()
         target = torch.tensor([0.0]).to(device=device)
         return model, loss, data, target
@@ -116,7 +112,7 @@ class DistributedShampooGraftingTest(unittest.TestCase):
                 weight_decay=weight_decay,
             )
             with self.subTest(weight_decay=weight_decay):
-                self._test_baseline_and_shampoo(
+                DistributedShampooGraftingTest._test_baseline_and_shampoo(
                     baseline_optim_factory=partial(
                         optim_factory, optim_cls=Adagrad, eps=1e-10
                     ),
@@ -147,7 +143,7 @@ class DistributedShampooGraftingTest(unittest.TestCase):
                 weight_decay=weight_decay,
             )
             with self.subTest(weight_decay=weight_decay):
-                self._test_baseline_and_shampoo(
+                DistributedShampooGraftingTest._test_baseline_and_shampoo(
                     baseline_optim_factory=partial(
                         optim_factory, optim_cls=Adam, eps=1e-8
                     ),
@@ -178,7 +174,7 @@ class DistributedShampooGraftingTest(unittest.TestCase):
                 weight_decay=weight_decay,
             )
             with self.subTest(weight_decay=weight_decay):
-                self._test_baseline_and_shampoo(
+                DistributedShampooGraftingTest._test_baseline_and_shampoo(
                     baseline_optim_factory=partial(
                         optim_factory, optim_cls=AdamW, eps=1e-8
                     ),
@@ -208,7 +204,7 @@ class DistributedShampooGraftingTest(unittest.TestCase):
                 weight_decay=weight_decay,
             )
             with self.subTest(weight_decay=weight_decay):
-                self._test_baseline_and_shampoo(
+                DistributedShampooGraftingTest._test_baseline_and_shampoo(
                     baseline_optim_factory=partial(
                         optim_factory,
                         optim_cls=RMSprop,
@@ -243,7 +239,7 @@ class DistributedShampooGraftingTest(unittest.TestCase):
                 weight_decay=weight_decay,
             )
             with self.subTest(weight_decay=weight_decay, use_nesterov=use_nesterov):
-                self._test_baseline_and_shampoo(
+                DistributedShampooGraftingTest._test_baseline_and_shampoo(
                     baseline_optim_factory=partial(
                         optim_factory,
                         optim_cls=SGD,

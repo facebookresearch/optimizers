@@ -9,7 +9,10 @@ LICENSE file in the root directory of this source tree.
 
 #!/usr/bin/env python3
 
-import os
+
+import contextlib
+import itertools
+import pathlib
 import re
 import unittest
 from itertools import product
@@ -35,16 +38,20 @@ class ShampooDDPDistributorTest(MultiProcessTestCase):
     @staticmethod
     def _construct_model(
         device: torch.device,
+        model_linear_layers_dims: tuple[int, ...],
     ) -> Tuple[nn.Module, nn.Module, torch.Tensor, torch.Tensor]:
-        data = torch.arange(80, dtype=torch.float, device=device)
+        data = torch.arange(
+            model_linear_layers_dims[0], dtype=torch.float, device=device
+        )
         data /= torch.norm(data)
         model = nn.Sequential(
-            nn.Linear(80, 40, bias=False),
-            nn.Linear(40, 1, bias=False),
+            *(
+                nn.Linear(a, b, bias=False)
+                for a, b in itertools.pairwise(model_linear_layers_dims + (1,))
+            )
         ).to(device=device)
-        model[0].weight.data.fill_(0.01)
-        model[1].weight.data.fill_(0.01)
-        model[1].requires_grad = False
+        for m in model:
+            m.weight.data.fill_(0.01)
         loss = nn.MSELoss()
         target = torch.tensor([0.0]).to(device=device)
         return model, loss, data, target
@@ -56,9 +63,11 @@ class ShampooDDPDistributorTest(MultiProcessTestCase):
             torch.optim.Optimizer,
         ],
         device: torch.device,
+        model_linear_layers_dims: tuple[int, ...] = (80, 40),
     ) -> Tuple[Parameter, torch.Tensor]:
         model, loss, data, target = ShampooDDPDistributorTest._construct_model(
-            device=device
+            device=device,
+            model_linear_layers_dims=model_linear_layers_dims,
         )
         params = model.parameters()
         optimizer = optim_factory(params)
@@ -98,10 +107,7 @@ class ShampooDDPDistributorTest(MultiProcessTestCase):
 
     def tearDown(self) -> None:
         super().tearDown()
-        try:
-            os.remove(self.file_name)
-        except OSError:
-            pass
+        pathlib.Path(self.file_name).unlink(missing_ok=True)
 
     def _init_distributed(self) -> None:
         if not dist.is_initialized():
@@ -162,7 +168,7 @@ class ShampooDDPDistributorTest(MultiProcessTestCase):
                 num_trainers_per_group=num_trainers_per_group,
                 communicate_params=communicate_params,
             ):
-                self._test_two_configs(
+                ShampooDDPDistributorTest._test_two_configs(
                     self._shampoo_optim_factory(
                         distributed_config=None,
                     ),
@@ -176,13 +182,46 @@ class ShampooDDPDistributorTest(MultiProcessTestCase):
                     device=torch.device("cuda"),
                 )
 
+    def test_empty_local_blocked_params(self) -> None:
+        self._init_distributed()
+
+        # The test setting is only rank 0 has params, so all other ranks have no parameters to work on.
+        has_blocked_params = dist.get_rank() == 0
+        with (
+            # This mock is used to catch the number of calls to Shampoo's step(), which happened after __init__().
+            # If there is no blocked params, __init__() will raise and step() should not be called.
+            # Otherwise, step() will be called.
+            mock.patch.object(DistributedShampoo, "step")
+        ) as mock_step:
+            with (
+                contextlib.nullcontext()
+                if has_blocked_params
+                else self.assertRaisesRegex(
+                    AssertionError,
+                    re.escape("Some workers have no parameters to work on."),
+                )
+            ):
+                ShampooDDPDistributorTest._train_model(
+                    self._shampoo_optim_factory(distributed_config=DDPShampooConfig()),
+                    device=torch.device("cuda"),
+                    # Setting model_linear_layers_dims to (20,) creates an model with one linear layer with 20x1 weight.
+                    # Because Shampoo's max_preconditioner_dim = 20, there will be only one block.
+                    # In the case of two trainers per group, there will be one trainer has no params to work on.
+                    model_linear_layers_dims=(20,),
+                )
+
+            if has_blocked_params:
+                mock_step.assert_called()
+            else:
+                mock_step.assert_not_called()
+
     def test_invalid_num_trainers_per_group(self) -> None:
         self._init_distributed()
         with self.assertRaisesRegex(
             ValueError,
             re.escape("Invalid number of trainers per group:"),
         ):
-            self._train_model(
+            ShampooDDPDistributorTest._train_model(
                 self._shampoo_optim_factory(
                     DDPShampooConfig(
                         num_trainers_per_group=3,
@@ -202,7 +241,7 @@ class ShampooDDPDistributorTest(MultiProcessTestCase):
                 "distributed_config.num_trainers_per_group=3 must divide self._global_size=8!"
             ),
         ):
-            self._train_model(
+            ShampooDDPDistributorTest._train_model(
                 self._shampoo_optim_factory(
                     DDPShampooConfig(
                         num_trainers_per_group=3,

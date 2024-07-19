@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
 import torch
+from torch.distributed.device_mesh import DeviceMesh
 from torch.nn.parameter import Parameter
 
 # Keys for optimizer state (always checkpointed)
@@ -28,6 +29,7 @@ INV_ROOT_OVERRIDE = "inv_root_override"
 LR = "lr"
 MAX_PRECONDITIONER_DIM = "max_preconditioner_dim"
 PARAMS = "params"  # While this is stored in groups by default, we do not checkpoint this quantity.
+PRECISION_CONFIG = "precision_config"
 PRECONDITION_FREQUENCY = "precondition_frequency"
 PRECONDITIONER_DTYPE = "preconditioner_dtype"
 START_PRECONDITIONING_STEP = "start_preconditioning_step"
@@ -80,6 +82,34 @@ class FSDPParameterMetadata:
 
 
 @dataclass
+class PrecisionConfig:
+    """Configuration for precision of each optimizer state.
+
+    Args:
+        computation_dtype (torch.dtype): Data type that all computation is performed in. (Default: torch.float32)
+        factor_matrix_dtype (torch.dtype): Data type for storing Shampoo factor matrices. (Default: torch.float32)
+        inv_factor_matrix_dtype (torch.dtype): Data type for storing Shampoo inverse factor matrices. (Default: torch.float32)
+        filtered_grad_dtype (torch.dtype): Data type for storing filtered gradients (EMA). (Default: torch.float32)
+        momentum_dtype (torch.dtype): Data type for storing momentum states. (Default: torch.float32)
+        grafting_state_dtype (torch.dtype): Data type for storing grafting preconditioners, if applicable. (Default: torch.float32)
+            Current applicable grafting configs:
+            - AdaGradGraftingConfig
+            - RMSpropGraftingConfig
+            - AdamGraftingConfig
+            NOT applicable configs:
+            - SGDGraftingConfig
+            - None (i.e. no grafting)
+    """
+
+    computation_dtype: torch.dtype = torch.float32
+    factor_matrix_dtype: torch.dtype = torch.float32
+    inv_factor_matrix_dtype: torch.dtype = torch.float32
+    filtered_grad_dtype: torch.dtype = torch.float32
+    momentum_dtype: torch.dtype = torch.float32
+    grafting_state_dtype: torch.dtype = torch.float32
+
+
+@dataclass
 class AbstractDataclass:
     def __new__(cls, *args: Any, **kwargs: Any) -> Optional["AbstractDataclass"]:
         if cls == AbstractDataclass or cls.__bases__[0] == AbstractDataclass:
@@ -126,6 +156,32 @@ class FSDPShampooConfig(DistributedConfig):
     """
 
     param_to_metadata: Dict[Parameter, FSDPParameterMetadata]
+
+
+@dataclass
+class HSDPShampooConfig(DistributedConfig):
+    """Configuration for HSDP Shampoo.
+
+    Enables distributed computation and optimizer states (like ZeRO-1) via DTensor for Shampoo across ranks with shared
+    parameters between different HSDP process groups.
+
+    Args:
+        param_to_metadata (Dict[Parameter, FSDPParameterMetadata]): Dictionary mapping parameter to its metadata from HSDP.
+        device_mesh (Optional[torch.distributed.device_mesh.DeviceMesh]): Device mesh for HSDP. (Default: None)
+        communication_dtype (CommunicationDType): Data type for communication between ranks. (Default: DEFAULT)
+        num_trainers_per_group (int): Number of GPUs per distributed process group for distributed computation/memory.
+            If num_trainers_per_group = -1 is used, then defaults to using the number of workers in each replicated HSDP
+            group. (Default: -1)
+        communicate_params (bool): Flag for all-gathering updated params across multiple workers.
+            If False, all-gathers parameter updates across multiple workers. (Default: False)
+
+    """
+
+    param_to_metadata: Dict[Parameter, FSDPParameterMetadata]
+    device_mesh: DeviceMesh
+    communication_dtype: CommunicationDType = CommunicationDType.DEFAULT
+    num_trainers_per_group: int = -1
+    communicate_params: bool = False
 
 
 @dataclass
