@@ -15,7 +15,7 @@ See the [CONTRIBUTING](CONTRIBUTING.md) file for how to help out.
 Optimizers is BSD licensed, as found in the LICENSE file.
 
 ## Installation and Dependencies
-This code requires `python>=3.8` and (as of 5 May 2023) requires the PyTorch nightly build. Please follow the instructions [here](https://pytorch.org/get-started/locally/) to install PyTorch. Installing PyTorch with CUDA and NCCL support is required.
+This code requires `python>=3.10` and (as of 18 July 2024) requires the PyTorch nightly build. Please follow the instructions [here](https://pytorch.org/get-started/locally/) to install PyTorch. Installing PyTorch with CUDA and NCCL support is required.
 
 Install `distributed_shampoo`:
 ```

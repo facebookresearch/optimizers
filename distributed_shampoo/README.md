@@ -59,10 +59,8 @@ Key distinctives of this implementation include:
 We have tested this implementation on the following versions of PyTorch:
 
 - PyTorch >= 2.0;
-- Python >= 3.8;
+- Python >= 3.10;
 - CUDA 11.3-11.4; 12.2+;
-- [expecttest](https://github.com/ezyang/expecttest) (for distributed unit tests);
-- [hypothesis](https://github.com/HypothesisWorks/hypothesis) (for distributed unit tests).
 
 Note: We have observed known instabilities with the torch.linalg.eigh operator on CUDA 11.6-12.1, specifically for low-rank matrices, which may appear with using a small start_preconditioning_step. Please avoid these versions of CUDA if possible. See: https://github.com/pytorch/pytorch/issues/94772.
 
