@@ -22,6 +22,7 @@ from distributed_shampoo.examples.trainer_utils import (
     LossMetrics,
     Parser,
 )
+from distributed_shampoo.shampoo_types import PrecisionConfig
 from torch import nn
 from torchvision import datasets, transforms
 
@@ -144,7 +145,14 @@ if __name__ == "__main__":
         use_merge_dims=args.use_merge_dims,
         use_pytorch_compile=args.use_pytorch_compile,
         distributed_config=None,
-        preconditioner_dtype=args.preconditioner_dtype,
+        precision_config=PrecisionConfig(
+            computation_dtype=args.computation_dtype.value,
+            factor_matrix_dtype=args.factor_matrix_dtype.value,
+            inv_factor_matrix_dtype=args.inv_factor_matrix_dtype.value,
+            filtered_grad_dtype=args.filtered_grad_dtype.value,
+            momentum_dtype=args.momentum_dtype.value,
+            grafting_state_dtype=args.grafting_state_dtype.value,
+        ),
         use_protected_eigh=args.use_protected_eigh,
         track_root_inv_residuals=args.track_root_inv_residuals,
     )

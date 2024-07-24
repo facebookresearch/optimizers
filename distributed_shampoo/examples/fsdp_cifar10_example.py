@@ -23,7 +23,7 @@ from distributed_shampoo.examples.trainer_utils import (
     Parser,
 )
 
-from distributed_shampoo.shampoo_types import FSDPShampooConfig
+from distributed_shampoo.shampoo_types import FSDPShampooConfig, PrecisionConfig
 from distributed_shampoo.utils.shampoo_fsdp_utils import compile_fsdp_parameter_metadata
 from torch import nn
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
@@ -185,7 +185,14 @@ if __name__ == "__main__":
         distributed_config=FSDPShampooConfig(
             param_to_metadata=compile_fsdp_parameter_metadata(model),
         ),
-        preconditioner_dtype=args.preconditioner_dtype,
+        precision_config=PrecisionConfig(
+            computation_dtype=args.computation_dtype.value,
+            factor_matrix_dtype=args.factor_matrix_dtype.value,
+            inv_factor_matrix_dtype=args.inv_factor_matrix_dtype.value,
+            filtered_grad_dtype=args.filtered_grad_dtype.value,
+            momentum_dtype=args.momentum_dtype.value,
+            grafting_state_dtype=args.grafting_state_dtype.value,
+        ),
         use_protected_eigh=args.use_protected_eigh,
         track_root_inv_residuals=args.track_root_inv_residuals,
     )

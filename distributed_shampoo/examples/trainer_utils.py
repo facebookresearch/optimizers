@@ -23,15 +23,12 @@ from distributed_shampoo.shampoo_types import (
     CommunicationDType,
     DistributedConfig,
     GraftingConfig,
+    PrecisionConfig,
     RMSpropGraftingConfig,
     SGDGraftingConfig,
 )
 from torch import nn
 
-logging.basicConfig(
-    format="[%(filename)s:%(lineno)d] %(levelname)s: %(message)s",
-    level=logging.DEBUG,
-)
 logger = logging.getLogger(__name__)
 
 # create default device
@@ -162,6 +159,28 @@ class Parser:
             help="Use decoupled weight decay for Adam and Shampoo.",
         )
         parser.add_argument(
+            "--use-merge-dims",
+            action="store_true",
+            help="Use merge dims for Shampoo.",
+        )
+        parser.add_argument(
+            "--use-pytorch-compile",
+            action="store_true",
+            help="Use PyTorch compile for Shampoo.",
+        )
+        parser.add_argument(
+            "--use-protected-eigh",
+            action="store_true",
+            help="Uses protected eigendecomposition.",
+        )
+        parser.add_argument(
+            "--track-root-inv-residuals",
+            action="store_true",
+            help="Use debug mode for examining root inverse residuals.",
+        )
+
+        # Arguments for grafting.
+        parser.add_argument(
             "--grafting-type",
             type=lambda t: enum_type_parse(t, GraftingType),
             default=GraftingType.SGD,
@@ -179,31 +198,43 @@ class Parser:
             default=0.999,
             help="Grafting beta2 parameter for Shampoo.",
         )
+
+        # Arguments for mixed-precision.
         parser.add_argument(
-            "--use-merge-dims",
-            action="store_true",
-            help="Use merge dims for Shampoo.",
-        )
-        parser.add_argument(
-            "--use-pytorch-compile",
-            action="store_true",
-            help="Use PyTorch compile for Shampoo.",
-        )
-        parser.add_argument(
-            "--preconditioner-dtype",
+            "--computation-dtype",
             type=lambda t: enum_type_parse(t, DType),
             default=DType.FP32,
-            help="Preconditioner dtype for Shampoo.",
+            help="Data type for all computation in Shampoo.",
         )
         parser.add_argument(
-            "--use-protected-eigh",
-            action="store_true",
-            help="Uses protected eigendecomposition.",
+            "--factor-matrix-dtype",
+            type=lambda t: enum_type_parse(t, DType),
+            default=DType.FP32,
+            help="Data type for storing Shampoo factor matrices.",
         )
         parser.add_argument(
-            "--track-root-inv-residuals",
-            action="store_true",
-            help="Use debug mode for examining root inverse residuals.",
+            "--inv-factor-matrix-dtype",
+            type=lambda t: enum_type_parse(t, DType),
+            default=DType.FP32,
+            help="Data type for storing Shampoo inverse factor matrices.",
+        )
+        parser.add_argument(
+            "--filtered-grad-dtype",
+            type=lambda t: enum_type_parse(t, DType),
+            default=DType.FP32,
+            help="Data type for storing filtered gradients.",
+        )
+        parser.add_argument(
+            "--momentum-dtype",
+            type=lambda t: enum_type_parse(t, DType),
+            default=DType.FP32,
+            help="Data type for storing momentum states.",
+        )
+        parser.add_argument(
+            "--grafting-state-dtype",
+            type=lambda t: enum_type_parse(t, DType),
+            default=DType.FP32,
+            help="Data type for storing grafting preconditioners.",
         )
 
         # Arguments for DDP Shampoo.
@@ -357,7 +388,7 @@ def instantiate_optimizer(
     use_merge_dims: bool,
     use_pytorch_compile: bool,
     distributed_config: Optional[DistributedConfig],
-    preconditioner_dtype: DType,
+    precision_config: Optional[PrecisionConfig],
     use_protected_eigh: bool,
     track_root_inv_residuals: bool,
 ) -> torch.optim.Optimizer:
@@ -408,7 +439,7 @@ def instantiate_optimizer(
             use_merge_dims=use_merge_dims,
             use_pytorch_compile=use_pytorch_compile,
             distributed_config=distributed_config,
-            preconditioner_dtype=preconditioner_dtype.value,
+            precision_config=precision_config,
             use_protected_eigh=use_protected_eigh,
             track_root_inv_residuals=track_root_inv_residuals,
         )
