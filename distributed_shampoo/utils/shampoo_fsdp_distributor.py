@@ -389,7 +389,7 @@ class FSDPDistributor(DistributorInterface):
              ________________________________________________________________
             |____________________|______|_______________|__|_________________|
                                  ^      ^               ^  ^
-                             start_idx  |               | end_idx
+                       block_start_idx  |               | block_end_idx
                                         |               |
                             center_split_start_idx      |
                                                 center_split_end_idx
@@ -398,13 +398,13 @@ class FSDPDistributor(DistributorInterface):
 
             """
             # Get starting index of the center split of the tensor shard. (See figure above.)
-            # This is equal to ceil(start_idx / remaining_size) * remaining_size.
+            # This is equal to ceil(block_start_idx / remaining_size) * remaining_size.
             center_split_start_idx = (
-                (start_idx + remaining_size - 1) // remaining_size
+                (block_start_idx + remaining_size - 1) // remaining_size
             ) * remaining_size
             # Similarly, get end index of the center split of the tensor shard.
-            # This is equal to floor(end_idx / remaining_size) * remaining_size.
-            center_split_end_idx = end_idx // remaining_size * remaining_size
+            # This is equal to floor(block_end_idx / remaining_size) * remaining_size.
+            center_split_end_idx = block_end_idx // remaining_size * remaining_size
 
             # Handles largest convex partition in the center.
             if center_split_start_idx < center_split_end_idx:

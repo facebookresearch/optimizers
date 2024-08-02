@@ -9,7 +9,7 @@ LICENSE file in the root directory of this source tree.
 
 import heapq
 import logging
-from functools import partial
+from functools import cache, partial
 from math import prod
 from typing import Any, Dict, List, Tuple
 
@@ -66,9 +66,6 @@ class HSDPDistributor(DistributorInterface):
         self._hsdp_device_mesh: torch.distributed.device_mesh.DeviceMesh = (
             distributed_config.device_mesh
         )
-        self._device_mesh_cache: Dict[
-            Tensor, torch.distributed.device_mesh.DeviceMesh
-        ] = {}
         self._global_num_splits_per_param: Tuple[int, ...] = ()
         self._global_num_blocks_per_split_param: Tuple[int, ...] = ()
 
@@ -759,7 +756,7 @@ class HSDPDistributor(DistributorInterface):
              ________________________________________________________________
             |____________________|______|_______________|__|_________________|
                                  ^      ^               ^  ^
-                             start_idx  |               | end_idx
+                       block_start_idx  |               | block_end_idx
                                         |               |
                             center_split_start_idx      |
                                                 center_split_end_idx
@@ -768,13 +765,13 @@ class HSDPDistributor(DistributorInterface):
 
             """
             # Get starting index of the center split of the tensor shard. (See figure above.)
-            # This is equal to ceil(start_idx / remaining_size) * remaining_size.
+            # This is equal to ceil(block_start_idx / remaining_size) * remaining_size.
             center_split_start_idx = (
-                (start_idx + remaining_size - 1) // remaining_size
+                (block_start_idx + remaining_size - 1) // remaining_size
             ) * remaining_size
             # Similarly, get end index of the center split of the tensor shard.
-            # This is equal to floor(end_idx / remaining_size) * remaining_size.
-            center_split_end_idx = end_idx // remaining_size * remaining_size
+            # This is equal to floor(block_end_idx / remaining_size) * remaining_size.
+            center_split_end_idx = block_end_idx // remaining_size * remaining_size
 
             # Handles largest convex partition in the center.
             if center_split_start_idx < center_split_end_idx:
@@ -849,29 +846,27 @@ class HSDPDistributor(DistributorInterface):
         device_type: str,
         ranks_in_replicated_group: Tensor,
     ) -> dtensor.DeviceMesh:
-        """Returns 2D device mesh from provided mesh. This function will cache previous meshes according to the input ranks.
+        """Returns 2D device mesh from the provided device type and ranks in replicated group.
+        The 2D device mesh is formed in the way where the shard dimension is the same as self._dist_group_size.
 
         Args:
             device_type (str): Device type (specified as a string).
             ranks_in_replicated_group (Tensor): Ranks in replicated group.
 
+        Returns:
+            device_mesh (dtensor.DeviceMesh): Device mesh.
+
         """
-        if ranks_in_replicated_group not in self._device_mesh_cache:
-            mesh = torch.stack(
-                [
-                    ranks_in_replicated_group[i : i + self._dist_group_size]
-                    for i in range(
-                        0, len(ranks_in_replicated_group), self._dist_group_size
-                    )
-                ]
-            )
-            self._device_mesh_cache[ranks_in_replicated_group] = dtensor.DeviceMesh(
-                device_type=self._hsdp_device_mesh.device_type,
-                mesh=mesh,
-                mesh_dim_names=("shard", "replicate"),
+
+        @cache
+        def get_device_mesh(ranks_in_replicated_group: Tensor) -> dtensor.DeviceMesh:
+            return dtensor.DeviceMesh(
+                device_type=device_type,
+                mesh=ranks_in_replicated_group.view(-1, self._dist_group_size),
+                mesh_dim_names=("replicate", "shard"),
             )
 
-        return self._device_mesh_cache[ranks_in_replicated_group]
+        return get_device_mesh(ranks_in_replicated_group)
 
     def _allocate_zeros_distributed_tensor(
         self,

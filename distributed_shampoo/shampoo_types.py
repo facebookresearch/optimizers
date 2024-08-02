@@ -21,7 +21,9 @@ MOMENTUM = "momentum"
 STEP = "step"
 
 # Keys for parameter groups (checkpointed if specified)
+BETA3 = "beta3"
 BETAS = "betas"
+DAMPENING = "dampening"
 EPSILON = "epsilon"
 EXPONENT_MULTIPLIER = "exponent_multiplier"
 GRAFTING_CONFIG = "grafting_config"

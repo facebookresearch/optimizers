@@ -7,6 +7,9 @@ LICENSE file in the root directory of this source tree.
 
 """
 
+#!/usr/bin/env python3
+
+
 import copy
 import re
 import unittest
@@ -75,12 +78,20 @@ class DistributedShampooInitTest(unittest.TestCase):
                 "Invalid beta parameter at index 1: 0.0. Must be in (0.0, 1.0].",
             ),
             (
+                {"beta3": -0.1},
+                "Invalid beta3 parameter: -0.1. Must be in [0.0, 1.0).",
+            ),
+            (
                 {"epsilon": 0.0},
                 "Invalid epsilon value: 0.0. Must be > 0.0.",
             ),
             (
                 {"momentum": 3.14},
                 "Invalid momentum parameter: 3.14. Must be [0.0, 1.0).",
+            ),
+            (
+                {"dampening": -0.1},
+                "Invalid damping parameter: -0.1. Must be [0.0, 1.0).",
             ),
             (
                 {"weight_decay": -0.1},
@@ -372,8 +383,10 @@ class DistributedShampooStateDictTest(unittest.TestCase):
                 "0.weight": {
                     "lr": 0.01,
                     "betas": (0.9, 1.0),
+                    "beta3": 0.9,
                     "epsilon": 1e-12,
                     "momentum": 0.0,
+                    "dampening": 0.0,
                     "weight_decay": 0.0,
                     "max_preconditioner_dim": 5,
                     "precondition_frequency": 1,

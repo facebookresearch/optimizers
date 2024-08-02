@@ -7,6 +7,9 @@ LICENSE file in the root directory of this source tree.
 
 """
 
+#!/usr/bin/env python3
+
+
 import itertools
 import unittest
 from functools import partial
@@ -102,8 +105,10 @@ class DistributedShampooPytorchCompileTest(unittest.TestCase):
             parameters,
             lr=0.01,
             betas=betas,
+            beta3=betas[0] * betas[0],
             epsilon=1e-10,
-            momentum=0.1,
+            momentum=0.9,
+            dampening=0.9,
             weight_decay=weight_decay,
             max_preconditioner_dim=10,
             precondition_frequency=precondition_frequency,
@@ -128,15 +133,15 @@ class DistributedShampooPytorchCompileTest(unittest.TestCase):
                 total_steps,
             ),
         ) in itertools.product(
-            (0.0, 0.3),
-            ((0.0, 1.0), (0.1, 0.9)),
+            (0.0, 0.1),
+            ((0.0, 1.0), (0.9, 0.999)),
             (
                 None,
                 AdaGradGraftingConfig(
                     epsilon=1e-10,
                 ),
             ),
-            ((1, 1000, 5), (10, 10, 9)),
+            ((1, 1000, 5), (10, 10, 5)),
         ):
             shampoo_optim_factory = partial(
                 DistributedShampooPytorchCompileTest._shampoo_optim_factory,
@@ -185,16 +190,16 @@ class DistributedShampooPytorchCompileTest(unittest.TestCase):
                 total_steps,
             ),
         ) in itertools.product(
-            (0.3,),
-            ((0.1, 0.9),),
+            (0.1,),
+            ((0.9, 0.999),),
             (
                 AdaGradGraftingConfig(
                     epsilon=1e-10,
                 ),
             ),
             (
-                (10, 100, 120),
-                (10, 10, 30),
+                (10, 100, 110),
+                (10, 10, 20),
             ),
         ):
             shampoo_optim_factory = partial(

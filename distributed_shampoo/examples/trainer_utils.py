@@ -97,6 +97,12 @@ class Parser:
             help="Beta2 for exponential moving average of second moment.",
         )
         parser.add_argument(
+            "--beta3",
+            type=float,
+            default=-1.0,
+            help="Beta3 for taking the exponential moving average of the gradient only at the current iteration.",
+        )
+        parser.add_argument(
             "--epsilon", type=float, default=1e-12, help="Epsilon for Adam and Shampoo."
         )
         parser.add_argument(
@@ -112,6 +118,12 @@ class Parser:
             type=float,
             default=0.0,
             help="Momentum parameter for SGD and Shampoo.",
+        )
+        parser.add_argument(
+            "--dampening",
+            type=float,
+            default=0.0,
+            help="Dampening parameter for SGD and Shampoo in momentum.",
         )
         parser.add_argument(
             "--max-preconditioner-dim",
@@ -371,8 +383,10 @@ def instantiate_optimizer(
     model: nn.Module,
     lr: float,
     betas: Tuple[float, float],
+    beta3: float,
     epsilon: float,
     momentum: float,
+    dampening: float,
     weight_decay: float,
     max_preconditioner_dim: int,
     precondition_frequency: int,
@@ -397,6 +411,7 @@ def instantiate_optimizer(
             model.parameters(),
             lr=lr,
             momentum=momentum,
+            dampening=dampening,
             weight_decay=weight_decay,
             nesterov=use_nesterov,
         )
@@ -422,8 +437,10 @@ def instantiate_optimizer(
             model.parameters(),
             lr=lr,
             betas=betas,
+            beta3=beta3,
             epsilon=epsilon,
             momentum=momentum,
+            dampening=dampening,
             weight_decay=weight_decay,
             max_preconditioner_dim=max_preconditioner_dim,
             precondition_frequency=precondition_frequency,

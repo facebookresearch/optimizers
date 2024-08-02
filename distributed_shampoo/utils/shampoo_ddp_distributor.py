@@ -52,10 +52,6 @@ class DDPDistributor(DistributorInterface):
         distributed_config: DDPShampooConfig,
     ) -> None:
         super().__init__(param_group)
-        if not dist.is_initialized():
-            raise RuntimeError(
-                "DDPDistributor needs torch.distributed to be initialized!"
-            )
 
         # Construct global masked blocked parameters (which is DDP-specific).
         self._global_masked_blocked_params: Tuple[Tensor, ...] = (
@@ -66,21 +62,9 @@ class DDPDistributor(DistributorInterface):
         # NOTE: If num_trainers_per_group = -1, then we use the global world size.
         self._global_size: int = dist.get_world_size()
 
-        if not (
-            1 <= distributed_config.num_trainers_per_group <= self._global_size
-            or distributed_config.num_trainers_per_group == -1
-        ):
-            raise ValueError(
-                f"Invalid number of trainers per group: {distributed_config.num_trainers_per_group}. "
-                f"Must be between [1, {self._global_size}] or set to -1."
-            )
         if distributed_config.num_trainers_per_group == -1:
             logger.info(
                 f"Note that {distributed_config.num_trainers_per_group=}! Defaulting to world size {self._global_size}."
-            )
-        elif not self._global_size % distributed_config.num_trainers_per_group == 0:
-            raise ValueError(
-                f"{distributed_config.num_trainers_per_group=} must divide {self._global_size=}!"
             )
         self._group_size: int = (
             distributed_config.num_trainers_per_group
@@ -104,25 +88,12 @@ class DDPDistributor(DistributorInterface):
             self._communication_dtype = torch.float32
 
         # Initialize _dist_group and _group_rank.
-        if self._group_size == self._global_size:
-            self._dist_group: Optional[dist.ProcessGroup] = (
-                dist.distributed_c10d.GroupMember.WORLD
-            )
-            self._group_rank: int = dist.get_rank()
-        else:
-            for group_ranks in [
-                list(range(r, r + self._group_size))
-                for r in range(0, self._global_size, self._group_size)
-            ]:
-                # This is a collective call, so even if this rank does not belong to
-                # this group, we need to create it.
-                group = dist.new_group(ranks=group_ranks)
-
-                # Determines which group this rank belongs to.
-                if dist.get_rank() in group_ranks:
-                    self._dist_group = group
-
-            self._group_rank = dist.get_rank(group=self._dist_group)
+        self._dist_group: Optional[dist.ProcessGroup] = (
+            dist.distributed_c10d.GroupMember.WORLD
+            if self._group_size == self._global_size
+            else dist.new_subgroups(group_size=self._group_size)[0]
+        )
+        self._group_rank: int = dist.get_rank(group=self._dist_group)
 
         # Assign ranks to blocks with their respective buffer size.
         buffer_size_ranks = self._distribute_buffer_sizes(

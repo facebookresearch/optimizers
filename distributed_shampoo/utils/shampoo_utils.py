@@ -88,6 +88,8 @@ def compress_list(
 
 def get_dtype_size(dtype: torch.dtype) -> int:
     """Return the size (bytes) of a given data type."""
+    if dtype is torch.bool:
+        return 1
     return math.ceil(
         (torch.finfo if dtype.is_floating_point else torch.iinfo)(dtype).bits / 8.0
     )

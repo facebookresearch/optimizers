@@ -11,6 +11,7 @@ LICENSE file in the root directory of this source tree.
 
 
 import re
+from copy import deepcopy
 from functools import partial
 from typing import Callable, Iterable, List, Optional, Tuple
 from unittest import mock
@@ -250,7 +251,7 @@ class ShampooHSDPDistributorTest(FSDPTest):
             device_mesh=mesh_2d,
             num_trainers_per_group=1,
         )
-        modified_hsdp_config = hsdp_config
+        modified_hsdp_config = deepcopy(hsdp_config)
         modified_hsdp_config.num_trainers_per_group = 2
         ShampooHSDPDistributorTest._test_two_configs(
             ShampooHSDPDistributorTest._shampoo_optim_factory(

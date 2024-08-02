@@ -18,8 +18,6 @@ from typing import Callable, List
 import numpy as np
 
 import torch
-
-from hpc.optimizers import matrix_functions
 from matrix_functions import (
     _matrix_inverse_root_newton,
     _matrix_root_eigen,

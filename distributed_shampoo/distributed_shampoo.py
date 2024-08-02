@@ -28,7 +28,9 @@ import torch
 from distributed_shampoo.shampoo_types import (
     AdaGradGraftingConfig,
     AdamGraftingConfig,
+    BETA3,
     BETAS,
+    DAMPENING,
     DDPShampooConfig,
     DistributedConfig,
     DISTRIBUTOR,
@@ -107,9 +109,9 @@ class DistributedShampoo(torch.optim.Optimizer):
 
     with contributions and support from:
 
-    Rohan Anil (Google), Adnan Aziz (Meta), Pavan Balaji (Meta), Shuo Chang (Meta), Weiwei Chu (Meta), Assaf Eisenman (Meta),
-    Will Feng (Meta), Zhuobo Feng (Meta), Jose Gallego-Posada (Mila / Meta Platforms, Inc.), Avirup Ghosh (Meta), Yizi Gu (Meta),
-    Vineet Gupta (Google), Yuchen Hao (Meta), Brian Hirsh (Meta), Yusuo Hu (Meta), Yuxi Hu (Meta), Minhui Huang (Meta),
+    Ganesh Ajjanagadde (Meta), Rohan Anil (Google), Adnan Aziz (Meta), Pavan Balaji (Meta), Shuo Chang (Meta), Weiwei Chu (Meta),
+    Assaf Eisenman (Meta), Will Feng (Meta), Zhuobo Feng (Meta), Jose Gallego-Posada (Mila / Meta Platforms, Inc.), Avirup Ghosh (Meta),
+    Yizi Gu (Meta), Vineet Gupta (Google), Yuchen Hao (Meta), Brian Hirsh (Meta), Yusuo Hu (Meta), Yuxi Hu (Meta), Minhui Huang (Meta),
     Guna Lakshminarayanan (Meta), Michael Lazos (Meta), Zhijing Li (Meta), Ming Liang (Meta), Wanchao Liang (Meta), Ying Liu
     (Meta), Wenguang Mao (Meta), Dheevatsa Mudigere (NVIDIA), Maxim Naumov (Meta), Jongsoo Park (Meta), Mike Rabbat (Meta),
     Kaushik Rangadurai (Meta), Dennis van der Staay (Meta), Fei Tian (Meta), Sanjay Vishwakarma (Meta), Xunnan (Shawn) Xu (Meta),
@@ -220,12 +222,17 @@ class DistributedShampoo(torch.optim.Optimizer):
                 - One must enable the option use_orig_params = True in FSDP.
 
     Args:
-        params (iterable): Iterable of parameters to optimize or dicts defining parameter groups.
+        params (ParamsT): Iterable of parameters to optimize or dicts defining parameter groups.
         lr (float): Learning rate. (Default: 1e-2)
         betas (Tuple[float, float]): Coefficients used for computing running averages of gradient and its square.
             (Default: (0.9, 1.0))
+        beta3 (float): Coefficient used for computing running average of gradient only for the current iteration.
+            This can be used to replicate a version of NAdam if set appropriately. For example, if beta1 = 0.9, then applying
+            beta1 interpolation a second time is equivalent to setting beta3 = 0.9 * 0.9 = 0.81.
+            If set to -1.0, will set equal to beta1. (Default: -1.0)
         epsilon (float): Term added to the denominator to improve numerical stability. (Default: 1e-12)
-        momentum (float): Momentum parameter. (default: 0.)
+        momentum (float): Momentum parameter. (Default: 0.)
+        dampening (float): Dampening parameter for momentum. (Default: 0.)
         weight_decay (float): Weight decay (L2 penalty). (Default: 0.)
         max_preconditioner_dim (int): Maximum preconditioner dimensio. (Default: 1024)
         precondition_frequency (int): Frequency for computing root inverse preconditioner. (Default: 1)
@@ -263,8 +270,10 @@ class DistributedShampoo(torch.optim.Optimizer):
         params: ParamsT,
         lr: float = 1e-2,
         betas: Tuple[float, float] = (0.9, 1.0),
+        beta3: float = -1.0,
         epsilon: float = 1e-12,
         momentum: float = 0.0,
+        dampening: float = 0.0,
         weight_decay: float = 0.0,
         max_preconditioner_dim: int = 1024,
         precondition_frequency: int = 1,
@@ -295,11 +304,21 @@ class DistributedShampoo(torch.optim.Optimizer):
             raise ValueError(
                 f"Invalid beta parameter at index 1: {betas[1]}. Must be in (0.0, 1.0]."
             )
+        if beta3 == -1.0:
+            beta3 = betas[0]
+        elif not 0.0 <= beta3 < 1.0:
+            raise ValueError(
+                f"Invalid beta3 parameter: {beta3}. Must be in [0.0, 1.0)."
+            )
         if not epsilon > 0.0:
             raise ValueError(f"Invalid epsilon value: {epsilon}. Must be > 0.0.")
         if not 0.0 <= momentum < 1.0:
             raise ValueError(
                 f"Invalid momentum parameter: {momentum}. Must be [0.0, 1.0)."
+            )
+        if not 0.0 <= dampening < 1.0:
+            raise ValueError(
+                f"Invalid damping parameter: {dampening}. Must be [0.0, 1.0)."
             )
         if not weight_decay >= 0.0:
             raise ValueError(
@@ -378,8 +397,10 @@ class DistributedShampoo(torch.optim.Optimizer):
             {
                 LR: lr,
                 BETAS: betas,
+                BETA3: beta3,
                 EPSILON: epsilon,
                 MOMENTUM: momentum,
+                DAMPENING: dampening,
                 WEIGHT_DECAY: weight_decay,
                 MAX_PRECONDITIONER_DIM: max_preconditioner_dim,
                 PRECONDITION_FREQUENCY: precondition_frequency,
@@ -656,6 +677,8 @@ class DistributedShampoo(torch.optim.Optimizer):
                 float,
                 float,
                 float,
+                float,
+                float,
                 bool,
                 bool,
                 bool,
@@ -866,30 +889,37 @@ class DistributedShampoo(torch.optim.Optimizer):
         state_lists: Dict[str, Any],
         step: torch.Tensor,
         beta1: float,
+        beta3: float,
         use_bias_correction: bool,
     ) -> Tuple[torch.Tensor, ...]:
-        # Compute filtered gradient or EMA of the gradients.
         if beta1 != 0.0:
             state_lists[MASKED_FILTERED_GRAD_LIST].dequantize_()
 
-            torch._foreach_mul_(
-                state_lists[MASKED_FILTERED_GRAD_LIST].dequantized_value, beta1
+            # Computes filtered gradient or EMA of the gradients with respect to beta3 if beta3 != beta1.
+            masked_filtered_grad_list = (
+                torch._foreach_lerp(
+                    state_lists[MASKED_FILTERED_GRAD_LIST].dequantized_value,
+                    state_lists[MASKED_BLOCKED_GRADS],
+                    weight=1 - beta3,
+                )
+                if beta3 != beta1
+                else state_lists[MASKED_FILTERED_GRAD_LIST].dequantized_value
             )
-            torch._foreach_add_(
+
+            # Update EMA of the gradients (with respect to beta1).
+            torch._foreach_lerp_(
                 state_lists[MASKED_FILTERED_GRAD_LIST].dequantized_value,
                 state_lists[MASKED_BLOCKED_GRADS],
-                alpha=1 - beta1,
+                weight=1 - beta1,
             )
+
+            # Apply bias correction if necessary.
             if use_bias_correction:
-                bias_correction1 = 1.0 - beta1**step
+                bias_correction1 = 1.0 - beta3 * beta1 ** (step - 1)
                 masked_filtered_grad_list = torch._foreach_div(
-                    state_lists[MASKED_FILTERED_GRAD_LIST].dequantized_value,
+                    masked_filtered_grad_list,
                     bias_correction1,
                 )
-            else:
-                masked_filtered_grad_list = state_lists[
-                    MASKED_FILTERED_GRAD_LIST
-                ].dequantized_value
 
             state_lists[MASKED_FILTERED_GRAD_LIST].quantize_()
         else:
@@ -919,6 +949,7 @@ class DistributedShampoo(torch.optim.Optimizer):
         state_lists: Dict[str, Any],
         masked_blocked_search_directions: Tuple[torch.Tensor, ...],
         momentum_param: float,
+        dampening: float,
         use_nesterov: bool,
     ) -> None:
         # Update momentum optimizer state and use momentum / Nesterov if enabled.
@@ -931,16 +962,20 @@ class DistributedShampoo(torch.optim.Optimizer):
             torch._foreach_add_(
                 state_lists[MASKED_MOMENTUM_LIST].dequantized_value,
                 masked_blocked_search_directions,
+                alpha=1 - dampening,
             )
 
             # Incorporates Nesterov momentum.
             if use_nesterov:
+                torch._foreach_mul_(
+                    masked_blocked_search_directions,
+                    1 - dampening,
+                )
                 torch._foreach_add_(
                     masked_blocked_search_directions,
                     state_lists[MASKED_MOMENTUM_LIST].dequantized_value,
                     alpha=momentum_param,
                 )
-
             else:
                 torch._foreach_copy_(
                     masked_blocked_search_directions,
@@ -956,8 +991,10 @@ class DistributedShampoo(torch.optim.Optimizer):
         step: torch.Tensor,
         lr: torch.Tensor,
         beta1: float,
+        beta3: float,
         weight_decay: float,
         momentum_param: float,
+        dampening: float,
         grafting_config_not_none: bool,
         compute_root_inverse: bool,
         use_decoupled_weight_decay: bool,
@@ -1000,12 +1037,15 @@ class DistributedShampoo(torch.optim.Optimizer):
         #   (and similar)
         self._compute_root_inverse(state_lists, compute_root_inverse)
 
-        # Compute filtered gradient or EMA of the gradients if beta1 > 0.
+        # Compute filtered gradient or EMA of the gradients if beta1 > 0 and beta3 > 0.
+        # Note that we use two beta factors here akin to Lion.
+        #   G_bar <- beta3 * G_tilde + (1 - beta3) * G
         #   G_tilde <- beta1 * G_tilde + (1 - beta1) * G
         masked_filtered_grad_list = self._compute_filtered_grad_list(
             state_lists,
             step,
             beta1,
+            beta3,
             use_bias_correction,
         )
 
@@ -1013,8 +1053,8 @@ class DistributedShampoo(torch.optim.Optimizer):
         # PT2 compile is currently disabled for preconditioning and grafting.
         # TODO: Resolve preconditioning and grafting PT2 NEX issue and enable them.
         #
-        #   P_shampoo <- L_inv * G_tilde * R_inv (and similar)
-        #   P_grafting <- G_tilde / (sqrt(V) + epsilon)
+        #   P_shampoo <- L_inv * G_bar * R_inv (and similar)
+        #   P_grafting <- G_bar / (sqrt(V) + epsilon)
         #   P <- P_grafting                                     if step < start_preconditioning_step
         #   P <- ||P_grafting|| / ||P_shampoo|| * P_shampoo     otherwise
         masked_blocked_search_directions = self._precondition_and_grafting(
@@ -1034,13 +1074,14 @@ class DistributedShampoo(torch.optim.Optimizer):
         )
 
         # Update momentum optimizer state and use momentum / Nesterov if enabled.
-        #   M <- momentum_param * M + P
-        #   P <- P + momentum_param * M     if use_nesterov
-        #   P <- M                          otherwise
+        #   M <- momentum_param * M + (1 - dampening) * P
+        #   P <- (1 - dampening) * P + momentum_param * M     if use_nesterov
+        #   P <- M                                            otherwise.
         self._update_momentum(
             state_lists,
             masked_blocked_search_directions,
             momentum_param,
+            dampening,
             use_nesterov,
         )
 
@@ -1089,8 +1130,10 @@ class DistributedShampoo(torch.optim.Optimizer):
                 self._device, non_blocking=True
             )
             beta1 = group[BETAS][0]
+            beta3 = group[BETA3]
             weight_decay = group[WEIGHT_DECAY]
             momentum_param = group[MOMENTUM]
+            dampening = group[DAMPENING]
             grafting_config_not_none = group[GRAFTING_CONFIG] is not None
             # Check compute root inverse or not for preconditioner
             compute_root_inverse = (
@@ -1112,8 +1155,10 @@ class DistributedShampoo(torch.optim.Optimizer):
                 step,
                 lr,
                 beta1,
+                beta3,
                 weight_decay,
                 momentum_param,
+                dampening,
                 grafting_config_not_none,
                 compute_root_inverse,
                 use_decoupled_weight_decay,

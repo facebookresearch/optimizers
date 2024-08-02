@@ -127,3 +127,18 @@ class SplitTensorBlockRecoveryTest(unittest.TestCase):
                 start_idx=8,
                 end_idx=10,
             )
+
+        with self.subTest("Test with indices [7, 22)"):
+            actual_split_tensors = [
+                torch.tensor([7, 8]),
+                torch.tensor([[[9, 10, 11], [12, 13, 14], [15, 16, 17]]]),
+                torch.tensor([[18, 19, 20]]),
+                torch.tensor([21]),
+            ]
+
+            self._test_split_tensor_block_recovery(
+                original_tensor=original_tensor,
+                expected_split_tensors=actual_split_tensors,
+                start_idx=7,
+                end_idx=22,
+            )

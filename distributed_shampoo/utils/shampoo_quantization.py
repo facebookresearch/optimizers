@@ -8,6 +8,7 @@ LICENSE file in the root directory of this source tree.
 """
 
 import logging
+import typing
 from typing import Optional, Sequence, Tuple, Union
 
 import torch
@@ -61,9 +62,9 @@ class QuantizedTensor(OptimizerModule):
             dtype=quantized_dtype,
             device=dequantized_values.device,
         )
-        min_value, max_value = cls._quantize_and_return_metadata(
-            block_info.get_tensor(dequantized_values),
-            block_info.get_tensor(quantized_values),
+        min_value, max_value = QuantizedTensor._quantize_and_return_metadata(
+            dequantized_values=block_info.get_tensor(dequantized_values),
+            quantized_values=block_info.get_tensor(quantized_values),
         )
         return cls(quantized_values, block_info, min_value, max_value)
 
@@ -149,7 +150,7 @@ class QuantizedTensorList:
             )
         else:
             raise TypeError(
-                "Quantized_data must be either a Sequence[QuantizedTensor] or a Sequence[Tuple[Tensor, Optional[Tensor], Optional[Tensor]]] (i.e. a sequence of quantized values, min values, and max values)."
+                f"quantized_data must be {typing.get_type_hints(QuantizedTensorList.__init__)['quantized_data']} but get {type(quantized_data)}"
             )
 
         self.dequantized_value_list: Optional[Tuple[Tensor, ...]] = None
@@ -158,6 +159,9 @@ class QuantizedTensorList:
             value.dtype == quantized_dtype for value in self.quantized_value_list
         )
         self.quantized_dtype = quantized_dtype
+        assert (
+            computation_dtype in _FLOAT_DTYPES
+        ), f"{computation_dtype=} is not supported! It must be one of {_FLOAT_DTYPES}!"
         self.computation_dtype = computation_dtype
 
         # All min/max values should be None, or no min/max values are None
@@ -177,7 +181,7 @@ class QuantizedTensorList:
             return self.quantized_value_list
         elif self.quantized_dtype in _FLOAT_DTYPES:
             return self._convert_float_to_float(
-                self.quantized_value_list, self.computation_dtype
+                src_list=self.quantized_value_list, target_dtype=self.computation_dtype
             )
         else:
             raise NotImplementedError(
@@ -195,15 +199,17 @@ class QuantizedTensorList:
     def quantize(self, tensor_list: Tuple[Tensor, ...]) -> None:
         if (
             tensor_list is not self.dequantized_value_list
-            and self.dequantized_value_list is not None
+            and self.is_dequantized_stored()
         ):
             logger.warning(
-                f"Existing stored dequantized values {self.dequantized_value_list=}.\nWriting quantized values with input {tensor_list=} without using these stored dequantized values..."
+                "Existing stored dequantized values.\nWriting quantized values with input tensor_list without using these stored dequantized values..."
             )
 
         if self.quantized_dtype in _FLOAT_DTYPES:
             self._convert_float_to_float(
-                tensor_list, self.quantized_dtype, self.quantized_value_list
+                src_list=tensor_list,
+                target_dtype=self.quantized_dtype,
+                dest_list=self.quantized_value_list,
             )
         else:
             raise NotImplementedError(

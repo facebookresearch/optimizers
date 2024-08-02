@@ -7,11 +7,8 @@ LICENSE file in the root directory of this source tree.
 
 """
 
-import builtins
 import re
 import unittest
-from typing import Mapping, Optional, Sequence
-from unittest import mock
 
 import torch
 
@@ -102,7 +99,10 @@ class CompressListTest(unittest.TestCase):
 
 class GetDTypeSizeTest(unittest.TestCase):
     def test_get_dtype_size(self) -> None:
+        self.assertEqual(get_dtype_size(torch.int64), 8)
         self.assertEqual(get_dtype_size(torch.float32), 4)
+        self.assertEqual(get_dtype_size(torch.bfloat16), 2)
+        self.assertEqual(get_dtype_size(torch.bool), 1)
 
 
 class GeneratePairwiseIndicesTest(unittest.TestCase):
