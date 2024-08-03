@@ -79,6 +79,7 @@ from distributed_shampoo.utils.shampoo_checkpoint_utils import (
 from distributed_shampoo.utils.shampoo_ddp_distributor import DDPDistributor
 from distributed_shampoo.utils.shampoo_distributor import Distributor
 from distributed_shampoo.utils.shampoo_fsdp_distributor import FSDPDistributor
+from distributed_shampoo.utils.shampoo_fsdp2_distributor import FSDP2Distributor
 from distributed_shampoo.utils.shampoo_hsdp_distributor import HSDPDistributor
 
 from distributed_shampoo.utils.shampoo_preconditioner_list import (
@@ -424,6 +425,14 @@ class DistributedShampoo(torch.optim.Optimizer):
         self._use_pytorch_compile = use_pytorch_compile
         self._pytorch_compile_backend = pytorch_compile_backend
 
+        logging.info(
+            "czhuge: GPU:%s, DistributedShampoo __init__: param group size: %s, param group[0]['params'][0] type: %s, max_preconditioner_dim: %s",
+            torch.cuda.current_device(),
+            len(self.param_groups),
+            type(self.param_groups[0]["params"][0]),
+            max_preconditioner_dim,
+        )
+
         # Initialize dictionary containing lists of .
         self._per_group_state_lists: List[Dict[str, Any]] = [
             {} for _ in self.param_groups
@@ -448,9 +457,14 @@ class DistributedShampoo(torch.optim.Optimizer):
                 DDPDistributor, distributed_config=self._distributed_config
             )
         elif isinstance(self._distributed_config, FSDPShampooConfig):
-            distributor = partial(
-                FSDPDistributor, distributed_config=self._distributed_config
-            )
+            if self._distributed_config.use_v2:
+                distributor = partial(
+                    FSDP2Distributor, distributed_config=self._distributed_config
+                )
+            else:
+                distributor = partial(
+                    FSDPDistributor, distributed_config=self._distributed_config
+                )
         elif isinstance(self._distributed_config, HSDPShampooConfig):
             distributor = partial(
                 HSDPDistributor,
@@ -458,6 +472,12 @@ class DistributedShampoo(torch.optim.Optimizer):
             )
         else:
             raise NotImplementedError(f"{self._distributed_config=} not supported!")
+
+        logger.info(
+            "czhuge: GPU:%d, _instantiate_distributor: len param_groups: %s",
+            torch.cuda.current_device(),
+            len(self.param_groups),
+        )
 
         for state_lists, group in zip(
             self._per_group_state_lists, self.param_groups, strict=True
@@ -484,6 +504,13 @@ class DistributedShampoo(torch.optim.Optimizer):
         for state_lists, group in zip(
             self._per_group_state_lists, self.param_groups, strict=True
         ):
+            logger.info(
+                "czhuge: GPU:%s, _instantiate_shampoo_preconditioner_list: len local_blocked_params: %s, len global_blocked_params: %s, len global_block_info_list: %s",
+                torch.cuda.current_device(),
+                len(state_lists[DISTRIBUTOR].local_blocked_params),
+                len(state_lists[DISTRIBUTOR].global_blocked_params),
+                len(state_lists[DISTRIBUTOR].global_block_info_list),
+            )
             state_lists[SHAMPOO_PRECONDITIONER_LIST] = ShampooPreconditionerList(
                 block_list=state_lists[DISTRIBUTOR].global_blocked_params,
                 state=self.state,

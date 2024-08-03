@@ -16,6 +16,7 @@ import numpy as np
 
 import torch
 import torch.distributed as dist
+from torch.distributed._composable.fsdp import fully_shard
 from distributed_shampoo.examples.convnet import ConvNet
 from distributed_shampoo.examples.trainer_utils import (
     instantiate_optimizer,
@@ -80,7 +81,7 @@ def train_fsdp_model(
 
             optimizer.step()
             metrics.update(loss)
-            metrics.log()
+            # metrics.log()
             metrics.update_global_metrics()
             if LOCAL_RANK == 0:
                 metrics.log_global_metrics()
@@ -140,7 +141,13 @@ if __name__ == "__main__":
 
     # instantiate model and loss function
     model = ConvNet(32, 32, 3).to(device)
-    model = FSDP(model, use_orig_params=True)
+    if args.use_fsdp2 is True:
+        logging.info("czhuge: cifar10 example shampoo FSDPv2 (DTensor, per-param)")
+        model = fully_shard(model)  # FSDPv2 (per-param)
+    else:
+        logging.info("czhuge: cifar10 example FSDP")
+        model = FSDP(model, use_orig_params=True)
+
     loss_function = nn.CrossEntropyLoss()
 
     # instantiate data loader
@@ -186,6 +193,7 @@ if __name__ == "__main__":
         use_pytorch_compile=args.use_pytorch_compile,
         distributed_config=FSDPShampooConfig(
             param_to_metadata=compile_fsdp_parameter_metadata(model),
+            use_v2=args.use_fsdp2,
         ),
         precision_config=PrecisionConfig(
             computation_dtype=args.computation_dtype.value,

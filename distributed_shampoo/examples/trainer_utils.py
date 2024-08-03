@@ -299,6 +299,12 @@ class Parser:
             default="./checkpoints",
             help="Directory to save checkpoints and logs.",
         )
+        parser.add_argument(
+            "--use-fsdp2",
+            type=bool,
+            default=False,
+            help="Enable FSDPv2 (per-parameter FSDP).",
+        )
 
         return parser.parse_args()
 

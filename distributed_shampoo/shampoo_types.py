@@ -158,6 +158,7 @@ class FSDPShampooConfig(DistributedConfig):
     """
 
     param_to_metadata: Dict[Parameter, FSDPParameterMetadata]
+    use_v2: bool = False
 
 
 @dataclass

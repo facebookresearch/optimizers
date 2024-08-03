@@ -204,10 +204,10 @@ class AdagradPreconditionerList(PreconditionerList):
             )
             preconditioner_list.append(block_state[ADAGRAD])
 
-            logger.info(
-                f"Instantiated Adagrad Preconditioner {preconditioner_index} ({block_state[ADAGRAD].quantized_values.shape} with dtype {block_state[ADAGRAD].quantized_values.dtype}) "
-                f"for Parameter {param_index} ({block_info.param.shape}), Block {block_index} ({block.shape})."
-            )
+            # logger.info(
+            #     f"Instantiated Adagrad Preconditioner {preconditioner_index} ({block_state[ADAGRAD].quantized_values.shape} with dtype {block_state[ADAGRAD].quantized_values.dtype}) "
+            #     f"for Parameter {param_index} ({block_info.param.shape}), Block {block_index} ({block.shape})."
+            # )
 
         # Masked lists are the list of active preconditioners or values after filtering out gradients with None.
         self._local_preconditioner_list = QuantizedTensorList(
@@ -466,11 +466,11 @@ class ShampooPreconditionerList(PreconditionerList):
                 )
             )
 
-            logger.info(
-                f"Instantiated Shampoo Preconditioner {preconditioner_index} "
-                f"({[(factor_matrix.quantized_values.shape, factor_matrix.quantized_values.dtype) for factor_matrix in block_state[SHAMPOO].factor_matrices]}) "
-                f"for Parameter {param_index} ({block_info.param.shape}), Block {block_index} ({block.shape})."
-            )
+            # logger.info(
+            #     f"Instantiated Shampoo Preconditioner {preconditioner_index} "
+            #     f"({[(factor_matrix.quantized_values.shape, factor_matrix.quantized_values.dtype) for factor_matrix in block_state[SHAMPOO].factor_matrices]}) "
+            #     f"for Parameter {param_index} ({block_info.param.shape}), Block {block_index} ({block.shape})."
+            # )
 
         # Initialize local lists.
         local_block_list = compress_list(block_list, distributor_selector)
@@ -640,9 +640,9 @@ class ShampooPreconditionerList(PreconditionerList):
                     # the update matrix is diagonal.
                     if is_factor_matrix_diagonal and not check_diagonal(factor_matrix):
                         is_factor_matrix_diagonal.copy_(torch.tensor(False))
-                        logger.debug(
-                            f"Factor matrix {factor_matrix_index} is not diagonal."
-                        )
+                        # logger.debug(
+                        #     f"Factor matrix {factor_matrix_index} is not diagonal."
+                        # )
 
                     # Add epsilon term and incorporate bias correction.
                     bias_corrected_factor_matrix = (
