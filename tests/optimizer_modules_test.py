@@ -7,8 +7,8 @@ LICENSE file in the root directory of this source tree.
 
 """
 
-#!/usr/bin/env fbpython
-# (c) Meta Platforms, Inc. and affiliates. Confidential and proprietary.
+#!/usr/bin/env python3
+
 
 import unittest
 from dataclasses import dataclass

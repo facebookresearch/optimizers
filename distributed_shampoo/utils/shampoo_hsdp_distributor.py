@@ -9,7 +9,7 @@ LICENSE file in the root directory of this source tree.
 
 import heapq
 import logging
-from functools import cache, partial
+from functools import cache
 from math import prod
 from typing import Any, Dict, List, Tuple
 
@@ -314,11 +314,7 @@ class HSDPDistributor(DistributorInterface):
                     param_index,
                     f"sharded_group_rank_{sharded_group_rank}-block_{block_index}",
                 ),
-                # Curry a function to capture a local variable "group_source_rank".
-                allocate_zeros_tensor=partial(
-                    self._allocate_zeros_distributed_tensor,
-                    group_source_rank=group_source_rank,
-                ),
+                allocate_zeros_tensor=self._allocate_zeros_distributed_tensor,
                 get_tensor=lambda input_tensor: (
                     input_tensor.to_local()
                     if isinstance(input_tensor, dtensor.DTensor)
@@ -873,7 +869,6 @@ class HSDPDistributor(DistributorInterface):
         shape: Tuple[int, ...],
         dtype: torch.dtype,
         device: torch.device,
-        group_source_rank: int,
     ) -> torch.Tensor:
         """Instantiates distributed tensor using DTensor.
 
@@ -884,7 +879,6 @@ class HSDPDistributor(DistributorInterface):
                 DType of desired tensor.
             device (device type accepted by torch.zeros() including torch.device):
                 Device of desired tensor.
-            group_source_rank (int): Desired source rank of allocated zeros tensor within the process group.
 
         Returns:
             out (Tensor): Desired Tensor.
