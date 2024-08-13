@@ -169,6 +169,13 @@ class QuantizedTensorListTest(unittest.TestCase):
         for i, tensor in enumerate(quantized_tensor_list.quantized_value):
             self.assertFalse(torch.any(torch.nonzero(tensor - i)))
 
+    def test_compress(self) -> None:
+        selector = (True, False, True, False, True)
+        compressed_quantized_tensors = self._quantized_tensors.compress(selector)
+        self.assertEqual(
+            len(compressed_quantized_tensors.quantized_value), selector.count(True)
+        )
+
     def test_dequantize_quantize(self) -> None:
         deq_tensors = self._quantized_tensors.dequantize()
         self.assertFalse(self._quantized_tensors.is_dequantized_stored())
