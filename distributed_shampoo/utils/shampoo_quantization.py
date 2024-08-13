@@ -76,7 +76,8 @@ class QuantizedTensor(OptimizerModule):
                 self.quantized_values, dtype=dequantized_dtype
             )
             QuantizedTensor._convert_float_to_float(
-                dequantized_values, self.quantized_values
+                src=self.quantized_values,
+                dest=dequantized_values,
             )
             return dequantized_values
         else:
@@ -189,7 +190,7 @@ class QuantizedTensorList:
             )
 
     def dequantize_(self) -> None:
-        if self.dequantized_value_list is not None:
+        if self.is_dequantized_stored():
             logger.warning(
                 "Dequantized values are already stored; overwriting these values..."
             )
@@ -217,7 +218,7 @@ class QuantizedTensorList:
             )
 
     def quantize_(self) -> None:
-        if self.dequantized_value_list is None:
+        if not self.is_dequantized_stored():
             logger.warning(
                 f"No stored dequantized values {self.dequantized_value_list=}. Must first call dequantize_()."
             )
@@ -232,7 +233,7 @@ class QuantizedTensorList:
 
     @property
     def dequantized_value(self) -> Tuple[Tensor, ...]:
-        assert self.dequantized_value_list is not None
+        assert self.dequantized_value_list is not None  # make type checker happy
         return self.dequantized_value_list
 
     @property
@@ -243,7 +244,7 @@ class QuantizedTensorList:
         return self.dequantized_value_list is not None
 
     def compress(self, selector: Tuple[bool, ...]) -> "QuantizedTensorList":
-        assert self.dequantized_value_list is None
+        assert not self.is_dequantized_stored()
         masked_quantized_value_list = compress_list(self.quantized_value_list, selector)
         masked_min_values = compress_list(self._min_values, selector)
         masked_max_values = compress_list(self._max_values, selector)

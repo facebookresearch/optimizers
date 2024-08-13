@@ -9,7 +9,7 @@ LICENSE file in the root directory of this source tree.
 
 import heapq
 import logging
-from functools import cache, partial
+from functools import partial
 from typing import Any, Dict, Optional, Tuple
 
 import torch
@@ -20,6 +20,7 @@ from distributed_shampoo.shampoo_types import (
     PARAMS,
 )
 from distributed_shampoo.utils.shampoo_block_info import DDPBlockInfo
+from distributed_shampoo.utils.shampoo_dist_utils import get_device_mesh
 from distributed_shampoo.utils.shampoo_distributor import DistributorInterface
 from distributed_shampoo.utils.shampoo_utils import (
     compress_list,
@@ -478,19 +479,11 @@ class DDPDistributor(DistributorInterface):
             )
         )
 
-        @cache
-        def get_device_mesh(device_mesh_ranks: Tuple[int, ...]) -> dtensor.DeviceMesh:
-            """Returns device mesh from provided ranks. This function will cache previous meshes according to the input ranks.
-
-            Args:
-                device_mesh_ranks ([Tuple[int, ...]): Ranks to use in device mesh of desired tensor.
-
-            """
-            return dtensor.DeviceMesh(device_type=device.type, mesh=device_mesh_ranks)
-
         return dtensor_zeros(
             shape,
             dtype=dtype,
-            device_mesh=get_device_mesh(device_mesh_ranks),
+            device_mesh=get_device_mesh(
+                device_type=device.type, mesh=device_mesh_ranks
+            ),
             placements=[dtensor.Replicate()],
         )

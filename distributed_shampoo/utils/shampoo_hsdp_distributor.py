@@ -9,7 +9,6 @@ LICENSE file in the root directory of this source tree.
 
 import heapq
 import logging
-from functools import cache
 from math import prod
 from typing import Any, Dict, List, Tuple
 
@@ -23,6 +22,7 @@ from distributed_shampoo.shampoo_types import (
     USE_MERGE_DIMS,
 )
 from distributed_shampoo.utils.shampoo_block_info import DDPBlockInfo
+from distributed_shampoo.utils.shampoo_dist_utils import get_device_mesh
 from distributed_shampoo.utils.shampoo_distributor import DistributorInterface
 from distributed_shampoo.utils.shampoo_utils import (
     compress_list,
@@ -137,9 +137,10 @@ class HSDPDistributor(DistributorInterface):
             # Instantiates this by using DeviceMesh.
             ranks_in_all_replicated_groups = self._hsdp_device_mesh.mesh.T
             for ranks_in_replicated_group in ranks_in_all_replicated_groups:
-                device_mesh = self._get_device_mesh(
+                device_mesh = get_device_mesh(
                     device_type=self._hsdp_device_mesh.device_type,
-                    ranks_in_replicated_group=ranks_in_replicated_group,
+                    mesh=ranks_in_replicated_group.view(-1, self._dist_group_size),
+                    mesh_dim_names=("replicate", "shard"),
                 )
                 if dist.get_rank() in ranks_in_replicated_group:
                     self._dist_group = device_mesh.get_group("shard")
@@ -837,33 +838,6 @@ class HSDPDistributor(DistributorInterface):
             block_end_idx=end_idx,
         )
 
-    def _get_device_mesh(
-        self,
-        device_type: str,
-        ranks_in_replicated_group: Tensor,
-    ) -> dtensor.DeviceMesh:
-        """Returns 2D device mesh from the provided device type and ranks in replicated group.
-        The 2D device mesh is formed in the way where the shard dimension is the same as self._dist_group_size.
-
-        Args:
-            device_type (str): Device type (specified as a string).
-            ranks_in_replicated_group (Tensor): Ranks in replicated group.
-
-        Returns:
-            device_mesh (dtensor.DeviceMesh): Device mesh.
-
-        """
-
-        @cache
-        def get_device_mesh(ranks_in_replicated_group: Tensor) -> dtensor.DeviceMesh:
-            return dtensor.DeviceMesh(
-                device_type=device_type,
-                mesh=ranks_in_replicated_group.view(-1, self._dist_group_size),
-                mesh_dim_names=("replicate", "shard"),
-            )
-
-        return get_device_mesh(ranks_in_replicated_group)
-
     def _allocate_zeros_distributed_tensor(
         self,
         shape: Tuple[int, ...],
@@ -887,9 +861,10 @@ class HSDPDistributor(DistributorInterface):
         ranks_in_replicated_group = torch.tensor(
             dist.get_process_group_ranks(self._hsdp_device_mesh.get_group(0))
         )
-        device_mesh_2d = self._get_device_mesh(
+        device_mesh_2d = get_device_mesh(
             device_type=device.type,
-            ranks_in_replicated_group=ranks_in_replicated_group,
+            mesh=ranks_in_replicated_group.view(-1, self._dist_group_size),
+            mesh_dim_names=("replicate", "shard"),
         )
 
         return dtensor_zeros(

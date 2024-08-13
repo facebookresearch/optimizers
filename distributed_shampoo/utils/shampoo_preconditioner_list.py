@@ -12,7 +12,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 
 from itertools import chain
-from typing import Any, DefaultDict, Sequence, Tuple, Union
+from types import TracebackType
+from typing import Any, DefaultDict, Optional, Sequence, Tuple, Type, Union
 
 import torch
 from distributed_shampoo.utils.shampoo_block_info import BlockInfo
@@ -775,3 +776,32 @@ class ShampooPreconditionerList(PreconditionerList):
             tuple(relative_errors),
             tuple(relative_residuals),
         )
+
+
+class DequantizePreconditionersContext:
+    """DequantizePreconditionersContext is used for automatically dequantize and then quantize the preconditioners used within this context.
+
+    Args:
+        preconditioner_list (PreconditionerList): Preconditioner list which contains the preconditioners to be dequantized and quantized.
+
+    Examples:
+        >>> with DequantizePreconditionersContext(preconditioner_list):
+        >>>     # Do something with the preconditioners, and preconditioner_list will be dequantized.
+        >>> # After the context is exited, the preconditioners will be quantized.
+
+    """
+
+    def __init__(self, preconditioner_list: PreconditionerList) -> None:
+        self._preconditioner_list = preconditioner_list
+
+    def __enter__(self) -> "DequantizePreconditionersContext":
+        self._preconditioner_list.dequantize_preconditioners()
+        return self
+
+    def __exit__(
+        self,
+        exc_type: Optional[Type[BaseException]],
+        exc_val: Optional[BaseException],
+        exc_tb: Optional[TracebackType],
+    ) -> None:
+        self._preconditioner_list.quantize_preconditioners()

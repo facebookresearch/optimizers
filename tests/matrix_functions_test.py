@@ -16,6 +16,8 @@ from functools import partial
 from types import ModuleType
 from typing import Callable, List, Tuple
 
+import matrix_functions
+
 import numpy as np
 
 import torch
@@ -30,8 +32,6 @@ from matrix_functions import (
     RootInvMethod,
 )
 from torch import Tensor
-
-from . import matrix_functions
 
 
 class CheckDiagonalTest(unittest.TestCase):

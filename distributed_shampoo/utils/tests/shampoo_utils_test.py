@@ -50,6 +50,13 @@ class MergeSmallDimsTest(unittest.TestCase):
         threshold = 1
         self.assertEqual(merge_small_dims(dims, threshold), merged_dims)
 
+    def test_merge_small_dims_empty(self) -> None:
+        dims = (0,)
+        merged_dims = (0,)
+
+        threshold = 10
+        self.assertEqual(merge_small_dims(dims, threshold), merged_dims)
+
 
 class MultiDimSplitTest(unittest.TestCase):
     def test_multi_dim_split_for_one_dim(self) -> None:

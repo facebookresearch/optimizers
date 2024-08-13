@@ -29,7 +29,7 @@ def merge_small_dims(tensor_shape: Sequence[int], threshold: int) -> Tuple[int, 
 
     # Squeeze tensor shape to remove dimension with 1; if all dimensions are 1,
     # then add a 1 to the tensor shape.
-    squeezed_tensor_shape = list(filter(lambda t: t > 1, tensor_shape)) or [1]
+    squeezed_tensor_shape = list(filter(lambda t: t != 1, tensor_shape)) or [1]
     new_tensor_shape = [squeezed_tensor_shape[0]]
     for next_tensor_shape in squeezed_tensor_shape[1:]:
         if (new_dimension := new_tensor_shape[-1] * next_tensor_shape) <= threshold:
