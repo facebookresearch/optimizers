@@ -363,8 +363,8 @@ class LossMetrics(Metrics):
         if dist.is_initialized() and self._world_size > 1:
             self._global_window_loss = self._window_loss / self._world_size
             self._global_lifetime_loss = self._lifetime_loss / self._world_size
-            dist.all_reduce(self._global_window_loss, op=dist.reduce_op.SUM)
-            dist.all_reduce(self._global_lifetime_loss, op=dist.reduce_op.SUM)
+            dist.all_reduce(self._global_window_loss, op=dist.ReduceOp.SUM)
+            dist.all_reduce(self._global_lifetime_loss, op=dist.ReduceOp.SUM)
         else:
             pass
 
