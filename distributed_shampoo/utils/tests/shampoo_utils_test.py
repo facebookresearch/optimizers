@@ -53,8 +53,14 @@ class MergeSmallDimsTest(unittest.TestCase):
     def test_merge_small_dims_empty(self) -> None:
         dims = (0,)
         merged_dims = (0,)
-
         threshold = 10
+
+        self.assertEqual(merge_small_dims(dims, threshold), merged_dims)
+
+        dims = (0, 1)
+        self.assertEqual(merge_small_dims(dims, threshold), merged_dims)
+
+        dims = (0, 1, 5, 10, 20)
         self.assertEqual(merge_small_dims(dims, threshold), merged_dims)
 
 

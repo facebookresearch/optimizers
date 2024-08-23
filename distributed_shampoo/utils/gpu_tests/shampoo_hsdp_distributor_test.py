@@ -11,8 +11,8 @@ LICENSE file in the root directory of this source tree.
 
 
 import re
-from copy import deepcopy
 from functools import partial
+from itertools import product
 from typing import Callable, Iterable, List, Optional, Tuple
 from unittest import mock
 
@@ -208,21 +208,29 @@ class ShampooHSDPDistributorTest(FSDPTest):
     @skip_if_lt_x_gpu(4)
     def test_hsdp_shampoo_against_default_shampoo(self) -> None:
         mesh_2d = init_device_mesh("cuda", (2, 2))
-        for communication_dtype, communicate_params in (
-            (CommunicationDType.DEFAULT, False),
-            (CommunicationDType.DEFAULT, True),
-            (CommunicationDType.FP16, False),
-            (CommunicationDType.BF16, False),
+        for num_trainers_per_group, (
+            communication_dtype,
+            communicate_params,
+        ) in product(
+            (-1, 1, 2),
+            (
+                (CommunicationDType.DEFAULT, False),
+                (CommunicationDType.DEFAULT, True),
+                (CommunicationDType.FP16, False),
+                (CommunicationDType.BF16, False),
+            ),
         ):
             hsdp_config = HSDPShampooConfig(
                 param_to_metadata={},
                 device_mesh=mesh_2d,
                 communication_dtype=communication_dtype,
+                num_trainers_per_group=num_trainers_per_group,
                 communicate_params=communicate_params,
             )
 
             with self.subTest(
                 communication_dtype=communication_dtype,
+                num_trainers_per_group=num_trainers_per_group,
                 communicate_params=communicate_params,
             ):
                 ShampooHSDPDistributorTest._test_two_configs(
@@ -240,34 +248,6 @@ class ShampooHSDPDistributorTest(FSDPTest):
                     ),
                     device=torch.device("cuda"),
                 )
-
-    @skip_if_lt_x_gpu(4)
-    def test_hsdp_shampoo_with_different_num_trainers_per_group(
-        self,
-    ) -> None:
-        mesh_2d = init_device_mesh("cuda", (2, 2))
-        hsdp_config = HSDPShampooConfig(
-            param_to_metadata={},
-            device_mesh=mesh_2d,
-            num_trainers_per_group=1,
-        )
-        modified_hsdp_config = deepcopy(hsdp_config)
-        modified_hsdp_config.num_trainers_per_group = 2
-        ShampooHSDPDistributorTest._test_two_configs(
-            ShampooHSDPDistributorTest._shampoo_optim_factory(
-                hsdp_config,
-            ),
-            ShampooHSDPDistributorTest._model_factory(
-                hsdp_config,
-            ),
-            ShampooHSDPDistributorTest._shampoo_optim_factory(
-                modified_hsdp_config,
-            ),
-            ShampooHSDPDistributorTest._model_factory(
-                modified_hsdp_config,
-            ),
-            device=torch.device("cuda"),
-        )
 
     @skip_if_lt_x_gpu(4)
     def test_hsdp_shampoo_block_index(self) -> None:

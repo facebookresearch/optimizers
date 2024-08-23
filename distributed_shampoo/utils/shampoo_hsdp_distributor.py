@@ -130,20 +130,22 @@ class HSDPDistributor(DistributorInterface):
 
         # Initialize _dist_group and _group_rank.
         # Note that this requires initializing all process groups.
-        if self._dist_group_size == self._replicated_group_size:
-            self._dist_group: dist.ProcessGroup = self._hsdp_device_mesh.get_group(0)
-        else:
-            # Splits replicated ranks group into smaller groups of size self._dist_group_size.
-            # Instantiates this by using DeviceMesh.
-            ranks_in_all_replicated_groups = self._hsdp_device_mesh.mesh.T
-            for ranks_in_replicated_group in ranks_in_all_replicated_groups:
-                device_mesh = get_device_mesh(
-                    device_type=self._hsdp_device_mesh.device_type,
-                    mesh=ranks_in_replicated_group.view(-1, self._dist_group_size),
-                    mesh_dim_names=("replicate", "shard"),
-                )
-                if dist.get_rank() in ranks_in_replicated_group:
-                    self._dist_group = device_mesh.get_group("shard")
+        # Splits replicated ranks group into smaller groups of size self._dist_group_size.
+        # Instantiates this by using DeviceMesh.
+        ranks_in_all_replicated_groups = self._hsdp_device_mesh.mesh.T
+        for ranks_in_replicated_group in ranks_in_all_replicated_groups:
+            device_mesh = get_device_mesh(
+                device_type=self._hsdp_device_mesh.device_type,
+                mesh=tuple(
+                    tuple(ranks_in_replicated_subgroup)
+                    for ranks_in_replicated_subgroup in ranks_in_replicated_group.view(
+                        -1, self._dist_group_size
+                    ).tolist()
+                ),
+                mesh_dim_names=("replicate", "shard"),
+            )
+            if dist.get_rank() in ranks_in_replicated_group:
+                self._dist_group: dist.ProcessGroup = device_mesh.get_group("shard")
 
         self._group_rank: int = dist.get_rank(self._dist_group)
 
@@ -863,7 +865,12 @@ class HSDPDistributor(DistributorInterface):
         )
         device_mesh_2d = get_device_mesh(
             device_type=device.type,
-            mesh=ranks_in_replicated_group.view(-1, self._dist_group_size),
+            mesh=tuple(
+                tuple(ranks_in_replicated_subgroup)
+                for ranks_in_replicated_subgroup in ranks_in_replicated_group.view(
+                    -1, self._dist_group_size
+                ).tolist()
+            ),
             mesh_dim_names=("replicate", "shard"),
         )
 

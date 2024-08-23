@@ -8,8 +8,10 @@ LICENSE file in the root directory of this source tree.
 """
 
 import math
+from functools import partial
 from itertools import accumulate, chain, compress, pairwise
-from typing import Iterator, Sequence, Tuple, TypeVar
+from types import TracebackType
+from typing import Callable, Iterator, Optional, Sequence, Tuple, Type, TypeVar
 
 import torch
 from torch import Tensor
@@ -111,3 +113,42 @@ def generate_pairwise_indices(input_list: Sequence[int]) -> Iterator[Tuple[int, 
 
     """
     return pairwise(accumulate(chain([0], input_list)))
+
+
+ParameterizeEnterExitContextType = TypeVar("ParameterizeEnterExitContextType")
+
+
+class ParameterizeEnterExitContext:
+    """ParameterizeEnterExitContext is used for automatically invoking the enter and exit methods on the input within this context.
+
+    Args:
+        input_with_enter_exit_context (ParameterizeEnterExitContextType): Input whose state will be changed while entering and exiting the context by enter_method_caller and exit_method_caller and exit_method_caller respectively.
+        enter_method_caller (Callable[[ParameterizeEnterExitContextType], None]): Method caller for entering the context.
+        exit_method_caller (Callable[[ParameterizeEnterExitContextType], None]): Method caller for exiting the context.
+
+    """
+
+    def __init__(
+        self,
+        input_with_enter_exit_context: ParameterizeEnterExitContextType,
+        enter_method_caller: Callable[[ParameterizeEnterExitContextType], None],
+        exit_method_caller: Callable[[ParameterizeEnterExitContextType], None],
+    ) -> None:
+        self._enter_method: Callable[[], None] = partial(
+            enter_method_caller, input_with_enter_exit_context
+        )
+        self._exit_method: Callable[[], None] = partial(
+            exit_method_caller, input_with_enter_exit_context
+        )
+
+    def __enter__(self) -> "ParameterizeEnterExitContext":
+        self._enter_method()
+        return self
+
+    def __exit__(
+        self,
+        exc_type: Optional[Type[BaseException]],
+        exc_val: Optional[BaseException],
+        exc_tb: Optional[TracebackType],
+    ) -> None:
+        self._exit_method()

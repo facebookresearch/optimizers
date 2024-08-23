@@ -17,7 +17,11 @@ from typing import Callable, Iterable, Optional, Tuple
 
 import torch
 from distributed_shampoo.distributed_shampoo import DistributedShampoo
-from distributed_shampoo.shampoo_types import AdaGradGraftingConfig, GraftingConfig
+from distributed_shampoo.shampoo_types import (
+    AdaGradGraftingConfig,
+    GraftingConfig,
+    ShampooPT2CompileConfig,
+)
 from torch import nn
 from torch.nn.parameter import Parameter
 
@@ -94,7 +98,7 @@ class DistributedShampooPytorchCompileTest(unittest.TestCase):
 
     @staticmethod
     def _shampoo_optim_factory(
-        use_pytorch_compile: bool,
+        shampoo_pt2_compile_config: ShampooPT2CompileConfig,
         precondition_frequency: int,
         start_preconditioning_step: int,
         weight_decay: float,
@@ -114,9 +118,8 @@ class DistributedShampooPytorchCompileTest(unittest.TestCase):
             precondition_frequency=precondition_frequency,
             start_preconditioning_step=start_preconditioning_step,
             use_decoupled_weight_decay=True,
-            use_pytorch_compile=use_pytorch_compile,
+            shampoo_pt2_compile_config=shampoo_pt2_compile_config,
             grafting_config=grafting_config,
-            pytorch_compile_backend="inductor",
         )
 
     def test_pt2_shampoo_before_preconditioning_on_quadratic(self) -> None:
@@ -161,9 +164,11 @@ class DistributedShampooPytorchCompileTest(unittest.TestCase):
             ):
                 DistributedShampooPytorchCompileTest._test_shampoo_baseline_and_pt2(
                     baseline_optim_factory=shampoo_optim_factory(
-                        use_pytorch_compile=False
+                        shampoo_pt2_compile_config=None,
                     ),
-                    pt2_optim_factory=shampoo_optim_factory(use_pytorch_compile=True),
+                    pt2_optim_factory=shampoo_optim_factory(
+                        shampoo_pt2_compile_config=ShampooPT2CompileConfig()
+                    ),
                     total_steps=total_steps,
                 )
 
@@ -220,9 +225,11 @@ class DistributedShampooPytorchCompileTest(unittest.TestCase):
             ):
                 DistributedShampooPytorchCompileTest._test_shampoo_baseline_and_pt2(
                     baseline_optim_factory=shampoo_optim_factory(
-                        use_pytorch_compile=False
+                        shampoo_pt2_compile_config=None,
                     ),
-                    pt2_optim_factory=shampoo_optim_factory(use_pytorch_compile=True),
+                    pt2_optim_factory=shampoo_optim_factory(
+                        shampoo_pt2_compile_config=ShampooPT2CompileConfig()
+                    ),
                     total_steps=total_steps,
                     rtol=1.0e-3,
                     atol=1.0e-5,

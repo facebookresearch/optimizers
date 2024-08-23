@@ -9,12 +9,16 @@ LICENSE file in the root directory of this source tree.
 
 import logging
 import typing
+from operator import methodcaller
 from typing import Optional, Sequence, Tuple, Union
 
 import torch
 from distributed_shampoo.utils.shampoo_block_info import BlockInfo
 
-from distributed_shampoo.utils.shampoo_utils import compress_list
+from distributed_shampoo.utils.shampoo_utils import (
+    compress_list,
+    ParameterizeEnterExitContext,
+)
 
 from optimizer_modules import OptimizerModule
 from torch import Tensor
@@ -110,13 +114,6 @@ class QuantizedTensor(OptimizerModule):
     def _convert_float_to_float(src: torch.Tensor, dest: torch.Tensor) -> None:
         dest.copy_(src)
 
-    @staticmethod
-    def _convert_float_to_bucket(src: torch.Tensor, dest: torch.Tensor) -> None:
-        target_dtype = dest.dtype
-        raise NotImplementedError(
-            f"Quantization for {target_dtype} is not yet supported!"
-        )
-
 
 class QuantizedTensorList:
     def __init__(
@@ -181,7 +178,7 @@ class QuantizedTensorList:
         if self.quantized_dtype == self.computation_dtype:
             return self.quantized_value_list
         elif self.quantized_dtype in _FLOAT_DTYPES:
-            return self._convert_float_to_float(
+            return QuantizedTensorList._convert_float_to_float(
                 src_list=self.quantized_value_list, target_dtype=self.computation_dtype
             )
         else:
@@ -207,7 +204,7 @@ class QuantizedTensorList:
             )
 
         if self.quantized_dtype in _FLOAT_DTYPES:
-            self._convert_float_to_float(
+            QuantizedTensorList._convert_float_to_float(
                 src_list=tensor_list,
                 target_dtype=self.quantized_dtype,
                 dest_list=self.quantized_value_list,
@@ -256,8 +253,8 @@ class QuantizedTensorList:
             self.computation_dtype,
         )
 
+    @staticmethod
     def _convert_float_to_float(
-        self,
         src_list: Tuple[Tensor, ...],
         target_dtype: torch.dtype,
         dest_list: Optional[Tuple[Tensor, ...]] = None,
@@ -269,12 +266,26 @@ class QuantizedTensorList:
         torch._foreach_copy_(dest_list, src_list)
         return dest_list
 
-    def _convert_bucket_to_float(self) -> Tuple[Tensor, ...]:
-        raise NotImplementedError(
-            f"Quantization for {self.quantized_dtype} is not yet supported!"
-        )
 
-    def _convert_float_to_bucket(self) -> Tuple[Tensor, ...]:
-        raise NotImplementedError(
-            f"Quantization for {self.quantized_dtype} is not yet supported!"
+class DequantizeQuantizedTensorListContext(ParameterizeEnterExitContext):
+    """DequantizeQuantizedTensorListContext is used for automatically dequantize and then quantize the quantized tensor list used within this context.
+
+    Args:
+        quantized_tensor_list (QuantizedTensorList): A list contains the quantized tensors to be dequantized and quantized.
+
+    Examples:
+        >>> with DequantizeQuantizedTensorListContext(quantized_tensor_list):
+        >>>     # Do something with the quantized tensor list which is dequantized.
+        >>> # After the context is exited, the quantized tensor list will be quantized.
+
+    """
+
+    def __init__(
+        self,
+        quantized_tensor_list: QuantizedTensorList,
+    ) -> None:
+        super().__init__(
+            input_with_enter_exit_context=quantized_tensor_list,
+            enter_method_caller=methodcaller("dequantize_"),
+            exit_method_caller=methodcaller("quantize_"),
         )

@@ -29,6 +29,7 @@ from distributed_shampoo.shampoo_types import (
     PrecisionConfig,
     SGDGraftingConfig,
     SHAMPOO_PRECONDITIONER_LIST,
+    ShampooPT2CompileConfig,
 )
 from distributed_shampoo.utils.shampoo_preconditioner_list import (
     ShampooPreconditionerList,
@@ -142,12 +143,59 @@ class DistributedShampooInitTest(unittest.TestCase):
         ), self.assertRaisesRegex(
             ValueError,
             re.escape(
-                "Backend does NOT support Pytorch 2.0 compile. Switch to use_pytorch_compile=False."
+                "Both use_pytorch_compile and shampoo_pt2_compile_config are provided. Please use only shampoo_pt2_compile_config as use_pytorch_compile is deprecating."
             ),
         ):
             DistributedShampoo(
                 self._model.parameters(),
                 use_pytorch_compile=True,
+                shampoo_pt2_compile_config=ShampooPT2CompileConfig(),
+            )
+
+        with mock.patch.object(
+            torch.cuda, "is_available", return_value=False
+        ), self.assertRaisesRegex(
+            ValueError,
+            re.escape(
+                "use_pytorch_compile=False conflicts with non-None shampoo_pt2_compile_config arg. Please use only shampoo_pt2_compile_config as use_pytorch_compile is deprecating."
+            ),
+        ):
+            DistributedShampoo(
+                self._model.parameters(),
+                use_pytorch_compile=False,
+                shampoo_pt2_compile_config=ShampooPT2CompileConfig(),
+            )
+
+    def test_warning_pytorch_compile_setting(self) -> None:
+        with mock.patch.object(
+            torch.cuda, "is_available", return_value=True
+        ), self.assertLogs(
+            level="WARNING",
+        ) as cm:
+            DistributedShampoo(
+                self._model.parameters(),
+                lr=0.01,
+                use_pytorch_compile=True,
+                shampoo_pt2_compile_config=None,
+            )
+
+            self.assertIn(
+                "use_pytorch_compile is deprecating. Please use shampoo_pt2_compile_config instead.",
+                [r.msg for r in cm.records],
+            )
+
+    def test_invalid_cuda_pytorch_compile_setting(self) -> None:
+        with mock.patch.object(
+            torch.cuda, "is_available", return_value=False
+        ), self.assertRaisesRegex(
+            ValueError,
+            re.escape(
+                "Backend does NOT support Pytorch 2.0 compile. Switch to use_pytorch_compile in (False, None) and shampoo_pt2_compile_config=None."
+            ),
+        ):
+            DistributedShampoo(
+                self._model.parameters(),
+                shampoo_pt2_compile_config=ShampooPT2CompileConfig(),
             )
 
     def test_nesterov_and_zero_momentum(self) -> None:
@@ -755,3 +803,47 @@ class DistributedShampooPrecisionTest(unittest.TestCase):
                 "preconditioner_dtype is deprecated. Please use precision_config instead.",
                 [r.msg for r in cm.records],
             )
+
+
+class DistributedShampooNoneGradTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self._model = nn.Sequential(
+            nn.Linear(5, 10, bias=False),
+        )
+        self._optimizer = DistributedShampoo(
+            self._model.parameters(),
+            lr=0.01,
+            betas=(0.9, 1.0),
+            epsilon=1e-12,
+            momentum=0.0,
+            weight_decay=0.0,
+            max_preconditioner_dim=5,
+            precondition_frequency=1,
+            start_preconditioning_step=1,
+            distributed_config=None,
+            # Explicity set grafting_config=None to test the case that no grafting is used.
+            grafting_config=None,
+        )
+
+    def test_step_with_consistent_grads(self) -> None:
+        with self.assertNoLogs(level="WARNING"):
+            self._model[0].weight.grad = torch.rand(10, 5)
+            self._optimizer.step()
+            self._model[0].weight.grad = torch.rand(10, 5)
+            self._optimizer.step()
+
+    def test_step_with_none_grads(self) -> None:
+        expected_msgs = [
+            "PT2 will recompile because the gradient selction of model parameters have changed from the previous step. Possible reasons include some gradients are None. If this is not intended, please check the data and/or model.",
+        ]
+        with self.assertLogs(level="WARNING") as cm:
+            self._model[0].weight.grad = torch.rand(10, 5)
+            self._optimizer.step()
+            self._model[0].weight.grad = None  # set grad=None in second step
+            self._optimizer.step()
+            msgs = [r.msg for r in cm.records]
+
+        self.assertEqual(
+            msgs,
+            expected_msgs,
+        )

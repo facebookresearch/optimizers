@@ -187,6 +187,31 @@ class HSDPShampooConfig(DistributedConfig):
 
 
 @dataclass
+class ShampooPT2CompileConfig:
+    """Configuration for Shampoo PT2 compilation.
+
+    Enables Shampoo pytorch compilation with configure to speed up model training.
+    For more details: https://pytorch.org/get-started/pytorch-2.0/
+
+    Args:
+        pytorch_compile_backend (str): The backend for PT2 compilation. More info about PT2 backends:
+            https://pytorch.org/docs/stable/torch.compiler.html (Default: inductor)
+        enable_shampoo_pt2_dynamic_shape (Optional[bool]): Compile Shampoo in static, dynamic or auto-dynamic shape mode (Default: False).
+            - False: Use 'static' mode. Static mode assumes tensors in Shampoo will NOT change shapes. We recommend using this mode if
+                you expect parameters and gradients to change shapes only a very small number of times (e.g. <=5).
+            - True: Use 'dynamic' mode.  Dynamic mode assumes all tensors in Shampoo can change shapes during the run. In general, we do
+                not recommend using this mode, as it generates kernels that are not specialized to particular tensor shapes, and therefore
+                perform much slower.
+            - None: Use 'auto-dynamic' mode. Auto-dynamic mode assumes tensors in Shampoo are static, but will switch to dynamic mode if
+                some tensors change shapes. If PT2 recompiles excessively during your run, we recommend trying this mode to reduce recompilation overhead.
+
+    """
+
+    pytorch_compile_backend: str = "inductor"
+    enable_shampoo_pt2_dynamic_shape: Optional[bool] = False
+
+
+@dataclass
 class GraftingConfig(AbstractDataclass):
     """Abstract dataclass for grafting configurations in Shampoo."""
 

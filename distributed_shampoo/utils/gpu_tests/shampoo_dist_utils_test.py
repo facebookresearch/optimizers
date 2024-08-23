@@ -45,7 +45,14 @@ class ShampooDistUtilsTest(DTensorTestBase):
 
     @with_comms
     def test_get_device_mesh(self) -> None:
-        mesh = torch.tensor(range(self.world_size)).view(-1, self.world_size // 2)
+        mesh = tuple(
+            map(
+                tuple,
+                torch.tensor(range(self.world_size))
+                .view(-1, self.world_size // 2)
+                .tolist(),
+            )
+        )
 
         self._verify_deivce_mesh(
             device_mesh=get_device_mesh(

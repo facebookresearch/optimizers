@@ -10,8 +10,6 @@ LICENSE file in the root directory of this source tree.
 from functools import cache
 from typing import Optional
 
-import torch
-
 from torch.distributed import _tensor as dtensor
 from torch.distributed._tensor import DeviceMesh
 
@@ -19,14 +17,15 @@ from torch.distributed._tensor import DeviceMesh
 @cache
 def get_device_mesh(
     device_type: str,
-    mesh: torch.Tensor | tuple[int, ...],
+    mesh: tuple[tuple[int, ...], ...] | tuple[int, ...],
     mesh_dim_names: Optional[tuple[str, ...]] = None,
 ) -> dtensor.DeviceMesh:
-    """Returns device mesh from provided ranks. This function will cache previous meshes according to the input ranks.
+    """Returns device mesh from provided device type, mesh, and mesh dim names.
+    This function will cache previous meshes according to the input.
 
     Args:
         device_type (str): The device type of the mesh. Currently supports: "cpu", "cuda/cuda-like".
-        mesh (torch.Tensor | tuple[int, ...]):  A multi-dimensional array or an integer tensor describing the layout
+        mesh (tuple[tuple[int, ...], ...] | tuple[int, ...]):  A multi-dimensional array describing the layout
                 of devices, where the IDs are global IDs of the default process group.
         mesh_dim_names (Optional[tuple[str, ...]]): Names of mesh dimensions.
 

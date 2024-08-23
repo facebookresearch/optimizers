@@ -12,8 +12,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 
 from itertools import chain
-from types import TracebackType
-from typing import Any, DefaultDict, Optional, Sequence, Tuple, Type, Union
+from operator import methodcaller
+from typing import Any, DefaultDict, Sequence, Tuple, Union
 
 import torch
 from distributed_shampoo.utils.shampoo_block_info import BlockInfo
@@ -21,7 +21,11 @@ from distributed_shampoo.utils.shampoo_quantization import (
     QuantizedTensor,
     QuantizedTensorList,
 )
-from distributed_shampoo.utils.shampoo_utils import compress_list, get_dtype_size
+from distributed_shampoo.utils.shampoo_utils import (
+    compress_list,
+    get_dtype_size,
+    ParameterizeEnterExitContext,
+)
 
 from matrix_functions import (
     check_diagonal,
@@ -151,7 +155,7 @@ class AdagradPreconditionerList(PreconditionerList):
 
     Args:
         block_list (Tuple[Tensor, ...]): List of (blocks of) parameters.
-        state (DefaultDict[Parameter, Any]): Dictionary containing optimizer state.
+        state (DefaultDict[Tensor, Any]): Dictionary containing optimizer state.
         block_info_list (Tuple[BlockInfo, ...]): List containing corresponding BlockInfo for each block/parameter in block_list.
             Note that this should have the same length as block_list.
         distributor_selector (Tuple[bool, ...]): Distributor selector is a boolean list indicating whether a blocked parameter
@@ -159,6 +163,8 @@ class AdagradPreconditionerList(PreconditionerList):
         beta2 (float): Exponential moving average factor for Adam/RMSprop second moment state. If beta2 = 1., will use
             unweighted sum. (Default: 1.0)
         epsilon (float): Epsilon term for regularizing preconditioner to ensure positive definiteness. (Default: 1e-10)
+        preconditioner_dtype (torch.dtype): Data type for accumulating and computing root inverse of preconditioner. (Default: torch.float32)
+        computation_dtype (torch.dtype): Data type for computation (i.e., matrix inverse) is performed in. (Default: torch.float32)
         use_bias_correction (bool): Flag for using bias correction. (Default: False)
 
     """
@@ -349,7 +355,7 @@ class ShampooPreconditionerList(PreconditionerList):
 
     Args:
         block_list (Tuple[Tensor, ...]): List of (blocks of) parameters.
-        state (DefaultDict[Parameter, Any]): Dictionary containing optimizer state.
+        state (DefaultDict[Tensor, Any]): Dictionary containing optimizer state.
         block_info_list (Tuple[BlockInfo, ...]): List containing corresponding BlockInfo for each block/parameter in block_list.
             Note that this should have the same length as block_list.
         distributor_selector (Tuple[bool, ...]): Distributor selector is a boolean list indicating whether a blocked parameter
@@ -357,14 +363,16 @@ class ShampooPreconditionerList(PreconditionerList):
         beta2 (float): Exponential moving average factor for Shampoo factor matrices. If beta2 = 1., will use unweighted sum.
             (Default: 1.0)
         epsilon (float): Epsilon term for regularizing preconditioner to ensure positive definiteness. (Default: 1e-12)
-        inv_root_override (int, Tuple[int, ...]): Inverse root to use in Shampoo. If a list [l0, l1, l2, ..., lp], then we will
+        inv_root_override (Union[int, Tuple[int, ...]]): Inverse root to use in Shampoo. If a list [l0, l1, l2, ..., lp], then we will
             use -1 / l0 for 0-D tensors (scalars), -1 / l1 for 1-D tensor (vectors), -1 / l2 for 2-D tensors (matrices), and so on.
             If the order of the tensor exceeds the length of the list, we revert to using the default value. If 0 is used, uses the
             default inverse root -1 / (2 * o), where o is the order of the tensor. (Default: 0)
         exponent_multiplier (float): Number to be multiplied to the numerator of the inverse root, i.e., eta where the
             exponent is -eta / (2 * p). (Default: 1.0)
         use_bias_correction (bool): Flag for using bias correction. (Default: True)
-        factor_matrix_dtype (torch.dtype): Data type for accumulating and computing root inverse of preconditioners. (Default: torch.float)
+        factor_matrix_dtype (torch.dtype): Data type for storing Shampoo factor matrices. (Default: torch.float)
+        inv_factor_matrix_dtype (torch.dtype): Data type for storing Shampoo inverse factor matrices. (Default: torch.float)
+        computation_dtype (torch.dtype): Data type for computation (i.e., matrix inverse) is performed in. (Default: torch.float)
         use_protected_eigh (bool): Flag for using two guards to prevent failures of torch.linalg.eigh. (Default: True)
             1. Attempts to compute root inverse in preconditioner_dtype precision.
             2. Attempts to recompute the eigendecomposition if using lower-precision fails.
@@ -778,7 +786,7 @@ class ShampooPreconditionerList(PreconditionerList):
         )
 
 
-class DequantizePreconditionersContext:
+class DequantizePreconditionersContext(ParameterizeEnterExitContext):
     """DequantizePreconditionersContext is used for automatically dequantize and then quantize the preconditioners used within this context.
 
     Args:
@@ -786,22 +794,14 @@ class DequantizePreconditionersContext:
 
     Examples:
         >>> with DequantizePreconditionersContext(preconditioner_list):
-        >>>     # Do something with the preconditioners, and preconditioner_list will be dequantized.
+        >>>     # Do something with the preconditioners which are dequantized.
         >>> # After the context is exited, the preconditioners will be quantized.
 
     """
 
     def __init__(self, preconditioner_list: PreconditionerList) -> None:
-        self._preconditioner_list = preconditioner_list
-
-    def __enter__(self) -> "DequantizePreconditionersContext":
-        self._preconditioner_list.dequantize_preconditioners()
-        return self
-
-    def __exit__(
-        self,
-        exc_type: Optional[Type[BaseException]],
-        exc_val: Optional[BaseException],
-        exc_tb: Optional[TracebackType],
-    ) -> None:
-        self._preconditioner_list.quantize_preconditioners()
+        super().__init__(
+            input_with_enter_exit_context=preconditioner_list,
+            enter_method_caller=methodcaller("dequantize_preconditioners"),
+            exit_method_caller=methodcaller("quantize_preconditioners"),
+        )

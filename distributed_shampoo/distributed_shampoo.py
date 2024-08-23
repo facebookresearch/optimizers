@@ -7,6 +7,7 @@ LICENSE file in the root directory of this source tree.
 
 """
 
+import contextlib
 import logging
 from copy import deepcopy
 from functools import partial
@@ -61,6 +62,7 @@ from distributed_shampoo.shampoo_types import (
     RMSpropGraftingConfig,
     SGDGraftingConfig,
     SHAMPOO_PRECONDITIONER_LIST,
+    ShampooPT2CompileConfig,
     START_PRECONDITIONING_STEP,
     STEP,
     USE_BIAS_CORRECTION,
@@ -83,10 +85,12 @@ from distributed_shampoo.utils.shampoo_hsdp_distributor import HSDPDistributor
 
 from distributed_shampoo.utils.shampoo_preconditioner_list import (
     AdagradPreconditionerList,
+    DequantizePreconditionersContext,
     SGDPreconditionerList,
     ShampooPreconditionerList,
 )
 from distributed_shampoo.utils.shampoo_quantization import (
+    DequantizeQuantizedTensorListContext,
     QuantizedTensor,
     QuantizedTensorList,
 )
@@ -128,7 +132,7 @@ class DistributedShampoo(torch.optim.Optimizer):
     ------------
 
     1. PyTorch >= 2.0
-    2. Python >= 3.8
+    2. Python >= 3.10
     3. CUDA 11.3, 11.4, 12.2+
 
     In order to support checkpointing, one must use torch.distributed.checkpoint and pass the named parameters into state_dict.
@@ -221,6 +225,27 @@ class DistributedShampoo(torch.optim.Optimizer):
                 - torch.distributed must be initialized in advance.
                 - One must enable the option use_orig_params = True in FSDP.
 
+    4. PyTorch 2.0 Compile Support: Shampoo supports PyTorch 2.0's compilation feature to speed up model training. This is enabled by
+        setting up the shampoo_pt2_compile_config arg for Shampoo PyTorch 2.0 compilation.
+
+        - If shampoo_pt2_compile_config = None, ignores compilation, and Shampoo will run in eager mode.
+            Shampoo PT2 eager mode means the optimizer runs on plain python code, there is no graphs and lower level kernels used
+            to speed up the optimizer stage; and typically you would expect lower QPS for model training as a result.
+            For more details regarding PT2 compilation: https://pytorch.org/get-started/pytorch-2.0/
+
+        - If shampoo_pt2_compile_config is set to ShampooPT2CompileConfig class, Shampoo will run in PT2 mode. Shampoo PT2 mode typically gives
+            on par numerics and model NE, plus higher QPS. But due to differences in lower level kernel implementation, model NE on par is not always
+            guaranteed. If you see NE gap, please switch back to Shampoo PT2 eager mode.
+
+        Shampoo PT2 compilation can also be customized for the backend and options via ShampooPT2CompileConfig.
+            ShampooPT2CompileConfig
+                - pytorch_compile_backend: PT2 backend to use. All available backends in pytorch 2.0 is available for Shampoo. Typical backends to use
+                    include 'inductor', 'aot_eager'. For more details: https://pytorch.org/docs/stable/torch.compiler.html
+                - enable_shampoo_pt2_dynamic_shape: if true, PT2 will compile Shampoo data/tensors with `dynamic shape` mode. Default is False and use
+                    `static` mode. `dynamic shape` means the tensor shapes can change from run to run, and PT2 will generate kernels not specialized to
+                    particular tensor shape. Recommended to use `static` mode here for Shampoo.
+                    More about dynamic shape: https://pytorch.org/docs/stable/torch.compiler_dynamic_shapes.html
+
     Args:
         params (ParamsT): Iterable of parameters to optimize or dicts defining parameter groups.
         lr (float): Learning rate. (Default: 1e-2)
@@ -250,7 +275,10 @@ class DistributedShampoo(torch.optim.Optimizer):
         grafting_config (Optional[GraftingConfig]): Configuration for grafting method. If None, ignores grafting.
             (Default: None)
         use_merge_dims (bool): Merge dimensions if possible while respecting max_preconditioner_dim. (Default: True)
-        use_pytorch_compile (bool): Use PyTorch 2.0 compiler feature to speed up training. (Default: False)
+        use_pytorch_compile (bool): Use PyTorch 2.0 compiler feature to speed up training. Deprecating, please use
+            shampoo_pt2_compile_config instead. (Default: None)
+        shampoo_pt2_compile_config (Optional[ShampooPT2CompileConfig]): Configuration for Shampoo PT2 compilation. If None,
+            ignores compilation, and Shampoo will run in eager mode. (Default: None)
         distributed_config (Optional[DistributedConfig]): Configuration for applying Shampoo
             to different distributed training frameworks, such as distributed-data parallel (DDP) training.
             Based on the configuration, determines which version of Shampoo to use. (Default: None)
@@ -285,13 +313,13 @@ class DistributedShampoo(torch.optim.Optimizer):
         use_decoupled_weight_decay: bool = True,
         grafting_config: Optional[GraftingConfig] = None,
         use_merge_dims: bool = True,
-        use_pytorch_compile: bool = False,
+        use_pytorch_compile: Optional[bool] = None,
+        shampoo_pt2_compile_config: Optional[ShampooPT2CompileConfig] = None,
         distributed_config: Optional[DistributedConfig] = None,
         preconditioner_dtype: Optional[torch.dtype] = None,
         precision_config: Optional[PrecisionConfig] = None,
         use_protected_eigh: bool = True,
         track_root_inv_residuals: bool = False,
-        pytorch_compile_backend: str = "inductor",
     ) -> None:
         # Hyperparameter checks.
         if not lr >= 0.0:
@@ -368,10 +396,26 @@ class DistributedShampoo(torch.optim.Optimizer):
                 "Continuing without using momentum or Nesterov acceleration..."
             )
 
+        # Deprecation warning for use_pytorch_compile
+        if use_pytorch_compile is not None:
+            if use_pytorch_compile and shampoo_pt2_compile_config is None:
+                shampoo_pt2_compile_config = ShampooPT2CompileConfig()
+                logger.warning(
+                    "use_pytorch_compile is deprecating. Please use shampoo_pt2_compile_config instead."
+                )
+            elif use_pytorch_compile and shampoo_pt2_compile_config is not None:
+                raise ValueError(
+                    "Both use_pytorch_compile and shampoo_pt2_compile_config are provided. Please use only shampoo_pt2_compile_config as use_pytorch_compile is deprecating."
+                )
+            elif not use_pytorch_compile and shampoo_pt2_compile_config is not None:
+                raise ValueError(
+                    "use_pytorch_compile=False conflicts with non-None shampoo_pt2_compile_config arg. Please use only shampoo_pt2_compile_config as use_pytorch_compile is deprecating."
+                )
+
         # Provide error for system Pytorch compile availability
-        if use_pytorch_compile and not torch.cuda.is_available():
+        if shampoo_pt2_compile_config is not None and not torch.cuda.is_available():
             raise ValueError(
-                "Backend does NOT support Pytorch 2.0 compile. Switch to use_pytorch_compile=False."
+                "Backend does NOT support Pytorch 2.0 compile. Switch to use_pytorch_compile in (False, None) and shampoo_pt2_compile_config=None."
             )
 
         # Deprecation warning for preconditioner_dtype
@@ -421,8 +465,9 @@ class DistributedShampoo(torch.optim.Optimizer):
         self._distributed_config = distributed_config
         self._use_protected_eigh = use_protected_eigh
         self._track_root_inv_residuals = track_root_inv_residuals
-        self._use_pytorch_compile = use_pytorch_compile
-        self._pytorch_compile_backend = pytorch_compile_backend
+        self._shampoo_pt2_compile_config: Optional[ShampooPT2CompileConfig] = (
+            shampoo_pt2_compile_config
+        )
 
         # Initialize dictionary containing lists of .
         self._per_group_state_lists: List[Dict[str, Any]] = [
@@ -689,14 +734,16 @@ class DistributedShampoo(torch.optim.Optimizer):
             None,
         ] = (
             torch.compile(
-                self._per_group_step_impl, backend=self._pytorch_compile_backend
+                self._per_group_step_impl,
+                backend=self._shampoo_pt2_compile_config.pytorch_compile_backend,
+                dynamic=self._shampoo_pt2_compile_config.enable_shampoo_pt2_dynamic_shape,
             )
-            if self._use_pytorch_compile
+            if self._shampoo_pt2_compile_config is not None
             else self._per_group_step_impl
         )
-        if self._use_pytorch_compile:
+        if self._shampoo_pt2_compile_config is not None:
             logger.info(
-                f"DistributedShampoo optimizer initialization is using {self._pytorch_compile_backend} backend."
+                f"DistributedShampoo optimizer initialization is using {self._shampoo_pt2_compile_config.pytorch_compile_backend} backend and enable_shampoo_pt2_dynamic_shape={self._shampoo_pt2_compile_config.enable_shampoo_pt2_dynamic_shape}"
             )
 
     @staticmethod
@@ -708,6 +755,10 @@ class DistributedShampoo(torch.optim.Optimizer):
         ):
             return
 
+        if state_lists[STEP].item() >= 1:
+            logger.warn(
+                "PT2 will recompile because the gradient selction of model parameters have changed from the previous step. Possible reasons include some gradients are None. If this is not intended, please check the data and/or model."
+            )
         # Updates masked state lists if previous block selector disagrees with current selector.
         # State list compression is necessary in order to avoid handling gradients with None.
         state_lists[PREVIOUS_GRAD_SELECTOR] = state_lists[
@@ -841,11 +892,6 @@ class DistributedShampoo(torch.optim.Optimizer):
                     masked_blocked_search_directions, grafting_norm_list
                 )
 
-        state_lists[SHAMPOO_PRECONDITIONER_LIST].quantize_preconditioners()
-        if grafting_config_not_none:
-            state_lists[GRAFTING_PRECONDITIONER_LIST].quantize_preconditioners()
-        # TODO: take care of quantization using context manager in _per_group_step_impl()
-
         return masked_blocked_search_directions
 
     @torch.no_grad()
@@ -871,17 +917,11 @@ class DistributedShampoo(torch.optim.Optimizer):
         grafting_config_not_none: bool,
     ) -> None:
         # Update Shampoo and grafting preconditioners / factor matrices.
-        state_lists[SHAMPOO_PRECONDITIONER_LIST].dequantize_preconditioners()
-        # TODO: take care of dequantization using context manager in _per_group_step_impl()
-
         state_lists[SHAMPOO_PRECONDITIONER_LIST].update_preconditioners(
             masked_grad_list=state_lists[MASKED_BLOCKED_GRADS],
             step=step,
         )
         if grafting_config_not_none:
-            state_lists[GRAFTING_PRECONDITIONER_LIST].dequantize_preconditioners()
-            # TODO: take care of dequantization using context manager in _per_group_step_impl()
-
             state_lists[GRAFTING_PRECONDITIONER_LIST].update_preconditioners(
                 masked_grad_list=state_lists[MASKED_BLOCKED_GRADS],
                 step=step,
@@ -897,35 +937,34 @@ class DistributedShampoo(torch.optim.Optimizer):
         use_bias_correction: bool,
     ) -> Tuple[torch.Tensor, ...]:
         if beta1 != 0.0:
-            state_lists[MASKED_FILTERED_GRAD_LIST].dequantize_()
+            with DequantizeQuantizedTensorListContext(
+                quantized_tensor_list=state_lists[MASKED_FILTERED_GRAD_LIST]
+            ):
+                # Computes filtered gradient or EMA of the gradients with respect to beta3 if beta3 != beta1.
+                masked_filtered_grad_list = (
+                    torch._foreach_lerp(
+                        state_lists[MASKED_FILTERED_GRAD_LIST].dequantized_value,
+                        state_lists[MASKED_BLOCKED_GRADS],
+                        weight=1 - beta3,
+                    )
+                    if beta3 != beta1
+                    else state_lists[MASKED_FILTERED_GRAD_LIST].dequantized_value
+                )
 
-            # Computes filtered gradient or EMA of the gradients with respect to beta3 if beta3 != beta1.
-            masked_filtered_grad_list = (
-                torch._foreach_lerp(
+                # Update EMA of the gradients (with respect to beta1).
+                torch._foreach_lerp_(
                     state_lists[MASKED_FILTERED_GRAD_LIST].dequantized_value,
                     state_lists[MASKED_BLOCKED_GRADS],
-                    weight=1 - beta3,
-                )
-                if beta3 != beta1
-                else state_lists[MASKED_FILTERED_GRAD_LIST].dequantized_value
-            )
-
-            # Update EMA of the gradients (with respect to beta1).
-            torch._foreach_lerp_(
-                state_lists[MASKED_FILTERED_GRAD_LIST].dequantized_value,
-                state_lists[MASKED_BLOCKED_GRADS],
-                weight=1 - beta1,
-            )
-
-            # Apply bias correction if necessary.
-            if use_bias_correction:
-                bias_correction1 = 1.0 - beta3 * beta1 ** (step - 1)
-                masked_filtered_grad_list = torch._foreach_div(
-                    masked_filtered_grad_list,
-                    bias_correction1,
+                    weight=1 - beta1,
                 )
 
-            state_lists[MASKED_FILTERED_GRAD_LIST].quantize_()
+                # Apply bias correction if necessary.
+                if use_bias_correction:
+                    bias_correction1 = 1.0 - beta3 * beta1 ** (step - 1)
+                    masked_filtered_grad_list = torch._foreach_div(
+                        masked_filtered_grad_list,
+                        bias_correction1,
+                    )
         else:
             masked_filtered_grad_list = state_lists[MASKED_BLOCKED_GRADS]
 
@@ -958,35 +997,34 @@ class DistributedShampoo(torch.optim.Optimizer):
     ) -> None:
         # Update momentum optimizer state and use momentum / Nesterov if enabled.
         if momentum_param != 0.0:
-            state_lists[MASKED_MOMENTUM_LIST].dequantize_()
-
-            torch._foreach_mul_(
-                state_lists[MASKED_MOMENTUM_LIST].dequantized_value, momentum_param
-            )
-            torch._foreach_add_(
-                state_lists[MASKED_MOMENTUM_LIST].dequantized_value,
-                masked_blocked_search_directions,
-                alpha=1 - dampening,
-            )
-
-            # Incorporates Nesterov momentum.
-            if use_nesterov:
+            with DequantizeQuantizedTensorListContext(
+                quantized_tensor_list=state_lists[MASKED_MOMENTUM_LIST]
+            ):
                 torch._foreach_mul_(
-                    masked_blocked_search_directions,
-                    1 - dampening,
+                    state_lists[MASKED_MOMENTUM_LIST].dequantized_value, momentum_param
                 )
                 torch._foreach_add_(
-                    masked_blocked_search_directions,
                     state_lists[MASKED_MOMENTUM_LIST].dequantized_value,
-                    alpha=momentum_param,
-                )
-            else:
-                torch._foreach_copy_(
                     masked_blocked_search_directions,
-                    state_lists[MASKED_MOMENTUM_LIST].dequantized_value,
+                    alpha=1 - dampening,
                 )
 
-            state_lists[MASKED_MOMENTUM_LIST].quantize_()
+                # Incorporates Nesterov momentum.
+                if use_nesterov:
+                    torch._foreach_mul_(
+                        masked_blocked_search_directions,
+                        1 - dampening,
+                    )
+                    torch._foreach_add_(
+                        masked_blocked_search_directions,
+                        state_lists[MASKED_MOMENTUM_LIST].dequantized_value,
+                        alpha=momentum_param,
+                    )
+                else:
+                    torch._foreach_copy_(
+                        masked_blocked_search_directions,
+                        state_lists[MASKED_MOMENTUM_LIST].dequantized_value,
+                    )
 
     @torch.no_grad()
     def _per_group_step_impl(
@@ -1006,15 +1044,6 @@ class DistributedShampoo(torch.optim.Optimizer):
         use_grafting_method: bool,
         use_nesterov: bool,
     ) -> None:
-        # Set elements in split_params and split_search_directions to be static
-        # to avoid excessive dynamic shape guards generated on those parameters.
-        # TODO : Re-evaluate whether this can be removed after Dynamo fixed the root cause.
-        if torch._dynamo.is_compiling():
-            for elem in state_lists[MASKED_BLOCKED_GRADS]:
-                torch._dynamo.mark_static(elem)
-            for elem in state_lists[MASKED_BLOCKED_PARAMS]:
-                torch._dynamo.mark_static(elem)
-
         # Incorporate L2-regularization or (coupled) weight decay if enabled.
         #   G <- G + lr * weight_decay * W
         self._add_l2_regularization(
@@ -1023,50 +1052,59 @@ class DistributedShampoo(torch.optim.Optimizer):
             use_decoupled_weight_decay,
         )
 
-        # Update Shampoo and grafting preconditioners / factor matrices.
-        #   Example for AdaGrad accumulation:
-        #   L <- L + G * G^T
-        #   R <- R + G^T * G
-        #   V <- V + G^2    (element-wise)
-        #   (and similar)
-        self._update_preconditioners(
-            state_lists,
-            step,
-            grafting_config_not_none,
-        )
+        with DequantizePreconditionersContext(
+            preconditioner_list=state_lists[SHAMPOO_PRECONDITIONER_LIST]
+        ), (
+            DequantizePreconditionersContext(
+                preconditioner_list=state_lists[GRAFTING_PRECONDITIONER_LIST]
+            )
+            if grafting_config_not_none
+            else contextlib.nullcontext()
+        ):
+            # Update Shampoo and grafting preconditioners / factor matrices.
+            #   Example for AdaGrad accumulation:
+            #   L <- L + G * G^T
+            #   R <- R + G^T * G
+            #   V <- V + G^2    (element-wise)
+            #   (and similar)
+            self._update_preconditioners(
+                state_lists,
+                step,
+                grafting_config_not_none,
+            )
 
-        # Compute matrix root inverse.
-        #   L_inv <- L ** (-1/4)
-        #   R_inv <- R ** (-1/4)
-        #   (and similar)
-        self._compute_root_inverse(state_lists, compute_root_inverse)
+            # Compute matrix root inverse.
+            #   L_inv <- L ** (-1/4)
+            #   R_inv <- R ** (-1/4)
+            #   (and similar)
+            self._compute_root_inverse(state_lists, compute_root_inverse)
 
-        # Compute filtered gradient or EMA of the gradients if beta1 > 0 and beta3 > 0.
-        # Note that we use two beta factors here akin to Lion.
-        #   G_bar <- beta3 * G_tilde + (1 - beta3) * G
-        #   G_tilde <- beta1 * G_tilde + (1 - beta1) * G
-        masked_filtered_grad_list = self._compute_filtered_grad_list(
-            state_lists,
-            step,
-            beta1,
-            beta3,
-            use_bias_correction,
-        )
+            # Compute filtered gradient or EMA of the gradients if beta1 > 0 and beta3 > 0.
+            # Note that we use two beta factors here akin to Lion.
+            #   G_bar <- beta3 * G_tilde + (1 - beta3) * G
+            #   G_tilde <- beta1 * G_tilde + (1 - beta1) * G
+            masked_filtered_grad_list = self._compute_filtered_grad_list(
+                state_lists,
+                step,
+                beta1,
+                beta3,
+                use_bias_correction,
+            )
 
-        # Precondition and graft filtered gradients.
-        # PT2 compile is currently disabled for preconditioning and grafting.
-        # TODO: Resolve preconditioning and grafting PT2 NEX issue and enable them.
-        #
-        #   P_shampoo <- L_inv * G_bar * R_inv (and similar)
-        #   P_grafting <- G_bar / (sqrt(V) + epsilon)
-        #   P <- P_grafting                                     if step < start_preconditioning_step
-        #   P <- ||P_grafting|| / ||P_shampoo|| * P_shampoo     otherwise
-        masked_blocked_search_directions = self._precondition_and_grafting(
-            state_lists,
-            masked_filtered_grad_list,
-            use_grafting_method,
-            grafting_config_not_none,
-        )
+            # Precondition and graft filtered gradients.
+            # PT2 compile is currently disabled for preconditioning and grafting.
+            # TODO: Resolve preconditioning and grafting PT2 NEX issue and enable them.
+            #
+            #   P_shampoo <- L_inv * G_bar * R_inv (and similar)
+            #   P_grafting <- G_bar / (sqrt(V) + epsilon)
+            #   P <- P_grafting                                     if step < start_preconditioning_step
+            #   P <- ||P_grafting|| / ||P_shampoo|| * P_shampoo     otherwise
+            masked_blocked_search_directions = self._precondition_and_grafting(
+                state_lists,
+                masked_filtered_grad_list,
+                use_grafting_method,
+                grafting_config_not_none,
+            )
 
         # Incorporate decoupled weight decay into search direction if enabled.
         #   P <- P + weight_decay * W
