@@ -258,7 +258,7 @@ import torch
 import torch.distributed as dist
 
 from distributed_shampoo.distributed_shampoo import DistributedShampoo
-from distributed_shampoo.shampoo_types import AdamGraftingConfig, DDPShampooConfig
+from distributed_shampoo.shampoo_types import AdamGraftingConfig, DDPShampooConfig, CommunicationDType
 from torch import nn
 
 LOCAL_RANK = int(os.environ["LOCAL_RANK"])
