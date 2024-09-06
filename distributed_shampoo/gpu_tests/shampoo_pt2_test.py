@@ -13,7 +13,7 @@ LICENSE file in the root directory of this source tree.
 import itertools
 import unittest
 from functools import partial
-from typing import Callable, Iterable, Optional, Tuple
+from typing import Callable, Optional
 
 import torch
 from distributed_shampoo.distributed_shampoo import DistributedShampoo
@@ -22,39 +22,27 @@ from distributed_shampoo.shampoo_types import (
     GraftingConfig,
     ShampooPT2CompileConfig,
 )
-from torch import nn
+from distributed_shampoo.tests.shampoo_test_utils import construct_training_problem
 from torch.nn.parameter import Parameter
+from torch.optim.optimizer import ParamsT
 
 
 class DistributedShampooPytorchCompileTest(unittest.TestCase):
     @staticmethod
-    def _construct_quadratic() -> (
-        Tuple[nn.Module, nn.Module, torch.Tensor, torch.Tensor]
-    ):
-        data = torch.arange(10, dtype=torch.float, device=torch.device("cuda"))
-        data /= torch.norm(data)
-        model = nn.Sequential(
-            nn.Linear(10, 1, bias=False),
-            nn.Linear(1, 1, bias=False),
-        ).to(device=torch.device("cuda"))
-        model[0].weight.data.fill_(1.0)
-        model[1].weight.data.fill_(1.0)
-        model[1].requires_grad = False
-        loss = nn.MSELoss()
-        target = torch.tensor([0.0]).to(device=torch.device("cuda"))
-        return model, loss, data, target
-
-    @staticmethod
     def _train_quadratic(
-        shampoo_optim_factory: Callable[[Iterable[Parameter]], torch.optim.Optimizer],
+        shampoo_optim_factory: Callable[[ParamsT], torch.optim.Optimizer],
         total_steps: int = 5,
-    ) -> Tuple[Parameter, torch.Tensor]:
+    ) -> tuple[Parameter, torch.Tensor]:
         (
             model,
             loss,
             data,
             target,
-        ) = DistributedShampooPytorchCompileTest._construct_quadratic()
+        ) = construct_training_problem(
+            model_linear_layers_dims=(10, 1, 1),
+            device=torch.device("cuda"),
+            fill=1.0,
+        )
         params = model.parameters()
         optimizer = shampoo_optim_factory(params)
         for _ in range(total_steps):
@@ -62,12 +50,12 @@ class DistributedShampooPytorchCompileTest(unittest.TestCase):
             objective = loss(model(data), target)
             objective.backward()
             optimizer.step()
-        return model[0].weight.data.cpu(), objective.detach().cpu()
+        return model.linear_layers[0].weight.data.cpu(), objective.detach().cpu()
 
     @staticmethod
     def _test_shampoo_baseline_and_pt2(
-        baseline_optim_factory: Callable[[Iterable[Parameter]], torch.optim.Optimizer],
-        pt2_optim_factory: Callable[[Iterable[Parameter]], torch.optim.Optimizer],
+        baseline_optim_factory: Callable[[ParamsT], torch.optim.Optimizer],
+        pt2_optim_factory: Callable[[ParamsT], torch.optim.Optimizer],
         total_steps: int = 5,
         rtol: Optional[float] = None,
         atol: Optional[float] = None,
@@ -102,9 +90,9 @@ class DistributedShampooPytorchCompileTest(unittest.TestCase):
         precondition_frequency: int,
         start_preconditioning_step: int,
         weight_decay: float,
-        betas: Tuple[float, float],
+        betas: tuple[float, float],
         grafting_config: GraftingConfig,
-    ) -> Callable[[Iterable[Parameter]], torch.optim.Optimizer]:
+    ) -> Callable[[ParamsT], torch.optim.Optimizer]:
         return lambda parameters: DistributedShampoo(
             parameters,
             lr=0.01,

@@ -226,15 +226,17 @@ class AdagradPreconditionerList(PreconditionerList):
             self._local_preconditioner_list
         )
 
-        # Construct lists of bytes and numels for logging purposes.
+        # Construct lists of dims, bytes, and numels for logging purposes.
+        self._dims_list: Tuple[torch.Size, ...] = compress_list(
+            self._dims_list, distributor_selector
+        )
         self._numel_list: Tuple[int, ...] = tuple(
-            preconditioner.quantized_values.numel()
-            for preconditioner in preconditioner_list
+            quantized_preconditioner.numel()
+            for quantized_preconditioner in self._local_preconditioner_list.quantized_value
         )
         self._num_bytes_list: Tuple[int, ...] = tuple(
-            preconditioner.quantized_values.numel()
-            * preconditioner.quantized_values.element_size()
-            for preconditioner in preconditioner_list
+            quantize_preconditioner.numel() * quantize_preconditioner.element_size()
+            for quantize_preconditioner in self._local_preconditioner_list.quantized_value
         )
 
     def update_preconditioners(
@@ -502,6 +504,9 @@ class ShampooPreconditionerList(PreconditionerList):
 
         # Construct lists of bytes and numels for logging purposes.
         # NOTE: These lists are constructed across all blocked parameters.
+        self._dims_list: Tuple[torch.Size, ...] = compress_list(
+            self._dims_list, distributor_selector
+        )
         self._numel_list: Tuple[int, ...] = tuple(
             sum(2 * dim**2 for dim in dims) for dims in self._dims_list
         )
@@ -509,7 +514,7 @@ class ShampooPreconditionerList(PreconditionerList):
             numel
             * (get_dtype_size(self._factor_matrix_dtype) + get_dtype_size(block.dtype))
             // 2
-            for numel, block in zip(self._numel_list, local_block_list)
+            for numel, block in zip(self._numel_list, local_block_list, strict=True)
         )
 
     @staticmethod

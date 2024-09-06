@@ -12,8 +12,8 @@ LICENSE file in the root directory of this source tree.
 
 import re
 from functools import partial
-from itertools import product
-from typing import Callable, Iterable, List, Optional, Tuple
+from itertools import pairwise, product
+from typing import Callable, List, Optional, Tuple
 from unittest import mock
 
 import torch
@@ -23,6 +23,7 @@ from distributed_shampoo.shampoo_types import (
     CommunicationDType,
     HSDPShampooConfig,
 )
+from distributed_shampoo.tests.shampoo_test_utils import construct_training_problem
 from distributed_shampoo.utils.shampoo_fsdp_utils import compile_fsdp_parameter_metadata
 from distributed_shampoo.utils.shampoo_preconditioner_list import SHAMPOO
 
@@ -30,7 +31,7 @@ from torch import nn
 from torch.distributed.checkpoint._nested_dict import flatten_state_dict
 from torch.distributed.device_mesh import init_device_mesh
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP, ShardingStrategy
-from torch.nn.parameter import Parameter
+from torch.optim.optimizer import ParamsT
 from torch.testing._internal.common_distributed import skip_if_lt_x_gpu
 from torch.testing._internal.common_fsdp import FSDPTest
 
@@ -45,8 +46,6 @@ class ShampooHSDPDistributorTest(FSDPTest):
         device: torch.device,
         distributed_config: Optional[HSDPShampooConfig],
     ) -> Tuple[nn.Module, nn.Module, torch.Tensor, torch.Tensor]:
-        data = torch.arange(16 * 4, dtype=torch.float, device=device)
-        data /= torch.norm(data)
         # NOTE: We construct the model here specifically in order to ensure that
         #       HSDP Shampoo and default Shampoo produce equivalent results.
         #       This requires us to construct a model such that FSDP will split the
@@ -57,22 +56,19 @@ class ShampooHSDPDistributorTest(FSDPTest):
         #       An additional constraint imposed by FSDP is from PT2; the split must be
         #       16-byte aligned. With FP32 elements, this corresponds to 4 elements.
         #
-        #       Based on the design of the model below, the model has 512 + 72 + 576 = 1160
-        #       elements, which means that the model will be split at index 580 across the
-        #       flattened param in FSDP.
-        #       This corresponds to index 580 - 512 = 68 in the second parameter. Note that
-        #       splitting at this index is equivalent to the standard blocking with a block
-        #       size of 4.
-        model = nn.Sequential(
-            nn.Linear(16 * 4, 8, bias=False),  # 512 elements
-            nn.Linear(8, 9, bias=False),  # 72 elements
-            nn.Linear(9, 16 * 4, bias=False),  # 576 elements
-        ).to(device=device)
-        model[0].weight.data.fill_(0.1)
-        model[1].weight.data.fill_(0.1)
-        model[2].weight.data.fill_(0.1)
-        loss = nn.MSELoss()
-        target = torch.tensor([0.0]).to(device=device)
+        #       Based on the design of the model below, the model has 512 + 72 + 576 + 64 =
+        #       1224 elements, which means that the model will be split at index 612 across
+        #       the flattened param in FSDP.
+        #       This corresponds to index 612 - 512 - 72 = 28 in the third parameter. Note
+        #       that splitting at this index is equivalent to the standard blocking with a
+        #       block size of 4.
+        model_linear_layers_dims = (16 * 4, 8, 9, 16 * 4, 1)
+        model, loss, data, target = construct_training_problem(
+            model_linear_layers_dims=model_linear_layers_dims,
+            model_dead_layer_dims=None,
+            device=device,
+            fill=0.01,
+        )
         if isinstance(distributed_config, HSDPShampooConfig):
             model = FSDP(
                 model,
@@ -83,13 +79,16 @@ class ShampooHSDPDistributorTest(FSDPTest):
             distributed_config.param_to_metadata = compile_fsdp_parameter_metadata(
                 model
             )
-            assert sum(param.numel() for param in model.parameters()) == 1160 / 2
+            assert (
+                sum(param.numel() for param in model.parameters())
+                == sum(a * b for a, b in pairwise(model_linear_layers_dims)) // 2
+            ), f"{sum(param.numel() for param in model.parameters())=}, {sum(a * b for a, b in pairwise(model_linear_layers_dims)) // 2=}"
         return model, loss, data, target
 
     @staticmethod
     def _train_model(
         optim_factory: Callable[
-            [Iterable[Parameter]],
+            [ParamsT],
             torch.optim.Optimizer,
         ],
         model_factory: Callable[
@@ -120,7 +119,7 @@ class ShampooHSDPDistributorTest(FSDPTest):
     @staticmethod
     def _test_two_configs(
         optim_factory1: Callable[
-            [Iterable[Parameter]],
+            [ParamsT],
             torch.optim.Optimizer,
         ],
         model_factory1: Callable[
@@ -133,7 +132,7 @@ class ShampooHSDPDistributorTest(FSDPTest):
             ],
         ],
         optim_factory2: Callable[
-            [Iterable[Parameter]],
+            [ParamsT],
             torch.optim.Optimizer,
         ],
         model_factory2: Callable[
@@ -164,7 +163,7 @@ class ShampooHSDPDistributorTest(FSDPTest):
     def _shampoo_optim_factory(
         distributed_config: Optional[HSDPShampooConfig],
     ) -> Callable[
-        [Iterable[Parameter]],
+        [ParamsT],
         torch.optim.Optimizer,
     ]:
         return lambda parameters: (

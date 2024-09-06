@@ -258,7 +258,7 @@ import torch
 import torch.distributed as dist
 
 from distributed_shampoo.distributed_shampoo import DistributedShampoo
-from distributed_shampoo.shampoo_types import AdamGraftingConfig, DDPShampooConfig
+from distributed_shampoo.shampoo_types import AdamGraftingConfig, CommunicationDType, DDPShampooConfig
 from torch import nn
 
 LOCAL_RANK = int(os.environ["LOCAL_RANK"])
@@ -474,6 +474,19 @@ With the inclusion of learning rate grafting, we can extract a good learning rat
     * **Process Group Size** (`num_trainers_per_group`): For large-scale distributed jobs, this hyperparameter allows us to trade off computational and communication costs. Assuming the number of GPUs per node is 8, one should search for a value in $\{8,16,32,64\}$. This hyperparameter has no impact on model quality.
     * **Quantized Communications** (`communication_dtype`): One can enable quantized communications by setting the `communication_dtype`. We have found that using `CommunicationDType.FP16` works well in practice (with `communicate_params = False`).
     * **Communicate Updated Parameters** (`communicate_params`): If one does not enable quantized communications, one can possibly obtain better performance by communicating the updated parameters by setting this to `True`.
+
+## Commmon Questions
+
+### Encountering `NaN/Inf` numerical error:
+
+When gradients are `NaN/Inf`, most optimizers still proceed smoothly and modify model weights with those `NaN/Inf` values but Shampoo reacts with error messages like "Encountered nan values ...".
+
+When encountering those errors, following are things you could try:
+
+1. Decrease the learning rate.
+2. Adjust the learning rate scheduler.
+3. Increase `start_preconditioning_step`.
+4. Consider applying gradient clipping.
 
 ## References
 

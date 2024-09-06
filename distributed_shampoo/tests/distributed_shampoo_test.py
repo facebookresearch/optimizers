@@ -23,6 +23,7 @@ from distributed_shampoo.distributed_shampoo import DistributedShampoo
 from distributed_shampoo.shampoo_types import (
     AdaGradGraftingConfig,
     DDPShampooConfig,
+    DistributedConfig,
     GRAFTING_PRECONDITIONER_LIST,
     MASKED_FILTERED_GRAD_LIST,
     MASKED_MOMENTUM_LIST,
@@ -223,12 +224,8 @@ class DistributedShampooInitTest(unittest.TestCase):
             ),
         ), mock.patch.object(
             distributed_shampoo,
-            "isinstance",
-            side_effect=lambda object, classinfo: (
-                False
-                if classinfo == DDPShampooConfig
-                else isinstance(object, classinfo)
-            ),
+            "type",
+            side_effect=lambda object: DistributedConfig,
         ):
             DistributedShampoo(
                 params=self._model.parameters(),

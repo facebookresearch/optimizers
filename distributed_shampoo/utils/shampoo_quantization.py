@@ -247,7 +247,12 @@ class QuantizedTensorList:
         masked_max_values = compress_list(self._max_values, selector)
         return QuantizedTensorList(
             tuple(
-                zip(masked_quantized_value_list, masked_min_values, masked_max_values)
+                zip(
+                    masked_quantized_value_list,
+                    masked_min_values,
+                    masked_max_values,
+                    strict=True,
+                )
             ),
             self.quantized_dtype,
             self.computation_dtype,

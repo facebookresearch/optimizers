@@ -11,13 +11,12 @@ LICENSE file in the root directory of this source tree.
 
 
 import contextlib
-import itertools
 import pathlib
 import re
 import unittest
 from itertools import product
 
-from typing import Callable, Iterable, Optional, Tuple
+from typing import Callable, Optional
 from unittest import mock
 
 import torch
@@ -27,47 +26,31 @@ from distributed_shampoo.shampoo_types import (
     CommunicationDType,
     DDPShampooConfig,
 )
+from distributed_shampoo.tests.shampoo_test_utils import construct_training_problem
 
-from torch import distributed as dist, nn
+from torch import distributed as dist
 from torch.nn.parameter import Parameter
+from torch.optim.optimizer import ParamsT
 from torch.testing._internal.common_distributed import MultiProcessTestCase
 
 
 @unittest.skipIf(not torch.cuda.is_available(), "Skip when CUDA is not available")
 class ShampooDDPDistributorTest(MultiProcessTestCase):
     @staticmethod
-    def _construct_model(
-        device: torch.device,
-        model_linear_layers_dims: tuple[int, ...],
-    ) -> Tuple[nn.Module, nn.Module, torch.Tensor, torch.Tensor]:
-        data = torch.arange(
-            model_linear_layers_dims[0], dtype=torch.float, device=device
-        )
-        data /= torch.norm(data)
-        model = nn.Sequential(
-            *(
-                nn.Linear(a, b, bias=False)
-                for a, b in itertools.pairwise(model_linear_layers_dims + (1,))
-            )
-        ).to(device=device)
-        for m in model:
-            m.weight.data.fill_(0.01)
-        loss = nn.MSELoss()
-        target = torch.tensor([0.0]).to(device=device)
-        return model, loss, data, target
-
-    @staticmethod
     def _train_model(
         optim_factory: Callable[
-            [Iterable[Parameter]],
+            [ParamsT],
             torch.optim.Optimizer,
         ],
         device: torch.device,
-        model_linear_layers_dims: tuple[int, ...] = (80, 40),
-    ) -> Tuple[Parameter, torch.Tensor]:
-        model, loss, data, target = ShampooDDPDistributorTest._construct_model(
-            device=device,
+        model_linear_layers_dims: tuple[int, ...] = (80, 40, 1),
+        model_dead_layer_dims: Optional[tuple[int, ...]] = (20, 20),
+    ) -> tuple[Parameter, torch.Tensor]:
+        model, loss, data, target = construct_training_problem(
             model_linear_layers_dims=model_linear_layers_dims,
+            model_dead_layer_dims=model_dead_layer_dims,
+            device=device,
+            fill=0.01,
         )
         params = model.parameters()
         optimizer = optim_factory(params)
@@ -76,16 +59,16 @@ class ShampooDDPDistributorTest(MultiProcessTestCase):
             objective = loss(model(data), target)
             objective.backward()
             optimizer.step()
-        return model[0].weight.data.cpu(), objective.detach().cpu()
+        return model.linear_layers[0].weight.data.cpu(), objective.detach().cpu()
 
     @staticmethod
     def _test_two_configs(
         optim_factory1: Callable[
-            [Iterable[Parameter]],
+            [ParamsT],
             torch.optim.Optimizer,
         ],
         optim_factory2: Callable[
-            [Iterable[Parameter]],
+            [ParamsT],
             torch.optim.Optimizer,
         ],
         device: torch.device,
@@ -126,7 +109,7 @@ class ShampooDDPDistributorTest(MultiProcessTestCase):
     @staticmethod
     def _shampoo_optim_factory(
         distributed_config: Optional[DDPShampooConfig],
-    ) -> Callable[[Iterable[Parameter]], torch.optim.Optimizer]:
+    ) -> Callable[[ParamsT], torch.optim.Optimizer]:
         return lambda parameters: (
             lambda distributed_config: DistributedShampoo(
                 parameters,
@@ -204,10 +187,11 @@ class ShampooDDPDistributorTest(MultiProcessTestCase):
                 ShampooDDPDistributorTest._train_model(
                     self._shampoo_optim_factory(distributed_config=DDPShampooConfig()),
                     device=torch.device("cuda"),
-                    # Setting model_linear_layers_dims to (20,) creates an model with one linear layer with 20x1 weight.
+                    # Setting model_linear_layers_dims to (20, 1) creates an model with one linear layer with 20x1 weight.
                     # Because Shampoo's max_preconditioner_dim = 20, there will be only one block.
                     # In the case of two trainers per group, there will be one trainer has no params to work on.
-                    model_linear_layers_dims=(20,),
+                    model_linear_layers_dims=(20, 1),
+                    model_dead_layer_dims=None,
                 )
 
             if has_blocked_params:

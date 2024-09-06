@@ -12,7 +12,7 @@ from typing import Dict, Tuple
 import torch
 from distributed_shampoo.shampoo_types import FSDPParameterMetadata
 
-from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+from torch.distributed.fsdp import FullyShardedDataParallel as FSDP, ShardingStrategy
 from torch.nn import Parameter
 
 
@@ -38,6 +38,8 @@ def compile_fsdp_parameter_metadata(
         shapes = flat_param._shapes
         numels = flat_param._numels
         shard_param_infos = flat_param._shard_param_infos
+        sharding_strategy = fsdp_module.sharding_strategy
+
         assert (
             flat_param._params is not None
         ), "flat_param._params should not be None! Set the value of `use_orig_params` in FSDP module to True "
@@ -55,6 +57,7 @@ def compile_fsdp_parameter_metadata(
                     if shard_param_info.intra_param_end_idx is not None
                     else 0
                 ),
+                sharding_strategy=sharding_strategy,
             )
             for param, fqn, shape, numel, shard_param_info in zip(
                 params,
@@ -72,7 +75,7 @@ def compile_fsdp_parameter_metadata(
 def parse_fsdp_params(
     named_params: Dict[str, Parameter],
     param_metadata: Dict[Parameter, FSDPParameterMetadata],
-) -> Tuple[Dict[str, Parameter], Dict[str, Parameter]]:
+) -> Tuple[Dict[str, Parameter], Dict[str, Parameter], Dict[str, Parameter]]:
     """Splits parameters into FSDP and non-FSDP parameters.
 
     This is useful for parsing the parameters when FSDP is only wrapping a subset of modules within a model.
@@ -83,14 +86,29 @@ def parse_fsdp_params(
 
     Returns:
         fsdp_params (Dict[str, Parameter]): Dictionary mapping each parameter name to its corresponding FSDP parameter.
+        hsdp_params (Dict[str, Parameter]): Dictionary mapping each parameter name to its corresponding HSDP parameter.
         other_params (Dict[str, Parameter]): Dictionary mapping each parameter name to its corresponding non-FSDP parameter.
 
     """
     fsdp_params = {
-        fqn: param for fqn, param in named_params.items() if param in param_metadata
+        fqn: param
+        for fqn, param in named_params.items()
+        if param in param_metadata
+        and param_metadata[param].sharding_strategy
+        in [ShardingStrategy.FULL_SHARD, ShardingStrategy.SHARD_GRAD_OP]
+    }
+    hsdp_params = {
+        fqn: param
+        for fqn, param in named_params.items()
+        if param in param_metadata
+        and param_metadata[param].sharding_strategy
+        in [ShardingStrategy.HYBRID_SHARD, ShardingStrategy._HYBRID_SHARD_ZERO2]
     }
     other_params = {
-        fqn: param for fqn, param in named_params.items() if param not in param_metadata
+        fqn: param
+        for fqn, param in named_params.items()
+        if param not in param_metadata
+        or param_metadata[param].sharding_strategy == ShardingStrategy.NO_SHARD
     }
 
-    return fsdp_params, other_params
+    return fsdp_params, hsdp_params, other_params

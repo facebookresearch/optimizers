@@ -8,7 +8,8 @@ LICENSE file in the root directory of this source tree.
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Optional, Tuple
+from operator import attrgetter
+from typing import Any, Dict, Iterable, Optional, Tuple
 
 import torch
 from distributed_shampoo.shampoo_types import (
@@ -95,10 +96,32 @@ class DistributorInterface(ABC):
     def global_block_info_list(self) -> Tuple[BlockInfo, ...]:
         return self._global_block_info_list
 
+    def _get_params_or_grads(self, get_grad: bool = False) -> Iterable[Tensor | None]:
+        """Helper function that gets params or grads from the parameter group.
+
+        NOTE: The purpose of this function is for FullyShardShampooDistributor (supporting
+        Shampoo on per-parameter FSDP, a.k.a. FSDP2 or FullyShard) to override, in order to
+        get the local params/grads from DTensors.
+
+        By default, we just return the original params/grads.
+
+        Args:
+            get_grad (bool): Whether to return the param or the grad of the param. (Default: False)
+        Returns:
+            local (Iterable[Tensor | None]): Local params (or gradidents) from the param_group. Note
+              that gradients can be None.
+        """
+
+        return (
+            map(attrgetter("grad"), self._param_group[PARAMS])
+            if get_grad
+            else self._param_group[PARAMS]
+        )
+
     def _merge_and_block_parameters(
         self,
     ) -> None:
-        """Merge and block parameters.
+        """Merges small dims and blocks parameters.
 
         NOTE: FSDP may modify this function.
 
@@ -106,14 +129,15 @@ class DistributorInterface(ABC):
 
         # Merge dimensions for each parameter.
         self._global_merged_dims_list: Tuple[Tuple[int, ...], ...] = tuple(
-            (
+            tuple(
                 merge_small_dims(
                     param.size(), self._param_group[MAX_PRECONDITIONER_DIM]
                 )
                 if self._param_group[USE_MERGE_DIMS]
                 else param.size()
             )
-            for param in self._param_group[PARAMS]
+            for param in self._get_params_or_grads()
+            if param is not None  # For type checking. Param should not be None here.
         )
 
         # Generate blocked parameters list and number of blocks per parameter.
@@ -121,8 +145,9 @@ class DistributorInterface(ABC):
         global_num_blocks_per_param = []
 
         for param, merged_dims in zip(
-            self._param_group[PARAMS], self._global_merged_dims_list
+            self._get_params_or_grads(), self._global_merged_dims_list, strict=True
         ):
+            assert param is not None
             # Obtain blocks for each parameter after merging.
             blocks_within_param = multi_dim_split(
                 param.view(merged_dims), self._param_group[MAX_PRECONDITIONER_DIM]
@@ -151,7 +176,7 @@ class DistributorInterface(ABC):
     def _merge_and_block_gradients(
         self,
     ) -> Tuple[Tensor, ...]:
-        """Merge and block gradients.
+        """Merges small dims and blocks gradients.
 
         NOTE: FSDP Distributor may modify this function.
 
@@ -163,14 +188,13 @@ class DistributorInterface(ABC):
         local_masked_blocked_grads = []
         global_grad_selector = []
 
-        for param, merged_dims, num_blocks, (block_index, next_block_index) in zip(
-            self._param_group[PARAMS],
+        for grad, merged_dims, num_blocks, (block_index, next_block_index) in zip(
+            self._get_params_or_grads(get_grad=True),
             self._global_merged_dims_list,
             self._global_num_blocks_per_param,
             generate_pairwise_indices(self._global_num_blocks_per_param),
             strict=True,
         ):
-            grad = param.grad
             param_distributor_selector = self._distributor_selector[
                 block_index:next_block_index
             ]

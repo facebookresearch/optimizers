@@ -161,9 +161,12 @@ class SGDPreconditionerListTest(PreconditionerListTest):
 
 class AdagradPreconditionerListTest(PreconditionerListTest):
     def _instantiate_block_list(self) -> Tuple[Tensor, ...]:
+        # Because maximum_preconditioner_dim = 2, self._params[0] forms a block by itself,
+        # self._params[1] are split into two blocks, and self._params[2] forms a block by itself.
         return (
             self._params[0],
             *torch.split(self._params[1], 2, dim=0),
+            self._params[2],
         )
 
     def _instantiate_preconditioner_list(self, **kwargs: Any) -> PreconditionerList:
@@ -180,11 +183,16 @@ class AdagradPreconditionerListTest(PreconditionerListTest):
         self._params = (
             torch.tensor([1.0, 2.0]),
             torch.arange(6, dtype=torch.float).reshape(3, 2),
+            # Following param will not be used due to the distributor selector below.
+            torch.tensor([torch.nan, torch.nan]),
         )
         self._state = {
             self._params[0]: {},
             self._params[1]: {},
+            self._params[2]: {},
         }
+        # Because maximum_preconditioner_dim = 2, self._params[0] forms a block by itself,
+        # self._params[1] are split into two blocks, and self._params[2] forms a block by itself.
         self._block_info_list = (
             BlockInfo(
                 param=self._params[0],
@@ -198,8 +206,13 @@ class AdagradPreconditionerListTest(PreconditionerListTest):
                 param=self._params[1],
                 composable_block_ids=(1, "block_1"),
             ),
+            BlockInfo(
+                param=self._params[2],
+                composable_block_ids=(2, "block_0"),
+            ),
         )
-        self._distributor_selector = (True, True, True)
+        # Ignores the last block, which is self._params[2] itself.
+        self._distributor_selector = (True, True, True, False)
         super().setUp()
 
     def test_update_preconditioners_and_precondition(self) -> None:

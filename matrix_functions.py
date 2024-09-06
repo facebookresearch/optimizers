@@ -73,7 +73,7 @@ def matrix_inverse_root(
     tolerance: float = 1e-6,
     is_diagonal: Union[Tensor, bool] = False,
     retry_double_precision: bool = True,
-    order: int = 2,
+    order: int = 3,
 ) -> Tensor:
     """Computes matrix root inverse of square symmetric positive definite matrix.
 
@@ -89,7 +89,7 @@ def matrix_inverse_root(
             root inverse of diagonal entries. (Default: False)
         retry_double_precision (bool): Flag for re-trying eigendecomposition with higher precision if lower precision fails due
             to CuSOLVER failure. (Default: True)
-        order (int): Order used in the higher-order method. (Default: 2)
+        order (int): Order used in the higher-order method. (Default: 3)
 
     Returns:
         X (Tensor): Inverse root of matrix A.
@@ -157,6 +157,7 @@ def matrix_inverse_root(
             A=A,
             root=Fraction(root),
             rel_epsilon=epsilon,
+            abs_epsilon=epsilon,
             order=order,
             max_iterations=max_iterations,
             tolerance=tolerance,
@@ -360,9 +361,10 @@ def _matrix_inverse_root_higher_order(
     A: Tensor,
     root: Fraction,
     rel_epsilon: float = 0.0,
+    abs_epsilon: float = 0.0,
     max_iterations: int = 100,
     tolerance: float = 1e-20,
-    order: int = 2,  # 2 represents Newton's method
+    order: int = 3,  # 2 represents Newton's method
     disable_tf32: bool = True,
 ) -> Tuple[Tensor, Tensor, NewtonConvergenceFlag, int, Tensor]:
     """Compute matrix inverse root using coupled iterations, similar to above but generalized to support higher order.
@@ -387,6 +389,7 @@ def _matrix_inverse_root_higher_order(
         A (Tensor): Matrix of interest.
         root (Fraction): Root of interest. Any rational number. Use small numerator, denominator for best numerics as well as performance.
         rel_epsilon (float): Adds epsilon * lambda_max * I to matrix before taking matrix root, where lambda_max is an upper bound on maximum eigenvalue.
+        abs_epsilon (float): Adds epsilon * I to matrix before taking matrix root. When both "abs_epsilon" and "rel_epsilon" are specified, max(rel_epsilon * lambda_max, abs_epsilon) * I is added to the matrix.
         Generally recommend setting according to A.dtype (1e-3 for tf32, 1e-5 for fp32, 1e-9 for fp64) (Default: 0.0)
         max_iterations (int): Maximum number of iterations. Typically we need < 20 iterations. (Default: 100)
         tolerance (float): Tolerance for determining exit criterion from iterations. (Default: 1e-20, which in practice guarantees they run to convergence)
@@ -436,13 +439,9 @@ def _matrix_inverse_root_higher_order(
         # We add a diagonal term to condition the matrix better
         # We follow the Google style conditioning (in spirit) and scale by an upper bound on the max eigenvalue
         # NOTE: this is different from other parts of Shampoo for now
-        A_fourth = torch.linalg.matrix_power(A, 4)
-        n_matmul = 2
+        # Simply use the basic upper bound on the spectral radius of A via infinity norm (should not underflow)
+        # NOTE: One may wish to use a cheap (|A^4|_inf)**0.25 to get a tighter upper bound, but beware of fp32 underflow!
         lambda_max_approx = torch.linalg.matrix_norm(A, torch.inf)
-        lambda_max_approx = min(
-            torch.linalg.matrix_norm(A_fourth, torch.inf) ** 0.25,
-            lambda_max_approx,
-        )
 
         # We have not seen lambda_max being Inf in practice, however there is not a whole lot we can do in this pathological case and its good to bail early
         if not isfinite(lambda_max_approx):
@@ -451,28 +450,15 @@ def _matrix_inverse_root_higher_order(
             )
 
         # Now scale and setup our variables
-        epsilon = max(rel_epsilon * lambda_max_approx, 1.0e-16)
+        epsilon = max(rel_epsilon * lambda_max_approx, abs_epsilon)
         identity = torch.eye(n, dtype=dtype, device=A.device)
         A_ridge = torch.add(A, identity, alpha=epsilon)
         lambda_max_approx += epsilon
 
         # Figure out a constant that gives good starting location
-        # We default to 1.001, but adjust depending on epsilon and lambda_max_approx
-        # Roughly, this is done to "balance" the eigenvalue dynamics of 1st iteration at the two extreme ends: lambda_max and eps
-        # So after the 1st iteration of the method below, lambda_max_approx and eps both get sent to the same value (in the unit disk)
-        # TODO: this complex recipe may not actually make much too much of a difference but lets retain it for now
-        c = 1.001
-        if epsilon > 0:
-            cond_term = (lambda_max_approx / epsilon) ** (1 / p)
-            c_new = (cond_term * lambda_max_approx - epsilon) / (
-                cond_term * lambda_max_approx - lambda_max_approx
-            )
-            if c_new > c:
-                c = c_new
-                logger.debug(f"Changed seed factor from 1.001 to: {c_new}")
-
-        # For convergence, c = 1.0 below is enough. Put in at least 1.001 for numerical safety.
-        z = (p + 1) / (c * lambda_max_approx)
+        # We stick to a conservative setting that gives very good accuracy
+        # For a ref, see https://github.com/google-research/google-research/blob/master/scalable_shampoo/pytorch/matrix_functions.py#L114
+        z = 1.0 / torch.trace(A_ridge).item()
         X = (z ** (-s)) * identity
         M = z * A_ridge
         error = torch.linalg.vector_norm(M - identity, torch.inf)
@@ -488,7 +474,7 @@ def _matrix_inverse_root_higher_order(
         X = X @ M_p
         M = torch.linalg.matrix_power(M_p, p) @ M
         error = torch.linalg.vector_norm(M - identity, torch.inf)
-        n_matmul += math.ceil(math.log2(p)) + 2
+        n_matmul = math.ceil(math.log2(p)) + 2
         iteration += 1
         t_iter_end = time.time()
         logger.debug(
@@ -516,7 +502,7 @@ def _matrix_inverse_root_higher_order(
             n_matmul += math.ceil(math.log2(p)) + order
 
             # TODO: 1.2 is the value from the Google code, can be tuned
-            if new_error > error * 1.2 or new_error == error:
+            if new_error > error * 1.2 or (new_error == error and error < 1e-3):
                 logger.debug(
                     f"Coupled inverse Newton is stagnating or diverging based on comparing current error {new_error.item()} against last iteration's error {error.item()}."
                     f"(We assume divergence if the new error > 1.2 * previous error, and assume stagnation if they are equal.)"

@@ -13,6 +13,7 @@ from typing import Any, Dict, Optional
 
 import torch
 from torch.distributed.device_mesh import DeviceMesh
+from torch.distributed.fsdp import ShardingStrategy
 from torch.nn.parameter import Parameter
 
 # Keys for optimizer state (always checkpointed)
@@ -73,6 +74,7 @@ class FSDPParameterMetadata:
         numel (int): Number of elements in the parameter.
         start_idx (int): Start index of the local shard in the flattened parameter (inclusive).
         end_idx (int): End index of the local shard in the flattened parameter (exclusive).
+        sharding_strategy (ShardingStrategy): Sharding strategy for the parameter.
 
     """
 
@@ -81,6 +83,7 @@ class FSDPParameterMetadata:
     numel: int
     start_idx: int
     end_idx: int
+    sharding_strategy: ShardingStrategy
 
 
 @dataclass
@@ -126,7 +129,7 @@ class DistributedConfig(AbstractDataclass):
     ...
 
 
-@dataclass
+@dataclass(kw_only=True)
 class DDPShampooConfig(DistributedConfig):
     """Configuration for DDP Shampoo.
 
@@ -146,7 +149,7 @@ class DDPShampooConfig(DistributedConfig):
     communicate_params: bool = False
 
 
-@dataclass
+@dataclass(kw_only=True)
 class FSDPShampooConfig(DistributedConfig):
     """Configuration for FSDP Shampoo.
 
@@ -160,16 +163,26 @@ class FSDPShampooConfig(DistributedConfig):
     param_to_metadata: Dict[Parameter, FSDPParameterMetadata]
 
 
+@dataclass(kw_only=True)
+class FullyShardShampooConfig(DistributedConfig):
+    """Configuration for FullyShard (per-parameter FSDP) Shampoo.
+
+    Currently only a placeholder used for Shampoo optimizer to select FullyShardDistributor.
+    """
+
+    pass
+
+
 @dataclass
-class HSDPShampooConfig(DistributedConfig):
+class HSDPShampooConfig(FSDPShampooConfig, DDPShampooConfig):
     """Configuration for HSDP Shampoo.
 
     Enables distributed computation and optimizer states (like ZeRO-1) via DTensor for Shampoo across ranks with shared
     parameters between different HSDP process groups.
 
     Args:
+        device_mesh (torch.distributed.device_mesh.DeviceMesh): Device mesh for HSDP.
         param_to_metadata (Dict[Parameter, FSDPParameterMetadata]): Dictionary mapping parameter to its metadata from HSDP.
-        device_mesh (Optional[torch.distributed.device_mesh.DeviceMesh]): Device mesh for HSDP. (Default: None)
         communication_dtype (CommunicationDType): Data type for communication between ranks. (Default: DEFAULT)
         num_trainers_per_group (int): Number of GPUs per distributed process group for distributed computation/memory.
             If num_trainers_per_group = -1 is used, then defaults to using the number of workers in each replicated HSDP
@@ -179,11 +192,7 @@ class HSDPShampooConfig(DistributedConfig):
 
     """
 
-    param_to_metadata: Dict[Parameter, FSDPParameterMetadata]
     device_mesh: DeviceMesh
-    communication_dtype: CommunicationDType = CommunicationDType.DEFAULT
-    num_trainers_per_group: int = -1
-    communicate_params: bool = False
 
 
 @dataclass

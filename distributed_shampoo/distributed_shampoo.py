@@ -40,6 +40,7 @@ from distributed_shampoo.shampoo_types import (
     FILTERED_GRAD,
     FILTERED_GRAD_LIST,
     FSDPShampooConfig,
+    FullyShardShampooConfig,
     GRAFTING_CONFIG,
     GRAFTING_PRECONDITIONER_LIST,
     GraftingConfig,
@@ -81,6 +82,9 @@ from distributed_shampoo.utils.shampoo_checkpoint_utils import (
 from distributed_shampoo.utils.shampoo_ddp_distributor import DDPDistributor
 from distributed_shampoo.utils.shampoo_distributor import Distributor
 from distributed_shampoo.utils.shampoo_fsdp_distributor import FSDPDistributor
+from distributed_shampoo.utils.shampoo_fully_shard_distributor import (
+    FullyShardDistributor,
+)
 from distributed_shampoo.utils.shampoo_hsdp_distributor import HSDPDistributor
 
 from distributed_shampoo.utils.shampoo_preconditioner_list import (
@@ -234,8 +238,9 @@ class DistributedShampoo(torch.optim.Optimizer):
             For more details regarding PT2 compilation: https://pytorch.org/get-started/pytorch-2.0/
 
         - If shampoo_pt2_compile_config is set to ShampooPT2CompileConfig class, Shampoo will run in PT2 mode. Shampoo PT2 mode typically gives
-            on par numerics and model NE, plus higher QPS. But due to differences in lower level kernel implementation, model NE on par is not always
-            guaranteed. If you see NE gap, please switch back to Shampoo PT2 eager mode.
+            on par numerics and model quality, plus higher QPS. But due to differences in lower level kernel implementation, model quality on par
+            is not always guaranteed. If you see model quality gap, please switch back to Shampoo PT2 eager mode by setting
+            shampoo_pt2_compile_config = None.
 
         Shampoo PT2 compilation can also be customized for the backend and options via ShampooPT2CompileConfig.
             ShampooPT2CompileConfig
@@ -275,8 +280,9 @@ class DistributedShampoo(torch.optim.Optimizer):
         grafting_config (Optional[GraftingConfig]): Configuration for grafting method. If None, ignores grafting.
             (Default: None)
         use_merge_dims (bool): Merge dimensions if possible while respecting max_preconditioner_dim. (Default: True)
-        use_pytorch_compile (bool): Use PyTorch 2.0 compiler feature to speed up training. Deprecating, please use
-            shampoo_pt2_compile_config instead. (Default: None)
+        use_pytorch_compile (Optional[bool]): Use PyTorch 2.0 compiler feature to speed up training. Deprecating, please use
+            shampoo_pt2_compile_config instead; when this field is None, the use of PyTorch 2.0 compiler is decided by
+            shampoo_pt2_compile_config. (Default: None)
         shampoo_pt2_compile_config (Optional[ShampooPT2CompileConfig]): Configuration for Shampoo PT2 compilation. If None,
             ignores compilation, and Shampoo will run in eager mode. (Default: None)
         distributed_config (Optional[DistributedConfig]): Configuration for applying Shampoo
@@ -488,15 +494,17 @@ class DistributedShampoo(torch.optim.Optimizer):
     def _instantiate_distributor(self) -> None:
         if self._distributed_config is None:
             distributor = Distributor
-        elif isinstance(self._distributed_config, DDPShampooConfig):
+        elif type(self._distributed_config) is DDPShampooConfig:
             distributor = partial(
                 DDPDistributor, distributed_config=self._distributed_config
             )
-        elif isinstance(self._distributed_config, FSDPShampooConfig):
+        elif type(self._distributed_config) is FSDPShampooConfig:
             distributor = partial(
                 FSDPDistributor, distributed_config=self._distributed_config
             )
-        elif isinstance(self._distributed_config, HSDPShampooConfig):
+        elif type(self._distributed_config) is FullyShardShampooConfig:
+            distributor = FullyShardDistributor
+        elif type(self._distributed_config) is HSDPShampooConfig:
             distributor = partial(
                 HSDPDistributor,
                 distributed_config=self._distributed_config,

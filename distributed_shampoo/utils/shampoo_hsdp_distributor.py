@@ -9,6 +9,7 @@ LICENSE file in the root directory of this source tree.
 
 import heapq
 import logging
+from functools import partial
 from math import prod
 from typing import Any, Dict, List, Tuple
 
@@ -34,6 +35,7 @@ from distributed_shampoo.utils.shampoo_utils import (
 from torch import distributed as dist, Tensor
 from torch.distributed import _tensor as dtensor
 from torch.distributed._tensor import zeros as dtensor_zeros
+from torch.distributed.device_mesh import _mesh_resources
 from torch.nn import Parameter
 
 logger: logging.Logger = logging.getLogger(__name__)
@@ -44,10 +46,42 @@ class HSDPDistributor(DistributorInterface):
 
     Handles split tensor block recovery of different parameters, then merging and blocking of
     the tensor blocks, as well as distributing of the parameters at instantiation.
-    The gradients are also recovered at each iteration.
 
-    The constructor internally sets up process groups as well, so torch.distributed must be
-    initialized in advance.
+    The constructor internally sets up `DeviceMesh` objects as necessary for distributing memory
+    and computation, so torch.distributed must be initialized in advance.
+
+    Unlike FSDPDistributor, HSDPDistributor requires the user to pass in a device mesh used for
+    HSDP. For example, suppose we have 48 GPUs and the HSDP group size is 8. Then:
+
+    HSDP Device Mesh with (Replicate, Shard) = (6, 8):
+
+        device_mesh = [[ 0,  1,  2,  3,  4,  5,  6,  7]
+                       [ 8,  9, 10, 11, 12, 13, 14, 15]
+                       [16, 17, 18, 19, 20, 21, 22, 23]
+                       [24, 25, 26, 27, 28, 29, 30, 31]
+                       [32, 33, 34, 35, 36, 37, 38, 39]
+                       [40, 41, 42, 43, 44, 45, 46, 47]]
+
+    For example, if my device is rank 11, then:
+        device_mesh["replicate"] = [3, 11, 19, 27, 35, 43]
+        device_mesh["shard"] = [8, 9, 10, 11, 12, 13, 14, 15]
+
+    Since the parameters are sharded along the "shard" dimension, we would normally replicate the
+    computation along the "replicate" dimension. With HSDP Shampoo, we instead want to distribute
+    the computation and memory requirements across the "replicate" dimension of the original HSDP
+    device mesh.
+
+    For example, suppose that the num_trainers_per_group = 3. We want to form a (2, 3)-submesh on
+    the ranks [3, 11, 19, 27, 35, 43] (and similar).
+
+    HSDPDistributor 2D Sub-Mesh Example with (Replicate, Shard) = (2, 3):
+
+        submesh = [[ 3, 11, 19]
+                   [27, 35, 43]]
+
+    In this case, optimizer states will live on different "replicate" meshes: {[3, 27], [11, 35],
+    [19, 43]}. In order to synchronize the optimizer step, we will communicate along the "shard"
+    mesh {[3, 11, 19], [27, 35, 43]}.
 
     Args:
         param_group (Dict[str, Any]): Parameter group containing parameters.
@@ -145,9 +179,16 @@ class HSDPDistributor(DistributorInterface):
                 mesh_dim_names=("replicate", "shard"),
             )
             if dist.get_rank() in ranks_in_replicated_group:
-                self._dist_group: dist.ProcessGroup = device_mesh.get_group("shard")
+                # NOTE: We want the process group in the device mesh that the current rank
+                # belongs to but solely along the "shard" dimension for communications.
+                #
+                # For example, if the current rank is 11, then I want the process group
+                # that contains the ranks [3, 11, 19].
+                self._comms_dist_group: dist.ProcessGroup = device_mesh.get_group(
+                    "shard"
+                )
 
-        self._group_rank: int = dist.get_rank(self._dist_group)
+        self._comms_group_rank: int = dist.get_rank(self._comms_dist_group)
 
         # Assign ranks to blocks with their respective buffer size.
         buffer_size_ranks = self._distribute_buffer_sizes(
@@ -161,7 +202,7 @@ class HSDPDistributor(DistributorInterface):
 
         # Initialize selectors and local blocked (masked) parameters.
         self._distributor_selector: Tuple[bool, ...] = tuple(
-            block_info.group_source_rank == self._group_rank
+            block_info.group_source_rank == self._comms_group_rank
             for block_info in self._global_block_info_list
         )
         self._local_blocked_params: Tuple[Tensor, ...] = compress_list(
@@ -183,7 +224,7 @@ class HSDPDistributor(DistributorInterface):
         dist.all_gather_into_tensor(
             self._global_dist_buffer,
             self._local_dist_buffer,
-            group=self._dist_group,
+            group=self._comms_dist_group,
         )
 
     @torch.no_grad()
@@ -315,9 +356,12 @@ class HSDPDistributor(DistributorInterface):
                 param=param,
                 composable_block_ids=(
                     param_index,
-                    f"sharded_group_rank_{sharded_group_rank}-block_{block_index}",
+                    f"rank_{sharded_group_rank}-block_{block_index}",
                 ),
-                allocate_zeros_tensor=self._allocate_zeros_distributed_tensor,
+                allocate_zeros_tensor=partial(
+                    self._allocate_zeros_distributed_tensor,
+                    group_source_rank=group_source_rank,
+                ),
                 get_tensor=lambda input_tensor: (
                     input_tensor.to_local()
                     if isinstance(input_tensor, dtensor.DTensor)
@@ -510,7 +554,7 @@ class HSDPDistributor(DistributorInterface):
         )
 
         # Get local buffer for specific group rank.
-        self._local_dist_buffer = local_dist_buffers[self._group_rank]
+        self._local_dist_buffer = local_dist_buffers[self._comms_group_rank]
 
         # Obtain the list of buffers corresponding to each block (ignoring padding).
         # Note that each buffer is reshaped into the block's shape and viewed in terms
@@ -845,6 +889,7 @@ class HSDPDistributor(DistributorInterface):
         shape: Tuple[int, ...],
         dtype: torch.dtype,
         device: torch.device,
+        group_source_rank: int,
     ) -> torch.Tensor:
         """Instantiates distributed tensor using DTensor.
 
@@ -855,6 +900,8 @@ class HSDPDistributor(DistributorInterface):
                 DType of desired tensor.
             device (device type accepted by torch.zeros() including torch.device):
                 Device of desired tensor.
+            group_source_rank (int): Group rank (with respect to the sharded group of
+                the 2D submesh) that determines which ranks the DTensor is allocated on.
 
         Returns:
             out (Tensor): Desired Tensor.
@@ -873,10 +920,19 @@ class HSDPDistributor(DistributorInterface):
             ),
             mesh_dim_names=("replicate", "shard"),
         )
+        # NOTE: We get all submeshes along the "replicate" dimension, then pick out
+        # the sub-mesh that the optimizer state is assigned to.
+        #
+        # For the example above, this would give me submeshes [[3, 27], [11, 35], [19, 43]].
+        # Note that the group source rank must belong to {0, 1, 2} in this case.
+        # Suppose the group_source_rank = 1, then this would get the submesh [11, 35].
+        replicate_submesh = _mesh_resources._get_all_submeshes(
+            device_mesh_2d, "replicate"
+        )[group_source_rank]
 
         return dtensor_zeros(
             shape,
             dtype=dtype,
-            device_mesh=device_mesh_2d["replicate"],
+            device_mesh=replicate_submesh,
             placements=[dtensor.Replicate()],
         )
