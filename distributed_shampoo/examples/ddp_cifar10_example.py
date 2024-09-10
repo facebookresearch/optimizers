@@ -9,26 +9,22 @@ LICENSE file in the root directory of this source tree.
 
 import logging
 import os
-import random
-from typing import Optional, Tuple, Union
 
-import numpy as np
-
-import torch
 import torch.distributed as dist
 import torch.distributed.checkpoint as dist_checkpoint
 
 from distributed_shampoo.distributed_shampoo import DistributedShampoo
-from distributed_shampoo.examples.convnet import ConvNet
 from distributed_shampoo.examples.trainer_utils import (
+    get_data_loader_and_sampler,
+    get_model_and_loss_fn,
     instantiate_optimizer,
-    LossMetrics,
     Parser,
+    set_seed,
+    setup_distribution,
+    train_model,
 )
 from distributed_shampoo.shampoo_types import DDPShampooConfig, PrecisionConfig
 from torch import nn
-
-from torchvision import datasets, transforms
 
 logging.basicConfig(
     format="[%(filename)s:%(lineno)d] %(levelname)s: %(message)s",
@@ -43,95 +39,6 @@ os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
 LOCAL_RANK = int(os.environ["LOCAL_RANK"])
 WORLD_RANK = int(os.environ["RANK"])
 WORLD_SIZE = int(os.environ["WORLD_SIZE"])
-
-
-def train_ddp_model(
-    model: nn.Module,
-    world_size: int,
-    loss_function: nn.Module,
-    sampler: torch.utils.data.Sampler,
-    data_loader: torch.utils.data.DataLoader,
-    optimizer: torch.optim.Optimizer,
-    device: Union[str, torch.device],
-    epochs: int = 1,
-    window_size: int = 100,
-    use_distributed_checkpoint: bool = False,
-    checkpoint_dir: Optional[str] = None,
-) -> Tuple[float, float, int]:
-    """Constructs the main training loop.
-
-    Assumes torch.distributed is initialized.
-
-    """
-
-    # checks for checkpointing
-    if use_distributed_checkpoint and not isinstance(optimizer, DistributedShampoo):
-        raise ValueError(
-            "Distributed checkpointing is only supported with DistributedShampoo!"
-        )
-    if use_distributed_checkpoint and checkpoint_dir is None:
-        raise ValueError(
-            "Trying to use distributed checkpointing but checkpoint directory is not provided!"
-        )
-
-    # initialize metrics
-    metrics = LossMetrics(window_size=window_size, device=device, world_size=world_size)
-
-    # load optimizer and model checkpoint if using Distributed Shampoo optimizer
-    if (
-        use_distributed_checkpoint
-        and isinstance(optimizer, DistributedShampoo)
-        and os.path.exists(checkpoint_dir + "/.metadata")
-    ):
-        state_dict = {
-            "model": model.state_dict(),
-            "optim": optimizer.distributed_state_dict(
-                key_to_param=model.named_parameters()
-            ),
-        }
-        dist_checkpoint.load_state_dict(
-            state_dict=state_dict,
-            storage_reader=dist_checkpoint.FileSystemReader(checkpoint_dir),
-        )
-
-        model.load_state_dict(state_dict["model"])
-        optimizer.load_distributed_state_dict(
-            state_dict["optim"], key_to_param=model.named_parameters()
-        )
-
-    # main training loop
-    for epoch in range(epochs):
-        metrics._epoch = epoch
-        sampler.set_epoch(epoch)
-
-        for inputs, labels in data_loader:
-            inputs, labels = inputs.to(device), labels.to(device)
-            optimizer.zero_grad()
-            output = model(inputs)
-            loss = loss_function(output, labels)
-            loss.backward()
-
-            optimizer.step()
-            metrics.update(loss)
-            metrics.log()
-            metrics.update_global_metrics()
-            if LOCAL_RANK == 0:
-                metrics.log_global_metrics()
-
-    # checkpoint optimizer and model using distributed checkpointing solution
-    if use_distributed_checkpoint and isinstance(optimizer, DistributedShampoo):
-        state_dict = {
-            "model": model.state_dict(),
-            "optim": optimizer.distributed_state_dict(
-                key_to_param=model.named_parameters()
-            ),
-        }
-        dist_checkpoint.save_state_dict(
-            state_dict=state_dict,
-            storage_writer=dist_checkpoint.FileSystemWriter(checkpoint_dir),
-        )
-
-    return metrics._lifetime_loss, metrics._window_loss, metrics._iteration
 
 
 if __name__ == "__main__":
@@ -164,48 +71,25 @@ if __name__ == "__main__":
     args = Parser.get_args()
 
     # set seed for reproducibility
-    torch.manual_seed(args.seed)
-    np.random.seed(args.seed)
-    random.seed(args.seed)
-    torch.use_deterministic_algorithms(True)
+    set_seed(args.seed)
 
     # initialize distributed process group
-    dist.init_process_group(
+    device = setup_distribution(
         backend=args.backend,
-        init_method="env://",
-        rank=WORLD_RANK,
+        world_rank=WORLD_RANK,
         world_size=WORLD_SIZE,
+        local_rank=LOCAL_RANK,
     )
-    device = torch.device("cuda:{}".format(LOCAL_RANK))
-
-    # Necessary to ensure DTensor's local tensors are instantiated
-    # on the correct device.
-    #
-    # TODO: DTensor zeros instantiation needs to be fixed.
-    torch.cuda.set_device(LOCAL_RANK)
 
     # instantiate model and loss function
-    model = ConvNet(32, 32, 3).to(device)
+    model, loss_function = get_model_and_loss_fn(device)
     model = nn.parallel.DistributedDataParallel(
         model, device_ids=[LOCAL_RANK], output_device=LOCAL_RANK
     )
-    loss_function = nn.CrossEntropyLoss()
 
     # instantiate data loader
-    transform = transforms.Compose(
-        [transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))]
-    )
-    dataset = datasets.CIFAR10(
-        args.data_path, train=True, download=True, transform=transform
-    )
-    sampler = torch.utils.data.distributed.DistributedSampler(
-        dataset, num_replicas=WORLD_SIZE, rank=WORLD_RANK, shuffle=True
-    )
-    data_loader = torch.utils.data.DataLoader(
-        dataset,
-        batch_size=args.local_batch_size,
-        sampler=sampler,
-        num_workers=2,
+    data_loader, sampler = get_data_loader_and_sampler(
+        args.data_path, WORLD_SIZE, WORLD_RANK, args.local_batch_size
     )
 
     # instantiate optimizer (SGD, Adam, DistributedShampoo)
@@ -249,8 +133,42 @@ if __name__ == "__main__":
         track_root_inv_residuals=args.track_root_inv_residuals,
     )
 
+    # checks for checkpointing
+    if args.use_distributed_checkpoint and not isinstance(
+        optimizer, DistributedShampoo
+    ):
+        raise ValueError(
+            "Distributed checkpointing is only supported with DistributedShampoo!"
+        )
+    if args.se_distributed_checkpoint and args.checkpoint_dir is None:
+        raise ValueError(
+            "Trying to use distributed checkpointing but checkpoint directory is not provided!"
+        )
+
+    # load optimizer and model checkpoint if using Distributed Shampoo optimizer
+    if (
+        args.use_distributed_checkpoint
+        and isinstance(optimizer, DistributedShampoo)
+        and os.path.exists(args.checkpoint_dir + "/.metadata")
+    ):
+        state_dict = {
+            "model": model.state_dict(),
+            "optim": optimizer.distributed_state_dict(
+                key_to_param=model.named_parameters()
+            ),
+        }
+        dist_checkpoint.load_state_dict(
+            state_dict=state_dict,
+            storage_reader=dist_checkpoint.FileSystemReader(args.checkpoint_dir),
+        )
+
+        model.load_state_dict(state_dict["model"])
+        optimizer.load_distributed_state_dict(
+            state_dict["optim"], key_to_param=model.named_parameters()
+        )
+
     # train model
-    train_ddp_model(
+    train_model(
         model,
         WORLD_SIZE,
         loss_function,
@@ -260,9 +178,21 @@ if __name__ == "__main__":
         device=device,
         epochs=args.epochs,
         window_size=args.window_size,
-        use_distributed_checkpoint=args.use_distributed_checkpoint,
-        checkpoint_dir=args.checkpoint_dir,
+        local_rank=LOCAL_RANK,
     )
+
+    # checkpoint optimizer and model using distributed checkpointing solution
+    if args.use_distributed_checkpoint and isinstance(optimizer, DistributedShampoo):
+        state_dict = {
+            "model": model.state_dict(),
+            "optim": optimizer.distributed_state_dict(
+                key_to_param=model.named_parameters()
+            ),
+        }
+        dist_checkpoint.save_state_dict(
+            state_dict=state_dict,
+            storage_writer=dist_checkpoint.FileSystemWriter(args.checkpoint_dir),
+        )
 
     # clean up process group
     dist.destroy_process_group()

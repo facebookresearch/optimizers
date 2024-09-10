@@ -9,26 +9,21 @@ LICENSE file in the root directory of this source tree.
 
 import logging
 import os
-import random
-from typing import Optional, Tuple, Union
 
-import numpy as np
-
-import torch
 import torch.distributed as dist
-from distributed_shampoo.examples.convnet import ConvNet
 from distributed_shampoo.examples.trainer_utils import (
+    get_data_loader_and_sampler,
+    get_model_and_loss_fn,
     instantiate_optimizer,
-    LossMetrics,
     Parser,
+    set_seed,
+    setup_distribution,
+    train_model,
 )
 
 from distributed_shampoo.shampoo_types import FSDPShampooConfig, PrecisionConfig
 from distributed_shampoo.utils.shampoo_fsdp_utils import compile_fsdp_parameter_metadata
-from torch import nn
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
-
-from torchvision import datasets, transforms
 
 logging.basicConfig(
     format="[%(filename)s:%(lineno)d] %(levelname)s: %(message)s",
@@ -43,49 +38,6 @@ os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
 LOCAL_RANK = int(os.environ["LOCAL_RANK"])
 WORLD_RANK = int(os.environ["RANK"])
 WORLD_SIZE = int(os.environ["WORLD_SIZE"])
-
-
-def train_fsdp_model(
-    model: nn.Module,
-    world_size: int,
-    loss_function: nn.Module,
-    sampler: torch.utils.data.Sampler,
-    data_loader: torch.utils.data.DataLoader,
-    optimizer: torch.optim.Optimizer,
-    device: Union[str, torch.device],
-    epochs: int = 1,
-    window_size: int = 100,
-    checkpoint_dir: Optional[str] = None,
-) -> Tuple[float, float, int]:
-    """Constructs the main training loop.
-
-    Assumes torch.distributed is initialized.
-
-    """
-
-    # initialize metrics
-    metrics = LossMetrics(window_size=window_size, device=device, world_size=world_size)
-
-    # main training loop
-    for epoch in range(epochs):
-        metrics._epoch = epoch
-        sampler.set_epoch(epoch)
-
-        for inputs, labels in data_loader:
-            inputs, labels = inputs.to(device), labels.to(device)
-            optimizer.zero_grad()
-            output = model(inputs)
-            loss = loss_function(output, labels)
-            loss.backward()
-
-            optimizer.step()
-            metrics.update(loss)
-            metrics.log()
-            metrics.update_global_metrics()
-            if LOCAL_RANK == 0:
-                metrics.log_global_metrics()
-
-    return metrics._lifetime_loss, metrics._window_loss, metrics._iteration
 
 
 if __name__ == "__main__":
@@ -118,46 +70,23 @@ if __name__ == "__main__":
     args = Parser.get_args()
 
     # set seed for reproducibility
-    torch.manual_seed(args.seed)
-    np.random.seed(args.seed)
-    random.seed(args.seed)
-    torch.use_deterministic_algorithms(True)
+    set_seed(args.seed)
 
     # initialize distributed process group
-    dist.init_process_group(
+    device = setup_distribution(
         backend=args.backend,
-        init_method="env://",
-        rank=WORLD_RANK,
+        world_rank=WORLD_RANK,
         world_size=WORLD_SIZE,
+        local_rank=LOCAL_RANK,
     )
-    device = torch.device("cuda:{}".format(LOCAL_RANK))
-
-    # Necessary to ensure DTensor's local tensors are instantiated
-    # on the correct device.
-    #
-    # TODO: DTensor zeros instantiation needs to be fixed.
-    torch.cuda.set_device(LOCAL_RANK)
 
     # instantiate model and loss function
-    model = ConvNet(32, 32, 3).to(device)
+    model, loss_function = get_model_and_loss_fn(device)
     model = FSDP(model, use_orig_params=True)
-    loss_function = nn.CrossEntropyLoss()
 
     # instantiate data loader
-    transform = transforms.Compose(
-        [transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))]
-    )
-    dataset = datasets.CIFAR10(
-        args.data_path, train=True, download=True, transform=transform
-    )
-    sampler = torch.utils.data.distributed.DistributedSampler(
-        dataset, num_replicas=WORLD_SIZE, rank=WORLD_RANK, shuffle=True
-    )
-    data_loader = torch.utils.data.DataLoader(
-        dataset,
-        batch_size=args.local_batch_size,
-        sampler=sampler,
-        num_workers=2,
+    data_loader, sampler = get_data_loader_and_sampler(
+        args.data_path, WORLD_SIZE, WORLD_RANK, args.local_batch_size
     )
 
     # instantiate optimizer (SGD, Adam, DistributedShampoo)
@@ -200,7 +129,7 @@ if __name__ == "__main__":
     )
 
     # train model
-    train_fsdp_model(
+    train_model(
         model,
         WORLD_SIZE,
         loss_function,
@@ -210,7 +139,7 @@ if __name__ == "__main__":
         device=device,
         epochs=args.epochs,
         window_size=args.window_size,
-        checkpoint_dir=args.checkpoint_dir,
+        local_rank=LOCAL_RANK,
     )
 
     # clean up process group

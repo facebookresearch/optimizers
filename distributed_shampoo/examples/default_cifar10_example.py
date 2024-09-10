@@ -9,22 +9,20 @@ LICENSE file in the root directory of this source tree.
 
 import logging
 import os
-import random
 from typing import Tuple
 
-import numpy as np
-
 import torch
-from distributed_shampoo.examples.convnet import ConvNet
 
 from distributed_shampoo.examples.trainer_utils import (
+    get_data_loader_and_sampler,
+    get_model_and_loss_fn,
     instantiate_optimizer,
     LossMetrics,
     Parser,
+    set_seed,
 )
 from distributed_shampoo.shampoo_types import PrecisionConfig
 from torch import nn
-from torchvision import datasets, transforms
 
 logging.basicConfig(
     format="[%(filename)s:%(lineno)d] %(levelname)s: %(message)s",
@@ -96,31 +94,17 @@ if __name__ == "__main__":
     args = Parser.get_args()
 
     # set seed for reproducibility
-    torch.manual_seed(args.seed)
-    np.random.seed(args.seed)
-    random.seed(args.seed)
-    torch.use_deterministic_algorithms(True)
+    set_seed(args.seed)
 
     # check cuda availability and set device
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     # instantiate model and loss function
-    model = ConvNet(32, 32, 3).to(device)
-    loss_function = nn.CrossEntropyLoss()
+    model, loss_function = get_model_and_loss_fn(device)
 
-    # instantiate data loader
-    transform = transforms.Compose(
-        [transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))]
-    )
-    dataset = datasets.CIFAR10(
-        args.data_path, train=True, download=True, transform=transform
-    )
-    data_loader = torch.utils.data.DataLoader(
-        dataset,
-        batch_size=args.batch_size,
-        shuffle=True,
-        num_workers=2,
-    )
+    # instantiate data loader. Note that this is a single GPU training example,
+    # so we do not need to instantiate a sampler.
+    data_loader, _ = get_data_loader_and_sampler(args.data_path, 1, 1, args.batch_size)
 
     # instantiate optimizer (SGD, Adam, DistributedShampoo)
     optimizer = instantiate_optimizer(

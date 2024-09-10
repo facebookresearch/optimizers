@@ -10,13 +10,17 @@ LICENSE file in the root directory of this source tree.
 import argparse
 import enum
 import logging
+import random
 from abc import ABC, abstractmethod
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Union
+
+import numpy as np
 
 import torch
 import torch.distributed as dist
 
 from distributed_shampoo.distributed_shampoo import DistributedShampoo
+from distributed_shampoo.examples.convnet import ConvNet
 from distributed_shampoo.shampoo_types import (
     AdaGradGraftingConfig,
     AdamGraftingConfig,
@@ -28,6 +32,7 @@ from distributed_shampoo.shampoo_types import (
     SGDGraftingConfig,
 )
 from torch import nn
+from torchvision import datasets, transforms
 
 logger = logging.getLogger(__name__)
 
@@ -494,3 +499,106 @@ def instantiate_grafting_config(
         )
     else:
         raise ValueError(f"Invalid GraftingType {grafting_type}!")
+
+
+###### DATA LOADER ######
+def get_data_loader_and_sampler(
+    data_path: str, world_size: int, rank: int, local_batch_size: int
+) -> tuple[
+    torch.utils.data.DataLoader, torch.utils.data.distributed.DistributedSampler
+]:
+    # instantiate data loader
+    transform = transforms.Compose(
+        [transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))]
+    )
+    dataset = datasets.CIFAR10(
+        data_path, train=True, download=True, transform=transform
+    )
+    sampler = torch.utils.data.distributed.DistributedSampler(
+        dataset, num_replicas=world_size, rank=rank, shuffle=True
+    )
+    return (
+        torch.utils.data.DataLoader(
+            dataset,
+            batch_size=local_batch_size,
+            sampler=sampler,
+            num_workers=2,
+        ),
+        sampler,
+    )
+
+
+###### SET UP ######
+def set_seed(seed: int):
+    # set seed for reproducibility
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+    torch.use_deterministic_algorithms(True)
+
+
+def setup_distribution(
+    backend: str, world_rank: int, world_size: int, local_rank: int
+) -> torch.device:
+    # initialize distributed process group
+    dist.init_process_group(
+        backend=backend,
+        init_method="env://",
+        rank=world_rank,
+        world_size=world_size,
+    )
+    device = torch.device("cuda:{}".format(local_rank))
+
+    # Necessary to ensure DTensor's local tensors are instantiated
+    # on the correct device.
+    #
+    # TODO: DTensor zeros instantiation needs to be fixed.
+    torch.cuda.set_device(local_rank)
+
+    return device
+
+
+def get_model_and_loss_fn(device: torch.device) -> tuple[nn.Module, nn.Module]:
+    # instantiate model and loss function
+    model = ConvNet(32, 32, 3).to(device)
+    loss_fn = nn.CrossEntropyLoss()
+
+    return model, loss_fn
+
+
+###### TRAIN LOOP ######
+def train_model(
+    model: nn.Module,
+    world_size: int,
+    loss_function: nn.Module,
+    sampler: torch.utils.data.Sampler,
+    data_loader: torch.utils.data.DataLoader,
+    optimizer: torch.optim.Optimizer,
+    device: Union[str, torch.device],
+    epochs: int = 1,
+    window_size: int = 100,
+    local_rank: int = 0,
+):
+    # initialize metrics
+    metrics = LossMetrics(window_size=window_size, device=device, world_size=world_size)
+
+    # main training loop
+    for epoch in range(epochs):
+        metrics._epoch = epoch
+        sampler.set_epoch(epoch)
+
+        for inputs, labels in data_loader:
+            inputs, labels = inputs.to(device), labels.to(device)
+            optimizer.zero_grad()
+            output = model(inputs)
+            loss = loss_function(output, labels)
+            loss.backward()
+
+            optimizer.step()
+            metrics.update(loss)
+            metrics.log()
+            metrics.update_global_metrics()
+            if local_rank == 0:
+                metrics.log_global_metrics()
+
+    return metrics._lifetime_loss, metrics._window_loss, metrics._iteration
