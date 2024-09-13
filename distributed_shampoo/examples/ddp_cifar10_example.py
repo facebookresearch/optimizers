@@ -140,7 +140,7 @@ if __name__ == "__main__":
         raise ValueError(
             "Distributed checkpointing is only supported with DistributedShampoo!"
         )
-    if args.se_distributed_checkpoint and args.checkpoint_dir is None:
+    if args.use_distributed_checkpoint and args.checkpoint_dir is None:
         raise ValueError(
             "Trying to use distributed checkpointing but checkpoint directory is not provided!"
         )
