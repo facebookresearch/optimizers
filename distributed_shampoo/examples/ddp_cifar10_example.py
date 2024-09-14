@@ -131,6 +131,12 @@ if __name__ == "__main__":
         ),
         use_protected_eigh=args.use_protected_eigh,
         track_root_inv_residuals=args.track_root_inv_residuals,
+        experimental_lrs=(
+            [float(f) for f in args.experimental_lrs.split(",")]
+            if args.experimental_lrs
+            else []
+        ),
+        experimental_param_to_lr_mapping=args.experimental_param_to_lr_mapping,
     )
 
     # checks for checkpointing

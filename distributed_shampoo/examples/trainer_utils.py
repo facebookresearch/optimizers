@@ -12,7 +12,7 @@ import enum
 import logging
 import random
 from abc import ABC, abstractmethod
-from typing import Optional, Tuple, Union
+from typing import List, Optional, Tuple, Union
 
 import numpy as np
 
@@ -92,6 +92,12 @@ class Parser:
 
         # Arguments for optimizer.
         parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate.")
+        parser.add_argument(
+            "--experimental-lrs",
+            type=str,
+            default="",
+            help="Comma-separated list of learning rates.  It overwrites --lr when it's set."
+        )
         parser.add_argument(
             "--beta1", type=float, default=0.9, help="Beta1 for gradient filtering."
         )
@@ -194,6 +200,12 @@ class Parser:
             "--track-root-inv-residuals",
             action="store_true",
             help="Use debug mode for examining root inverse residuals.",
+        )
+        parser.add_argument(
+            "--experimental-param-to-lr-mapping",
+            type=bool,
+            default=False,
+            help="Use an experimental feature that maps parameters to learning rates."
         )
 
         # Arguments for grafting.
@@ -410,6 +422,8 @@ def instantiate_optimizer(
     precision_config: Optional[PrecisionConfig],
     use_protected_eigh: bool,
     track_root_inv_residuals: bool,
+    experimental_lrs: List[float] = [],
+    experimental_param_to_lr_mapping: bool = False,
 ) -> torch.optim.Optimizer:
     if optimizer_type == OptimizerType.SGD:
         optimizer = torch.optim.SGD(
@@ -438,33 +452,108 @@ def instantiate_optimizer(
                 weight_decay=weight_decay,
             )
     elif optimizer_type == OptimizerType.DISTRIBUTED_SHAMPOO:
-        optimizer = DistributedShampoo(
-            model.parameters(),
-            lr=lr,
-            betas=betas,
-            beta3=beta3,
-            epsilon=epsilon,
-            momentum=momentum,
-            dampening=dampening,
-            weight_decay=weight_decay,
-            max_preconditioner_dim=max_preconditioner_dim,
-            precondition_frequency=precondition_frequency,
-            start_preconditioning_step=start_preconditioning_step,
-            inv_root_override=inv_root_override,
-            exponent_multiplier=exponent_multiplier,
-            use_nesterov=use_nesterov,
-            use_bias_correction=use_bias_correction,
-            use_decoupled_weight_decay=use_decoupled_weight_decay,
-            grafting_config=instantiate_grafting_config(
-                grafting_type, grafting_beta2, grafting_epsilon
-            ),
-            use_merge_dims=use_merge_dims,
-            use_pytorch_compile=use_pytorch_compile,
-            distributed_config=distributed_config,
-            precision_config=precision_config,
-            use_protected_eigh=use_protected_eigh,
-            track_root_inv_residuals=track_root_inv_residuals,
-        )
+        if len(experimental_lrs) == 0:
+            # The default and standard behavior of Shampoo.
+            optimizer = DistributedShampoo(
+                model.parameters(),
+                lr=lr,
+                betas=betas,
+                beta3=beta3,
+                epsilon=epsilon,
+                momentum=momentum,
+                dampening=dampening,
+                weight_decay=weight_decay,
+                max_preconditioner_dim=max_preconditioner_dim,
+                precondition_frequency=precondition_frequency,
+                start_preconditioning_step=start_preconditioning_step,
+                inv_root_override=inv_root_override,
+                exponent_multiplier=exponent_multiplier,
+                use_nesterov=use_nesterov,
+                use_bias_correction=use_bias_correction,
+                use_decoupled_weight_decay=use_decoupled_weight_decay,
+                grafting_config=instantiate_grafting_config(
+                    grafting_type, grafting_beta2, grafting_epsilon
+                ),
+                use_merge_dims=use_merge_dims,
+                use_pytorch_compile=use_pytorch_compile,
+                distributed_config=distributed_config,
+                precision_config=precision_config,
+                use_protected_eigh=use_protected_eigh,
+                track_root_inv_residuals=track_root_inv_residuals,
+            )
+        else:
+            param_to_lr_idx = {
+                param: param_idx % len(experimental_lrs) for param_idx, param in enumerate(model.parameters())
+            }
+            if not experimental_param_to_lr_mapping:
+                # Here we assume that lrs are set to each parameters.
+                # Let's use round-robin for simplicity.
+                param_groups = [{"params": [], "lr": lr} for lr in experimental_lrs]
+                for param in model.parameters():
+                    param_groups[param_to_lr_idx[param]]["params"].append(param)
+
+                optimizer = DistributedShampoo(
+                    param_groups,
+                    lr=lr,
+                    betas=betas,
+                    beta3=beta3,
+                    epsilon=epsilon,
+                    momentum=momentum,
+                    dampening=dampening,
+                    weight_decay=weight_decay,
+                    max_preconditioner_dim=max_preconditioner_dim,
+                    precondition_frequency=precondition_frequency,
+                    start_preconditioning_step=start_preconditioning_step,
+                    inv_root_override=inv_root_override,
+                    exponent_multiplier=exponent_multiplier,
+                    use_nesterov=use_nesterov,
+                    use_bias_correction=use_bias_correction,
+                    use_decoupled_weight_decay=use_decoupled_weight_decay,
+                    grafting_config=instantiate_grafting_config(
+                        grafting_type, grafting_beta2, grafting_epsilon
+                    ),
+                    use_merge_dims=use_merge_dims,
+                    use_pytorch_compile=use_pytorch_compile,
+                    distributed_config=distributed_config,
+                    precision_config=precision_config,
+                    use_protected_eigh=use_protected_eigh,
+                    track_root_inv_residuals=track_root_inv_residuals,
+                )
+            else:
+                # Pass learning rates via an experimental interface.
+                # Note that we pass only a single param_group.
+                def param_to_lr(param: torch.Tensor) -> float:
+                    return experimental_lrs[param_to_lr_idx[param]]
+
+                optimizer = DistributedShampoo(
+                model.parameters(),
+                    lr=lr,
+                    betas=betas,
+                    beta3=beta3,
+                    epsilon=epsilon,
+                    momentum=momentum,
+                    dampening=dampening,
+                    weight_decay=weight_decay,
+                    max_preconditioner_dim=max_preconditioner_dim,
+                    precondition_frequency=precondition_frequency,
+                    start_preconditioning_step=start_preconditioning_step,
+                    inv_root_override=inv_root_override,
+                    exponent_multiplier=exponent_multiplier,
+                    use_nesterov=use_nesterov,
+                    use_bias_correction=use_bias_correction,
+                    use_decoupled_weight_decay=use_decoupled_weight_decay,
+                    grafting_config=instantiate_grafting_config(
+                        grafting_type, grafting_beta2, grafting_epsilon
+                    ),
+                    use_merge_dims=use_merge_dims,
+                    use_pytorch_compile=use_pytorch_compile,
+                    distributed_config=distributed_config,
+                    precision_config=precision_config,
+                    use_protected_eigh=use_protected_eigh,
+                    track_root_inv_residuals=track_root_inv_residuals,
+                    experimental_param_to_lr=param_to_lr,
+                )
+
     else:
         raise ValueError(f"Invalid OptimizerType {optimizer_type}!")
 
