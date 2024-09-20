@@ -232,7 +232,7 @@ optimizer = DistributedShampoo(
     use_decoupled_weight_decay=True,
     grafting_config=AdamGraftingConfig(
         beta2=0.999,
-        epsilon=1e-12,
+        epsilon=1e-08,
     ),
 )
 ```
