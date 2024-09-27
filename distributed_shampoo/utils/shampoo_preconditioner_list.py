@@ -32,6 +32,8 @@ from matrix_functions import (
     compute_matrix_root_inverse_residuals,
     matrix_inverse_root,
 )
+
+from matrix_functions_types import DefaultEigenConfig, RootInvConfig
 from optimizer_modules import OptimizerModule
 from torch import Tensor
 from torch.autograd import profiler
@@ -362,6 +364,7 @@ class ShampooPreconditionerList(PreconditionerList):
             Note that this should have the same length as block_list.
         distributor_selector (Tuple[bool, ...]): Distributor selector is a boolean list indicating whether a blocked parameter
             is selected by the current Distributor.
+        root_inv_config (RootInvConfig): Configuration for root inverse computation. (Default: DefaultEigenConfig)
         beta2 (float): Exponential moving average factor for Shampoo factor matrices. If beta2 = 1., will use unweighted sum.
             (Default: 1.0)
         epsilon (float): Epsilon term for regularizing preconditioner to ensure positive definiteness. (Default: 1e-12)
@@ -388,6 +391,7 @@ class ShampooPreconditionerList(PreconditionerList):
         state: DefaultDict[Tensor, Any],
         block_info_list: Tuple[BlockInfo, ...],
         distributor_selector: Tuple[bool, ...],
+        root_inv_config: RootInvConfig = DefaultEigenConfig,
         beta2: float = 1.0,
         epsilon: float = 1e-12,
         inv_root_override: Union[int, Tuple[int, ...]] = 0,
@@ -401,6 +405,7 @@ class ShampooPreconditionerList(PreconditionerList):
         super().__init__(block_list)
 
         # Initialize parameters.
+        self._root_inv_config = root_inv_config
         self._beta2 = beta2
         self._epsilon = epsilon
         self._inv_root_override = inv_root_override
@@ -690,10 +695,10 @@ class ShampooPreconditionerList(PreconditionerList):
                         computed_inv_factor_matrix = matrix_inverse_root(
                             A=bias_corrected_factor_matrix,
                             root=root,
+                            root_inv_config=self._root_inv_config,
                             epsilon=self._epsilon,
                             exponent_multiplier=self._exponent_multiplier,
                             is_diagonal=is_factor_matrix_diagonal,
-                            retry_double_precision=self._use_protected_eigh,
                         ).to(dtype=inv_factor_matrix.dtype)
 
                         # Check if we encounter NaN or inf values in computed inverse matrix.
@@ -776,11 +781,12 @@ class ShampooPreconditionerList(PreconditionerList):
                     relative_error,
                     relative_residual,
                 ) = compute_matrix_root_inverse_residuals(
-                    bias_corrected_factor_matrix,
-                    inv_factor_matrix,
-                    root,
-                    self._epsilon,
-                    self._exponent_multiplier,
+                    A=bias_corrected_factor_matrix,
+                    X_hat=inv_factor_matrix,
+                    root=root,
+                    epsilon=self._epsilon,
+                    exponent_multiplier=self._exponent_multiplier,
+                    root_inv_config=self._root_inv_config,
                 )
                 relative_errors.append(relative_error)
                 relative_residuals.append(relative_residual)

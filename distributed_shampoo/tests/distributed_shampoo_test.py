@@ -36,6 +36,7 @@ from distributed_shampoo.utils.shampoo_preconditioner_list import (
     ShampooPreconditionerList,
 )
 from distributed_shampoo.utils.shampoo_quantization import QuantizedTensorList
+from matrix_functions_types import DefaultEigenConfig
 from torch import nn
 
 
@@ -267,15 +268,15 @@ class DistributedShampooTest(unittest.TestCase):
 
         self.assertEqual(self._optimizer.step(closure=closure), 1.0)
 
-    def test_step_with_empty_grad_list(self) -> None:
+    @mock.patch.object(ShampooPreconditionerList, "update_preconditioners")
+    def test_step_with_empty_grad_list(
+        self, mock_upgrade_preconditioners: mock.Mock
+    ) -> None:
         # Test the case that the grad_list is empty.
         self._optimizer.zero_grad()
-        with mock.patch.object(
-            ShampooPreconditionerList, "update_preconditioners"
-        ) as mock_upgrade_preconditioners:
-            self._optimizer.step()
-            # Because the gradient list is empty, the preconditioners should not be updated.
-            mock_upgrade_preconditioners.assert_not_called()
+        self._optimizer.step()
+        # Because the gradient list is empty, the preconditioners should not be updated.
+        mock_upgrade_preconditioners.assert_not_called()
 
 
 class DistributedShampooStateDictTest(unittest.TestCase):
@@ -447,6 +448,7 @@ class DistributedShampooStateDictTest(unittest.TestCase):
                     "use_merge_dims": True,
                     "preconditioner_dtype": None,
                     "precision_config": PrecisionConfig(),
+                    "root_inv_config": DefaultEigenConfig,
                 }
             },
         }
@@ -674,6 +676,8 @@ class DistributedShampooPrecisionTest(unittest.TestCase):
         self._model = nn.Sequential(
             nn.Linear(5, 10, bias=False),
         )
+        self._x = torch.randn(5)
+        self._y = torch.randn(10)
 
     def _instantiate_optimizer(
         self, precision_config: PrecisionConfig
@@ -756,6 +760,12 @@ class DistributedShampooPrecisionTest(unittest.TestCase):
                 filtered_grad_dtype=torch.float16,
                 momentum_dtype=torch.float16,
             ),
+            PrecisionConfig(
+                factor_matrix_dtype=torch.float64,
+                inv_factor_matrix_dtype=torch.float64,
+                filtered_grad_dtype=torch.float64,
+                computation_dtype=torch.float64,
+            ),
         ]
 
         for precision_config in precision_configs:
@@ -767,6 +777,10 @@ class DistributedShampooPrecisionTest(unittest.TestCase):
                     self._assert_state_list_dtype(state_list, precision_config)
 
                 for _ in range(2):
+                    optimizer.zero_grad()
+                    y_hat = self._model(self._x)
+                    loss = torch.nn.CrossEntropyLoss()(y_hat, self._y)
+                    loss.backward()
                     optimizer.step()
                     for state_list in optimizer._per_group_state_lists:
                         self._assert_state_list_dtype(state_list, precision_config)

@@ -61,6 +61,7 @@ from distributed_shampoo.shampoo_types import (
     PRECONDITIONER_DTYPE,
     PREVIOUS_GRAD_SELECTOR,
     RMSpropGraftingConfig,
+    ROOT_INV_CONFIG,
     SGDGraftingConfig,
     SHAMPOO_PRECONDITIONER_LIST,
     ShampooPT2CompileConfig,
@@ -99,6 +100,8 @@ from distributed_shampoo.utils.shampoo_quantization import (
     QuantizedTensorList,
 )
 from distributed_shampoo.utils.shampoo_utils import compress_list
+
+from matrix_functions_types import DefaultEigenConfig, RootInvConfig
 from torch.optim.optimizer import ParamsT
 
 logger: logging.Logger = logging.getLogger(__name__)
@@ -106,45 +109,6 @@ logger: logging.Logger = logging.getLogger(__name__)
 
 class DistributedShampoo(torch.optim.Optimizer):
     """Implements distributed Shampoo algorithm.
-
-    Developers:
-        Hao-Jun Michael Shi (Meta Platforms, Inc.)
-        Tsung-Hsien Lee
-        Anna Cai (Meta Platforms, Inc.)
-        Shintaro Iwasaki (Meta Platforms, Inc.)
-        Ke Sang (Meta Platforms, Inc.)
-        Wang Zhou (Meta Platforms, Inc.)
-
-    with contributions and support from:
-
-    Ganesh Ajjanagadde (Meta), Rohan Anil (Google), Adnan Aziz (Meta), Pavan Balaji (Meta), Shuo Chang (Meta), Weiwei Chu (Meta),
-    Assaf Eisenman (Meta), Will Feng (Meta), Zhuobo Feng (Meta), Jose Gallego-Posada (Mila / Meta Platforms, Inc.), Avirup Ghosh (Meta),
-    Yizi Gu (Meta), Vineet Gupta (Google), Yuchen Hao (Meta), Brian Hirsh (Meta), Yusuo Hu (Meta), Yuxi Hu (Meta), Minhui Huang (Meta),
-    Guna Lakshminarayanan (Meta), Michael Lazos (Meta), Zhijing Li (Meta), Ming Liang (Meta), Wanchao Liang (Meta), Ying Liu
-    (Meta), Wenguang Mao (Meta), Dheevatsa Mudigere (NVIDIA), Maxim Naumov (Meta), Jongsoo Park (Meta), Mike Rabbat (Meta),
-    Kaushik Rangadurai (Meta), Dennis van der Staay (Meta), Fei Tian (Meta), Sanjay Vishwakarma (Meta), Xunnan (Shawn) Xu (Meta),
-    Jiyan Yang (Meta), Chunxing Yin (Meta), and Iris Zhang (Meta).
-
-    Details in: https://arxiv.org/pdf/2309.06497.pdf.
-
-    Partly based on the work in:
-    - https://arxiv.org/pdf/1802.09568.pdf
-    - https://arxiv.org/pdf/2002.09018.pdf
-
-    ------------
-    Requirements
-    ------------
-
-    1. PyTorch >= 2.0
-    2. Python >= 3.10
-    3. CUDA 11.3, 11.4, 12.2+
-
-    In order to support checkpointing, one must use torch.distributed.checkpoint and pass the named parameters into state_dict.
-    Note that the standard checkpointing solution by PyTorch is not supported!
-
-    Note: We have observed known instabilities with the torch.linalg.eigh operator on CUDA 11.6-12.1, specifically for low-rank
-    matrices, which may appear with using a small start_preconditioning_step. Please avoid these versions of CUDA if possible.
-    See: https://github.com/pytorch/pytorch/issues/94772.
 
     --------
     Features
@@ -296,6 +260,7 @@ class DistributedShampoo(torch.optim.Optimizer):
             3. Otherwise, re-uses previous inverse factor matrix when both root inverse computations fail.
         track_root_inv_residuals (bool): Track errors and residuals of root inverse. For debugging purposes.
             (Default: False)
+        root_inv_config (RootInvConfig): Configuration for root inverse computation. (Default: DefaultEigenConfig)
 
     """
 
@@ -326,6 +291,7 @@ class DistributedShampoo(torch.optim.Optimizer):
         precision_config: Optional[PrecisionConfig] = None,
         use_protected_eigh: bool = True,
         track_root_inv_residuals: bool = False,
+        root_inv_config: RootInvConfig = DefaultEigenConfig,
     ) -> None:
         # Hyperparameter checks.
         if not lr >= 0.0:
@@ -464,6 +430,7 @@ class DistributedShampoo(torch.optim.Optimizer):
                 USE_MERGE_DIMS: use_merge_dims,
                 PRECONDITIONER_DTYPE: preconditioner_dtype,
                 PRECISION_CONFIG: precision_config,
+                ROOT_INV_CONFIG: root_inv_config,
             },
         )
 
@@ -542,6 +509,7 @@ class DistributedShampoo(torch.optim.Optimizer):
                 state=self.state,
                 block_info_list=state_lists[DISTRIBUTOR].global_block_info_list,
                 distributor_selector=state_lists[DISTRIBUTOR].distributor_selector,
+                root_inv_config=group[ROOT_INV_CONFIG],
                 beta2=group[BETAS][1],
                 epsilon=group[EPSILON],
                 inv_root_override=group[INV_ROOT_OVERRIDE],
@@ -1170,6 +1138,19 @@ class DistributedShampoo(torch.optim.Optimizer):
             # Check if gradient list is empty. If so, continue.
             if not state_lists[MASKED_BLOCKED_GRADS]:
                 continue
+
+            # Convert the gradient dtype to the computation dtype set in the precision_config if
+            # necessary.
+            #
+            # This conversion is needed because the blocked gradient list has float32 dtype, and we
+            # need to convert it to the desired precision before precondition computation.
+            if (
+                computation_dtype := group[PRECISION_CONFIG].computation_dtype
+            ) != state_lists[MASKED_BLOCKED_GRADS][0].dtype:
+                state_lists[MASKED_BLOCKED_GRADS] = tuple(
+                    tensor.to(dtype=computation_dtype)
+                    for tensor in state_lists[MASKED_BLOCKED_GRADS]
+                )
 
             # Iterate group step counter and define Python scalar step.
             step = state_lists[STEP].add_(1)

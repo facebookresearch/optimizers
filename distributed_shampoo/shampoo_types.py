@@ -35,6 +35,7 @@ PARAMS = "params"  # While this is stored in groups by default, we do not checkp
 PRECISION_CONFIG = "precision_config"
 PRECONDITION_FREQUENCY = "precondition_frequency"
 PRECONDITIONER_DTYPE = "preconditioner_dtype"
+ROOT_INV_CONFIG = "root_inv_config"
 START_PRECONDITIONING_STEP = "start_preconditioning_step"
 USE_BIAS_CORRECTION = "use_bias_correction"
 USE_DECOUPLED_WEIGHT_DECAY = "use_decoupled_weight_decay"

@@ -23,13 +23,14 @@ class _ModelWithLinearAndDeadLayers(nn.Module):
     ) -> None:
         super().__init__()
         self.linear_layers = nn.ModuleList(
-            [
-                nn.Linear(a, b, bias=bias)
-                for a, b in itertools.pairwise(model_linear_layers_dims)
-            ]
+            nn.Linear(a, b, bias=bias)
+            for a, b in itertools.pairwise(model_linear_layers_dims)
         )
         if model_dead_layer_dims is not None:
-            self.useless: nn.Module = nn.Linear(*model_dead_layer_dims, bias=False)
+            self.dead_layers: nn.ModuleList = nn.ModuleList(
+                nn.Linear(a, b, bias=False)
+                for a, b in itertools.pairwise(model_dead_layer_dims)
+            )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         for linear_layer in self.linear_layers:
@@ -49,7 +50,7 @@ def construct_training_problem(
 
     Args:
         model_linear_layers_dims (tuple[int, ...]): The dimensions of the model linear layers.
-        model_dead_layer_dims (Optional[tuple[int, ...]]): The dimensions of the model dead layer. (Default: (10, 10))
+        model_dead_layer_dims (Optional[tuple[int, ...]]): The dimensions of the model dead linear layers. (Default: (10, 10))
         device (Optional[torch.device]): The device to use. (Default: None)
         bias (bool): Whether to use bias in the linear (non-dead) layers. (Default: False)
         fill (float | tuple[float, ...]): The value(s) to fill the model parameters. If a tuple, each element should correspond to one layer. (Default: 0.0)

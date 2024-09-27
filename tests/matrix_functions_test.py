@@ -27,9 +27,13 @@ from matrix_functions import (
     check_diagonal,
     compute_matrix_root_inverse_residuals,
     matrix_inverse_root,
-    matrix_root_diagonal,
     NewtonConvergenceFlag,
-    RootInvMethod,
+)
+from matrix_functions_types import (
+    CoupledHigherOrderConfig,
+    CoupledNewtonConfig,
+    EigenConfig,
+    RootInvConfig,
 )
 from torch import Tensor
 
@@ -61,7 +65,9 @@ class MatrixInverseRootTest(unittest.TestCase):
             self.assertEqual(
                 A ** torch.tensor(-1.82 / 2),
                 matrix_inverse_root(
-                    A, root=root, exponent_multiplier=exponent_multiplier
+                    A,
+                    root=root,
+                    exponent_multiplier=exponent_multiplier,
                 ),
             )
         with self.subTest("Test with matrix case."):
@@ -142,7 +148,6 @@ class MatrixInverseRootTest(unittest.TestCase):
                         A_list[i],
                         root=root,
                         exponent_multiplier=exponent_multiplier,
-                        root_inv_method=RootInvMethod.EIGEN,
                         is_diagonal=False,
                     ),
                     atol=atol,
@@ -155,8 +160,8 @@ class MatrixInverseRootTest(unittest.TestCase):
                     matrix_inverse_root(
                         A_list[i],
                         root=root,
+                        root_inv_config=CoupledNewtonConfig(),
                         exponent_multiplier=exponent_multiplier,
-                        root_inv_method=RootInvMethod.NEWTON,
                         is_diagonal=False,
                     ),
                     atol=atol,
@@ -170,9 +175,8 @@ class MatrixInverseRootTest(unittest.TestCase):
                         matrix_inverse_root(
                             A_list[i],
                             root=Fraction(root),
+                            root_inv_config=CoupledHigherOrderConfig(order=order),
                             exponent_multiplier=exponent_multiplier,
-                            root_inv_method=RootInvMethod.HIGHER_ORDER,
-                            order=order,
                             is_diagonal=False,
                         ),
                         atol=atol,
@@ -185,9 +189,8 @@ class MatrixInverseRootTest(unittest.TestCase):
                         matrix_inverse_root(
                             A_list[i],
                             root=Fraction(root) / exp,
+                            root_inv_config=CoupledHigherOrderConfig(order=order),
                             exponent_multiplier=exponent_multiplier,
-                            root_inv_method=RootInvMethod.HIGHER_ORDER,
-                            order=order,
                             is_diagonal=False,
                         ),
                         atol=atol,
@@ -196,7 +199,7 @@ class MatrixInverseRootTest(unittest.TestCase):
 
     def test_matrix_inverse_root_higher_order_blowup(self) -> None:
         A = torch.tensor([[1.0, 0.0], [0.0, 1e-4]])
-        root_inv_method = RootInvMethod.HIGHER_ORDER
+        root_inv_config = CoupledHigherOrderConfig()
         self.assertRaisesRegex(
             ArithmeticError,
             re.escape(
@@ -206,30 +209,30 @@ class MatrixInverseRootTest(unittest.TestCase):
             A=A,
             root=Fraction(1, 20),
             exponent_multiplier=1.0,
-            root_inv_method=root_inv_method,
+            root_inv_config=root_inv_config,
         )
 
     def test_matrix_inverse_root_with_no_effect_exponent_multiplier(self) -> None:
         A = torch.tensor([[1.0, 0.0], [0.0, 4.0]])
-        root_inv_method_and_msg: List[Tuple[RootInvMethod, str]] = [
-            (RootInvMethod.NEWTON, "inverse Newton iteration"),
-            (RootInvMethod.HIGHER_ORDER, "higher order method"),
+        root_inv_config_and_msg: List[Tuple[RootInvConfig, str]] = [
+            (CoupledNewtonConfig(), "inverse Newton iteration"),
+            (CoupledHigherOrderConfig(), "higher order method"),
         ]
 
-        for root_inv_method, root_inv_method_msg in root_inv_method_and_msg:
+        for root_inv_config, root_inv_config_msg in root_inv_config_and_msg:
             with self.subTest(
-                root_inv_method=root_inv_method, root_inv_method_msg=root_inv_method_msg
+                root_inv_config=root_inv_config, root_inv_config_msg=root_inv_config_msg
             ):
                 self.assertRaisesRegex(
                     ValueError,
                     re.escape(
-                        f"Exponent multiplier 2.0 must be equal to 1 to use coupled {root_inv_method_msg}!"
+                        f"Exponent multiplier 2.0 must be equal to 1 to use coupled {root_inv_config_msg}!"
                     ),
                     matrix_inverse_root,
                     A=A,
                     root=2,
                     exponent_multiplier=2.0,
-                    root_inv_method=root_inv_method,
+                    root_inv_config=root_inv_config,
                 )
 
     def test_matrix_inverse_root_newton_fraction(self) -> None:
@@ -242,28 +245,28 @@ class MatrixInverseRootTest(unittest.TestCase):
             matrix_inverse_root,
             A=A,
             root=Fraction(numerator=1, denominator=2),
-            root_inv_method=RootInvMethod.NEWTON,
+            root_inv_config=CoupledNewtonConfig(),
             is_diagonal=False,
         )
 
     def test_matrix_inverse_root_reach_max_iterations(self) -> None:
         A = torch.tensor([[1.0, 0.0], [0.0, 4.0]])
         root = 4
-        root_inv_method_and_implementation_and_msg: List[
-            Tuple[RootInvMethod, str, str]
+        root_inv_config_and_implementation_and_msg: List[
+            Tuple[RootInvConfig, str, str]
         ] = [
-            (RootInvMethod.NEWTON, "_matrix_inverse_root_newton", "Newton"),
+            (CoupledNewtonConfig(), "_matrix_inverse_root_newton", "Newton"),
             (
-                RootInvMethod.HIGHER_ORDER,
+                CoupledHigherOrderConfig(),
                 "_matrix_inverse_root_higher_order",
                 "Higher order method",
             ),
         ]
         for (
-            root_inv_method,
+            root_inv_config,
             implementation,
             msg,
-        ) in root_inv_method_and_implementation_and_msg:
+        ) in root_inv_config_and_implementation_and_msg:
             with mock.patch.object(
                 matrix_functions,
                 implementation,
@@ -275,7 +278,7 @@ class MatrixInverseRootTest(unittest.TestCase):
                     None,
                 ),
             ), self.subTest(
-                root_inv_method=root_inv_method,
+                root_inv_config=root_inv_config,
                 implementation=implementation,
                 msg=msg,
             ), self.assertLogs(
@@ -284,7 +287,7 @@ class MatrixInverseRootTest(unittest.TestCase):
                 matrix_inverse_root(
                     A=A,
                     root=root,
-                    root_inv_method=root_inv_method,
+                    root_inv_config=root_inv_config,
                 )
                 self.assertIn(
                     f"{msg} did not converge and reached maximum number of iterations!",
@@ -303,56 +306,41 @@ class MatrixInverseRootTest(unittest.TestCase):
             A=A,
             root=Fraction(root),
             exponent_multiplier=exponent_multiplier,
-            root_inv_method=RootInvMethod.HIGHER_ORDER,
+            root_inv_config=CoupledHigherOrderConfig(),
         )
         tf32_flag_after = torch.backends.cuda.matmul.allow_tf32
         assert tf32_flag_before == tf32_flag_after
 
-    def test_matrix_inverse_root_with_invalid_root_inv_method(self) -> None:
+    def test_matrix_inverse_root_with_invalid_root_inv_config(self) -> None:
         A = torch.tensor([[1.0, 0.0], [0.0, 4.0]])
         root = 4
-        with mock.patch.object(
-            RootInvMethod, "__eq__", return_value=False
-        ), self.assertRaisesRegex(
+        with self.assertRaisesRegex(
             NotImplementedError,
             re.escape(
-                "Root inverse method is not implemented! Specified root inverse method is RootInvMethod.NEWTON."
+                "Root inverse config is not implemented! Specified root inverse config is root_inv_config=RootInvConfig()."
             ),
         ):
             matrix_inverse_root(
                 A=A,
                 root=root,
-                root_inv_method=RootInvMethod.NEWTON,
+                root_inv_config=RootInvConfig(),
                 is_diagonal=False,
             )
 
 
 class MatrixRootDiagonalTest(unittest.TestCase):
-    def test_matrix_root_diagonal_with_not_two_dim_matrix(self) -> None:
-        A = torch.zeros((1, 2, 3))
-        root = 4
-        exponent_multiplier = 1.82
-        self.assertRaisesRegex(
-            ValueError,
-            re.escape("Matrix is not 2-dimensional!"),
-            matrix_root_diagonal,
-            A=A,
-            root=root,
-            exponent_multiplier=exponent_multiplier,
-            return_full_matrix=True,
-        )
-
     def test_matrix_root_diagonal_nonpositive_root(self) -> None:
         A = torch.tensor([[-1.0, 0.0], [0.0, 2.0]])
-        root = -1
-        self.assertRaisesRegex(
-            ValueError,
-            re.escape(f"Root {root} should be positive!"),
-            matrix_root_diagonal,
-            A=A,
-            root=root,
-            return_full_matrix=True,
-        )
+        for root in (-1, 0):
+            with self.subTest(f"With {root=}"):
+                self.assertRaisesRegex(
+                    ValueError,
+                    re.escape(f"Root {root} should be positive!"),
+                    matrix_inverse_root,
+                    A=A,
+                    root=root,
+                    is_diagonal=True,
+                )
 
 
 class EigenRootTest(unittest.TestCase):
@@ -361,7 +349,6 @@ class EigenRootTest(unittest.TestCase):
         A: torch.Tensor,
         root: int,
         make_positive_semidefinite: bool,
-        inverse: bool,
         epsilon: float,
         tolerance: float,
         eig_sols: Tensor,
@@ -371,11 +358,8 @@ class EigenRootTest(unittest.TestCase):
             root=root,
             epsilon=epsilon,
             make_positive_semidefinite=make_positive_semidefinite,
-            inverse=inverse,
         )
-        if inverse:
-            root = -root
-        abs_error = torch.dist(torch.linalg.matrix_power(X, root), A, p=torch.inf)
+        abs_error = torch.dist(torch.linalg.matrix_power(X, -root), A, p=torch.inf)
         A_norm = torch.linalg.norm(A, ord=torch.inf)
         rel_error = abs_error / torch.maximum(torch.tensor(1.0), A_norm)
         torch.testing.assert_close(L, eig_sols)
@@ -397,16 +381,6 @@ class EigenRootTest(unittest.TestCase):
                     A(n),
                     root,
                     make_positive_semidefinite,
-                    False,
-                    epsilon,
-                    tolerance,
-                    eig_sols(n),
-                )
-                self._test_eigen_root(
-                    A(n),
-                    root,
-                    make_positive_semidefinite,
-                    True,
                     epsilon,
                     tolerance,
                     eig_sols(n),
@@ -524,7 +498,7 @@ class EigenRootTest(unittest.TestCase):
         self.assertRaisesRegex(
             ValueError,
             re.escape(f"Root {root} should be positive!"),
-            _matrix_root_eigen,
+            matrix_inverse_root,
             A=A,
             root=root,
         )
@@ -539,13 +513,11 @@ class EigenRootTest(unittest.TestCase):
     ) -> None:
         A = torch.tensor([[-1.0, 0.0], [0.0, 2.0]])
         with self.assertRaisesRegex(RuntimeError, re.escape("Mock Eigen Error")):
-            _matrix_root_eigen(
+            matrix_inverse_root(
                 A=A,
                 root=2,
+                root_inv_config=EigenConfig(retry_double_precision=False),
                 epsilon=0.0,
-                make_positive_semidefinite=True,
-                inverse=False,
-                retry_double_precision=False,
             )
         mock_eigh.assert_called_once()
 
@@ -555,13 +527,10 @@ class EigenRootTest(unittest.TestCase):
     def test_retry_double_precision_raise_exception(self, mock_eigh: mock.Mock) -> None:
         A = torch.tensor([[-1.0, 0.0], [0.0, 2.0]])
         with self.assertRaisesRegex(RuntimeError, re.escape("Mock Eigen Error")):
-            _matrix_root_eigen(
+            matrix_inverse_root(
                 A=A,
                 root=2,
                 epsilon=0.0,
-                make_positive_semidefinite=True,
-                inverse=False,
-                retry_double_precision=True,
             )
         mock_eigh.assert_called()
         self.assertEqual(mock_eigh.call_count, 2)
@@ -578,13 +547,10 @@ class EigenRootTest(unittest.TestCase):
         self, mock_eigh: mock.Mock
     ) -> None:
         A = torch.tensor([[1.0, 0.0], [0.0, 1.0]])
-        X, _, _ = _matrix_root_eigen(
+        X = matrix_inverse_root(
             A=A,
             root=2,
             epsilon=0.0,
-            make_positive_semidefinite=True,
-            inverse=False,
-            retry_double_precision=True,
         )
         torch.testing.assert_close(X, torch.eye(2))
         mock_eigh.assert_called()
@@ -601,7 +567,7 @@ class NewtonRootInverseTest(unittest.TestCase):
         A_tol: float,
         M_tol: float,
     ) -> None:
-        X, M, flag, iteration, M_error = _matrix_inverse_root_newton(
+        X, _, _, _, M_error = _matrix_inverse_root_newton(
             A, root, epsilon, max_iterations, M_tol
         )
         abs_A_error = torch.dist(torch.linalg.matrix_power(X, -root), A, p=torch.inf)
