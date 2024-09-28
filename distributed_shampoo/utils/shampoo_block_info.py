@@ -7,11 +7,10 @@ LICENSE file in the root directory of this source tree.
 
 """
 
-from dataclasses import dataclass
-from typing import Callable, Tuple
-
 import torch
+from dataclasses import dataclass
 from torch import Tensor
+from typing import Callable, Tuple
 
 
 @dataclass
@@ -45,10 +44,14 @@ class BlockInfo:
 
     param: Tensor
     composable_block_ids: Tuple[int, str]
-    allocate_zeros_tensor: Callable[..., Tensor] = (
-        lambda shape, dtype, device: torch.zeros(size=shape, dtype=dtype, device=device)
-    )
-    get_tensor: Callable[..., Tensor] = lambda tensor_obj: tensor_obj
+
+    @staticmethod
+    def allocate_zeros_tensor(shape, dtype, device) -> Tensor:
+        return torch.zeros(size=shape, dtype=dtype, device=device)
+
+    @staticmethod
+    def get_tensor(tensor_obj) -> Tensor:
+        return tensor_obj
 
 
 @dataclass
