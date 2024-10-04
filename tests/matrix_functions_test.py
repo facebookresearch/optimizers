@@ -26,6 +26,7 @@ from matrix_functions import (
     _matrix_root_eigen,
     check_diagonal,
     compute_matrix_root_inverse_residuals,
+    matrix_eigenvectors,
     matrix_inverse_root,
     NewtonConvergenceFlag,
 )
@@ -786,4 +787,97 @@ class ComputeMatrixRootInverseResidualsTest(unittest.TestCase):
                 exponent_multiplier=exponent_multiplier,
                 expected_relative_error=expected_relative_error,
                 expected_relative_residual=expected_relative_residual,
+            )
+
+
+class MatrixEigenvectorsTest(unittest.TestCase):
+    def test_matrix_eigenvectors_scalar(self) -> None:
+        A = torch.tensor(2.0)
+        with self.subTest("Test with scalar case."):
+            self.assertEqual(
+                torch.tensor(1),
+                matrix_eigenvectors(A),
+            )
+        with self.subTest("Test with matrix case."):
+            self.assertEqual(
+                torch.tensor([[1]]),
+                matrix_eigenvectors(torch.tensor([[A]])),
+            )
+
+    def test_matrix_eigenvectors_with_not_two_dim_matrix(self) -> None:
+        A = torch.zeros((1, 2, 3))
+        self.assertRaisesRegex(
+            ValueError,
+            re.escape("Matrix is not 2-dimensional!"),
+            matrix_eigenvectors,
+            A=A,
+        )
+
+    def test_matrix_eigenvectors_not_square(self) -> None:
+        A = torch.zeros((2, 3))
+        self.assertRaisesRegex(
+            ValueError,
+            re.escape("Matrix is not square!"),
+            matrix_eigenvectors,
+            A=A,
+        )
+
+    def test_matrix_eigenvectors(self) -> None:
+        A_list = [
+            torch.tensor([[1.0, 0.0], [0.0, 4.0]]),
+            torch.tensor(
+                [
+                    [1195.0, -944.0, -224.0],
+                    [-944.0, 746.0, 177.0],
+                    [-224.0, 177.0, 42.0],
+                ]
+            ),
+        ]
+        actual_eigenvectors_list = [
+            torch.tensor([[1.0, 0.0], [0.0, 1.0]]),
+            torch.tensor(
+                [
+                    [0.0460, -0.6287, 0.7763],
+                    [-0.1752, -0.7702, -0.6133],
+                    [0.9835, -0.1078, -0.1455],
+                ]
+            ),
+        ]
+
+        atol = 0.05
+        rtol = 1e-2
+        with self.subTest("Test with diagonal case."):
+            torch.testing.assert_close(
+                actual_eigenvectors_list[0],
+                matrix_eigenvectors(
+                    A_list[0],
+                    is_diagonal=True,
+                ),
+                atol=atol,
+                rtol=rtol,
+            )
+        with self.subTest("Test with EIGEN."):
+            for i in range(len(A_list)):
+                torch.testing.assert_close(
+                    actual_eigenvectors_list[i],
+                    matrix_eigenvectors(
+                        A_list[i],
+                        is_diagonal=False,
+                    ),
+                    atol=atol,
+                    rtol=rtol,
+                )
+
+    def test_matrix_eigenvectors_with_invalid_root_inv_config(self) -> None:
+        A = torch.tensor([[1.0, 0.0], [0.0, 4.0]])
+        with self.assertRaisesRegex(
+            NotImplementedError,
+            re.escape(
+                "Eigenvector computation method is not implemented! Specified eigenvector method is eigenvector_computation_config=RootInvConfig()."
+            ),
+        ):
+            matrix_eigenvectors(
+                A=A,
+                eigenvector_computation_config=RootInvConfig(),
+                is_diagonal=False,
             )

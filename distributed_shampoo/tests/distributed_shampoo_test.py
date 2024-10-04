@@ -233,6 +233,52 @@ class DistributedShampooInitTest(unittest.TestCase):
                 distributed_config=DDPShampooConfig(),
             )
 
+    def test_inv_root_override(self) -> None:
+        # TODO: Add model with parameters with multiple different orders.
+        inv_root_override_settings_and_expected_inv_roots: List[
+            Tuple[Dict[str, Any], int]
+        ] = [
+            (
+                {"inv_root_override": 0},
+                (4,),
+            ),
+            (
+                {"inv_root_override": 2},
+                (2,),
+            ),
+            (
+                {"inv_root_override": (2, 1, 8, 3)},
+                (8,),
+            ),
+            (
+                {"inv_root_override": 0, "use_eigenvalue_correction": True},
+                (2,),
+            ),
+            (
+                {"inv_root_override": 2, "use_eigenvalue_correction": True},
+                (2,),
+            ),
+            (
+                {"inv_root_override": (2, 1, 8, 3), "use_eigenvalue_correction": True},
+                (8,),
+            ),
+        ]
+
+        for (
+            inv_root_override_setting,
+            expected_inv_root,
+        ) in inv_root_override_settings_and_expected_inv_roots:
+            shampoo = DistributedShampoo(
+                self._model.parameters(),
+                use_merge_dims=False,  # Set to False to keep order=2.
+                **inv_root_override_setting,
+            )
+            for state_lists in shampoo._per_group_state_lists:
+                self.assertEqual(
+                    state_lists[SHAMPOO_PRECONDITIONER_LIST]._local_root_list,
+                    expected_inv_root,
+                )
+
 
 class DistributedShampooTest(unittest.TestCase):
     def setUp(self) -> None:
@@ -277,6 +323,38 @@ class DistributedShampooTest(unittest.TestCase):
         self._optimizer.step()
         # Because the gradient list is empty, the preconditioners should not be updated.
         mock_upgrade_preconditioners.assert_not_called()
+
+
+class EigenvalueCorrectedDistributedShampooTest(DistributedShampooTest):
+    def setUp(self) -> None:
+        self._model = nn.Sequential(
+            nn.Linear(5, 10, bias=False),
+        )
+        self._optimizer = DistributedShampoo(
+            self._model.parameters(),
+            lr=0.01,
+            betas=(0.9, 1.0),
+            epsilon=1e-12,
+            momentum=0.0,
+            weight_decay=0.0,
+            max_preconditioner_dim=5,
+            precondition_frequency=1,
+            start_preconditioning_step=1,
+            use_eigenvalue_correction=True,  # use corrected eigenvalues
+            distributed_config=None,
+            # Explicity set grafting_config=None to test the case that no grafting is used.
+            grafting_config=None,
+        )
+
+    @mock.patch.object(ShampooPreconditionerList, "update_eigenvalue_corrections")
+    def test_step_with_empty_grad_list(
+        self, mock_update_eigenvalue_corrections: mock.Mock
+    ) -> None:
+        # Test the case that the grad_list is empty.
+        self._optimizer.zero_grad()
+        self._optimizer.step()
+        # Because the gradient list is empty, the eigenvalue corrections should not be updated.
+        mock_update_eigenvalue_corrections.assert_not_called()
 
 
 class DistributedShampooStateDictTest(unittest.TestCase):
@@ -439,6 +517,7 @@ class DistributedShampooStateDictTest(unittest.TestCase):
                     "start_preconditioning_step": 1,
                     "inv_root_override": 0,
                     "exponent_multiplier": 1.0,
+                    "use_eigenvalue_correction": False,
                     "use_nesterov": False,
                     "use_bias_correction": True,
                     "use_decoupled_weight_decay": True,
@@ -814,6 +893,99 @@ class DistributedShampooPrecisionTest(unittest.TestCase):
                 "preconditioner_dtype is deprecated. Please use precision_config instead.",
                 [r.msg for r in cm.records],
             )
+
+
+class EigenvalueCorrectedDistributedShampooPrecisionTest(DistributedShampooPrecisionTest):
+    def _instantiate_optimizer(
+        self, precision_config: PrecisionConfig
+    ) -> DistributedShampoo:
+        return DistributedShampoo(
+            self._model.parameters(),
+            lr=0.01,
+            betas=(0.9, 1.0),
+            epsilon=1e-12,
+            momentum=0.99,
+            weight_decay=0.0,
+            max_preconditioner_dim=5,
+            precondition_frequency=1,
+            start_preconditioning_step=1,
+            use_eigenvalue_correction=True,  # use corrected eigenvalues
+            distributed_config=None,
+            grafting_config=None,
+            precision_config=precision_config,
+        )
+
+    def _assert_state_list_dtype(
+        self, state_list: Dict[str, Any], precision_config: PrecisionConfig
+    ) -> None:
+        # TODO: is it possible to avoid accessing private field _masked_kronecker_factors_list?
+        for kronecker_factor in state_list[
+            SHAMPOO_PRECONDITIONER_LIST
+        ]._masked_kronecker_factors_list:
+            self._assert_equal_state_dtype(
+                kronecker_factor.factor_matrices,
+                precision_config.computation_dtype,
+                precision_config.factor_matrix_dtype,
+            )
+            self._assert_equal_state_dtype(
+                kronecker_factor.factor_matrices_eigenvectors,
+                precision_config.computation_dtype,
+                precision_config.factor_matrix_eigenvectors_dtype,
+            )
+            self._assert_equal_state_dtype(
+                kronecker_factor.corrected_eigenvalues,
+                precision_config.computation_dtype,
+                precision_config.corrected_eigenvalues_dtype,
+            )
+        self._assert_equal_state_dtype(
+            state_list[MASKED_FILTERED_GRAD_LIST],
+            precision_config.computation_dtype,
+            precision_config.filtered_grad_dtype,
+        )
+        self._assert_equal_state_dtype(
+            state_list[MASKED_MOMENTUM_LIST],
+            precision_config.computation_dtype,
+            precision_config.momentum_dtype,
+        )
+
+    def test_precision_configs(self) -> None:
+        precision_configs = [
+            PrecisionConfig(computation_dtype=torch.float16),
+            PrecisionConfig(factor_matrix_dtype=torch.float16),
+            PrecisionConfig(factor_matrix_eigenvectors_dtype=torch.float16),
+            PrecisionConfig(corrected_eigenvalues_dtype=torch.float16),
+            PrecisionConfig(filtered_grad_dtype=torch.float16),
+            PrecisionConfig(momentum_dtype=torch.float16),
+            PrecisionConfig(
+                factor_matrix_dtype=torch.float16,
+                factor_matrix_eigenvectors_dtype=torch.float16,
+            ),
+            PrecisionConfig(
+                factor_matrix_dtype=torch.float16,
+                factor_matrix_eigenvectors_dtype=torch.float16,
+                corrected_eigenvalues_dtype=torch.float16,
+            ),
+            PrecisionConfig(
+                factor_matrix_dtype=torch.float16,
+                factor_matrix_eigenvectors_dtype=torch.float16,
+                corrected_eigenvalues_dtype=torch.float16,
+                filtered_grad_dtype=torch.float16,
+                momentum_dtype=torch.float16,
+            ),
+        ]
+
+        for precision_config in precision_configs:
+            with self.subTest(precision_config=precision_config):
+                optimizer = self._instantiate_optimizer(
+                    precision_config=precision_config
+                )
+                for state_list in optimizer._per_group_state_lists:
+                    self._assert_state_list_dtype(state_list, precision_config)
+
+                for _ in range(2):
+                    optimizer.step()
+                    for state_list in optimizer._per_group_state_lists:
+                        self._assert_state_list_dtype(state_list, precision_config)
 
 
 class DistributedShampooNoneGradTest(unittest.TestCase):
