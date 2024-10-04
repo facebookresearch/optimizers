@@ -599,3 +599,67 @@ def compute_matrix_root_inverse_residuals(
     )
 
     return relative_error, relative_residual
+
+
+def matrix_eigenvectors(
+    A: Tensor,
+    is_diagonal: bool = False,
+    eigenvector_computation_config: RootInvConfig = DefaultEigenConfig,
+) -> Tensor:
+    """Compute eigenvectors of matrix using eigendecomposition of symmetric positive (semi-)definite matrix.
+
+            A = Q L Q^T => Q
+
+    Assumes matrix A is symmetric.
+
+    Args:
+        A (Tensor): Square matrix of interest.
+        is_diagonal (bool): Whether A is diagonal. (Default: False.)
+        eigenvector_computation_config (RootInvConfig): Determines how eigenvectors are computed.
+            (Default: DefaultEigenConfig.)
+
+    Returns:
+        Q (Tensor): Orthogonal matrix containing eigenvectors of A.
+
+    """
+    # check if matrix is scalar
+    if torch.numel(A) == 1:
+        return torch.ones_like(A)
+
+    # check matrix shape
+    if len(A.shape) != 2:
+        raise ValueError("Matrix is not 2-dimensional!")
+    elif A.shape[0] != A.shape[1]:
+        raise ValueError("Matrix is not square!")
+
+    # return identity matrix if A is diagonal
+    if is_diagonal:
+        return torch.eye(
+            A.shape[0],
+            dtype=A.dtype,
+            device=A.device,
+        )
+
+    if type(eigenvector_computation_config) is EigenConfig:
+        # compute eigendecomposition
+        try:
+            _, Q = torch.linalg.eigh(A)
+
+        except Exception as exception:
+            if (
+                eigenvector_computation_config.retry_double_precision
+                and A.dtype != torch.float64
+            ):
+                logger.warning(
+                    f"Failed to compute eigendecomposition in {A.dtype} precision with exception {exception}! Retrying in double precision..."
+                )
+                _, Q = torch.linalg.eigh(A.double())
+            else:
+                raise exception
+
+    else:
+        raise NotImplementedError(
+            f"Eigenvector computation method is not implemented! Specified eigenvector method is {eigenvector_computation_config=}."
+        )
+
+    return Q
