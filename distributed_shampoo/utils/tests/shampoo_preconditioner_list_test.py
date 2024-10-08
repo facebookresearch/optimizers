@@ -20,6 +20,7 @@ from distributed_shampoo.utils.shampoo_block_info import BlockInfo
 from distributed_shampoo.utils.shampoo_preconditioner_list import (
     AdagradPreconditionerList,
     DequantizePreconditionersContext,
+    EigenvalueCorrectedShampooPreconditionerList,
     PreconditionerList,
     SGDPreconditionerList,
     ShampooPreconditionerList,
@@ -71,15 +72,10 @@ class PreconditionerListTest(unittest.TestCase):
                 preconditioner_list.update_preconditioners(
                     masked_grad_list=masked_grad_list,
                     step=torch.tensor(step),
+                    compute_root_inverse_or_eigenvectors=(
+                        True if step == len(masked_grad_lists) else False
+                    ),
                 )
-            if isinstance(preconditioner_list, ShampooPreconditionerList):
-                if preconditioner_list._use_eigenvalue_correction:
-                    preconditioner_list.compute_preconditioner_eigenvectors()
-                    preconditioner_list.update_eigenvalue_corrections(
-                        masked_grad_list=masked_grad_list
-                    )
-                else:
-                    preconditioner_list.compute_root_inverse()
             masked_preconditioned_grad_list = preconditioner_list.precondition(
                 masked_grad_list=masked_grad_lists[-1]
             )
@@ -323,36 +319,6 @@ class ShampooPreconditionerListTest(AdagradPreconditionerListTest):
             R = G1^T * G1 + G2^T * G2 = [[1, 0], [0, 1]]
             P = L^{-1/4} G2 R^{-1/4} = 2^{-1/4} * [[0, 1]] = 2^{-1/4} G2
 
-        We can compute the same cases when use_eigenvalue_correction=True and a small epsilon != 0:
-
-        (1) Tensor of Size 2
-            G1 = [1, 0]^T
-            G2 = [0, 1]^T
-
-            L = G1 * G1^T + G2 * G2^T = [[1, 0], [0, 1]]
-            B = [[1, 0], [0, 1]]  # eigenvectors of L
-            P = B ((B G2) / sqrt((B G2)^2 + eps)) = G2 / sqrt(G2^2 + eps) ≈ G2
-
-        (2) Tensor of Size 2 x 2
-            G1 = [[1, 0], [0, 1]] / sqrt(2)
-            G2 = [[1, 0], [0, 1]] / sqrt(2)
-
-            L = G1 * G1^T + G2 * G2^T = [[1, 0], [0, 1]]
-            R = G1^T * G1 + G2^T * G2 = [[1, 0], [0, 1]]
-            B_L = [[1, 0], [0, 1]]   # eigenvectors of L
-            B_R = [[1, 0], [0, 1]]   # eigenvectors of R
-            P = (B_L G2 B_R) / sqrt(((B_L G2 B_R)^2 + eps) = G2 / sqrt(G2^2 + eps) ≈ [[1, 0], [0, 1]]
-
-        (3) Tensor of Size 1 x 2
-            G1 = [[1, 0]]
-            G2 = [[0, 1]]
-
-            L = G1 * G1^T + G2 * G2^T = 2
-            R = G1^T * G1 + G2^T * G2 = [[1, 0], [0, 1]]
-            B_L = 1  # eigenvectors of L
-            B_R = [[1, 0], [0, 1]]   # eigenvectors of R
-            P = (B_L G2 B_R) / sqrt(((B_L G2 B_R)^2 + eps) = 2 G2 / sqrt(4 G2^2 + eps) ≈ G2
-
         """
         masked_grad_list1 = (
             torch.tensor([1.0, 0.0]),
@@ -377,23 +343,6 @@ class ShampooPreconditionerListTest(AdagradPreconditionerListTest):
             preconditioner_list=self._instantiate_preconditioner_list(
                 beta2=1.0,
                 use_bias_correction=True,
-            ),
-            masked_grad_lists=[masked_grad_list1, masked_grad_list2],
-            masked_expected_preconditioned_grad_list=masked_expected_preconditioned_grad_list,
-        )
-
-        # Test the case when use_eigenvalue_correction=True and a small epsilon != 0.
-        masked_expected_preconditioned_grad_list = (
-            torch.tensor([0.0, 1.0]),
-            torch.eye(2),
-            torch.tensor([[0.0, 1.0]]),
-        )
-        self._test_update_preconditioners_and_precondition(
-            preconditioner_list=self._instantiate_preconditioner_list(
-                beta2=1.0,
-                use_bias_correction=True,
-                use_eigenvalue_correction=True,
-                epsilon=1e-12,
             ),
             masked_grad_lists=[masked_grad_list1, masked_grad_list2],
             masked_expected_preconditioned_grad_list=masked_expected_preconditioned_grad_list,
@@ -443,33 +392,6 @@ class ShampooPreconditionerListTest(AdagradPreconditionerListTest):
             masked_expected_preconditioned_grad_list=masked_expected_preconditioned_grad_list,
         )
 
-        # Test the case when use_eigenvalue_correction=True and a small epsilon != 0.
-        masked_expected_preconditioned_grad_list = [
-            torch.tensor([0.0, 1.0]),
-            torch.eye(2),
-            torch.tensor([[0.0, 1.0]]),
-        ]
-        # Fix scaling due to EMA.
-        torch._foreach_div_(
-            masked_expected_preconditioned_grad_list,
-            torch.tensor(1 - beta2).sqrt(),
-        )
-        self._test_update_preconditioners_and_precondition(
-            preconditioner_list=self._instantiate_preconditioner_list(
-                beta2=beta2,
-                use_bias_correction=False,
-                use_eigenvalue_correction=True,
-                epsilon=1e-12,
-            ),
-            masked_grad_lists=[
-                beta2_compensated_grad_list1,
-                beta2_compensated_grad_list2,
-            ],
-            masked_expected_preconditioned_grad_list=tuple(
-                masked_expected_preconditioned_grad_list
-            ),
-        )
-
         """
         For the last case of including bias correction, we re-scale the entire matrix by the
         bias correction at iteration 2.
@@ -513,33 +435,6 @@ class ShampooPreconditionerListTest(AdagradPreconditionerListTest):
             masked_expected_preconditioned_grad_list=masked_expected_preconditioned_grad_list,
         )
 
-        # Test the case when use_eigenvalue_correction=True and a small epsilon != 0.
-        masked_expected_preconditioned_grad_list = [
-            torch.tensor([0.0, 1.0]),
-            torch.eye(2),
-            torch.tensor([[0.0, 1.0]]),
-        ]
-        # Fix scaling due to EMA and bias correction.
-        torch._foreach_mul_(
-            masked_expected_preconditioned_grad_list,
-            torch.tensor(1 - beta2**2).div_(torch.tensor(1 - beta2)).sqrt_(),
-        )
-        self._test_update_preconditioners_and_precondition(
-            preconditioner_list=self._instantiate_preconditioner_list(
-                beta2=beta2,
-                use_bias_correction=True,
-                use_eigenvalue_correction=True,
-                epsilon=1e-12,
-            ),
-            masked_grad_lists=[
-                bias_compensated_grad_list1,
-                bias_compensated_grad_list2,
-            ],
-            masked_expected_preconditioned_grad_list=tuple(
-                masked_expected_preconditioned_grad_list
-            ),
-        )
-
     def test_inv_root_override_and_exponent_multiplier(self) -> None:
         """
         For this example, we modify the one given above such that the inv_root_override = 2
@@ -568,36 +463,6 @@ class ShampooPreconditionerListTest(AdagradPreconditionerListTest):
             L = G1 * G1^T + G2 * G2^T = 2
             R = G1^T * G1 + G2^T * G2 = [[1, 0], [0, 4]]
             P = L^{-1} G2 R^{-1} =  [[0, 0.1]]
-
-        We can compute the same cases when use_eigenvalue_correction=True and a small epsilon != 0:
-
-        (1) Tensor of Size 2
-            G1 = [1, 0]^T
-            G2 = [0, 2]^T
-
-            L = G1 * G1^T + G2 * G2^T = [[1, 0], [0, 4]]
-            B = [[1, 0], [0, 1]]  # eigenvectors of L
-            P = B ((B G2) / (B G2)^2 + eps) = G2 / (G2^2 + eps) ≈ [0, 0.5]^T
-
-        (2) Tensor of Size 2 x 2
-            G1 = [[1, 0], [0, 1]] / sqrt(2)
-            G2 = [[1, 0], [0, 1]] / sqrt(2)
-
-            L = G1 * G1^T + G2 * G2^T = [[1, 0], [0, 1]]
-            R = G1^T * G1 + G2^T * G2 = [[1, 0], [0, 1]]
-            B_L = [[1, 0], [0, 1]]   # eigenvectors of L
-            B_R = [[1, 0], [0, 1]]   # eigenvectors of R
-            P = (B_L G2 B_R) / (((B_L G2 B_R)^2 + eps) = G2 / (G2^2 + eps) ≈ [[1, 0], [0, 1]] * sqrt(2)
-
-        (3) Tensor of Size 1 x 2
-            G1 = [[1, 0]]
-            G2 = [[0, 2]]
-
-            L = G1 * G1^T + G2 * G2^T = 2
-            R = G1^T * G1 + G2^T * G2 = [[1, 0], [0, 4]]
-            B_L = 1  # eigenvectors of L
-            B_R = [[1, 0], [0, 1]]   # eigenvectors of R
-            P = (B_L G2 B_R) / (((B_L G2 B_R)^2 + eps) = G2 / (G2^2 + eps) ≈ [[0, 0.5]]
 
         """
 
@@ -638,26 +503,6 @@ class ShampooPreconditionerListTest(AdagradPreconditionerListTest):
                     masked_expected_preconditioned_grad_list=masked_expected_preconditioned_grad_list,
                 )
 
-            # Test the case when use_eigenvalue_correction=True and a small epsilon != 0.
-            masked_expected_preconditioned_grad_list = (
-                torch.tensor([0, 0.5]),
-                torch.eye(2) * torch.tensor(2.0).sqrt(),
-                torch.tensor([[0, 0.5]]),
-            )
-            with self.subTest(inv_root_override=inv_root_override):
-                self._test_update_preconditioners_and_precondition(
-                    preconditioner_list=self._instantiate_preconditioner_list(
-                        beta2=1.0,
-                        use_bias_correction=True,
-                        inv_root_override=inv_root_override,
-                        exponent_multiplier=exponent_multiplier,
-                        use_eigenvalue_correction=True,
-                        epsilon=1e-12,
-                    ),
-                    masked_grad_lists=[masked_grad_list1, masked_grad_list2],
-                    masked_expected_preconditioned_grad_list=masked_expected_preconditioned_grad_list,
-                )
-
         test_inverse_roots_from_override(inv_root_override=2)
         test_inverse_roots_from_override(inv_root_override=[2, 2, 2])
 
@@ -674,6 +519,7 @@ class ShampooPreconditionerListTest(AdagradPreconditionerListTest):
                     torch.tensor([[torch.inf, torch.inf]]),
                 ),
                 step=torch.tensor(1),
+                compute_root_inverse_or_eigenvectors=False,
             )
             with self.assertRaisesRegex(
                 ValueError,
@@ -692,6 +538,7 @@ class ShampooPreconditionerListTest(AdagradPreconditionerListTest):
                     torch.tensor([[torch.nan, torch.nan]]),
                 ),
                 step=torch.tensor(1),
+                compute_root_inverse_or_eigenvectors=False,
             )
             with self.assertRaisesRegex(
                 ValueError,
@@ -804,123 +651,7 @@ class ShampooPreconditionerListTest(AdagradPreconditionerListTest):
         )
         mock_check_diagonal.assert_called()
 
-    """Tests for compute_preconditioner_eigenvectors."""
-
-    def test_raise_inf_in_factor_matrix_compute_preconditioner_eigenvectors(self) -> None:
-        self._preconditioner_list = self._instantiate_preconditioner_list(
-            use_eigenvalue_correction=True
-        )
-        with DequantizePreconditionersContext(
-            preconditioner_list=self._preconditioner_list
-        ):
-            self._preconditioner_list.update_preconditioners(
-                masked_grad_list=(
-                    torch.tensor([torch.inf, torch.inf]),
-                    torch.eye(2) / torch.tensor(2.0).sqrt(),
-                    torch.tensor([[torch.inf, torch.inf]]),
-                ),
-                step=torch.tensor(1),
-            )
-            with self.assertRaisesRegex(
-                ValueError,
-                re.escape("Encountered inf values in factor matrix"),
-            ):
-                self._preconditioner_list.compute_preconditioner_eigenvectors()
-
-    def test_raise_nan_in_factor_matrix_compute_preconditioner_eigenvectors(self) -> None:
-        self._preconditioner_list = self._instantiate_preconditioner_list(
-            use_eigenvalue_correction=True
-        )
-        with DequantizePreconditionersContext(
-            preconditioner_list=self._preconditioner_list
-        ):
-            self._preconditioner_list.update_preconditioners(
-                masked_grad_list=(
-                    torch.tensor([torch.nan, torch.nan]),
-                    torch.eye(2) / torch.tensor(2.0).sqrt(),
-                    torch.tensor([[torch.nan, torch.nan]]),
-                ),
-                step=torch.tensor(1),
-            )
-            with self.assertRaisesRegex(
-                ValueError,
-                re.escape("Encountered nan values in factor matrix"),
-            ):
-                self._preconditioner_list.compute_preconditioner_eigenvectors()
-
-    # Note: This is needed for pyre to infer the type of argument into mock.patch.object.
-    shampoo_preconditioner_list_module: ModuleType = shampoo_preconditioner_list
-
-    @mock.patch.object(
-        shampoo_preconditioner_list_module,
-        "matrix_eigenvectors",
-        side_effect=(torch.tensor([torch.inf]),),
-    )
-    def test_raise_inf_in_inv_factor_matrix_compute_preconditioner_eigenvectors(
-        self, mock_matrix_eigenvectors: mock.Mock
-    ) -> None:
-        self._preconditioner_list = self._instantiate_preconditioner_list(
-            use_eigenvalue_correction=True
-        )
-        with DequantizePreconditionersContext(
-            preconditioner_list=self._preconditioner_list
-        ), self.assertRaisesRegex(
-            ValueError,
-            re.escape("Encountered nan or inf values in eigenvectors"),
-        ):
-            self._preconditioner_list.compute_preconditioner_eigenvectors()
-        mock_matrix_eigenvectors.assert_called_once()
-
-    @mock.patch.object(
-        shampoo_preconditioner_list_module,
-        "matrix_eigenvectors",
-        side_effect=(torch.tensor([torch.nan]),),
-    )
-    def test_raise_nan_in_inv_factor_matrix_compute_preconditioner_eigenvectors(
-        self, mock_matrix_eigenvectors: mock.Mock
-    ) -> None:
-        self._preconditioner_list = self._instantiate_preconditioner_list(
-            use_eigenvalue_correction=True
-        )
-        with DequantizePreconditionersContext(
-            preconditioner_list=self._preconditioner_list
-        ), self.assertRaisesRegex(
-            ValueError,
-            re.escape("Encountered nan or inf values in eigenvectors"),
-        ):
-            self._preconditioner_list.compute_preconditioner_eigenvectors()
-        mock_matrix_eigenvectors.assert_called_once()
-
-    @mock.patch.object(
-        shampoo_preconditioner_list_module,
-        "check_diagonal",
-        return_value=False,
-    )
-    def test_matrix_compute_preconditioner_eigenvectors_factor_matrix_non_diagonal(
-        self, mock_check_diagonal: mock.Mock
-    ) -> None:
-        self._preconditioner_list = self._instantiate_preconditioner_list(
-            use_eigenvalue_correction=True, epsilon=1.0
-        )
-        with DequantizePreconditionersContext(
-            preconditioner_list=self._preconditioner_list
-        ), self.assertLogs(
-            level="DEBUG",
-        ) as cm:
-            self._preconditioner_list.compute_preconditioner_eigenvectors()
-        self.assertCountEqual(
-            [r.msg for r in cm.records],
-            [
-                "Factor matrix 0.block_0.0 is not diagonal.",
-                "Factor matrix 1.block_0.0 is not diagonal.",
-                "Factor matrix 1.block_0.1 is not diagonal.",
-                "Factor matrix 1.block_1.0 is not diagonal.",
-                "Factor matrix 1.block_1.1 is not diagonal.",
-            ],
-        )
-        mock_check_diagonal.assert_called()
-
-    """End of tests for compute_preconditioner_eigenvectors."""
+    """End of tests for compute_root_inverse."""
 
     def test_numel_list(self) -> None:
         self.assertEqual(self._preconditioner_list.numel_list, (8, 16, 10))
@@ -965,12 +696,13 @@ class ShampooPreconditionerListTest(AdagradPreconditionerListTest):
             preconditioner_list.update_preconditioners(
                 masked_grad_list=masked_grad_list1,
                 step=torch.tensor(1),
+                compute_root_inverse_or_eigenvectors=False,
             )
             preconditioner_list.update_preconditioners(
                 masked_grad_list=masked_grad_list2,
                 step=torch.tensor(2),
+                compute_root_inverse_or_eigenvectors=True,
             )
-            preconditioner_list.compute_root_inverse()
 
             # Expect no relative errors and residuals because L is a diagonal matrix.
             (
@@ -983,3 +715,389 @@ class ShampooPreconditionerListTest(AdagradPreconditionerListTest):
 
         self.assertTupleEqual(relative_errors, expected_relative_errors)
         self.assertTupleEqual(relative_residuals, expected_relative_residuals)
+
+
+class EigenvalueCorrectedShampooPreconditionerListTest(AdagradPreconditionerListTest):
+    def _instantiate_preconditioner_list(self, **kwargs: Any) -> PreconditionerList:
+        kwargs = {
+            "beta2": 1.0,
+            "epsilon": 1e-12,
+            "inv_root_override": 0,
+            "exponent_multiplier": 1.0,
+            "use_bias_correction": True,
+            "use_protected_eigh": True,
+            "factor_matrix_dtype": torch.float64,
+        } | kwargs
+        return EigenvalueCorrectedShampooPreconditionerList(
+            block_list=self._block_list,
+            state=self._state,
+            block_info_list=self._block_info_list,
+            distributor_selector=self._distributor_selector,
+            **kwargs,
+        )
+
+    def test_update_preconditioners_and_precondition(self) -> None:
+        """
+        We provide examples where we update the preconditioners twice using specially
+        chosen gradients such that we get a scalar * identity matrix for both Kronecker
+        factor matrices for all parameters of interest.
+
+        Specifically, for the beta2 = 1 case, we have 3 parameters and define their gradients
+        as the following in order to get the expected preconditioned gradient list:
+
+        (1) Tensor of Size 2
+            G1 = [1, 0]^T
+            G2 = [0, 1]^T
+
+            L = G1 * G1^T + G2 * G2^T = [[1, 0], [0, 1]]
+            B = [[1, 0], [0, 1]]  # eigenvectors of L
+            E = G1^2 + (B G2)^2   # corrected eigenvalues
+            P = B ((B G2) / sqrt(E + eps)) = G2 / sqrt(E + eps) ≈ G2
+
+        (2) Tensor of Size 2 x 2
+            G1 = [[1, 0], [0, 1]] / sqrt(2)
+            G2 = [[1, 0], [0, 1]] / sqrt(2)
+
+            L = G1 * G1^T + G2 * G2^T = [[1, 0], [0, 1]]
+            R = G1^T * G1 + G2^T * G2 = [[1, 0], [0, 1]]
+            B_L = [[1, 0], [0, 1]]     # eigenvectors of L
+            B_R = [[1, 0], [0, 1]]     # eigenvectors of R
+            E = G1^2 + (B_L G2 B_R)^2  # corrected eigenvalues
+            P = B_L ((B_L G2 B_R) / sqrt(E + eps) B_R = G2 / sqrt(E + eps) ≈ G2
+
+        (3) Tensor of Size 1 x 2
+            G1 = [[1, 0]]
+            G2 = [[0, 1]]
+
+            L = G1 * G1^T + G2 * G2^T = 2
+            R = G1^T * G1 + G2^T * G2 = [[1, 0], [0, 1]]
+            B_L = 1                    # eigenvectors of L
+            B_R = [[1, 0], [0, 1]]     # eigenvectors of R
+            E = G1^2 + (B_L G2 B_R)^2  # corrected eigenvalues
+            P = B_L ((B_L G2 B_R) / sqrt(E + eps) B_R = G2 / sqrt(E + eps) ≈ G2
+
+        """
+        masked_grad_list1 = (
+            torch.tensor([1.0, 0.0]),
+            torch.eye(2) / torch.tensor(2.0).sqrt(),
+            torch.tensor([[1.0, 0.0]]),
+        )
+        masked_grad_list2 = (
+            torch.tensor([0.0, 1.0]),
+            torch.eye(2) / torch.tensor(2.0).sqrt(),
+            torch.tensor([[0.0, 1.0]]),
+        )
+
+        masked_expected_preconditioned_grad_list = (
+            torch.tensor([0.0, 1.0]),
+            torch.eye(2) / torch.tensor(2.0).sqrt(),
+            torch.tensor([[0.0, 1.0]]),
+        )
+        self._test_update_preconditioners_and_precondition(
+            preconditioner_list=self._instantiate_preconditioner_list(
+                beta2=1.0,
+                use_bias_correction=True,
+            ),
+            masked_grad_lists=[masked_grad_list1, masked_grad_list2],
+            masked_expected_preconditioned_grad_list=masked_expected_preconditioned_grad_list,
+        )
+
+        """
+        For the other two cases (beta2 < 1), note:
+
+            E = beta2 * (1 - beta2) G1^2 + (1 - beta2) G2^2
+
+        Therefore, in order to retain the identity matrix, we simply need to scale each gradient by:
+
+            G1 -> G1 / sqrt(beta2 * (1 - beta2))
+            G2 -> G2 / sqrt(1 - beta2).
+
+        """
+        beta2 = 0.9
+
+        beta2_compensated_grad_list1 = torch._foreach_div(
+            masked_grad_list1,
+            torch.tensor(beta2 * (1 - beta2)).sqrt(),
+        )
+        beta2_compensated_grad_list2 = torch._foreach_div(
+            masked_grad_list2,
+            torch.tensor(1 - beta2).sqrt(),
+        )
+
+        masked_expected_preconditioned_grad_list = [
+            torch.tensor([0.0, 1.0]),
+            torch.eye(2) / torch.tensor(2.0).sqrt(),
+            torch.tensor([[0.0, 1.0]]),
+        ]
+        # Fix scaling due to EMA.
+        torch._foreach_div_(
+            masked_expected_preconditioned_grad_list,
+            torch.tensor(1 - beta2).sqrt(),
+        )
+
+        self._test_update_preconditioners_and_precondition(
+            preconditioner_list=self._instantiate_preconditioner_list(
+                beta2=beta2,
+                use_bias_correction=False,
+            ),
+            masked_grad_lists=[
+                beta2_compensated_grad_list1,
+                beta2_compensated_grad_list2,
+            ],
+            masked_expected_preconditioned_grad_list=tuple(
+                masked_expected_preconditioned_grad_list
+            ),
+        )
+
+        """
+        For the last case of including bias correction, we re-scale the entire matrix by the
+        bias correction at iteration 2.
+
+            E -> E / (1 - beta2^2).
+
+        Therefore, it is sufficient to additionally scale by this value:
+
+            G1 -> sqrt(1 - beta2^2) * G1
+            G2 -> sqrt(1 - beta2^2) * G2.
+
+        """
+        bias_compensated_grad_list1 = torch._foreach_mul(
+            beta2_compensated_grad_list1,
+            torch.tensor(1 - beta2**2).sqrt(),
+        )
+        bias_compensated_grad_list2 = torch._foreach_mul(
+            beta2_compensated_grad_list2,
+            torch.tensor(1 - beta2**2).sqrt(),
+        )
+
+        # Fix scaling due to bias correction.
+        torch._foreach_mul_(
+            masked_expected_preconditioned_grad_list,
+            torch.tensor(1 - beta2**2).sqrt(),
+        )
+
+        self._test_update_preconditioners_and_precondition(
+            preconditioner_list=self._instantiate_preconditioner_list(
+                beta2=beta2,
+                use_bias_correction=True,
+            ),
+            masked_grad_lists=[
+                bias_compensated_grad_list1,
+                bias_compensated_grad_list2,
+            ],
+            masked_expected_preconditioned_grad_list=tuple(
+                masked_expected_preconditioned_grad_list
+            ),
+        )
+
+    def test_inv_root_override_and_exponent_multiplier(self) -> None:
+        """
+        For this example, we modify the one given above such that the inv_root_override = 2
+        and exponent_multiplier = 2.0. Therefore, in all cases, the exponent is -2 / 2 = -1.
+        This should result in the following behavior:
+
+        (1) Tensor of Size 2
+            G1 = [1, 0]^T
+            G2 = [0, 2]^T
+
+            L = G1 * G1^T + G2 * G2^T = [[1, 0], [0, 4]]
+            B = [[1, 0], [0, 1]]  # eigenvectors of L
+            E = G1^2 + (B G2)^2   # corrected eigenvalues
+            P = B ((B G2) / (E + eps) = G2 / (E + eps) ≈ [0, 0.5]^T
+
+        (2) Tensor of Size 2 x 2
+            G1 = [[1, 0], [0, 1]] / sqrt(2)
+            G2 = [[1, 0], [0, 1]] / sqrt(2)
+
+            L = G1 * G1^T + G2 * G2^T = [[1, 0], [0, 1]]
+            R = G1^T * G1 + G2^T * G2 = [[1, 0], [0, 1]]
+            B_L = [[1, 0], [0, 1]]     # eigenvectors of L
+            B_R = [[1, 0], [0, 1]]     # eigenvectors of R
+            E = G1^2 + (B_L G2 B_R)^2  # corrected eigenvalues
+            P = B_L ((B_L G2 B_R) / (E + eps) B_R = G2 / (E + eps) ≈ G2
+
+        (3) Tensor of Size 1 x 2
+            G1 = [[1, 0]]
+            G2 = [[0, 2]]
+
+            L = G1 * G1^T + G2 * G2^T = 2
+            R = G1^T * G1 + G2^T * G2 = [[1, 0], [0, 4]]
+            B_L = 1                    # eigenvectors of L
+            B_R = [[1, 0], [0, 1]]     # eigenvectors of R
+            E = G1^2 + (B_L G2 B_R)^2  # corrected eigenvalues
+            P = B_L ((B_L G2 B_R) / (E + eps)) B_R = G2 / (E + eps) ≈ [[0, 0.5]]
+
+        """
+
+        def test_inverse_roots_from_override(
+            inv_root_override: Union[int, List[int]],
+        ) -> None:
+            """
+            Tests that the inverse roots are computed correctly from inv_root_override.
+            """
+            exponent_multiplier = 2.0
+
+            masked_grad_list1 = (
+                torch.tensor([1.0, 0.0]),
+                torch.eye(2) / torch.tensor(2.0).sqrt(),
+                torch.tensor([[1.0, 0.0]]),
+            )
+            masked_grad_list2 = (
+                torch.tensor([0.0, 2.0]),
+                torch.eye(2) / torch.tensor(2.0).sqrt(),
+                torch.tensor([[0.0, 2.0]]),
+            )
+
+            masked_expected_preconditioned_grad_list = (
+                torch.tensor([0, 0.5]),
+                torch.eye(2) / torch.tensor(2.0).sqrt(),
+                torch.tensor([[0, 0.5]]),
+            )
+
+            with self.subTest(inv_root_override=inv_root_override):
+                self._test_update_preconditioners_and_precondition(
+                    preconditioner_list=self._instantiate_preconditioner_list(
+                        beta2=1.0,
+                        use_bias_correction=True,
+                        inv_root_override=inv_root_override,
+                        exponent_multiplier=exponent_multiplier,
+                    ),
+                    masked_grad_lists=[masked_grad_list1, masked_grad_list2],
+                    masked_expected_preconditioned_grad_list=masked_expected_preconditioned_grad_list,
+                )
+
+        test_inverse_roots_from_override(inv_root_override=2)
+        test_inverse_roots_from_override(inv_root_override=[2, 2, 2])
+
+    """Tests for compute_preconditioner_eigenvectors."""
+
+    def test_raise_inf_in_factor_matrix_compute_preconditioner_eigenvectors(self) -> None:
+        self._preconditioner_list = self._instantiate_preconditioner_list()
+        with DequantizePreconditionersContext(
+            preconditioner_list=self._preconditioner_list
+        ):
+            self._preconditioner_list.update_preconditioners(
+                masked_grad_list=(
+                    torch.tensor([torch.inf, torch.inf]),
+                    torch.eye(2) / torch.tensor(2.0).sqrt(),
+                    torch.tensor([[torch.inf, torch.inf]]),
+                ),
+                step=torch.tensor(1),
+                compute_root_inverse_or_eigenvectors=False,
+            )
+            with self.assertRaisesRegex(
+                ValueError,
+                re.escape("Encountered inf values in factor matrix"),
+            ):
+                self._preconditioner_list.compute_preconditioner_eigenvectors()
+
+    def test_raise_nan_in_factor_matrix_compute_preconditioner_eigenvectors(self) -> None:
+        self._preconditioner_list = self._instantiate_preconditioner_list()
+        with DequantizePreconditionersContext(
+            preconditioner_list=self._preconditioner_list
+        ):
+            self._preconditioner_list.update_preconditioners(
+                masked_grad_list=(
+                    torch.tensor([torch.nan, torch.nan]),
+                    torch.eye(2) / torch.tensor(2.0).sqrt(),
+                    torch.tensor([[torch.nan, torch.nan]]),
+                ),
+                step=torch.tensor(1),
+                compute_root_inverse_or_eigenvectors=False,
+            )
+            with self.assertRaisesRegex(
+                ValueError,
+                re.escape("Encountered nan values in factor matrix"),
+            ):
+                self._preconditioner_list.compute_preconditioner_eigenvectors()
+
+    # Note: This is needed for pyre to infer the type of argument into mock.patch.object.
+    shampoo_preconditioner_list_module: ModuleType = shampoo_preconditioner_list
+
+    @mock.patch.object(
+        shampoo_preconditioner_list_module,
+        "matrix_eigenvectors",
+        side_effect=(torch.tensor([torch.inf]),),
+    )
+    def test_raise_inf_in_inv_factor_matrix_compute_preconditioner_eigenvectors(
+        self, mock_matrix_eigenvectors: mock.Mock
+    ) -> None:
+        self._preconditioner_list = self._instantiate_preconditioner_list()
+        with DequantizePreconditionersContext(
+            preconditioner_list=self._preconditioner_list
+        ), self.assertRaisesRegex(
+            ValueError,
+            re.escape("Encountered nan or inf values in eigenvectors"),
+        ):
+            self._preconditioner_list.compute_preconditioner_eigenvectors()
+        mock_matrix_eigenvectors.assert_called_once()
+
+    @mock.patch.object(
+        shampoo_preconditioner_list_module,
+        "matrix_eigenvectors",
+        side_effect=(torch.tensor([torch.nan]),),
+    )
+    def test_raise_nan_in_inv_factor_matrix_compute_preconditioner_eigenvectors(
+        self, mock_matrix_eigenvectors: mock.Mock
+    ) -> None:
+        self._preconditioner_list = self._instantiate_preconditioner_list()
+        with DequantizePreconditionersContext(
+            preconditioner_list=self._preconditioner_list
+        ), self.assertRaisesRegex(
+            ValueError,
+            re.escape("Encountered nan or inf values in eigenvectors"),
+        ):
+            self._preconditioner_list.compute_preconditioner_eigenvectors()
+        mock_matrix_eigenvectors.assert_called_once()
+
+    @mock.patch.object(
+        shampoo_preconditioner_list_module,
+        "check_diagonal",
+        return_value=False,
+    )
+    def test_matrix_compute_preconditioner_eigenvectors_factor_matrix_non_diagonal(
+        self, mock_check_diagonal: mock.Mock
+    ) -> None:
+        self._preconditioner_list = self._instantiate_preconditioner_list(
+            epsilon=1.0
+        )
+        with DequantizePreconditionersContext(
+            preconditioner_list=self._preconditioner_list
+        ), self.assertLogs(
+            level="DEBUG",
+        ) as cm:
+            self._preconditioner_list.compute_preconditioner_eigenvectors()
+        self.assertCountEqual(
+            [r.msg for r in cm.records],
+            [
+                "Factor matrix 0.block_0.0 is not diagonal.",
+                "Factor matrix 1.block_0.0 is not diagonal.",
+                "Factor matrix 1.block_0.1 is not diagonal.",
+                "Factor matrix 1.block_1.0 is not diagonal.",
+                "Factor matrix 1.block_1.1 is not diagonal.",
+            ],
+        )
+        mock_check_diagonal.assert_called()
+
+    """End of tests for compute_preconditioner_eigenvectors."""
+
+    def test_numel_list(self) -> None:
+        self.assertEqual(self._preconditioner_list.numel_list, (8, 16, 10))
+
+    def test_dims_list(self) -> None:
+        self.assertEqual(
+            self._preconditioner_list.dims_list,
+            (torch.Size([2]), torch.Size([2, 2]), torch.Size([1, 2])),
+        )
+
+    def test_num_bytes_list(self) -> None:
+        self.assertEqual(self._preconditioner_list.num_bytes_list, (48, 96, 60))
+
+    def test_numel(self) -> None:
+        self.assertEqual(self._preconditioner_list.numel(), 34)
+
+    def test_num_bytes(self) -> None:
+        self.assertEqual(self._preconditioner_list.num_bytes(), 204)
+
+    def test_compress_preconditioner_list(self) -> None:
+        self._test_compress_preconditioner_list(expected_compress_list_call_count=3)

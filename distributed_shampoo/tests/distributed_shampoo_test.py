@@ -33,6 +33,7 @@ from distributed_shampoo.shampoo_types import (
     ShampooPT2CompileConfig,
 )
 from distributed_shampoo.utils.shampoo_preconditioner_list import (
+    EigenvalueCorrectedShampooPreconditionerList,
     ShampooPreconditionerList,
 )
 from distributed_shampoo.utils.shampoo_quantization import QuantizedTensorList
@@ -273,6 +274,7 @@ class DistributedShampooInitTest(unittest.TestCase):
                 use_merge_dims=False,  # Set to False to keep order=2.
                 **inv_root_override_setting,
             )
+            # TODO: is it possible to avoid accessing private fields?
             for state_lists in shampoo._per_group_state_lists:
                 self.assertEqual(
                     state_lists[SHAMPOO_PRECONDITIONER_LIST]._local_root_list,
@@ -345,16 +347,6 @@ class EigenvalueCorrectedDistributedShampooTest(DistributedShampooTest):
             # Explicity set grafting_config=None to test the case that no grafting is used.
             grafting_config=None,
         )
-
-    @mock.patch.object(ShampooPreconditionerList, "update_eigenvalue_corrections")
-    def test_step_with_empty_grad_list(
-        self, mock_update_eigenvalue_corrections: mock.Mock
-    ) -> None:
-        # Test the case that the grad_list is empty.
-        self._optimizer.zero_grad()
-        self._optimizer.step()
-        # Because the gradient list is empty, the eigenvalue corrections should not be updated.
-        mock_update_eigenvalue_corrections.assert_not_called()
 
 
 class DistributedShampooStateDictTest(unittest.TestCase):
