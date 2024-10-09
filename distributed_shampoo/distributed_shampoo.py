@@ -805,6 +805,7 @@ class DistributedShampoo(torch.optim.Optimizer):
             )
 
     @torch.no_grad()
+    @torch.compiler.disable
     def _compute_and_log_root_inverse_residuals(
         self,
     ) -> None:

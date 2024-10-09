@@ -724,6 +724,7 @@ class ShampooPreconditionerList(BaseShampooPreconditionerList):
                 )
             )
 
+    @torch.compiler.disable
     def compute_root_inverse(self) -> None:
         # NOTE: This function currently only computes the matrix root inverse based on
         # the masked lists which combines both selection based on the distributor and where
@@ -825,6 +826,7 @@ class ShampooPreconditionerList(BaseShampooPreconditionerList):
                 kronecker_factors.factor_matrices.quantize_()
                 kronecker_factors.inv_factor_matrices.quantize_()
 
+    @torch.compiler.disable
     def compute_root_inverse_residuals(
         self,
     ) -> Tuple[Tuple[Tensor, ...], Tuple[Tensor, ...]]:
@@ -1206,6 +1208,7 @@ class EigenvalueCorrectedShampooPreconditionerList(BaseShampooPreconditionerList
                 preconditioned_grad_list.append(grad)
             return tuple(preconditioned_grad_list)
 
+    @torch.compiler.disable
     def compute_preconditioner_eigenvectors(self) -> None:
         # NOTE: This function currently only computes the preconditioner eigenvectors based on
         # the masked lists which combines both selection based on the distributor and where
