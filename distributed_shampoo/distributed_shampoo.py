@@ -536,20 +536,11 @@ class DistributedShampoo(torch.optim.Optimizer):
         for state_lists, group in zip(
             self._per_group_state_lists, self.param_groups, strict=True
         ):
-            if group[USE_EIGENVALUE_CORRECTION]:
-                preconditioner_list_cls = EigenvalueCorrectedShampooPreconditionerList
-                extra_precision_kwargs = {
-                    "factor_matrix_eigenvectors_dtype":
-                        group[PRECISION_CONFIG].factor_matrix_eigenvectors_dtype,
-                    "corrected_eigenvalues_dtype":
-                        group[PRECISION_CONFIG].corrected_eigenvalues_dtype,
-                }
-            else:
-                preconditioner_list_cls = ShampooPreconditionerList
-                extra_precision_kwargs = {
-                    "inv_factor_matrix_dtype":
-                        group[PRECISION_CONFIG].inv_factor_matrix_dtype,
-                }
+            preconditioner_list_cls = (
+                EigenvalueCorrectedShampooPreconditionerList
+                if group[USE_EIGENVALUE_CORRECTION]
+                else ShampooPreconditionerList
+            )
             state_lists[SHAMPOO_PRECONDITIONER_LIST] = preconditioner_list_cls(
                 block_list=state_lists[DISTRIBUTOR].global_blocked_params,
                 state=self.state,
@@ -561,11 +552,9 @@ class DistributedShampoo(torch.optim.Optimizer):
                 inv_root_override=group[INV_ROOT_OVERRIDE],
                 exponent_multiplier=group[EXPONENT_MULTIPLIER],
                 use_bias_correction=group[USE_BIAS_CORRECTION],
-                factor_matrix_dtype=group[PRECISION_CONFIG].factor_matrix_dtype,
-                computation_dtype=group[PRECISION_CONFIG].computation_dtype,
+                precision_config=group[PRECISION_CONFIG],
                 # TODO: allow more specific computation dtypes that only apply to some computations
                 use_protected_eigh=self._use_protected_eigh,
-                **extra_precision_kwargs,
             )
 
     @torch.no_grad()
@@ -594,8 +583,7 @@ class DistributedShampoo(torch.optim.Optimizer):
                         else group[GRAFTING_CONFIG].beta2
                     ),
                     epsilon=group[GRAFTING_CONFIG].epsilon,
-                    preconditioner_dtype=group[PRECISION_CONFIG].grafting_state_dtype,
-                    computation_dtype=group[PRECISION_CONFIG].computation_dtype,
+                    precision_config=group[PRECISION_CONFIG],
                     use_bias_correction=isinstance(
                         group[GRAFTING_CONFIG], AdamGraftingConfig
                     ),

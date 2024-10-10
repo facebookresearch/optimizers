@@ -348,6 +348,19 @@ class EigenvalueCorrectedDistributedShampooTest(DistributedShampooTest):
             grafting_config=None,
         )
 
+    @mock.patch.object(
+            EigenvalueCorrectedShampooPreconditionerList,
+            "update_preconditioners",
+    )
+    def test_step_with_empty_grad_list(
+        self, mock_upgrade_preconditioners: mock.Mock
+    ) -> None:
+        # Test the case that the grad_list is empty.
+        self._optimizer.zero_grad()
+        self._optimizer.step()
+        # Because the gradient list is empty, the preconditioners should not be updated.
+        mock_upgrade_preconditioners.assert_not_called()
+
 
 class DistributedShampooStateDictTest(unittest.TestCase):
     def setUp(self) -> None:

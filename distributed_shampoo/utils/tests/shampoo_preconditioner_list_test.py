@@ -19,6 +19,7 @@ from distributed_shampoo.utils import shampoo_preconditioner_list
 from distributed_shampoo.utils.shampoo_block_info import BlockInfo
 from distributed_shampoo.utils.shampoo_preconditioner_list import (
     AdagradPreconditionerList,
+    BaseShampooPreconditionerList,
     DequantizePreconditionersContext,
     EigenvalueCorrectedShampooPreconditionerList,
     PreconditionerList,
@@ -26,6 +27,7 @@ from distributed_shampoo.utils.shampoo_preconditioner_list import (
     ShampooPreconditionerList,
 )
 from distributed_shampoo.utils.shampoo_quantization import QuantizedTensorList
+from distributed_shampoo.shampoo_types import PrecisionConfig
 from torch import Tensor
 
 
@@ -73,7 +75,12 @@ class PreconditionerListTest(unittest.TestCase):
                     masked_grad_list=masked_grad_list,
                     step=torch.tensor(step),
                     compute_root_inverse_or_eigenvectors=(
-                        True if step == len(masked_grad_lists) else False
+                        step == len(masked_grad_lists)
+                        if isinstance(
+                            preconditioner_list,
+                            BaseShampooPreconditionerList,
+                        )
+                        else None
                     ),
                 )
             masked_preconditioned_grad_list = preconditioner_list.precondition(
@@ -277,7 +284,9 @@ class ShampooPreconditionerListTest(AdagradPreconditionerListTest):
             "exponent_multiplier": 1.0,
             "use_bias_correction": True,
             "use_protected_eigh": True,
-            "factor_matrix_dtype": torch.float64,
+            "precision_config": PrecisionConfig(
+                factor_matrix_dtype=torch.float64,
+            ),
         } | kwargs
         return ShampooPreconditionerList(
             block_list=self._block_list,
@@ -726,7 +735,9 @@ class EigenvalueCorrectedShampooPreconditionerListTest(AdagradPreconditionerList
             "exponent_multiplier": 1.0,
             "use_bias_correction": True,
             "use_protected_eigh": True,
-            "factor_matrix_dtype": torch.float64,
+            "precision_config": PrecisionConfig(
+                factor_matrix_dtype=torch.float64,
+            ),
         } | kwargs
         return EigenvalueCorrectedShampooPreconditionerList(
             block_list=self._block_list,
