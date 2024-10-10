@@ -69,6 +69,7 @@ from distributed_shampoo.shampoo_types import (
     STEP,
     USE_BIAS_CORRECTION,
     USE_DECOUPLED_WEIGHT_DECAY,
+    USE_EIGENVALUE_CORRECTION,
     USE_MERGE_DIMS,
     USE_NESTEROV,
     WEIGHT_DECAY,
@@ -91,6 +92,7 @@ from distributed_shampoo.utils.shampoo_hsdp_distributor import HSDPDistributor
 from distributed_shampoo.utils.shampoo_preconditioner_list import (
     AdagradPreconditionerList,
     DequantizePreconditionersContext,
+    EigenvalueCorrectedShampooPreconditionerList,
     SGDPreconditionerList,
     ShampooPreconditionerList,
 )
@@ -101,7 +103,7 @@ from distributed_shampoo.utils.shampoo_quantization import (
 )
 from distributed_shampoo.utils.shampoo_utils import compress_list
 
-from matrix_functions_types import DefaultEigenConfig, RootInvConfig
+from matrix_functions_types import DefaultEigenConfig, EigenConfig, RootInvConfig
 from torch.optim.optimizer import ParamsT
 
 logger: logging.Logger = logging.getLogger(__name__)
@@ -215,6 +217,16 @@ class DistributedShampoo(torch.optim.Optimizer):
                     particular tensor shape. Recommended to use `static` mode here for Shampoo.
                     More about dynamic shape: https://pytorch.org/docs/stable/torch.compiler_dynamic_shapes.html
 
+    5. [EXPERIMENTAL] Eigenvalue correction: We can (approximately) correct the eigenvalues of Shampoo's preconditioner by accumulating a running
+        average of the squared gradient in the eigenbasis of Shampoo's preconditioner. This running average (with hyperparameter `betas[1]`) is
+        updated every iteration while the eigenbasis of Shampoo's preconditioner is only computed every `precondition_frequency` steps.
+        Alternatively, this can be seen as running Adam in the eigenbasis of Shampoo's preconditioner.
+
+        When setting `use_eigenvalue_correction=True`, there is typically no need to use learning rate grafting from Adam (`grafting_config=None`)
+        and, when they are available, Adam's optimal `lr`, `betas`, and `weight_decay` should be a good starting point for further tuning. However,
+        the case of `beta2=1.0`, i.e. an AdaGrad-like accumulation, has not been explored yet. Also, in settings where Shampoo would usually graft
+        its learning rate from SGD, grafting might still be beneficial.
+
     Args:
         params (ParamsT): Iterable of parameters to optimize or dicts defining parameter groups.
         lr (float): Learning rate. (Default: 1e-2)
@@ -229,16 +241,20 @@ class DistributedShampoo(torch.optim.Optimizer):
         dampening (float): Dampening parameter for momentum. (Default: 0.)
         weight_decay (float): Weight decay (L2 penalty). (Default: 0.)
         max_preconditioner_dim (int): Maximum preconditioner dimensio. (Default: 1024)
-        precondition_frequency (int): Frequency for computing root inverse preconditioner. (Default: 1)
+        precondition_frequency (int): Frequency for computing root inverse preconditioner. If use_eigenvalue_correction=True,
+            this is the frequency of the preconditioner eigenbasis computation. (Default: 1)
         start_preconditioning_step (int): Iteration to start computing inverse preconditioner. If -1, uses
             the same value as precondition_frequency. (Default: -1)
         inv_root_override (int, Sequence[int]): Inverse root to use in Shampoo. If a list [l1, l2, ..., lp], then we will
             use -1 / l1 for 1-D tensor (vectors), -1 / l2 for 2-D tensors (matrices), and so on. If the order of the
             tensor exceeds the order of the tensor, reverts to the default value. If 0 is used, uses the default inverse
-            root -1 / (2 * o), where o is the order of the tensor. (Default: 0)
+            root -1 / (2 * o), where o is the order of the tensor. If use_eigenvalue_correction=True, the default is -1 / 2.
+            (Default: 0)
         exponent_multiplier (float): Number to be multiplied to the numerator of the inverse root, i.e., eta where the
             exponent is -eta / (2 * p). (Default: 1.0)
-        use_nesterov (bool): Flag for using Nesterov momentum. (default: False)
+        use_eigenvalue_correction (bool): Flag for correcting the eigenvalues/running Adam in the eigenbasis of Shampoo's
+            preconditioner. (Default: False)
+        use_nesterov (bool): Flag for using Nesterov momentum. (Default: False)
         use_bias_correction (bool): Flag for using bias correction. (Default: True)
         use_decoupled_weight_decay (bool): Flag for using AdamW-style decoupled weight decay. (Default: True)
         grafting_config (Optional[GraftingConfig]): Configuration for grafting method. If None, ignores grafting.
@@ -279,6 +295,7 @@ class DistributedShampoo(torch.optim.Optimizer):
         start_preconditioning_step: int = -1,
         inv_root_override: Union[int, Sequence[int]] = 0,
         exponent_multiplier: float = 1.0,
+        use_eigenvalue_correction: bool = False,
         use_nesterov: bool = False,
         use_bias_correction: bool = True,
         use_decoupled_weight_decay: bool = True,
@@ -394,7 +411,8 @@ class DistributedShampoo(torch.optim.Optimizer):
         if preconditioner_dtype is not None:
             if precision_config is None:
                 precision_config = PrecisionConfig(
-                    factor_matrix_dtype=preconditioner_dtype
+                    factor_matrix_dtype=preconditioner_dtype,
+                    computation_dtype=preconditioner_dtype,
                 )
                 logger.warning(
                     "preconditioner_dtype is deprecated. Please use precision_config instead."
@@ -403,6 +421,19 @@ class DistributedShampoo(torch.optim.Optimizer):
                 raise ValueError(
                     "Both preconditioner_dtype and precision_config are provided. Please use only precision_config as preconditioner_dtype is deprecated."
                 )
+
+        # Check that EigenConfig.retry_double_precision is consistent with use_protected_eigh.
+        if type(root_inv_config) is EigenConfig:
+            if use_protected_eigh and not root_inv_config.retry_double_precision:
+                # NOTE: The inverse direction is valid.
+                raise ValueError(
+                    "If use_protected_eigh, then EigenConfig.retry_double_precision has to be set to True."
+                )
+
+        if use_eigenvalue_correction and track_root_inv_residuals:
+            raise ValueError(
+                "track_root_inv_residuals has to be set to False when use_eigenvalue_correction == True."
+            )
 
         # Create default precision config if it is not provided.
         if precision_config is None:
@@ -423,6 +454,7 @@ class DistributedShampoo(torch.optim.Optimizer):
                 START_PRECONDITIONING_STEP: start_preconditioning_step,
                 INV_ROOT_OVERRIDE: inv_root_override,
                 EXPONENT_MULTIPLIER: exponent_multiplier,
+                USE_EIGENVALUE_CORRECTION: use_eigenvalue_correction,
                 USE_NESTEROV: use_nesterov,
                 USE_BIAS_CORRECTION: use_bias_correction,
                 USE_DECOUPLED_WEIGHT_DECAY: use_decoupled_weight_decay,
@@ -442,7 +474,7 @@ class DistributedShampoo(torch.optim.Optimizer):
             shampoo_pt2_compile_config
         )
 
-        # Initialize dictionary containing lists of .
+        # Initialize list containing group state dictionaries.
         self._per_group_state_lists: List[Dict[str, Any]] = [
             {} for _ in self.param_groups
         ]
@@ -504,7 +536,12 @@ class DistributedShampoo(torch.optim.Optimizer):
         for state_lists, group in zip(
             self._per_group_state_lists, self.param_groups, strict=True
         ):
-            state_lists[SHAMPOO_PRECONDITIONER_LIST] = ShampooPreconditionerList(
+            preconditioner_list_cls = (
+                EigenvalueCorrectedShampooPreconditionerList
+                if group[USE_EIGENVALUE_CORRECTION]
+                else ShampooPreconditionerList
+            )
+            state_lists[SHAMPOO_PRECONDITIONER_LIST] = preconditioner_list_cls(
                 block_list=state_lists[DISTRIBUTOR].global_blocked_params,
                 state=self.state,
                 block_info_list=state_lists[DISTRIBUTOR].global_block_info_list,
@@ -515,13 +552,7 @@ class DistributedShampoo(torch.optim.Optimizer):
                 inv_root_override=group[INV_ROOT_OVERRIDE],
                 exponent_multiplier=group[EXPONENT_MULTIPLIER],
                 use_bias_correction=group[USE_BIAS_CORRECTION],
-                factor_matrix_dtype=group[PRECISION_CONFIG].factor_matrix_dtype,
-                inv_factor_matrix_dtype=group[PRECISION_CONFIG].inv_factor_matrix_dtype,
-                computation_dtype=(
-                    group[PRECISION_CONFIG].computation_dtype
-                    if group[PRECONDITIONER_DTYPE] is None
-                    else group[PRECONDITIONER_DTYPE]
-                ),
+                precision_config=group[PRECISION_CONFIG],
                 # TODO: allow more specific computation dtypes that only apply to some computations
                 use_protected_eigh=self._use_protected_eigh,
             )
@@ -552,8 +583,7 @@ class DistributedShampoo(torch.optim.Optimizer):
                         else group[GRAFTING_CONFIG].beta2
                     ),
                     epsilon=group[GRAFTING_CONFIG].epsilon,
-                    preconditioner_dtype=group[PRECISION_CONFIG].grafting_state_dtype,
-                    computation_dtype=group[PRECISION_CONFIG].computation_dtype,
+                    precision_config=group[PRECISION_CONFIG],
                     use_bias_correction=isinstance(
                         group[GRAFTING_CONFIG], AdamGraftingConfig
                     ),
@@ -705,7 +735,6 @@ class DistributedShampoo(torch.optim.Optimizer):
                 bool,
                 bool,
                 bool,
-                bool,
             ],
             None,
         ] = (
@@ -764,6 +793,7 @@ class DistributedShampoo(torch.optim.Optimizer):
             )
 
     @torch.no_grad()
+    @torch.compiler.disable
     def _compute_and_log_root_inverse_residuals(
         self,
     ) -> None:
@@ -814,16 +844,6 @@ class DistributedShampoo(torch.optim.Optimizer):
                 "Quantiles [0, 25, 50, 75, 100]: "
                 f"{torch.quantile(relative_residuals, quantiles, interpolation='nearest')}"
             )
-
-    @torch.no_grad()
-    @torch.compiler.disable
-    def _compute_root_inverse(
-        self, state_lists: Dict[str, Any], compute_root_inverse: bool
-    ) -> None:
-        if compute_root_inverse:
-            state_lists[SHAMPOO_PRECONDITIONER_LIST].compute_root_inverse()
-            if self._track_root_inv_residuals:
-                self._compute_and_log_root_inverse_residuals()
 
     @torch.no_grad()
     @torch.compiler.disable
@@ -891,12 +911,16 @@ class DistributedShampoo(torch.optim.Optimizer):
         state_lists: Dict[str, Any],
         step: torch.Tensor,
         grafting_config_not_none: bool,
+        compute_root_inverse_or_eigenvectors: bool,
     ) -> None:
-        # Update Shampoo and grafting preconditioners / factor matrices.
+        # Update Shampoo and grafting preconditioners.
         state_lists[SHAMPOO_PRECONDITIONER_LIST].update_preconditioners(
             masked_grad_list=state_lists[MASKED_BLOCKED_GRADS],
             step=step,
+            compute_root_inverse_or_eigenvectors=compute_root_inverse_or_eigenvectors,
         )
+        if self._track_root_inv_residuals and compute_root_inverse_or_eigenvectors:
+            self._compute_and_log_root_inverse_residuals()
         if grafting_config_not_none:
             state_lists[GRAFTING_PRECONDITIONER_LIST].update_preconditioners(
                 masked_grad_list=state_lists[MASKED_BLOCKED_GRADS],
@@ -1014,7 +1038,7 @@ class DistributedShampoo(torch.optim.Optimizer):
         momentum_param: float,
         dampening: float,
         grafting_config_not_none: bool,
-        compute_root_inverse: bool,
+        compute_root_inverse_or_eigenvectors: bool,
         use_decoupled_weight_decay: bool,
         use_bias_correction: bool,
         use_grafting_method: bool,
@@ -1037,23 +1061,27 @@ class DistributedShampoo(torch.optim.Optimizer):
             if grafting_config_not_none
             else contextlib.nullcontext()
         ):
-            # Update Shampoo and grafting preconditioners / factor matrices.
-            #   Example for AdaGrad accumulation:
+            # Update Shampoo and grafting preconditioners.
+            # Example for AdaGrad accumulation:
+            # 1. Update factor matrices/grafting preconditioners.
             #   L <- L + G * G^T
             #   R <- R + G^T * G
             #   V <- V + G^2    (element-wise)
             #   (and similar)
+            # 2. Root inverse/eigenvector computation.
+            # If use_eigenvalue_correction=False, compute root inverse of the Kronecker factors:
+            #   L_inv <- L ** (-1/4)
+            #   R_inv <- R ** (-1/4)
+            # (or similar);
+            # if use_eigenvalue_correction=True, compute eigenvectors of the Kronecker factors.
+            # Optional 3. Update the eigenvalue correction of the Shampoo preconditioner.
+            # (EMA over squared gradient in Kronecker-factored basis of Shampoo preconditioner.)
             self._update_preconditioners(
                 state_lists,
                 step,
                 grafting_config_not_none,
+                compute_root_inverse_or_eigenvectors,
             )
-
-            # Compute matrix root inverse.
-            #   L_inv <- L ** (-1/4)
-            #   R_inv <- R ** (-1/4)
-            #   (and similar)
-            self._compute_root_inverse(state_lists, compute_root_inverse)
 
             # Compute filtered gradient or EMA of the gradients if beta1 > 0 and beta3 > 0.
             # Note that we use two beta factors here akin to Lion.
@@ -1166,8 +1194,8 @@ class DistributedShampoo(torch.optim.Optimizer):
             momentum_param = group[MOMENTUM]
             dampening = group[DAMPENING]
             grafting_config_not_none = group[GRAFTING_CONFIG] is not None
-            # Check compute root inverse or not for preconditioner
-            compute_root_inverse = (
+            # Check compute root inverse/eigenvectors or not for preconditioner
+            compute_root_inverse_or_eigenvectors = (
                 step.item() % group[PRECONDITION_FREQUENCY] == 0
                 and step.item() > group[START_PRECONDITIONING_STEP]
                 or step.item() == group[START_PRECONDITIONING_STEP]
@@ -1191,7 +1219,7 @@ class DistributedShampoo(torch.optim.Optimizer):
                 momentum_param,
                 dampening,
                 grafting_config_not_none,
-                compute_root_inverse,
+                compute_root_inverse_or_eigenvectors,
                 use_decoupled_weight_decay,
                 use_bias_correction,
                 use_grafting_method,

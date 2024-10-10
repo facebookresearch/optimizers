@@ -161,6 +161,11 @@ class Parser:
             help="Exponent multiplier for Shampoo root inverse.",
         )
         parser.add_argument(
+            "--use-eigenvalue-correction",
+            action="store_true",
+            help="Use eigenvalue correction for Shampoo preconditioner.",
+        )
+        parser.add_argument(
             "--use-nesterov",
             action="store_true",
             help="Use Nesterov momentum for SGD and Shampoo.",
@@ -234,6 +239,18 @@ class Parser:
             type=lambda t: enum_type_parse(t, DType),
             default=DType.FP32,
             help="Data type for storing Shampoo inverse factor matrices.",
+        )
+        parser.add_argument(
+            "--factor-matrix-eigenvectors-dtype",
+            type=lambda t: enum_type_parse(t, DType),
+            default=DType.FP32,
+            help="Data type for storing Shampoo factor matrices eigenvectors.",
+        )
+        parser.add_argument(
+            "--corrected-eigenvalues-dtype",
+            type=lambda t: enum_type_parse(t, DType),
+            default=DType.FP32,
+            help="Data type for storing corrected eigenvalues of Shampoo preconditioner.",
         )
         parser.add_argument(
             "--filtered-grad-dtype",
@@ -398,6 +415,7 @@ def instantiate_optimizer(
     start_preconditioning_step: int,
     inv_root_override: int,
     exponent_multiplier: float,
+    use_eigenvalue_correction: bool,
     use_nesterov: bool,
     use_bias_correction: bool,
     use_decoupled_weight_decay: bool,
@@ -452,6 +470,7 @@ def instantiate_optimizer(
             start_preconditioning_step=start_preconditioning_step,
             inv_root_override=inv_root_override,
             exponent_multiplier=exponent_multiplier,
+            use_eigenvalue_correction=use_eigenvalue_correction,
             use_nesterov=use_nesterov,
             use_bias_correction=use_bias_correction,
             use_decoupled_weight_decay=use_decoupled_weight_decay,
