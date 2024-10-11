@@ -103,7 +103,6 @@ def update_param_state_dict_object(
     param_state_dict_to_load: Dict[str, Any],
     enable_missing_key_check: bool = True,
 ) -> None:
-
     for k, v in current_param_state_dict.items():
         if k not in param_state_dict_to_load:
             if enable_missing_key_check:
@@ -142,7 +141,7 @@ def extract_state_dict_content(
     """
 
     def parse_value(
-        value: Union[Dict[str, Any], torch.Tensor, OptimizerModule]
+        value: Union[Dict[str, Any], torch.Tensor, OptimizerModule],
     ) -> Union[Dict[str, Any], torch.Tensor]:
         if isinstance(value, dict):
             return extract_state_dict_content(value)

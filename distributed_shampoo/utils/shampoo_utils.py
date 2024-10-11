@@ -82,8 +82,8 @@ def compress_list(
         compressed_tuple (Tuple[CompressListType, ...]): Compressed list of candidates based on selector.
 
     """
-    assert len(complete_list) == len(
-        selector
+    assert (
+        len(complete_list) == len(selector)
     ), f"Inconsistent lengths between complete_list {len(complete_list)} and selector {len(selector)}!"
     return tuple(compress(complete_list, selector))
 

@@ -586,7 +586,6 @@ class NewtonRootInverseTest(unittest.TestCase):
         A_tol: float,
         M_tol: float,
     ) -> None:
-
         for n, root, epsilon in itertools.product(dims, roots, epsilons):
             with self.subTest(f"With dim = {n}, root = {root}, epsilon = {epsilon}"):
                 self._test_newton_root_inverse(

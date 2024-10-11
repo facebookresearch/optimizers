@@ -9,7 +9,6 @@ LICENSE file in the root directory of this source tree.
 
 #!/usr/bin/env python3
 
-
 import re
 from functools import partial
 from itertools import pairwise, product

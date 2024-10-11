@@ -9,7 +9,6 @@ LICENSE file in the root directory of this source tree.
 
 #!/usr/bin/env python3
 
-
 import unittest
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple, Union
