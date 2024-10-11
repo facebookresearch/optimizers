@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 
 from itertools import chain
 from operator import methodcaller
-from typing import Any, DefaultDict, Sequence, Tuple, Union
+from typing import Any, DefaultDict, List, Optional, Sequence, Tuple, Union
 
 import torch
 from distributed_shampoo.utils.shampoo_block_info import BlockInfo
@@ -26,10 +26,12 @@ from distributed_shampoo.utils.shampoo_utils import (
     get_dtype_size,
     ParameterizeEnterExitContext,
 )
+from distributed_shampoo.shampoo_types import PrecisionConfig
 
 from matrix_functions import (
     check_diagonal,
     compute_matrix_root_inverse_residuals,
+    matrix_eigenvectors,
     matrix_inverse_root,
 )
 
@@ -69,6 +71,7 @@ class PreconditionerList(ABC):
         self,
         masked_grad_list: Tuple[Tensor, ...],
         step: Tensor,
+        compute_root_inverse_or_eigenvectors: Optional[bool],
     ) -> None: ...
 
     @abstractmethod
@@ -124,6 +127,7 @@ class SGDPreconditionerList(PreconditionerList):
         self,
         masked_grad_list: Tuple[Tensor, ...],
         step: Tensor,
+        compute_root_inverse_or_eigenvectors: Optional[bool],
     ) -> None:
         return
 
@@ -165,8 +169,7 @@ class AdagradPreconditionerList(PreconditionerList):
         beta2 (float): Exponential moving average factor for Adam/RMSprop second moment state. If beta2 = 1., will use
             unweighted sum. (Default: 1.0)
         epsilon (float): Epsilon term for regularizing preconditioner to ensure positive definiteness. (Default: 1e-10)
-        preconditioner_dtype (torch.dtype): Data type for accumulating and computing root inverse of preconditioner. (Default: torch.float32)
-        computation_dtype (torch.dtype): Data type for computation (i.e., matrix inverse) is performed in. (Default: torch.float32)
+        precision_config (PrecisionConfig): Data types for optimizer states. (Default: all fields torch.float.)
         use_bias_correction (bool): Flag for using bias correction. (Default: False)
 
     """
@@ -179,8 +182,7 @@ class AdagradPreconditionerList(PreconditionerList):
         distributor_selector: Tuple[bool, ...],
         beta2: float = 1.0,
         epsilon: float = 1e-10,
-        preconditioner_dtype: torch.dtype = torch.float32,
-        computation_dtype: torch.dtype = torch.float32,
+        precision_config: PrecisionConfig = PrecisionConfig(),
         use_bias_correction: bool = True,
     ) -> None:
         super().__init__(block_list)
@@ -207,7 +209,9 @@ class AdagradPreconditionerList(PreconditionerList):
             preconditioner_index = str(param_index) + "." + str(block_index)
             block_state[ADAGRAD] = QuantizedTensor(
                 block_info.allocate_zeros_tensor(
-                    block.size(), preconditioner_dtype, block.device
+                    block.size(),
+                    precision_config.grafting_state_dtype,
+                    block.device,
                 ),
                 block_info,
             )
@@ -221,8 +225,8 @@ class AdagradPreconditionerList(PreconditionerList):
         # Masked lists are the list of active preconditioners or values after filtering out gradients with None.
         self._local_preconditioner_list = QuantizedTensorList(
             compress_list(preconditioner_list, distributor_selector),
-            preconditioner_dtype,
-            computation_dtype,
+            precision_config.grafting_state_dtype,
+            precision_config.computation_dtype,
         )
         self._masked_preconditioner_list: QuantizedTensorList = (
             self._local_preconditioner_list
@@ -245,7 +249,12 @@ class AdagradPreconditionerList(PreconditionerList):
         self,
         masked_grad_list: Tuple[Tensor, ...],
         step: Tensor,
+        compute_root_inverse_or_eigenvectors: Optional[bool] = None,
     ) -> None:
+        if compute_root_inverse_or_eigenvectors is not None:
+            raise ValueError(
+                "compute_root_inverse_or_eigenvectors has to be None."
+            )
         with profiler.record_function(
             f"## {self.__class__.__name__}:{self.update_preconditioners.__name__} ##"
         ):
@@ -311,49 +320,69 @@ class AdagradPreconditionerList(PreconditionerList):
 
 
 @dataclass
-class ShampooKroneckerFactorsState(OptimizerModule):
-    """Shampoo Kronecker Factors (wrapped) for storing in the optimizer state."""
+class BaseShampooKroneckerFactors(OptimizerModule):
+    """Base class for Shampoo Kronecker factors."""
 
-    factor_matrices: Tuple[QuantizedTensor, ...]
-    inv_factor_matrices: Tuple[QuantizedTensor, ...]
+    factor_matrices: Union[Tuple[QuantizedTensor, ...], QuantizedTensorList]
     factor_matrix_indices: Tuple[str, ...]
     is_factor_matrices_diagonal: Tuple[Tensor, ...] = field(init=False)
 
     def __post_init__(self) -> None:
         super().__init__()
-        assert (
-            len(self.factor_matrices)
-            == len(self.inv_factor_matrices)
-            == len(self.factor_matrix_indices)
-        )
+        assert len(self.factor_matrices) == len(self.factor_matrix_indices)
         self.is_factor_matrices_diagonal = tuple(
             torch.tensor(True) for _ in range(len(self.factor_matrices))
         )
 
 
 @dataclass
-class ShampooKroneckerFactorsList(OptimizerModule):
-    """Shampoo Kronecker Factors (unwrapped) for operations during optimizer computation."""
+class ShampooKroneckerFactorsState(BaseShampooKroneckerFactors):
+    """Shampoo Kronecker factors (wrapped) for storing in the optimizer state."""
 
-    factor_matrices: QuantizedTensorList
-    inv_factor_matrices: QuantizedTensorList
-    factor_matrix_indices: Tuple[str, ...]
-    is_factor_matrices_diagonal: Tuple[Tensor, ...] = field(init=False)
+    inv_factor_matrices: Tuple[QuantizedTensor, ...]
 
     def __post_init__(self) -> None:
-        super().__init__()
-        assert (
-            len(self.factor_matrices)
-            == len(self.inv_factor_matrices)
-            == len(self.factor_matrix_indices)
-        )
-        self.is_factor_matrices_diagonal = tuple(
-            torch.tensor(True) for _ in range(len(self.factor_matrices))
-        )
+        super().__post_init__()
+        assert len(self.factor_matrices) == len(self.inv_factor_matrices)
 
 
-class ShampooPreconditionerList(PreconditionerList):
-    """Shampoo preconditioners for list of parameters.
+@dataclass
+class ShampooKroneckerFactorsList(BaseShampooKroneckerFactors):
+    """Shampoo Kronecker factors (unwrapped) for operations during optimizer computation."""
+
+    inv_factor_matrices: QuantizedTensorList
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        assert len(self.factor_matrices) == len(self.inv_factor_matrices)
+
+
+@dataclass
+class EigenvalueCorrectedShampooKroneckerFactorsState(BaseShampooKroneckerFactors):
+    """Eigenvalue-corrected Shampoo Kronecker factors (wrapped) for storing in the optimizer state."""
+
+    factor_matrices_eigenvectors: Tuple[QuantizedTensor, ...]
+    corrected_eigenvalues: QuantizedTensor
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        assert len(self.factor_matrices) == len(self.factor_matrices_eigenvectors)
+
+
+@dataclass
+class EigenvalueCorrectedShampooKroneckerFactorsList(BaseShampooKroneckerFactors):
+    """Eigenvalue-corrected Shampoo Kronecker factors (unwrapped) for operations during optimizer computation."""
+
+    factor_matrices_eigenvectors: QuantizedTensorList
+    corrected_eigenvalues: QuantizedTensorList
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        assert len(self.factor_matrices) == len(self.factor_matrices_eigenvectors)
+
+
+class BaseShampooPreconditionerList(PreconditionerList):
+    """Base class for Shampoo preconditioners.
 
     NOTE: Does not support sparse gradients at this time.
 
@@ -375,9 +404,7 @@ class ShampooPreconditionerList(PreconditionerList):
         exponent_multiplier (float): Number to be multiplied to the numerator of the inverse root, i.e., eta where the
             exponent is -eta / (2 * p). (Default: 1.0)
         use_bias_correction (bool): Flag for using bias correction. (Default: True)
-        factor_matrix_dtype (torch.dtype): Data type for storing Shampoo factor matrices. (Default: torch.float)
-        inv_factor_matrix_dtype (torch.dtype): Data type for storing Shampoo inverse factor matrices. (Default: torch.float)
-        computation_dtype (torch.dtype): Data type for computation (i.e., matrix inverse) is performed in. (Default: torch.float)
+        precision_config (PrecisionConfig): Data types for optimizer states. (Default: all fields torch.float.)
         use_protected_eigh (bool): Flag for using two guards to prevent failures of torch.linalg.eigh. (Default: True)
             1. Attempts to compute root inverse in preconditioner_dtype precision.
             2. Attempts to recompute the eigendecomposition if using lower-precision fails.
@@ -397,9 +424,7 @@ class ShampooPreconditionerList(PreconditionerList):
         inv_root_override: Union[int, Tuple[int, ...]] = 0,
         exponent_multiplier: float = 1.0,
         use_bias_correction: bool = True,
-        factor_matrix_dtype: torch.dtype = torch.float,
-        inv_factor_matrix_dtype: torch.dtype = torch.float,
-        computation_dtype: torch.dtype = torch.float,
+        precision_config: PrecisionConfig = PrecisionConfig(),
         use_protected_eigh: bool = True,
     ) -> None:
         super().__init__(block_list)
@@ -410,13 +435,207 @@ class ShampooPreconditionerList(PreconditionerList):
         self._epsilon = epsilon
         self._inv_root_override = inv_root_override
         self._exponent_multiplier = exponent_multiplier
-        self._factor_matrix_dtype = factor_matrix_dtype
-        self._inv_factor_matrix_dtype = inv_factor_matrix_dtype
-        self._computation_dtype = computation_dtype
+        self._precision_config = precision_config
         self._use_bias_correction = use_bias_correction
         self._use_protected_eigh = use_protected_eigh
         self._bias_correction2: Tensor = torch.tensor(1.0)
 
+        # Create the Kronecker factors.
+        kronecker_factors_list = self._create_kronecker_factors_state(
+            block_list=block_list,
+            state=state,
+            block_info_list=block_info_list,
+        )
+
+        # Initialize state lists.
+        self._initialize_state_lists(
+            block_list=block_list,
+            kronecker_factors_list=kronecker_factors_list,
+            distributor_selector=distributor_selector,
+        )
+
+    @abstractmethod
+    def _create_kronecker_factors_state(
+        self,
+        block_list: Tuple[Tensor, ...],
+        state: DefaultDict[Tensor, Any],
+        block_info_list: Tuple[BlockInfo, ...],
+    ) -> List[
+            Union[
+                ShampooKroneckerFactorsList,
+                EigenvalueCorrectedShampooKroneckerFactorsList,
+            ]
+        ]:
+        ...
+
+    @staticmethod
+    @abstractmethod
+    def _get_inverse_roots_from_override(
+        inv_root_override: Union[int, Sequence[int]],
+        order_list: Tuple[int, ...],
+    ) -> Tuple[int, ...]:
+        ...
+
+    def _initialize_state_lists(
+        self,
+        block_list: Tuple[Tensor, ...],
+        kronecker_factors_list: List[
+            Union[
+                ShampooKroneckerFactorsList,
+                EigenvalueCorrectedShampooKroneckerFactorsList,
+            ]
+        ],
+        distributor_selector: Tuple[bool, ...],
+    ) -> None:
+        # Initialize local lists.
+        local_block_list = compress_list(block_list, distributor_selector)
+        self._local_kronecker_factors_list: Tuple[
+            Union[
+                ShampooKroneckerFactorsList,
+                EigenvalueCorrectedShampooKroneckerFactorsList,
+            ],
+            ...,
+        ] = compress_list(kronecker_factors_list, distributor_selector)
+        self._local_order_list: Tuple[int, ...] = tuple(
+            block.dim() for block in local_block_list
+        )
+        self._local_root_list: Tuple[int, ...] = self._get_inverse_roots_from_override(
+            self._inv_root_override,
+            self._local_order_list,
+        )
+
+        # Masked lists are the list of active preconditioners or values after filtering out gradients with None.
+        self._masked_order_list: Tuple[int, ...] = self._local_order_list
+        self._masked_root_list: Tuple[int, ...] = self._local_root_list
+        self._masked_kronecker_factors_list: Tuple[
+            Union[
+                ShampooKroneckerFactorsList,
+                EigenvalueCorrectedShampooKroneckerFactorsList,
+            ],
+            ...,
+        ] = self._local_kronecker_factors_list
+
+        # Construct lists of bytes and numels for logging purposes.
+        # NOTE: These lists are constructed across all blocked parameters.
+        self._dims_list: Tuple[torch.Size, ...] = compress_list(
+            self._dims_list, distributor_selector
+        )
+        self._numel_list: Tuple[int, ...] = tuple(
+            sum(2 * dim**2 for dim in dims) for dims in self._dims_list
+        )
+        self._num_bytes_list: Tuple[int, ...] = tuple(
+            numel
+            * (
+                get_dtype_size(self._precision_config.factor_matrix_dtype)
+                + get_dtype_size(block.dtype)
+            )
+            // 2
+            for numel, block in zip(self._numel_list, local_block_list, strict=True)
+        )
+
+    def compress_preconditioner_list(
+        self, local_grad_selector: Tuple[bool, ...]
+    ) -> None:
+        with profiler.record_function(
+            f"## {self.__class__.__name__}:{self.compress_preconditioner_list.__name__} ##"
+        ):
+            self._masked_order_list = compress_list(
+                self._local_order_list, local_grad_selector
+            )
+            self._masked_root_list = compress_list(
+                self._local_root_list, local_grad_selector
+            )
+            self._masked_kronecker_factors_list: Tuple[
+                Union[
+                    ShampooKroneckerFactorsList,
+                    EigenvalueCorrectedShampooKroneckerFactorsList,
+                ],
+                ...,
+            ] = compress_list(self._local_kronecker_factors_list, local_grad_selector)
+
+    def _update_factor_matrices(
+        self, masked_grad_list: Tuple[Tensor, ...]
+    ) -> None:
+        with profiler.record_function(
+            f"## {self.__class__.__name__}:{self._update_factor_matrices.__name__} ##"
+        ):
+            # NOTE: Unlike AdagradPreconditionerList, we will loop through each gradient individually.
+            # We apply foreach operators onto the list of Kronecker factor matrices (as opposed to the
+            # full list of gradients/optimizer states).
+            for grad, order, kronecker_factors in zip(
+                masked_grad_list,
+                self._masked_order_list,
+                self._masked_kronecker_factors_list,
+                strict=True,
+            ):
+                # Scale Kronecker factors as a list.
+                if self._beta2 != 1.0:
+                    torch._foreach_mul_(
+                        kronecker_factors.factor_matrices.dequantized_value, self._beta2
+                    )
+
+                # Construct outer product list for updating Kronecker factors.
+                outer_product_list = tuple(
+                    torch.tensordot(
+                        grad,
+                        grad,
+                        # Contracts across all dimensions except for k.
+                        dims=[[*chain(range(k), range(k + 1, order))]] * 2,
+                    )
+                    for k in range(order)
+                )
+
+                # Update Kronecker factors.
+                torch._foreach_add_(
+                    kronecker_factors.factor_matrices.dequantized_value,
+                    outer_product_list,
+                    alpha=1 - self._beta2 if self._beta2 != 1.0 else 1.0,
+                )
+
+    @staticmethod
+    def _precondition_grad(
+        grad: Tensor,
+        preconditioner_list: Tuple[Tensor, ...],
+        dims: List[List[int]] = [[0], [0]],
+    ) -> Tensor:
+        for preconditioner in preconditioner_list:
+            grad = torch.tensordot(grad, preconditioner, dims)
+        return grad
+
+    @staticmethod
+    def _check_factor_matrix_for_nan_and_inf(
+        factor_matrix: Tensor, factor_matrix_index: str
+    ) -> None:
+        # Check for nan or inf values.
+        if torch.isnan(factor_matrix).any():
+            raise ValueError(
+                f"Encountered nan values in factor matrix {factor_matrix_index}! "
+                f"To mitigate, check if nan inputs are being passed into the network or nan gradients "
+                f"are being passed to the optimizer."
+                f"For debugging purposes, factor_matrix {factor_matrix_index}: "
+                f"{torch.min(factor_matrix)=}, {torch.max(factor_matrix)=}, "
+                f"{factor_matrix.isinf().any()=}, {factor_matrix.isnan().any()=}."
+            )
+        if torch.isinf(factor_matrix).any():
+            raise ValueError(
+                f"Encountered inf values in factor matrix {factor_matrix_index}! "
+                f"In some cases, this may be due to divergence of the algorithm. "
+                f"To mitigate, try decreasing the learning rate or increasing grafting epsilon."
+                f"For debugging purposes, factor_matrix {factor_matrix_index}: "
+                f"{torch.min(factor_matrix)=}, {torch.max(factor_matrix)=}, "
+                f"{factor_matrix.isinf().any()=}, {factor_matrix.isnan().any()=}."
+            )
+
+
+class ShampooPreconditionerList(BaseShampooPreconditionerList):
+    """Shampoo preconditioners for list of parameters."""
+
+    def _create_kronecker_factors_state(
+        self,
+        block_list: Tuple[Tensor, ...],
+        state: DefaultDict[Tensor, Any],
+        block_info_list: Tuple[BlockInfo, ...],
+    ) -> List[ShampooKroneckerFactorsList]:
         # Instantiate (blocked) Kronecker factors and construct list of Kronecker factors.
         # NOTE: We need to instantiate the Kronecker factor states within the optimizer's state dictionary,
         # and do not explicitly store them as ShampooPreconditionerList attributes here.
@@ -437,19 +656,18 @@ class ShampooPreconditionerList(PreconditionerList):
                 QuantizedTensor(
                     block_info.allocate_zeros_tensor(
                         (dim, dim),
-                        self._factor_matrix_dtype,
+                        self._precision_config.factor_matrix_dtype,
                         block_info.param.device,
                     ),
                     block_info,
                 )
                 for dim in dims
             )
-            # The inverse factor matrices are instantiated using the dtype of the block / gradient.
             inv_factor_matrices = tuple(
                 QuantizedTensor(
                     block_info.allocate_zeros_tensor(
                         (dim, dim),
-                        self._inv_factor_matrix_dtype,
+                        self._precision_config.inv_factor_matrix_dtype,
                         block_info.param.device,
                     ),
                     block_info,
@@ -470,13 +688,13 @@ class ShampooPreconditionerList(PreconditionerList):
                 ShampooKroneckerFactorsList(
                     factor_matrices=QuantizedTensorList(
                         factor_matrices,
-                        self._factor_matrix_dtype,
-                        self._computation_dtype,
+                        self._precision_config.factor_matrix_dtype,
+                        self._precision_config.computation_dtype,
                     ),
                     inv_factor_matrices=QuantizedTensorList(
                         inv_factor_matrices,
-                        self._inv_factor_matrix_dtype,
-                        self._computation_dtype,
+                        self._precision_config.inv_factor_matrix_dtype,
+                        self._precision_config.computation_dtype,
                     ),
                     factor_matrix_indices=factor_matrix_indices,
                 )
@@ -488,43 +706,12 @@ class ShampooPreconditionerList(PreconditionerList):
                 f"for Parameter {param_index} ({block_info.param.shape}), Block {block_index} ({block.shape})."
             )
 
-        # Initialize local lists.
-        local_block_list = compress_list(block_list, distributor_selector)
-        self._local_kronecker_factors_list: Tuple[ShampooKroneckerFactorsList, ...] = (
-            compress_list(kronecker_factors_list, distributor_selector)
-        )
-        self._local_order_list: Tuple[int, ...] = tuple(
-            block.dim() for block in local_block_list
-        )
-        self._local_root_list: Tuple[int, ...] = self._get_inverse_roots_from_override(
-            self._inv_root_override, self._local_order_list
-        )
-
-        # Masked lists are the list of active preconditioners or values after filtering out gradients with None.
-        self._masked_order_list: Tuple[int, ...] = self._local_order_list
-        self._masked_root_list: Tuple[int, ...] = self._local_root_list
-        self._masked_kronecker_factors_list: Tuple[ShampooKroneckerFactorsList, ...] = (
-            self._local_kronecker_factors_list
-        )
-
-        # Construct lists of bytes and numels for logging purposes.
-        # NOTE: These lists are constructed across all blocked parameters.
-        self._dims_list: Tuple[torch.Size, ...] = compress_list(
-            self._dims_list, distributor_selector
-        )
-        self._numel_list: Tuple[int, ...] = tuple(
-            sum(2 * dim**2 for dim in dims) for dims in self._dims_list
-        )
-        self._num_bytes_list: Tuple[int, ...] = tuple(
-            numel
-            * (get_dtype_size(self._factor_matrix_dtype) + get_dtype_size(block.dtype))
-            // 2
-            for numel, block in zip(self._numel_list, local_block_list, strict=True)
-        )
+        return kronecker_factors_list
 
     @staticmethod
     def _get_inverse_roots_from_override(
-        inv_root_override: Union[int, Sequence[int]], order_list: Tuple[int, ...]
+        inv_root_override: Union[int, Sequence[int]],
+        order_list: Tuple[int, ...],
     ) -> Tuple[int, ...]:
         """Retrieves the appropriate root from the inverse root override parameter
         for a list of tensor orders.
@@ -561,73 +748,44 @@ class ShampooPreconditionerList(PreconditionerList):
             )
 
     def update_preconditioners(
-        self, masked_grad_list: Tuple[Tensor, ...], step: Tensor
+        self,
+        masked_grad_list: Tuple[Tensor],
+        step: Tensor,
+        compute_root_inverse_or_eigenvectors: Optional[bool],
     ) -> None:
+        if compute_root_inverse_or_eigenvectors is None:
+            raise ValueError(
+                "compute_root_inverse_or_eigenvectors has to be boolean."
+            )
         with profiler.record_function(
             f"## {self.__class__.__name__}:{self.update_preconditioners.__name__} ##"
         ):
-            # NOTE: Unlike AdagradPreconditionerList, we will loop through each gradient individually.
-            # We apply foreach operators onto the list of Kronecker factor matrices (as opposed to the
-            # full list of gradients/optimizer states).
-            for grad, order, kronecker_factors in zip(
-                masked_grad_list,
-                self._masked_order_list,
-                self._masked_kronecker_factors_list,
-                strict=True,
-            ):
-                # Scale Kronecker factors as a list.
-                if self._beta2 != 1.0:
-                    torch._foreach_mul_(
-                        kronecker_factors.factor_matrices.dequantized_value, self._beta2
-                    )
+            # Update the Kronecker factor matrices.
+            self._update_factor_matrices(masked_grad_list=masked_grad_list)
 
-                # Construct outer product list for updating Kronecker factors.
-                outer_product_list = tuple(
-                    torch.tensordot(
-                        grad,
-                        grad,
-                        # Contracts across all dimensions except for k.
-                        dims=[[*chain(range(k), range(k + 1, order))]] * 2,
-                    )
-                    for k in range(order)
-                )
-
-                # Update Kronecker factors.
-                torch._foreach_add_(
-                    kronecker_factors.factor_matrices.dequantized_value,
-                    outer_product_list,
-                    alpha=1 - self._beta2 if self._beta2 != 1.0 else 1.0,
-                )
-
-            # Update bias correction term based on step list.
+            # Update bias correction term based on step.
             if self._use_bias_correction and self._beta2 < 1.0:
                 self._bias_correction2 = torch.tensor(1.0) - self._beta2**step
+
+            # Update the inverse roots of the factor matrices.
+            if compute_root_inverse_or_eigenvectors:
+                self.compute_root_inverse()
 
     def precondition(self, masked_grad_list: Tuple[Tensor, ...]) -> Tuple[Tensor, ...]:
         with profiler.record_function(
             f"## {self.__class__.__name__}:{self.precondition.__name__} ##"
         ):
-
-            def precondition_masked_grad(
-                masked_grad: Tensor,
-                inv_factor_matrices: Tuple[Tensor, ...],
-            ) -> Tensor:
-                for inv_factor_matrix in inv_factor_matrices:
-                    masked_grad = torch.tensordot(
-                        masked_grad, inv_factor_matrix, [[0], [0]]
-                    )
-                return masked_grad
-
             return tuple(
-                precondition_masked_grad(
-                    masked_grad=masked_grad,
-                    inv_factor_matrices=kronecker_factors.inv_factor_matrices.dequantized_value,
+                self._precondition_grad(
+                    grad=masked_grad,
+                    preconditioner_list=kronecker_factors.inv_factor_matrices.dequantized_value,
                 )
                 for masked_grad, kronecker_factors in zip(
                     masked_grad_list, self._masked_kronecker_factors_list, strict=True
                 )
             )
 
+    @torch.compiler.disable
     def compute_root_inverse(self) -> None:
         # NOTE: This function currently only computes the matrix root inverse based on
         # the masked lists which combines both selection based on the distributor and where
@@ -668,25 +826,10 @@ class ShampooPreconditionerList(PreconditionerList):
                         factor_matrix / self._bias_correction2
                     )
 
-                    # Check for nan or inf values.
-                    if torch.isnan(bias_corrected_factor_matrix).any():
-                        raise ValueError(
-                            f"Encountered nan values in bias-corrected factor matrix {factor_matrix_index}! "
-                            f"To mitigate, check if nan inputs are being passed into the network or nan gradients "
-                            f"are being passed to the optimizer."
-                            f"For debugging purposes, factor_matrix {factor_matrix_index}: "
-                            f"{torch.min(factor_matrix)=}, {torch.max(factor_matrix)=}, "
-                            f"{factor_matrix.isinf().any()=}, {factor_matrix.isnan().any()=}."
-                        )
-                    if torch.isinf(bias_corrected_factor_matrix).any():
-                        raise ValueError(
-                            f"Encountered inf values in bias-corrected factor matrix {factor_matrix_index}! "
-                            f"In some cases, this may be due to divergence of the algorithm. "
-                            f"To mitigate, try decreasing the learning rate or increasing grafting epsilon."
-                            f"For debugging purposes, factor_matrix {factor_matrix_index}: "
-                            f"{torch.min(factor_matrix)=}, {torch.max(factor_matrix)=}, "
-                            f"{factor_matrix.isinf().any()=}, {factor_matrix.isnan().any()=}."
-                        )
+                    self._check_factor_matrix_for_nan_and_inf(
+                        bias_corrected_factor_matrix,
+                        factor_matrix_index,
+                    )
 
                     # Compute inverse preconditioner.
                     # If reuse_previous_inv_factor_matrix is True, will reuse previous matrix if matrix
@@ -744,22 +887,7 @@ class ShampooPreconditionerList(PreconditionerList):
                 kronecker_factors.factor_matrices.quantize_()
                 kronecker_factors.inv_factor_matrices.quantize_()
 
-    def compress_preconditioner_list(
-        self, local_grad_selector: Tuple[bool, ...]
-    ) -> None:
-        with profiler.record_function(
-            f"## {self.__class__.__name__}:{self.compress_preconditioner_list.__name__} ##"
-        ):
-            self._masked_order_list = compress_list(
-                self._local_order_list, local_grad_selector
-            )
-            self._masked_root_list = compress_list(
-                self._local_root_list, local_grad_selector
-            )
-            self._masked_kronecker_factors_list: Tuple[
-                ShampooKroneckerFactorsList, ...
-            ] = compress_list(self._local_kronecker_factors_list, local_grad_selector)
-
+    @torch.compiler.disable
     def compute_root_inverse_residuals(
         self,
     ) -> Tuple[Tuple[Tensor, ...], Tuple[Tensor, ...]]:
@@ -795,6 +923,336 @@ class ShampooPreconditionerList(PreconditionerList):
             tuple(relative_errors),
             tuple(relative_residuals),
         )
+
+
+class EigenvalueCorrectedShampooPreconditionerList(BaseShampooPreconditionerList):
+    """Eigenvalue-corrected Shampoo preconditioners for list of parameters."""
+
+    def _create_kronecker_factors_state(
+        self,
+        block_list: Tuple[Tensor, ...],
+        state: DefaultDict[Tensor, Any],
+        block_info_list: Tuple[BlockInfo, ...],
+    ) -> List[EigenvalueCorrectedShampooKroneckerFactorsList]:
+        # Instantiate (blocked) Kronecker factors and construct list of Kronecker factors.
+        # NOTE: We need to instantiate the Kronecker factor states within the optimizer's state dictionary,
+        # and do not explicitly store them as ShampooPreconditionerList attributes here.
+        # This is because the optimizer state is defined per-parameter, but ShampooPreconditionerList is defined
+        # across each parameter group (which includes multiple parameters).
+        kronecker_factors_list = []
+        for block, block_info, dims in zip(
+            block_list, block_info_list, self._dims_list, strict=True
+        ):
+            param_index, block_index = block_info.composable_block_ids
+            if block_index not in state[block_info.param]:
+                state[block_info.param][block_index] = {}
+            block_state = state[block_info.param][block_index]
+
+            # Instantiate ShampooKroneckerFactors for this block.
+            # The factor matrices are instantiated using the determined dtype.
+            factor_matrices = tuple(
+                QuantizedTensor(
+                    block_info.allocate_zeros_tensor(
+                        (dim, dim),
+                        self._precision_config.factor_matrix_dtype,
+                        block_info.param.device,
+                    ),
+                    block_info,
+                )
+                for dim in dims
+            )
+            factor_matrices_eigenvectors = tuple(
+                QuantizedTensor(
+                    block_info.allocate_zeros_tensor(
+                        (dim, dim),
+                        self._precision_config.factor_matrix_eigenvectors_dtype,
+                        block_info.param.device,
+                    ),
+                    block_info,
+                )
+                for dim in dims
+            )
+            corrected_eigenvalues = QuantizedTensor(
+                block_info.allocate_zeros_tensor(
+                    tuple(dims),
+                    self._precision_config.corrected_eigenvalues_dtype,
+                    block_info.param.device,
+                ),
+                block_info,
+            )
+
+            preconditioner_index = str(param_index) + "." + str(block_index)
+            factor_matrix_indices = tuple(
+                preconditioner_index + "." + str(k) for k in range(len(dims))
+            )
+            block_state[SHAMPOO] = EigenvalueCorrectedShampooKroneckerFactorsState(
+                factor_matrices=factor_matrices,
+                factor_matrices_eigenvectors=factor_matrices_eigenvectors,
+                corrected_eigenvalues=corrected_eigenvalues,
+                factor_matrix_indices=factor_matrix_indices,
+            )
+            kronecker_factors_list.append(
+                EigenvalueCorrectedShampooKroneckerFactorsList(
+                    factor_matrices=QuantizedTensorList(
+                        factor_matrices,
+                        self._precision_config.factor_matrix_dtype,
+                        self._precision_config.computation_dtype,
+                    ),
+                    factor_matrices_eigenvectors=QuantizedTensorList(
+                        factor_matrices_eigenvectors,
+                        self._precision_config.factor_matrix_eigenvectors_dtype,
+                        self._precision_config.computation_dtype,
+                    ),
+                    corrected_eigenvalues=QuantizedTensorList(
+                        (corrected_eigenvalues,),
+                        self._precision_config.corrected_eigenvalues_dtype,
+                        self._precision_config.computation_dtype,
+                    ),
+                    factor_matrix_indices=factor_matrix_indices,
+                )
+            )
+
+            logger.info(
+                f"Instantiated Shampoo Preconditioner {preconditioner_index} "
+                f"({[(factor_matrix.quantized_values.shape, factor_matrix.quantized_values.dtype) for factor_matrix in block_state[SHAMPOO].factor_matrices]}) "
+                f"for Parameter {param_index} ({block_info.param.shape}), Block {block_index} ({block.shape})."
+            )
+
+        return kronecker_factors_list
+
+    @staticmethod
+    def _get_inverse_roots_from_override(
+        inv_root_override: Union[int, Sequence[int]],
+        order_list: Tuple[int, ...],
+    ) -> Tuple[int, ...]:
+        """Retrieves the appropriate root from the inverse root override parameter
+        for a list of tensor orders.
+
+        For example, suppose inv_root_override = (2, 1, 4, 3).
+        If order = 0, then we will return 2;
+        If order = 1, then we will return 1;
+        If order = 2, then we will return 4;
+        If order = 3, then we will return 3;
+        If order > 3, then we will return 2.
+
+        Args:
+            inv_root_override (int, Sequence[int]): Inverse root override int or list.
+            order_list (Tuple[int, ...]): List of orders for their corresponding tensors.
+
+        Returns:
+            root_list (int): Inverse roots to use in Shampoo for a list of tensors.
+
+        """
+        if isinstance(inv_root_override, Sequence):
+            return tuple(
+                (
+                    2
+                    if order >= len(inv_root_override)
+                    else inv_root_override[order]
+                )
+                for order in order_list
+            )
+        else:
+            return (
+                (2 if inv_root_override == 0 else inv_root_override,)
+                * len(order_list)
+            )
+
+    def update_preconditioners(
+        self,
+        masked_grad_list: Tuple[Tensor],
+        step: Tensor,
+        compute_root_inverse_or_eigenvectors: Optional[bool],
+    ) -> None:
+        if compute_root_inverse_or_eigenvectors is None:
+            raise ValueError(
+                "compute_root_inverse_or_eigenvectors has to be boolean."
+            )
+        with profiler.record_function(
+            f"## {self.__class__.__name__}:{self.update_preconditioners.__name__} ##"
+        ):
+            # Update the Kronecker factor matrices.
+            self._update_factor_matrices(masked_grad_list=masked_grad_list)
+
+            # Update bias correction term based on step.
+            if self._use_bias_correction and self._beta2 < 1.0:
+                self._bias_correction2 = torch.tensor(1.0) - self._beta2**step
+
+            # Update the eigenvectors of the factor matrices.
+            if compute_root_inverse_or_eigenvectors:
+                self.compute_preconditioner_eigenvectors()
+
+            # Update the eigenvalue corrections of Shampoo's preconditioner.
+            self._update_eigenvalue_corrections(masked_grad_list=masked_grad_list)
+
+    def _update_eigenvalue_corrections(self, masked_grad_list: Tuple[Tensor, ...]) -> None:
+        with profiler.record_function(
+            f"## {self.__class__.__name__}:{self._update_eigenvalue_corrections.__name__} ##"
+        ):
+            # NOTE: Unlike AdagradPreconditionerList, we will loop through each gradient individually.
+            for grad, kronecker_factors in zip(
+                masked_grad_list,
+                self._masked_kronecker_factors_list,
+                strict=True,
+            ):
+                factor_eigenvectors = kronecker_factors.factor_matrices_eigenvectors.dequantized_value
+                if factor_eigenvectors[0].any():
+                    grad = self._precondition_grad(
+                        grad=grad,
+                        preconditioner_list=factor_eigenvectors,
+                    )
+                # Scale corrected eigenvalues.
+                # NOTE: The case when self._beta2 == 1.0 is not well tested and might not be stable.
+                if self._beta2 != 1.0:
+                    kronecker_factors.corrected_eigenvalues.dequantized_value[0].mul_(
+                        self._beta2
+                    )
+                # Update corrected eigenvalues (squared gradient in eigenbasis of Shampoo preconditioner).
+                kronecker_factors.corrected_eigenvalues.dequantized_value[0].add_(
+                    grad.square(),
+                    alpha=1 - self._beta2 if self._beta2 != 1.0 else 1.0,
+                )
+
+    def precondition(self, masked_grad_list: Tuple[Tensor, ...]) -> Tuple[Tensor, ...]:
+        with profiler.record_function(
+            f"## {self.__class__.__name__}:{self.precondition.__name__} ##"
+        ):
+            preconditioned_grad_list = []
+            for masked_grad, kronecker_factors, root in zip(
+                masked_grad_list,
+                self._masked_kronecker_factors_list,
+                self._masked_root_list,
+                strict=True,
+            ):
+                factor_eigenvectors = kronecker_factors.factor_matrices_eigenvectors.dequantized_value
+                corrected_eigenvalues = kronecker_factors.corrected_eigenvalues.dequantized_value[0]
+                use_eigenbasis = factor_eigenvectors[0].any()
+                grad = masked_grad.clone()
+                if use_eigenbasis:
+                    # Convert to eigenbasis of Shampoo factor matrices.
+                    grad = self._precondition_grad(
+                        grad=grad,
+                        preconditioner_list=factor_eigenvectors,
+                    )
+                # Precondition with inverse root of corrected eigenvalues.
+                grad.div_(
+                    corrected_eigenvalues.div(self._bias_correction2).add_(
+                        self._epsilon
+                    ).pow_(self._exponent_multiplier / root)
+                )
+                if use_eigenbasis:
+                    # Convert back to basis of the parameters.
+                    grad = self._precondition_grad(
+                        grad=grad,
+                        preconditioner_list=factor_eigenvectors,
+                        dims=[[0], [1]],
+                    )
+                preconditioned_grad_list.append(grad)
+            return tuple(preconditioned_grad_list)
+
+    @torch.compiler.disable
+    def compute_preconditioner_eigenvectors(self) -> None:
+        # NOTE: This function currently only computes the preconditioner eigenvectors based on
+        # the masked lists which combines both selection based on the distributor and where
+        # grad is not None. Implicitly, this assumes that there are no changes between the
+        # selector or masking from iteration-to-iteration within a single precondition_frequency
+        # interval.
+        with profiler.record_function(
+            f"## {self.__class__.__name__}:{self.compute_preconditioner_eigenvectors.__name__} ##"
+        ):
+            for kronecker_factors in self._masked_kronecker_factors_list:
+                for (
+                    factor_matrix,
+                    factor_matrix_eigenvectors,
+                    is_factor_matrix_diagonal,
+                    factor_matrix_index,
+                ) in zip(
+                    kronecker_factors.factor_matrices.dequantized_value,
+                    kronecker_factors.factor_matrices_eigenvectors.dequantized_value,
+                    kronecker_factors.is_factor_matrices_diagonal,
+                    kronecker_factors.factor_matrix_indices,
+                    strict=True,
+                ):
+                    # For tracking diagonality of the preconditioner.
+                    # Checks if the preconditioner is currently diagonal, then checks whether or not
+                    # the update matrix is diagonal.
+                    if is_factor_matrix_diagonal and not check_diagonal(factor_matrix):
+                        is_factor_matrix_diagonal.copy_(torch.tensor(False))
+                        logger.debug(
+                            f"Factor matrix {factor_matrix_index} is not diagonal."
+                        )
+
+                    self._check_factor_matrix_for_nan_and_inf(
+                        factor_matrix,
+                        factor_matrix_index,
+                    )
+
+                    # Compute eigenvectors of factor matrix.
+                    # If reuse_previous_inv_factor_matrix is True, will reuse previous matrix if matrix
+                    # inverse root computation fails.
+                    try:
+                        computed_eigenvectors = matrix_eigenvectors(
+                            A=factor_matrix,
+                            is_diagonal=is_factor_matrix_diagonal,
+                            eigenvector_computation_config=self._root_inv_config,
+                        )
+
+                        # Check if we encounter NaN or inf values in computed inverse matrix.
+                        if (
+                            torch.isnan(computed_eigenvectors).any()
+                            or torch.isinf(computed_eigenvectors).any()
+                        ):
+                            torch.set_printoptions(threshold=100_000)
+                            raise ValueError(
+                                f"Encountered nan or inf values in eigenvectors of factor matrix {factor_matrix_index}! "
+                                f"To mitigate, check factor matrix before matrix eigendecomposition: "
+                                f"{factor_matrix=}"
+                            )
+
+                        if is_factor_matrix_diagonal:
+                            # Eigenvectors matrix is identity -> only store zero tensor which will be treated
+                            # as identity when changing basis of gradient.
+                            computed_eigenvectors = torch.as_tensor(
+                                [0.0],
+                                dtype=self._precision_config.factor_matrix_eigenvectors_dtype,
+                                device=computed_eigenvectors.device,
+                            )
+                        factor_matrix_eigenvectors.copy_(
+                            computed_eigenvectors.to(
+                                dtype=self._precision_config.factor_matrix_eigenvectors_dtype
+                            )
+                        )
+
+                    except Exception as exception:
+                        if (
+                            not self._use_protected_eigh
+                            or "Encountered nan or inf values in eigenvectors of factor matrix"
+                            in str(exception)
+                        ):
+                            raise exception
+                        else:
+                            logger.warning(
+                                f"Eigenvector computation failed for factor matrix {factor_matrix_index} "
+                                f"with exception {exception}. Using previous factor_matrices_eigenvectors and continuing..."
+                            )
+
+    def dequantize_preconditioners(self) -> None:
+        with profiler.record_function(
+            f"## {self.__class__.__name__}:{self.dequantize_preconditioners.__name__} ##"
+        ):
+            for kronecker_factors in self._masked_kronecker_factors_list:
+                kronecker_factors.factor_matrices.dequantize_()
+                kronecker_factors.factor_matrices_eigenvectors.dequantize_()
+                kronecker_factors.corrected_eigenvalues.dequantize_()
+
+    def quantize_preconditioners(self) -> None:
+        with profiler.record_function(
+            f"## {self.__class__.__name__}:{self.quantize_preconditioners.__name__} ##"
+        ):
+            for kronecker_factors in self._masked_kronecker_factors_list:
+                kronecker_factors.factor_matrices.quantize_()
+                kronecker_factors.factor_matrices_eigenvectors.quantize_()
+                kronecker_factors.corrected_eigenvalues.quantize_()
 
 
 class DequantizePreconditionersContext(ParameterizeEnterExitContext):

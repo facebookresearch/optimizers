@@ -37,6 +37,7 @@ PRECONDITION_FREQUENCY = "precondition_frequency"
 PRECONDITIONER_DTYPE = "preconditioner_dtype"
 ROOT_INV_CONFIG = "root_inv_config"
 START_PRECONDITIONING_STEP = "start_preconditioning_step"
+USE_EIGENVALUE_CORRECTION = "use_eigenvalue_correction"
 USE_BIAS_CORRECTION = "use_bias_correction"
 USE_DECOUPLED_WEIGHT_DECAY = "use_decoupled_weight_decay"
 USE_MERGE_DIMS = "use_merge_dims"
@@ -95,6 +96,8 @@ class PrecisionConfig:
         computation_dtype (torch.dtype): Data type that all computation is performed in. (Default: torch.float32)
         factor_matrix_dtype (torch.dtype): Data type for storing Shampoo factor matrices. (Default: torch.float32)
         inv_factor_matrix_dtype (torch.dtype): Data type for storing Shampoo inverse factor matrices. (Default: torch.float32)
+        factor_matrix_eigenvectors_dtype (torch.dtype): Data type for storing the eigenvectors of Shampoo factor matrices. (Default: torch.float32)
+        corrected_eigenvalues_dtype (torch.dtype): Data type for storing the corrected eigenvalues of Shampoo preconditioner (EMA). (Default: torch.float32)
         filtered_grad_dtype (torch.dtype): Data type for storing filtered gradients (EMA). (Default: torch.float32)
         momentum_dtype (torch.dtype): Data type for storing momentum states. (Default: torch.float32)
         grafting_state_dtype (torch.dtype): Data type for storing grafting preconditioners, if applicable. (Default: torch.float32)
@@ -110,6 +113,8 @@ class PrecisionConfig:
     computation_dtype: torch.dtype = torch.float32
     factor_matrix_dtype: torch.dtype = torch.float32
     inv_factor_matrix_dtype: torch.dtype = torch.float32
+    factor_matrix_eigenvectors_dtype: torch.dtype = torch.float32
+    corrected_eigenvalues_dtype: torch.dtype = torch.float32
     filtered_grad_dtype: torch.dtype = torch.float32
     momentum_dtype: torch.dtype = torch.float32
     grafting_state_dtype: torch.dtype = torch.float32
