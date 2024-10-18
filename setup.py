@@ -16,16 +16,23 @@ if __name__ == "__main__":
         description="PyTorch implementation of Distributed Shampoo",
         license="BSD 3-clause",
         packages=find_packages(),
-        install_requires=[],
-        python_requires=">=3.8",
+        py_modules=[
+            "matrix_functions",
+            "matrix_functions_types",
+            "optimizer_modules",
+        ],
+        install_requires=[
+            "torch>=2.0.0",
+            "torchvision>=0.15.0",
+        ],
+        python_requires=">=3.10",
         classifiers=[
             "Development Status :: 3 - Alpha",
             "Intended Audience :: Science/Research",
             "Intended Audience :: Developers",
             "Operating System :: OS Independent",
-            "Programming Language :: Python :: 3.8",
-            "Programming Language :: Python :: 3.9",
             "Programming Language :: Python :: 3.10",
+            "Programming Language :: Python :: 3.11",
             "Topic :: Scientific/Engineering :: Artificial Intelligence",
         ],
     )
