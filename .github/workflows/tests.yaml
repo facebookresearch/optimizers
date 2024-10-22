@@ -1,0 +1,22 @@
+name: tests
+
+on: [push, pull_request]
+
+jobs:
+  runs-on: ubuntu-latest
+  steps:
+      - uses: actions/checkout@v4
+      - name: Set up and update uv.
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          uv self update
+      - name: Install Python.
+        run: uv python install 3.10
+      - name: Create venv and install the package.
+        run: |
+          uv venv && source .venv/bin/activate
+          uv pip install -e .
+      - name: Run tests.
+        run: |
+          source .venv/bin/activate
+          make test
