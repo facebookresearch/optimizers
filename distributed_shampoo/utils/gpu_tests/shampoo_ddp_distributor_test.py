@@ -12,7 +12,6 @@ LICENSE file in the root directory of this source tree.
 import contextlib
 import pathlib
 import re
-import unittest
 from itertools import product
 
 from typing import Callable, Optional
@@ -33,7 +32,6 @@ from torch.optim.optimizer import ParamsT
 from torch.testing._internal.common_distributed import MultiProcessTestCase
 
 
-@unittest.skipIf(not torch.cuda.is_available(), "Skip when CUDA is not available")
 class ShampooDDPDistributorTest(MultiProcessTestCase):
     @staticmethod
     def _train_model(
@@ -94,12 +92,13 @@ class ShampooDDPDistributorTest(MultiProcessTestCase):
     def _init_distributed(self) -> None:
         if not dist.is_initialized():
             dist.init_process_group(
-                dist.Backend.NCCL,
+                dist.Backend.NCCL if torch.cuda.is_available() else dist.Backend.GLOO,
                 init_method=f"file://{self.file_name}",
                 rank=self.rank,
                 world_size=self.world_size,
             )
-        torch.cuda.set_device(self.rank)
+        if torch.cuda.is_available():
+            torch.cuda.set_device(self.rank)
 
     @property
     def world_size(self) -> int:
@@ -161,7 +160,7 @@ class ShampooDDPDistributorTest(MultiProcessTestCase):
                             communicate_params=communicate_params,
                         )
                     ),
-                    device=torch.device("cuda"),
+                    device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
                 )
 
     # This mock is used to catch the number of calls to Shampoo's step(), which happened after __init__().
@@ -182,7 +181,7 @@ class ShampooDDPDistributorTest(MultiProcessTestCase):
         ):
             ShampooDDPDistributorTest._train_model(
                 self._shampoo_optim_factory(distributed_config=DDPShampooConfig()),
-                device=torch.device("cuda"),
+                device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
                 # Setting model_linear_layers_dims to (20, 1) creates an model with one linear layer with 20x1 weight.
                 # Because Shampoo's max_preconditioner_dim = 20, there will be only one block.
                 # In the case of two trainers per group, there will be one trainer has no params to work on.

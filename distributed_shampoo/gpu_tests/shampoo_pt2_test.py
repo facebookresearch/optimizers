@@ -26,6 +26,7 @@ from torch.nn.parameter import Parameter
 from torch.optim.optimizer import ParamsT
 
 
+@unittest.skipIf(not torch.cuda.is_available(), "Skip when CUDA is not available")
 class DistributedShampooPytorchCompileTest(unittest.TestCase):
     @staticmethod
     def _train_quadratic(
@@ -167,7 +168,7 @@ class DistributedShampooPytorchCompileTest(unittest.TestCase):
         #       So we still want to add some numerical diff guardrails to prevent PT2 degradation.
         #       - It appears if torch.float16 precision tolerance is a good threshold:
         #       rtol = 1e-3; atol = 1e-5;
-        #       - Test config specifc: changing other Shampoo param vals can lead to UT failure:
+        #       - Test config specific: changing other Shampoo param vals can lead to UT failure:
         #       e.g., increase total_steps to a big val (e.g., 10000)
 
         # Test all the combinations for weight decay, betas, grafting_config,
