@@ -26,7 +26,6 @@ BETA3 = "beta3"
 BETAS = "betas"
 DAMPENING = "dampening"
 EPSILON = "epsilon"
-EXPONENT_MULTIPLIER = "exponent_multiplier"
 GRAFTING_CONFIG = "grafting_config"
 INV_ROOT_OVERRIDE = "inv_root_override"
 LR = "lr"
@@ -64,6 +63,11 @@ class CommunicationDType(enum.Enum):
     FP32 = 3
 
 
+###### ERROR CLASSES ######
+class PreconditionerValueError(ValueError):
+    """ValueError for invalid values encountered during Preconditioner computation."""
+
+
 ###### DATACLASSES ######
 @dataclass
 class FSDPParameterMetadata:
@@ -91,10 +95,13 @@ class FSDPParameterMetadata:
 class PrecisionConfig:
     """Configuration for precision of each optimizer state.
 
+    TODO: allow more specific computation dtypes that only apply to some computations
+
     Args:
-        computation_dtype (torch.dtype): Data type that all computation is performed in. (Default: torch.float32)
+        computation_dtype (torch.dtype): Data type that all computation is performed in, except factor matrices (see factor_matrix_computation_dtype). (Default: torch.float32)
         factor_matrix_dtype (torch.dtype): Data type for storing Shampoo factor matrices. (Default: torch.float32)
         inv_factor_matrix_dtype (torch.dtype): Data type for storing Shampoo inverse factor matrices. (Default: torch.float32)
+        factor_matrix_computation_dtype (torch.dtype): Data type for accumulating factor matrices and computing their inverses. (Default: torch.float32)
         filtered_grad_dtype (torch.dtype): Data type for storing filtered gradients (EMA). (Default: torch.float32)
         momentum_dtype (torch.dtype): Data type for storing momentum states. (Default: torch.float32)
         grafting_state_dtype (torch.dtype): Data type for storing grafting preconditioners, if applicable. (Default: torch.float32)
@@ -110,6 +117,7 @@ class PrecisionConfig:
     computation_dtype: torch.dtype = torch.float32
     factor_matrix_dtype: torch.dtype = torch.float32
     inv_factor_matrix_dtype: torch.dtype = torch.float32
+    factor_matrix_computation_dtype: torch.dtype = torch.float32
     filtered_grad_dtype: torch.dtype = torch.float32
     momentum_dtype: torch.dtype = torch.float32
     grafting_state_dtype: torch.dtype = torch.float32
@@ -235,7 +243,7 @@ class SGDGraftingConfig(GraftingConfig):
     ...
 
 
-@dataclass
+@dataclass(kw_only=True)
 class AdaGradGraftingConfig(GraftingConfig):
     """Configuration for grafting from AdaGrad.
 
@@ -253,49 +261,43 @@ class AdaGradGraftingConfig(GraftingConfig):
             raise ValueError(f"Invalid epsilon value: {self.epsilon}. Must be > 0.0.")
 
 
-@dataclass
-class RMSpropGraftingConfig(GraftingConfig):
+@dataclass(kw_only=True)
+class RMSpropGraftingConfig(AdaGradGraftingConfig):
     """Configuration for grafting from RMSprop.
 
     Args:
         beta2 (float): Exponential moving average factor for second moment. (Default: 0.99)
         epsilon (float): Epsilon term for regularizing square-root of the second moment to ensure positive definiteness.
-            (Default: 1e-8)
+            (Default: 1e-10)
 
     """
 
     beta2: float = 0.99
-    epsilon: float = 1e-8
 
     def __post_init__(self) -> None:
-        super().__init__()
+        super().__post_init__()
         if not 0.0 < self.beta2 <= 1.0:
             raise ValueError(
                 f"Invalid grafting beta2 parameter: {self.beta2}. Must be in (0.0, 1.0]."
             )
-        if not self.epsilon > 0.0:
-            raise ValueError(f"Invalid epsilon value: {self.epsilon}. Must be > 0.0.")
 
 
-@dataclass
-class AdamGraftingConfig(GraftingConfig):
+@dataclass(kw_only=True)
+class AdamGraftingConfig(AdaGradGraftingConfig):
     """Configuration for grafting from Adam.
 
     Args:
         beta2 (float): Exponential moving average factor for second moment. (Default: 0.999)
         epsilon (float): Epsilon term for regularizing square-root of the second moment to ensure positive definiteness.
-            (Default: 1e-8)
+            (Default: 1e-10)
 
     """
 
     beta2: float = 0.999
-    epsilon: float = 1e-8
 
     def __post_init__(self) -> None:
-        super().__init__()
+        super().__post_init__()
         if not 0.0 < self.beta2 <= 1.0:
             raise ValueError(
                 f"Invalid grafting beta2 parameter: {self.beta2}. Must be in (0.0, 1.0]."
             )
-        if not self.epsilon > 0.0:
-            raise ValueError(f"Invalid epsilon value: {self.epsilon}. Must be > 0.0.")

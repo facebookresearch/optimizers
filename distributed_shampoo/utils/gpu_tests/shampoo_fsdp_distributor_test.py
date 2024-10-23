@@ -9,6 +9,7 @@ LICENSE file in the root directory of this source tree.
 
 #!/usr/bin/env python3
 
+import unittest
 from functools import partial
 from itertools import pairwise
 from typing import Callable, Optional
@@ -28,6 +29,7 @@ from torch.testing._internal.common_distributed import skip_if_lt_x_gpu
 from torch.testing._internal.common_fsdp import FSDPTest
 
 
+@unittest.skipIf(not torch.cuda.is_available(), "Skip when CUDA is not available")
 class ShampooFSDPDistributorTest(FSDPTest):
     @property
     def world_size(self) -> int:

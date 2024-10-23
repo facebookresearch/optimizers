@@ -21,7 +21,10 @@ from matrix_functions_types import (
     CoupledHigherOrderConfig,
     CoupledNewtonConfig,
     DefaultEigenConfig,
+    DefaultEighEigenvalueCorrectionConfig,
     EigenConfig,
+    EigenvalueCorrectionConfig,
+    EighEigenvalueCorrectionConfig,
     RootInvConfig,
 )
 
@@ -60,20 +63,18 @@ def check_diagonal(A: Tensor) -> bool:
 
 def matrix_inverse_root(
     A: Tensor,
-    root: Union[Fraction, int],
+    root: Fraction,
     root_inv_config: RootInvConfig = DefaultEigenConfig,
     epsilon: float = 0.0,
-    exponent_multiplier: float = 1.0,
     is_diagonal: Union[Tensor, bool] = False,
 ) -> Tensor:
     """Computes matrix root inverse of square symmetric positive definite matrix.
 
     Args:
         A (Tensor): Square matrix of interest.
-        root (int): Root of interest. Any natural number.
+        root (Fraction): Root of interest. Any rational number.
         root_inv_config (RootInvConfig): Configuration for root inverse computation. (Default: DefaultEigenConfig)
         epsilon (float): Adds epsilon * I to matrix before taking matrix root. (Default: 0.0)
-        exponent_multiplier (float): exponent multiplier in the eigen method (Default: 1.0)
         is_diagonal (Tensor, bool): Flag for whether or not matrix is diagonal. If so, will compute root inverse by computing
             root inverse of diagonal entries. (Default: False)
 
@@ -84,8 +85,7 @@ def matrix_inverse_root(
 
     # check if matrix is scalar
     if torch.numel(A) == 1:
-        alpha = torch.as_tensor(-exponent_multiplier / root)
-        return (A + epsilon) ** alpha
+        return (A + epsilon) ** torch.as_tensor(-1.0 / root)
 
     # check matrix shape
     if len(A.shape) != 2:
@@ -94,35 +94,29 @@ def matrix_inverse_root(
         raise ValueError("Matrix is not square!")
 
     if is_diagonal:
-        X = _matrix_root_diagonal(
+        X = _matrix_inverse_root_diagonal(
             A=A,
             root=root,
             epsilon=epsilon,
-            exponent_multiplier=exponent_multiplier,
-            return_full_matrix=True,
         )
     elif type(root_inv_config) is EigenConfig:
-        X, _, _ = _matrix_root_eigen(
+        X, _, _ = _matrix_inverse_root_eigen(
             A=A,
             root=root,
             epsilon=epsilon,
-            exponent_multiplier=exponent_multiplier,
-            **asdict(root_inv_config),
+            make_positive_semidefinite=root_inv_config.make_positive_semidefinite,
+            retry_double_precision=root_inv_config.retry_double_precision,
         )
     elif type(root_inv_config) is CoupledNewtonConfig:
-        if exponent_multiplier != 1.0:
+        # NOTE: Use Fraction.is_integer() instead when Python 3.12+ is available
+        if root.denominator != 1:
             raise ValueError(
-                f"Exponent multiplier {exponent_multiplier} must be equal to 1 to use coupled inverse Newton iteration!"
-            )
-
-        if isinstance(root, Fraction):
-            raise ValueError(
-                f"Root {root} must be an integer to use coupled inverse Newton iteration!"
+                f"{root.denominator=} must be equal to 1 to use coupled inverse Newton iteration!"
             )
 
         X, _, termination_flag, _, _ = _matrix_inverse_root_newton(
             A=A,
-            root=root,
+            root=root.numerator,
             epsilon=epsilon,
             **asdict(root_inv_config),
         )
@@ -131,14 +125,9 @@ def matrix_inverse_root(
                 "Newton did not converge and reached maximum number of iterations!"
             )
     elif type(root_inv_config) is CoupledHigherOrderConfig:
-        if exponent_multiplier != 1.0:
-            raise ValueError(
-                f"Exponent multiplier {exponent_multiplier} must be equal to 1 to use coupled higher order method!"
-            )
-
         X, _, termination_flag, _, _ = _matrix_inverse_root_higher_order(
             A=A,
-            root=Fraction(root),
+            root=root,
             abs_epsilon=epsilon,
             **asdict(root_inv_config),
         )
@@ -154,21 +143,17 @@ def matrix_inverse_root(
     return X
 
 
-def _matrix_root_diagonal(
+def _matrix_inverse_root_diagonal(
     A: Tensor,
-    root: Union[Fraction, int],
+    root: Fraction,
     epsilon: float = 0.0,
-    exponent_multiplier: float = 1.0,
-    return_full_matrix: bool = False,
 ) -> Tensor:
     """Computes matrix inverse root for a diagonal matrix by taking inverse square root of diagonal entries.
 
     Args:
-        A (Tensor): One- or two-dimensional tensor containing either the diagonal entries of the matrix or a diagonal matrix.
-        root (int): Root of interest. Any natural number.
+        A (Tensor): A diagonal matrix.
+        root (Fraction): Root of interest. Any rational number.
         epsilon (float): Adds epsilon * I to matrix before taking matrix root. (Default: 0.0)
-        exponent_multiplier (float): exponent multiplier in the eigen method (Default: 1.0)
-        return_full_matrix (bool): Returns full matrix by taking torch.diag of diagonal entries. (bool: False)
 
     Returns:
         X (Tensor): Inverse root of diagonal entries.
@@ -178,21 +163,45 @@ def _matrix_root_diagonal(
     if root <= 0:
         raise ValueError(f"Root {root} should be positive!")
 
-    # compute matrix power
-    alpha = -exponent_multiplier / root
-
-    return (
-        torch.diag(X := (torch.diag(A) + epsilon).pow(alpha))
-        if return_full_matrix
-        else X
-    )
+    return torch.diag((torch.diagonal(A) + epsilon).pow(torch.as_tensor(-1.0 / root)))
 
 
-def _matrix_root_eigen(
+def _compute_eigenvalue_decomposition(
     A: Tensor,
-    root: Union[Fraction, int],
+    retry_double_precision: bool = True,
+) -> Tuple[Tensor, Tensor]:
+    """
+    Compute the eigendecomposition of a symmetric matrix.
+
+    Args:
+        A (Tensor): The input symmetric matrix.
+        retry_double_precision (bool, optional): Whether to retry the computation in double precision if it fails in the current precision. Defaults to True.
+
+    Returns:
+        Tuple[Tensor, Tensor]: A tuple containing the eigenvalues and eigenvectors of the input matrix.
+    """
+    try:
+        # Attempt to compute the eigendecomposition in the current precision
+        L, Q = torch.linalg.eigh(A)
+
+    except Exception as exception:
+        # If the computation fails and retry_double_precision is True, retry in double precision
+        if retry_double_precision and A.dtype != torch.float64:
+            logger.warning(
+                f"Failed to compute eigendecomposition in {A.dtype} precision with exception {exception}! Retrying in double precision..."
+            )
+            L, Q = torch.linalg.eigh(A.double())
+        else:
+            # If retry_double_precision is False or the computation fails in double precision, raise the exception
+            raise exception
+
+    return L, Q
+
+
+def _matrix_inverse_root_eigen(
+    A: Tensor,
+    root: Fraction,
     epsilon: float = 0.0,
-    exponent_multiplier: float = 1.0,
     make_positive_semidefinite: bool = True,
     retry_double_precision: bool = True,
 ) -> Tuple[Tensor, Tensor, Tensor]:
@@ -204,9 +213,8 @@ def _matrix_root_eigen(
 
     Args:
         A (Tensor): Square matrix of interest.
-        root (int): Root of interest. Any natural number.
+        root (Fraction): Root of interest. Any rational number.
         epsilon (float): Adds epsilon * I to matrix before taking matrix root. (Default: 0.0)
-        exponent_multiplier (float): exponent multiplier in the eigen method (Default: 1.0)
         make_positive_semidefinite (bool): Perturbs matrix eigenvalues to ensure it is numerically positive semi-definite. (Default: True)
         retry_double_precision (bool): Flag for re-trying eigendecomposition with higher precision if lower precision fails due
             to CuSOLVER failure. (Default: True)
@@ -222,21 +230,10 @@ def _matrix_root_eigen(
     if root <= 0:
         raise ValueError(f"Root {root} should be positive!")
 
-    # compute matrix power
-    alpha = -exponent_multiplier / root
-
     # compute eigendecomposition and compute minimum eigenvalue
-    try:
-        L, Q = torch.linalg.eigh(A)
-
-    except Exception as exception:
-        if retry_double_precision and A.dtype != torch.float64:
-            logger.warning(
-                f"Failed to compute eigendecomposition in {A.dtype} precision with exception {exception}! Retrying in double precision..."
-            )
-            L, Q = torch.linalg.eigh(A.double())
-        else:
-            raise exception
+    L, Q = _compute_eigenvalue_decomposition(
+        A, retry_double_precision=retry_double_precision
+    )
 
     lambda_min = torch.min(L)
 
@@ -248,7 +245,7 @@ def _matrix_root_eigen(
     L += epsilon
 
     # compute inverse preconditioner
-    X = Q * L.pow(alpha).unsqueeze(0) @ Q.T
+    X = Q * L.pow(torch.as_tensor(-1.0 / root)).unsqueeze(0) @ Q.T
 
     return X, L, Q
 
@@ -384,10 +381,15 @@ def _matrix_inverse_root_higher_order(
     )
 
     try:
-        t_iter_begin = time.time()
+        t_iter_begin = time.perf_counter()
         p = root.numerator
         q = root.denominator
         dtype = A.dtype
+
+        if min(abs(p), abs(q)) >= 10:
+            logger.warning(
+                f"{abs(root.numerator)=} and {abs(root.denominator)=} are probably too big for best performance."
+            )
 
         # develop the b coefficients array first (ref: Lakic's paper)
         b = torch.zeros(order, dtype=A.dtype, device=A.device)
@@ -430,28 +432,28 @@ def _matrix_inverse_root_higher_order(
         X = (z ** (-s)) * identity
         M = z * A_ridge
         error = torch.linalg.vector_norm(M - identity, torch.inf)
-        t_iter_end = time.time()
+        t_iter_end = time.perf_counter()
         logger.debug(
             f"Iteration dur (s): {t_iter_end - t_iter_begin}, Error (|M-I|) at iteration {iteration}: {error.item()}"
         )
 
         # Do one iteration of basic Newton first. This is used to mathematically guarantee convergence of higher order method.
         # TODO: we may be able to get rid of this with a more careful analysis of the convergence region
-        t_iter_begin = time.time()
+        t_iter_begin = time.perf_counter()
         M_p = M.mul(s).add_(identity, alpha=(1 - s))
         X = X @ M_p
         M = torch.linalg.matrix_power(M_p, p) @ M
         error = torch.linalg.vector_norm(M - identity, torch.inf)
         n_matmul = math.ceil(math.log2(p)) + 2
         iteration += 1
-        t_iter_end = time.time()
+        t_iter_end = time.perf_counter()
         logger.debug(
             f"Iteration dur (s): {t_iter_end - t_iter_begin}, Error (|M-I|) at iteration {iteration}: {error.item()}"
         )
 
         # main while loop
         while error > tolerance and iteration < max_iterations:
-            t_iter_begin = time.time()
+            t_iter_begin = time.perf_counter()
             iteration += 1
 
             # create M_p via Horner's rule
@@ -478,7 +480,7 @@ def _matrix_inverse_root_higher_order(
                 break
             error = new_error
 
-            t_iter_end = time.time()
+            t_iter_end = time.perf_counter()
             logger.debug(
                 f"Iteration dur (s): {t_iter_end - t_iter_begin}, Error (|M-I|) at iteration {iteration}: {error.item()}"
             )
@@ -532,9 +534,8 @@ def _matrix_inverse_root_higher_order(
 def compute_matrix_root_inverse_residuals(
     A: Tensor,
     X_hat: Tensor,
-    root: int,
+    root: Fraction,
     epsilon: float,
-    exponent_multiplier: float,
     root_inv_config: RootInvConfig = DefaultEigenConfig,
 ) -> Tuple[Tensor, Tensor]:
     """Compute residual of matrix root inverse for debugging purposes.
@@ -545,9 +546,8 @@ def compute_matrix_root_inverse_residuals(
     Args:
         A (Tensor): Matrix of interest.
         X (Tensor): Computed matrix root inverse.
-        root (int): Root of interest.
+        root (Fraction): Root of interest. Any rational number.
         epsilon (float): Adds epsilon * I to matrix.
-        exponent_multiplier (float): Exponent multiplier to be multiplied to the numerator of the inverse root.
         root_inv_config (RootInvConfig): Configuration for root inverse computation (only supports EigenConfig for now). (Default: DefaultEigenConfig)
 
     Returns:
@@ -575,21 +575,16 @@ def compute_matrix_root_inverse_residuals(
         root,
         root_inv_config=root_inv_config,
         epsilon=epsilon,
-        exponent_multiplier=exponent_multiplier,
     )
     relative_error = torch.dist(X, X_hat, p=torch.inf) / torch.norm(X, p=torch.inf)
 
     # compute residual
-    if exponent_multiplier == 1.0:
-        X_invr = torch.linalg.matrix_power(X_hat.double(), n=-root)
-    else:
-        X_invr, _, _ = _matrix_root_eigen(
-            X_hat.double(),
-            root=1,
-            epsilon=0.0,
-            make_positive_semidefinite=True,
-            exponent_multiplier=root / exponent_multiplier,
-        )
+    X_invr, _, _ = _matrix_inverse_root_eigen(
+        X_hat.double(),
+        root=root,
+        epsilon=0.0,
+        make_positive_semidefinite=True,
+    )
 
     A_reg = A.double() + epsilon * torch.eye(
         A.shape[0], dtype=torch.float64, device=A.device
@@ -599,3 +594,53 @@ def compute_matrix_root_inverse_residuals(
     )
 
     return relative_error, relative_residual
+
+
+def matrix_eigenvectors(
+    A: Tensor,
+    eigenvector_computation_config: EigenvalueCorrectionConfig = DefaultEighEigenvalueCorrectionConfig,
+    is_diagonal: Tensor | bool = False,
+) -> Tensor:
+    """Compute eigenvectors of matrix using eigendecomposition of symmetric positive (semi-)definite matrix.
+
+            A = Q L Q^T => Q
+
+    Assumes matrix A is symmetric.
+
+    Args:
+        A (Tensor): Square matrix of interest.
+        eigenvector_computation_config (EigenvalueCorrectionConfig): Determines how eigenvectors are computed.
+            (Default: DefaultEighEigenvalueCorrectionConfig)
+        is_diagonal (Tensor | bool): Whether A is diagonal. (Default: False)
+
+    Returns:
+        Q (Tensor): Orthogonal matrix containing eigenvectors of A.
+
+    """
+    # check if matrix is scalar
+    if torch.numel(A) == 1:
+        return torch.ones_like(A)
+
+    # check matrix shape
+    if len(A.shape) != 2:
+        raise ValueError("Matrix is not 2-dimensional!")
+    elif A.shape[0] != A.shape[1]:
+        raise ValueError("Matrix is not square!")
+
+    # return identity matrix if A is diagonal
+    if is_diagonal:
+        return torch.eye(
+            A.shape[0],
+            dtype=A.dtype,
+            device=A.device,
+        )
+
+    if type(eigenvector_computation_config) is EighEigenvalueCorrectionConfig:
+        return _compute_eigenvalue_decomposition(
+            A,
+            retry_double_precision=eigenvector_computation_config.retry_double_precision,
+        )[1]
+    else:
+        raise NotImplementedError(
+            f"Eigenvector computation method is not implemented! Specified eigenvector method is {eigenvector_computation_config=}."
+        )

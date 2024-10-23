@@ -28,9 +28,9 @@ from distributed_shampoo.utils.shampoo_utils import (
     get_dtype_size,
 )
 from torch import Tensor
-from torch.distributed import _tensor as dtensor
+from torch.distributed import tensor as dtensor
 
-from torch.distributed._tensor import zeros as dtensor_zeros
+from torch.distributed.tensor import zeros as dtensor_zeros
 
 logger: logging.Logger = logging.getLogger(__name__)
 

@@ -20,7 +20,7 @@ class FullyShardDistributor(Distributor):
 
     Handles merging and blocking of the tensor blocks at instantiation, and the gradients at each iteration.
     Note that parameters for module wrapped by `fully_shard` are represented as DTensors, sharded at dim-0:
-    https://github.com/pytorch/pytorch/tree/main/torch/distributed/_tensor.
+    https://github.com/pytorch/pytorch/tree/main/torch/distributed/tensor.
     No communication is performed in FullyShard Distributor.
 
     """
@@ -47,8 +47,9 @@ class FullyShardDistributor(Distributor):
         """Construct global block info list from param_group and num_blocks_within_param."""
         rank = dist.get_rank()
 
-        rank_local_params = self._get_params_or_grads()
-
+        non_empty_params = filter(
+            lambda p: p.to_local().numel() > 0, super()._get_params_or_grads()
+        )
         self._global_block_info_list = tuple(
             BlockInfo(
                 param=param,
@@ -56,10 +57,9 @@ class FullyShardDistributor(Distributor):
             )
             # Block index that is accumulated across all parameters within a parameter group.
             for ((param_index, param), num_blocks_within_param) in zip(
-                enumerate(rank_local_params),
+                enumerate(non_empty_params),
                 self._global_num_blocks_per_param,
                 strict=True,
             )
             for block_index in range(num_blocks_within_param)
-            if param is not None  # For type checking. Param should not be None here.
         )

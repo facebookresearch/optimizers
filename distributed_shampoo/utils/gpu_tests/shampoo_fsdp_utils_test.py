@@ -7,17 +7,19 @@ LICENSE file in the root directory of this source tree.
 
 """
 
+import unittest
 from typing import List, Tuple
 
 import torch
 from distributed_shampoo.shampoo_types import FSDPParameterMetadata
-
 from distributed_shampoo.tests.shampoo_test_utils import construct_training_problem
 from distributed_shampoo.utils.shampoo_fsdp_utils import (
     compile_fsdp_parameter_metadata,
     parse_fsdp_params,
+    parse_fully_shard_params,
 )
 from torch import distributed as dist, nn
+from torch.distributed._composable.fsdp import fully_shard
 from torch.distributed.device_mesh import init_device_mesh
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP, ShardingStrategy
 from torch.nn.parameter import Parameter
@@ -28,13 +30,16 @@ from torch.testing._internal.common_fsdp import FSDPTest
 # Note: Ideally this function should be resided inside Test as part of setUp() but FSDPTest
 #       only calls setUp() on one device; as a result, every device has to call this function
 #       separately.
-def _create_model_and_params() -> Tuple[nn.Module, List[Parameter]]:
+def _create_model_and_params(
+    model_linear_layers_dims: tuple[int, ...] = (2, 5, 3),
+) -> Tuple[nn.Module, List[Parameter]]:
     model, _, _, _ = construct_training_problem(
-        (2, 5, 3), model_dead_layer_dims=None, fill=(1.0, 2.0)
+        model_linear_layers_dims, model_dead_layer_dims=None, fill=(1.0, 2.0)
     )
     return model, list(model.parameters())
 
 
+@unittest.skipIf(not torch.cuda.is_available(), "Skip when CUDA is not available")
 class CompileFSDPParameterMetadataTest(FSDPTest):
     @property
     def world_size(self) -> int:
@@ -104,6 +109,7 @@ class CompileFSDPParameterMetadataTest(FSDPTest):
         )
 
 
+@unittest.skipIf(not torch.cuda.is_available(), "Skip when CUDA is not available")
 class ParseFSDPParamsTest(FSDPTest):
     @property
     def world_size(self) -> int:
@@ -197,3 +203,31 @@ class ParseFSDPParamsTest(FSDPTest):
                 self.assertEqual(actual_fsdp_keys, expected_fsdp_keys)
                 self.assertEqual(actual_hsdp_keys, expected_hsdp_keys)
                 self.assertEqual(actual_other_keys, expected_other_keys)
+
+    @skip_if_lt_x_gpu(4)
+    def test_parse_fully_shard_params(self) -> None:
+        mesh_1d = init_device_mesh("cuda", (self.world_size,))
+        fully_shard_module, _ = _create_model_and_params((16, 8, 1))
+        fully_shard(fully_shard_module, mesh=mesh_1d)
+        mesh_2d = init_device_mesh(
+            "cuda",
+            (2, self.world_size // 2),
+            mesh_dim_names=("dp_replicate", "dp_shard"),
+        )
+        hybrid_shard_module, _ = _create_model_and_params((16, 8, 1))
+        fully_shard(hybrid_shard_module, mesh=mesh_2d)
+
+        model = nn.Sequential(
+            fully_shard_module, hybrid_shard_module, nn.Linear(3, 2, bias=False)
+        )
+
+        fully_shard_params = {f"0.{k}": v for k, v in model[0].named_parameters()}
+        hybrid_shard_params = {f"1.{k}": v for k, v in model[1].named_parameters()}
+        other_params = {f"2.{k}": v for k, v in model[2].named_parameters()}
+        parsed_fully_shard_params, parsed_hybrid_shard_params, parsed_other_params = (
+            parse_fully_shard_params(dict(model.named_parameters()))
+        )
+
+        self.assertEqual(fully_shard_params, parsed_fully_shard_params)
+        self.assertEqual(hybrid_shard_params, parsed_hybrid_shard_params)
+        self.assertEqual(other_params, parsed_other_params)

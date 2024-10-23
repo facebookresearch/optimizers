@@ -33,9 +33,9 @@ from distributed_shampoo.utils.shampoo_utils import (
     multi_dim_split,
 )
 from torch import distributed as dist, Tensor
-from torch.distributed import _tensor as dtensor
-from torch.distributed._tensor import zeros as dtensor_zeros
+from torch.distributed import tensor as dtensor
 from torch.distributed.device_mesh import _mesh_resources
+from torch.distributed.tensor import zeros as dtensor_zeros
 from torch.nn import Parameter
 
 logger: logging.Logger = logging.getLogger(__name__)

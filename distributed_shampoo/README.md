@@ -46,7 +46,7 @@ We have tested this implementation on the following versions of PyTorch:
 - Python >= 3.10;
 - CUDA 11.3-11.4; 12.2+;
 
-Note: We have observed known instabilities with the torch.linalg.eigh operator on CUDA 11.6-12.1, specifically for low-rank matrices, which may appear with using a small start_preconditioning_step. Please avoid these versions of CUDA if possible. See: https://github.com/pytorch/pytorch/issues/94772.
+Note: We have observed known instabilities with the torch.linalg.eigh operator on CUDA 11.6-12.1, specifically for low-rank matrices, which may appear with using a small `start_preconditioning_step`. Please avoid these versions of CUDA if possible. See: https://github.com/pytorch/pytorch/issues/94772.
 
 ## How to Use
 
@@ -428,7 +428,7 @@ With the inclusion of learning rate grafting, we can extract a good learning rat
 
     * This hyperparameter determines when to start using Shampoo. Prior to this, the optimizer will use the grafted method. This value should generally be set larger than or equal to `precondition_frequency` except when the precondition frequency is 1. By default, `start_preconditioning_step` is set equal to `precondition_frequency`.
 
-    * If the `precondition_frequency = 1`, then set `start_preconditioning_step = 0` in order to use Shampoo from the start.
+    * If the `precondition_frequency = 1`, then set `start_preconditioning_step = -1` in order to use Shampoo from the start.
 
     * Following is an example of setting `start_preconditioning_step = 300`:
     ```

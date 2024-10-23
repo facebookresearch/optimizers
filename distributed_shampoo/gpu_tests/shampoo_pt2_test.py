@@ -26,6 +26,7 @@ from torch.nn.parameter import Parameter
 from torch.optim.optimizer import ParamsT
 
 
+@unittest.skipIf(not torch.cuda.is_available(), "Skip when CUDA is not available")
 class DistributedShampooPytorchCompileTest(unittest.TestCase):
     @staticmethod
     def _train_quadratic(

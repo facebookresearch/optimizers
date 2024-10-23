@@ -22,14 +22,19 @@ class _ModelWithLinearAndDeadLayers(nn.Module):
         bias: bool = False,
     ) -> None:
         super().__init__()
-        self.linear_layers = nn.ModuleList(
-            nn.Linear(a, b, bias=bias)
-            for a, b in itertools.pairwise(model_linear_layers_dims)
+        # fully_shard doesn't support containers so we fall back to use nn.Sequential
+        self.linear_layers: nn.Sequential = nn.Sequential(
+            *(
+                nn.Linear(a, b, bias=bias)
+                for a, b in itertools.pairwise(model_linear_layers_dims)
+            )
         )
         if model_dead_layer_dims is not None:
-            self.dead_layers: nn.ModuleList = nn.ModuleList(
-                nn.Linear(a, b, bias=False)
-                for a, b in itertools.pairwise(model_dead_layer_dims)
+            self.dead_layers: nn.Sequential = nn.Sequential(
+                *(
+                    nn.Linear(a, b, bias=False)
+                    for a, b in itertools.pairwise(model_dead_layer_dims)
+                )
             )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
