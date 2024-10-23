@@ -10,12 +10,14 @@ LICENSE file in the root directory of this source tree.
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from fractions import Fraction
 
 from itertools import chain
 from operator import methodcaller
 from typing import Any, DefaultDict, Sequence, Tuple, Union
 
 import torch
+from distributed_shampoo.shampoo_types import PrecisionConfig, PreconditionerValueError
 from distributed_shampoo.utils.shampoo_block_info import BlockInfo
 from distributed_shampoo.utils.shampoo_quantization import (
     QuantizedTensor,
@@ -165,8 +167,7 @@ class AdagradPreconditionerList(PreconditionerList):
         beta2 (float): Exponential moving average factor for Adam/RMSprop second moment state. If beta2 = 1., will use
             unweighted sum. (Default: 1.0)
         epsilon (float): Epsilon term for regularizing preconditioner to ensure positive definiteness. (Default: 1e-10)
-        preconditioner_dtype (torch.dtype): Data type for accumulating and computing root inverse of preconditioner. (Default: torch.float32)
-        computation_dtype (torch.dtype): Data type for computation (i.e., matrix inverse) is performed in. (Default: torch.float32)
+        precision_config (PrecisionConfig): Data types for optimizer states. (Default: all fields torch.float)
         use_bias_correction (bool): Flag for using bias correction. (Default: False)
 
     """
@@ -177,10 +178,9 @@ class AdagradPreconditionerList(PreconditionerList):
         state: DefaultDict[Tensor, Any],
         block_info_list: Tuple[BlockInfo, ...],
         distributor_selector: Tuple[bool, ...],
+        precision_config: PrecisionConfig,
         beta2: float = 1.0,
         epsilon: float = 1e-10,
-        preconditioner_dtype: torch.dtype = torch.float32,
-        computation_dtype: torch.dtype = torch.float32,
         use_bias_correction: bool = True,
     ) -> None:
         super().__init__(block_list)
@@ -206,10 +206,10 @@ class AdagradPreconditionerList(PreconditionerList):
             # Instantiate AdaGrad optimizer state for this block.
             preconditioner_index = str(param_index) + "." + str(block_index)
             block_state[ADAGRAD] = QuantizedTensor(
-                block_info.allocate_zeros_tensor(
-                    block.size(), preconditioner_dtype, block.device
+                quantized_values=block_info.allocate_zeros_tensor(
+                    block.size(), precision_config.grafting_state_dtype, block.device
                 ),
-                block_info,
+                block_info=block_info,
             )
             preconditioner_list.append(block_state[ADAGRAD])
 
@@ -220,9 +220,9 @@ class AdagradPreconditionerList(PreconditionerList):
 
         # Masked lists are the list of active preconditioners or values after filtering out gradients with None.
         self._local_preconditioner_list = QuantizedTensorList(
-            compress_list(preconditioner_list, distributor_selector),
-            preconditioner_dtype,
-            computation_dtype,
+            quantized_data=compress_list(preconditioner_list, distributor_selector),
+            quantized_dtype=precision_config.grafting_state_dtype,
+            computation_dtype=precision_config.computation_dtype,
         )
         self._masked_preconditioner_list: QuantizedTensorList = (
             self._local_preconditioner_list
@@ -372,12 +372,8 @@ class ShampooPreconditionerList(PreconditionerList):
             use -1 / l0 for 0-D tensors (scalars), -1 / l1 for 1-D tensor (vectors), -1 / l2 for 2-D tensors (matrices), and so on.
             If the order of the tensor exceeds the length of the list, we revert to using the default value. If 0 is used, uses the
             default inverse root -1 / (2 * o), where o is the order of the tensor. (Default: 0)
-        exponent_multiplier (float): Number to be multiplied to the numerator of the inverse root, i.e., eta where the
-            exponent is -eta / (2 * p). (Default: 1.0)
         use_bias_correction (bool): Flag for using bias correction. (Default: True)
-        factor_matrix_dtype (torch.dtype): Data type for storing Shampoo factor matrices. (Default: torch.float)
-        inv_factor_matrix_dtype (torch.dtype): Data type for storing Shampoo inverse factor matrices. (Default: torch.float)
-        computation_dtype (torch.dtype): Data type for computation (i.e., matrix inverse) is performed in. (Default: torch.float)
+        precision_config (PrecisionConfig): Data types for optimizer states. (Default: all fields torch.float)
         use_protected_eigh (bool): Flag for using two guards to prevent failures of torch.linalg.eigh. (Default: True)
             1. Attempts to compute root inverse in preconditioner_dtype precision.
             2. Attempts to recompute the eigendecomposition if using lower-precision fails.
@@ -391,28 +387,22 @@ class ShampooPreconditionerList(PreconditionerList):
         state: DefaultDict[Tensor, Any],
         block_info_list: Tuple[BlockInfo, ...],
         distributor_selector: Tuple[bool, ...],
+        precision_config: PrecisionConfig,
         root_inv_config: RootInvConfig = DefaultEigenConfig,
         beta2: float = 1.0,
         epsilon: float = 1e-12,
         inv_root_override: Union[int, Tuple[int, ...]] = 0,
-        exponent_multiplier: float = 1.0,
         use_bias_correction: bool = True,
-        factor_matrix_dtype: torch.dtype = torch.float,
-        inv_factor_matrix_dtype: torch.dtype = torch.float,
-        computation_dtype: torch.dtype = torch.float,
         use_protected_eigh: bool = True,
     ) -> None:
         super().__init__(block_list)
 
         # Initialize parameters.
+        self._precision_config = precision_config
         self._root_inv_config = root_inv_config
         self._beta2 = beta2
         self._epsilon = epsilon
         self._inv_root_override = inv_root_override
-        self._exponent_multiplier = exponent_multiplier
-        self._factor_matrix_dtype = factor_matrix_dtype
-        self._inv_factor_matrix_dtype = inv_factor_matrix_dtype
-        self._computation_dtype = computation_dtype
         self._use_bias_correction = use_bias_correction
         self._use_protected_eigh = use_protected_eigh
         self._bias_correction2: Tensor = torch.tensor(1.0)
@@ -432,27 +422,25 @@ class ShampooPreconditionerList(PreconditionerList):
             block_state = state[block_info.param][block_index]
 
             # Instantiate ShampooKroneckerFactors for this block.
-            # The factor matrices are instantiated using the determined dtype.
             factor_matrices = tuple(
                 QuantizedTensor(
-                    block_info.allocate_zeros_tensor(
+                    quantized_values=block_info.allocate_zeros_tensor(
                         (dim, dim),
-                        self._factor_matrix_dtype,
+                        self._precision_config.factor_matrix_dtype,
                         block_info.param.device,
                     ),
-                    block_info,
+                    block_info=block_info,
                 )
                 for dim in dims
             )
-            # The inverse factor matrices are instantiated using the dtype of the block / gradient.
             inv_factor_matrices = tuple(
                 QuantizedTensor(
-                    block_info.allocate_zeros_tensor(
+                    quantized_values=block_info.allocate_zeros_tensor(
                         (dim, dim),
-                        self._inv_factor_matrix_dtype,
+                        self._precision_config.inv_factor_matrix_dtype,
                         block_info.param.device,
                     ),
-                    block_info,
+                    block_info=block_info,
                 )
                 for dim in dims
             )
@@ -468,15 +456,17 @@ class ShampooPreconditionerList(PreconditionerList):
             )
             kronecker_factors_list.append(
                 ShampooKroneckerFactorsList(
+                    # Factor matrices computation (accumulation, root inverse) should use the determined dtype.
                     factor_matrices=QuantizedTensorList(
-                        factor_matrices,
-                        self._factor_matrix_dtype,
-                        self._computation_dtype,
+                        quantized_data=factor_matrices,
+                        quantized_dtype=self._precision_config.factor_matrix_dtype,
+                        computation_dtype=self._precision_config.factor_matrix_computation_dtype,
                     ),
+                    # Inverse factor matrices computation (preconditioning) should use the dtype of the block / gradient.
                     inv_factor_matrices=QuantizedTensorList(
-                        inv_factor_matrices,
-                        self._inv_factor_matrix_dtype,
-                        self._computation_dtype,
+                        quantized_data=inv_factor_matrices,
+                        quantized_dtype=self._precision_config.inv_factor_matrix_dtype,
+                        computation_dtype=self._precision_config.computation_dtype,
                     ),
                     factor_matrix_indices=factor_matrix_indices,
                 )
@@ -517,7 +507,10 @@ class ShampooPreconditionerList(PreconditionerList):
         )
         self._num_bytes_list: Tuple[int, ...] = tuple(
             numel
-            * (get_dtype_size(self._factor_matrix_dtype) + get_dtype_size(block.dtype))
+            * (
+                get_dtype_size(self._precision_config.factor_matrix_dtype)
+                + get_dtype_size(block.dtype)
+            )
             // 2
             for numel, block in zip(self._numel_list, local_block_list, strict=True)
         )
@@ -541,7 +534,7 @@ class ShampooPreconditionerList(PreconditionerList):
             order_list (Tuple[int, ...]): List of orders for their corresponding tensors.
 
         Returns:
-            root_list (int): Inverse roots to use in Shampoo for a list of tensors.
+            root_list (Tuple[int, ...]): Inverse roots to use in Shampoo for a list of tensors.
 
         """
         if isinstance(inv_root_override, Sequence):
@@ -670,19 +663,19 @@ class ShampooPreconditionerList(PreconditionerList):
 
                     # Check for nan or inf values.
                     if torch.isnan(bias_corrected_factor_matrix).any():
-                        raise ValueError(
+                        raise PreconditionerValueError(
                             f"Encountered nan values in bias-corrected factor matrix {factor_matrix_index}! "
                             f"To mitigate, check if nan inputs are being passed into the network or nan gradients "
-                            f"are being passed to the optimizer."
+                            f"are being passed to the optimizer. "
                             f"For debugging purposes, factor_matrix {factor_matrix_index}: "
                             f"{torch.min(factor_matrix)=}, {torch.max(factor_matrix)=}, "
                             f"{factor_matrix.isinf().any()=}, {factor_matrix.isnan().any()=}."
                         )
                     if torch.isinf(bias_corrected_factor_matrix).any():
-                        raise ValueError(
+                        raise PreconditionerValueError(
                             f"Encountered inf values in bias-corrected factor matrix {factor_matrix_index}! "
                             f"In some cases, this may be due to divergence of the algorithm. "
-                            f"To mitigate, try decreasing the learning rate or increasing grafting epsilon."
+                            f"To mitigate, try decreasing the learning rate or increasing grafting epsilon. "
                             f"For debugging purposes, factor_matrix {factor_matrix_index}: "
                             f"{torch.min(factor_matrix)=}, {torch.max(factor_matrix)=}, "
                             f"{factor_matrix.isinf().any()=}, {factor_matrix.isnan().any()=}."
@@ -694,10 +687,14 @@ class ShampooPreconditionerList(PreconditionerList):
                     try:
                         computed_inv_factor_matrix = matrix_inverse_root(
                             A=bias_corrected_factor_matrix,
-                            root=root,
+                            root=Fraction(
+                                root
+                                / getattr(
+                                    self._root_inv_config, "exponent_multiplier", 1
+                                )
+                            ),
                             root_inv_config=self._root_inv_config,
                             epsilon=self._epsilon,
-                            exponent_multiplier=self._exponent_multiplier,
                             is_diagonal=is_factor_matrix_diagonal,
                         ).to(dtype=inv_factor_matrix.dtype)
 
@@ -707,7 +704,7 @@ class ShampooPreconditionerList(PreconditionerList):
                             or torch.isinf(computed_inv_factor_matrix).any()
                         ):
                             torch.set_printoptions(threshold=100_000)
-                            raise ValueError(
+                            raise PreconditionerValueError(
                                 f"Encountered nan or inf values in inverse factor matrix {factor_matrix_index}! "
                                 f"To mitigate, check factor matrix before matrix inverse root computation: "
                                 f"{bias_corrected_factor_matrix=}"
@@ -715,12 +712,10 @@ class ShampooPreconditionerList(PreconditionerList):
 
                         inv_factor_matrix.copy_(computed_inv_factor_matrix)
 
+                    except PreconditionerValueError as pve:
+                        raise pve
                     except Exception as exception:
-                        if (
-                            not self._use_protected_eigh
-                            or "Encountered nan or inf values in inverse factor matrix"
-                            in str(exception)
-                        ):
+                        if not self._use_protected_eigh:
                             raise exception
                         else:
                             logger.warning(
@@ -783,9 +778,10 @@ class ShampooPreconditionerList(PreconditionerList):
                 ) = compute_matrix_root_inverse_residuals(
                     A=bias_corrected_factor_matrix,
                     X_hat=inv_factor_matrix,
-                    root=root,
+                    root=Fraction(
+                        root / getattr(self._root_inv_config, "exponent_multiplier", 1)
+                    ),
                     epsilon=self._epsilon,
-                    exponent_multiplier=self._exponent_multiplier,
                     root_inv_config=self._root_inv_config,
                 )
                 relative_errors.append(relative_error)

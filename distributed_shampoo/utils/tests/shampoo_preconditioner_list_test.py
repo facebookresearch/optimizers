@@ -14,6 +14,7 @@ from typing import Any, List, Optional, Tuple, Union
 from unittest import mock
 
 import torch
+from distributed_shampoo.shampoo_types import PrecisionConfig, PreconditionerValueError
 
 from distributed_shampoo.utils import shampoo_preconditioner_list
 from distributed_shampoo.utils.shampoo_block_info import BlockInfo
@@ -25,6 +26,7 @@ from distributed_shampoo.utils.shampoo_preconditioner_list import (
     ShampooPreconditionerList,
 )
 from distributed_shampoo.utils.shampoo_quantization import QuantizedTensorList
+from matrix_functions_types import EigenConfig
 from torch import Tensor
 
 
@@ -176,6 +178,7 @@ class AdagradPreconditionerListTest(PreconditionerListTest):
             state=self._state,
             block_info_list=self._block_info_list,
             distributor_selector=self._distributor_selector,
+            precision_config=PrecisionConfig(),
             **kwargs,
         )
 
@@ -272,16 +275,15 @@ class ShampooPreconditionerListTest(AdagradPreconditionerListTest):
             "beta2": 1.0,
             "epsilon": 0.0,
             "inv_root_override": 0,
-            "exponent_multiplier": 1.0,
             "use_bias_correction": True,
             "use_protected_eigh": True,
-            "factor_matrix_dtype": torch.float64,
         } | kwargs
         return ShampooPreconditionerList(
             block_list=self._block_list,
             state=self._state,
             block_info_list=self._block_info_list,
             distributor_selector=self._distributor_selector,
+            precision_config=PrecisionConfig(factor_matrix_dtype=torch.float64),
             **kwargs,
         )
 
@@ -470,7 +472,7 @@ class ShampooPreconditionerListTest(AdagradPreconditionerListTest):
             """
             Tests that the inverse roots are computed correctly from inv_root_override.
             """
-            exponent_multiplier = 2.0
+            root_inv_config = EigenConfig(exponent_multiplier=2.0)
 
             masked_grad_list1 = (
                 torch.tensor([1.0, 0.0]),
@@ -495,7 +497,7 @@ class ShampooPreconditionerListTest(AdagradPreconditionerListTest):
                         beta2=1.0,
                         use_bias_correction=True,
                         inv_root_override=inv_root_override,
-                        exponent_multiplier=exponent_multiplier,
+                        root_inv_config=root_inv_config,
                     ),
                     masked_grad_lists=[masked_grad_list1, masked_grad_list2],
                     masked_expected_preconditioned_grad_list=masked_expected_preconditioned_grad_list,
@@ -517,7 +519,7 @@ class ShampooPreconditionerListTest(AdagradPreconditionerListTest):
                 step=torch.tensor(1),
             )
             with self.assertRaisesRegex(
-                ValueError,
+                PreconditionerValueError,
                 re.escape("Encountered inf values in bias-corrected factor matrix"),
             ):
                 self._preconditioner_list.compute_root_inverse()
@@ -535,7 +537,7 @@ class ShampooPreconditionerListTest(AdagradPreconditionerListTest):
                 step=torch.tensor(1),
             )
             with self.assertRaisesRegex(
-                ValueError,
+                PreconditionerValueError,
                 re.escape("Encountered nan values in bias-corrected factor matrix"),
             ):
                 self._preconditioner_list.compute_root_inverse()
@@ -554,7 +556,7 @@ class ShampooPreconditionerListTest(AdagradPreconditionerListTest):
         with DequantizePreconditionersContext(
             preconditioner_list=self._preconditioner_list
         ), self.assertRaisesRegex(
-            ValueError,
+            PreconditionerValueError,
             re.escape("Encountered nan or inf values in inverse factor matrix"),
         ):
             self._preconditioner_list.compute_root_inverse()
@@ -571,7 +573,7 @@ class ShampooPreconditionerListTest(AdagradPreconditionerListTest):
         with DequantizePreconditionersContext(
             preconditioner_list=self._preconditioner_list
         ), self.assertRaisesRegex(
-            ValueError,
+            PreconditionerValueError,
             re.escape("Encountered nan or inf values in inverse factor matrix"),
         ):
             self._preconditioner_list.compute_root_inverse()
@@ -679,6 +681,7 @@ class ShampooPreconditionerListTest(AdagradPreconditionerListTest):
             state=self._state,
             block_info_list=(self._block_info_list[0],),
             distributor_selector=(self._distributor_selector[0],),
+            precision_config=PrecisionConfig(),
             epsilon=0.0,
         )
 

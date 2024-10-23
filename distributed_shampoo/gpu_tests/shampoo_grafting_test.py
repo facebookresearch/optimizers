@@ -93,14 +93,19 @@ class DistributedShampooGraftingTest(unittest.TestCase):
         return optim_cls(parameters, **kwargs)
 
     def test_adagrad_grafting_on_quadratic(self) -> None:
-        # test with and without weight decay
-        for weight_decay in [0.0, 0.3]:
+        # Test with and without weight decay, and with CPU or GPU
+        for weight_decay, device in product(
+            (0.0, 0.3),
+            (torch.device("cpu"),) + (torch.device("cuda"),)
+            if torch.cuda.is_available()
+            else (),
+        ):
             optim_factory = partial(
                 DistributedShampooGraftingTest._optim_factory,
                 lr=0.01,
                 weight_decay=weight_decay,
             )
-            with self.subTest(weight_decay=weight_decay):
+            with self.subTest(weight_decay=weight_decay, device=device):
                 DistributedShampooGraftingTest._test_baseline_and_shampoo(
                     baseline_optim_factory=partial(
                         optim_factory, optim_cls=Adagrad, eps=1e-10
@@ -119,19 +124,24 @@ class DistributedShampooGraftingTest(unittest.TestCase):
                             epsilon=1e-10,
                         ),
                     ),
-                    device=torch.device("cpu"),
+                    device=device,
                 )
 
     def test_adam_grafting_on_quadratic(self) -> None:
-        # test with and without weight decay
-        for weight_decay in [0.0, 0.3]:
+        # Test with and without weight decay, and with CPU or GPU
+        for weight_decay, device in product(
+            (0.0, 0.3),
+            (torch.device("cpu"),) + (torch.device("cuda"),)
+            if torch.cuda.is_available()
+            else (),
+        ):
             optim_factory = partial(
                 DistributedShampooGraftingTest._optim_factory,
                 lr=0.001,
                 betas=(0.9, 0.999),
                 weight_decay=weight_decay,
             )
-            with self.subTest(weight_decay=weight_decay):
+            with self.subTest(weight_decay=weight_decay, device=device):
                 DistributedShampooGraftingTest._test_baseline_and_shampoo(
                     baseline_optim_factory=partial(
                         optim_factory, optim_cls=Adam, eps=1e-8
@@ -150,19 +160,24 @@ class DistributedShampooGraftingTest(unittest.TestCase):
                             epsilon=1e-8,
                         ),
                     ),
-                    device=torch.device("cpu"),
+                    device=device,
                 )
 
     def test_adamw_grafting_on_quadratic(self) -> None:
-        # test with and without weight decay
-        for weight_decay in [0.0, 0.3]:
+        # Test with and without weight decay, and with CPU or GPU
+        for weight_decay, device in product(
+            (0.0, 0.3),
+            (torch.device("cpu"),) + (torch.device("cuda"),)
+            if torch.cuda.is_available()
+            else (),
+        ):
             optim_factory = partial(
                 DistributedShampooGraftingTest._optim_factory,
                 lr=0.001,
                 betas=(0.9, 0.999),
                 weight_decay=weight_decay,
             )
-            with self.subTest(weight_decay=weight_decay):
+            with self.subTest(weight_decay=weight_decay, device=device):
                 DistributedShampooGraftingTest._test_baseline_and_shampoo(
                     baseline_optim_factory=partial(
                         optim_factory, optim_cls=AdamW, eps=1e-8
@@ -181,18 +196,23 @@ class DistributedShampooGraftingTest(unittest.TestCase):
                             epsilon=1e-8,
                         ),
                     ),
-                    device=torch.device("cpu"),
+                    device=device,
                 )
 
     def test_rmsprop_grafting_on_quadratic(self) -> None:
-        # test with and without weight decay
-        for weight_decay in [0.0, 0.3]:
+        # Test with and without weight decay, and with CPU or GPU
+        for weight_decay, device in product(
+            (0.0, 0.3),
+            (torch.device("cpu"),) + (torch.device("cuda"),)
+            if torch.cuda.is_available()
+            else (),
+        ):
             optim_factory = partial(
                 DistributedShampooGraftingTest._optim_factory,
                 lr=0.01,
                 weight_decay=weight_decay,
             )
-            with self.subTest(weight_decay=weight_decay):
+            with self.subTest(weight_decay=weight_decay, device=device):
                 DistributedShampooGraftingTest._test_baseline_and_shampoo(
                     baseline_optim_factory=partial(
                         optim_factory,
@@ -215,19 +235,27 @@ class DistributedShampooGraftingTest(unittest.TestCase):
                             epsilon=1e-8,
                         ),
                     ),
-                    device=torch.device("cpu"),
+                    device=device,
                 )
 
     def test_sgd_grafting_on_quadratic(self) -> None:
-        # Test all the combinations of with and without weight decay, and with and without nesterov.
-        for weight_decay, use_nesterov in product((0.0, 0.3), (True, False)):
+        # Test all the combinations of with and without weight decay, with and without nesterov, and with CPU or GPU.
+        for weight_decay, use_nesterov, device in product(
+            (0.0, 0.3),
+            (True, False),
+            (torch.device("cpu"),) + (torch.device("cuda"),)
+            if torch.cuda.is_available()
+            else (),
+        ):
             optim_factory = partial(
                 DistributedShampooGraftingTest._optim_factory,
                 lr=0.1,
                 momentum=0.9,
                 weight_decay=weight_decay,
             )
-            with self.subTest(weight_decay=weight_decay, use_nesterov=use_nesterov):
+            with self.subTest(
+                weight_decay=weight_decay, use_nesterov=use_nesterov, device=device
+            ):
                 DistributedShampooGraftingTest._test_baseline_and_shampoo(
                     baseline_optim_factory=partial(
                         optim_factory,
@@ -246,5 +274,5 @@ class DistributedShampooGraftingTest(unittest.TestCase):
                         use_decoupled_weight_decay=False,
                         grafting_config=SGDGraftingConfig(),
                     ),
-                    device=torch.device("cpu"),
+                    device=device,
                 )

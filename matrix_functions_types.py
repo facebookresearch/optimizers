@@ -9,9 +9,18 @@ LICENSE file in the root directory of this source tree.
 
 from dataclasses import dataclass
 
+from distributed_shampoo.shampoo_types import AbstractDataclass
 
-@dataclass(kw_only=True)
-class RootInvConfig:
+
+@dataclass
+class PreconditionerComputationConfig(AbstractDataclass):
+    """Configuration for preconditioner computation in Shampoo."""
+
+    ...
+
+
+@dataclass
+class RootInvConfig(PreconditionerComputationConfig):
     """Base dataclass for matrix root inverse method configurations in Shampoo."""
 
     ...
@@ -25,11 +34,14 @@ class EigenConfig(RootInvConfig):
         make_positive_semidefinite (bool): Perturbs matrix eigenvalues to ensure it is numerically positive semi-definite. (Default: True)
         retry_double_precision (bool): Whether to re-trying eigendecomposition with higher(double) precision if lower precision fails due
             to CuSOLVER failure. (Default: True)
+        exponent_multiplier (float): Number to be multiplied to the numerator of the inverse root, i.e., eta where the
+            exponent is -eta / (2 * p). (Default: 1.0)
 
     """
 
     make_positive_semidefinite: bool = True
     retry_double_precision: bool = True
+    exponent_multiplier: float = 1.0
 
 
 DefaultEigenConfig = EigenConfig()
@@ -70,3 +82,26 @@ class CoupledHigherOrderConfig(RootInvConfig):
     tolerance: float = 1e-8
     order: int = 3
     disable_tf32: bool = True
+
+
+@dataclass
+class EigenvalueCorrectionConfig(PreconditionerComputationConfig):
+    """Base dataclass for matrix eigenvector method configurations in Shampoo."""
+
+    ...
+
+
+@dataclass(kw_only=True)
+class EighEigenvalueCorrectionConfig(EigenvalueCorrectionConfig):
+    """Configuration for eigendecomposition method used in eigenvalue corrected Shampoo.
+
+    Args:
+        retry_double_precision (bool): Whether to re-trying eigendecomposition with higher(double) precision if lower precision fails due
+            to CuSOLVER failure. (Default: True)
+
+    """
+
+    retry_double_precision: bool = True
+
+
+DefaultEighEigenvalueCorrectionConfig = EighEigenvalueCorrectionConfig()

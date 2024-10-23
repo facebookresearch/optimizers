@@ -9,6 +9,7 @@ LICENSE file in the root directory of this source tree.
 
 #!/usr/bin/env python3
 
+import unittest
 from functools import partial
 from typing import Callable, List, Optional, Tuple
 
@@ -22,11 +23,13 @@ from distributed_shampoo.tests.shampoo_test_utils import construct_training_prob
 
 from torch import nn
 from torch.distributed._composable.fsdp import fully_shard
+from torch.distributed.tensor import DTensor
 from torch.optim.optimizer import ParamsT
 from torch.testing._internal.common_distributed import skip_if_lt_x_gpu
 from torch.testing._internal.common_fsdp import FSDPTest
 
 
+@unittest.skipIf(not torch.cuda.is_available(), "Skip when CUDA is not available")
 class ShampooFullyShardDistributorTest(FSDPTest):
     @property
     def world_size(self) -> int:
@@ -108,7 +111,7 @@ class ShampooFullyShardDistributorTest(FSDPTest):
             params = []
             for param in model.parameters():
                 # Need this assertion to get pass type-checking test.
-                assert isinstance(param, torch.distributed._tensor.DTensor)
+                assert isinstance(param, DTensor)
                 params.append(param.full_tensor().view(-1).detach().cpu())
         else:
             params = [param.view(-1).detach().cpu() for param in model.parameters()]

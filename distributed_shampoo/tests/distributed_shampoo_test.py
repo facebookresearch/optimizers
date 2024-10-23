@@ -24,6 +24,7 @@ from distributed_shampoo.shampoo_types import (
     DDPShampooConfig,
     DistributedConfig,
     GRAFTING_PRECONDITIONER_LIST,
+    GraftingConfig,
     MASKED_FILTERED_GRAD_LIST,
     MASKED_MOMENTUM_LIST,
     PrecisionConfig,
@@ -47,11 +48,7 @@ class DistributedShampooInitTest(unittest.TestCase):
 
     def test_invalid_grafting_config(self) -> None:
         with mock.patch.object(
-            distributed_shampoo,
-            "isinstance",
-            side_effect=lambda object, classinfo: (
-                False if classinfo == SGDGraftingConfig else None
-            ),
+            distributed_shampoo, "type", side_effect=lambda object: GraftingConfig
         ), self.assertRaisesRegex(
             NotImplementedError,
             re.escape(
@@ -219,7 +216,7 @@ class DistributedShampooInitTest(unittest.TestCase):
         with self.assertRaisesRegex(
             NotImplementedError,
             re.escape(
-                "self._distributed_config=DDPShampooConfig(communication_dtype=<CommunicationDType.DEFAULT: 0>, "
+                "distributed_config=DDPShampooConfig(communication_dtype=<CommunicationDType.DEFAULT: 0>, "
                 "num_trainers_per_group=-1, communicate_params=False) not supported!"
             ),
         ), mock.patch.object(
@@ -230,6 +227,24 @@ class DistributedShampooInitTest(unittest.TestCase):
             DistributedShampoo(
                 params=self._model.parameters(),
                 distributed_config=DDPShampooConfig(),
+            )
+
+    def test_setting_exponent_multiplier_with_eigen_config(self) -> None:
+        with self.assertLogs(
+            level="WARNING",
+        ) as cm:
+            DistributedShampoo(
+                self._model.parameters(),
+                lr=0.01,
+                start_preconditioning_step=1,
+                exponent_multiplier=2.0,
+                root_inv_config=DefaultEigenConfig,
+            )
+            self.assertCountEqual(
+                [r.msg for r in cm.records],
+                [
+                    "exponent_multiplier=2.0 is deprecating. Please consider using EigenConfig.exponent_multiplier directly and setting exponent_multipler=None instead in the future."
+                ],
             )
 
 
@@ -437,7 +452,6 @@ class DistributedShampooStateDictTest(unittest.TestCase):
                     "precondition_frequency": 1,
                     "start_preconditioning_step": 1,
                     "inv_root_override": 0,
-                    "exponent_multiplier": 1.0,
                     "use_nesterov": False,
                     "use_bias_correction": True,
                     "use_decoupled_weight_decay": True,
@@ -445,7 +459,6 @@ class DistributedShampooStateDictTest(unittest.TestCase):
                         epsilon=0.001,
                     ),
                     "use_merge_dims": True,
-                    "preconditioner_dtype": None,
                     "precision_config": PrecisionConfig(),
                     "root_inv_config": DefaultEigenConfig,
                 }
@@ -630,6 +643,7 @@ class DistributedShampooTrackRootInvResidualsTest(unittest.TestCase):
                 computation_dtype=dtype,
                 factor_matrix_dtype=dtype,
                 inv_factor_matrix_dtype=dtype,
+                factor_matrix_computation_dtype=dtype,
                 filtered_grad_dtype=dtype,
                 momentum_dtype=dtype,
                 grafting_state_dtype=dtype,
@@ -717,7 +731,7 @@ class DistributedShampooPrecisionTest(unittest.TestCase):
         ]._masked_kronecker_factors_list:
             self._assert_equal_state_dtype(
                 kronecker_factor.factor_matrices,
-                precision_config.computation_dtype,
+                precision_config.factor_matrix_computation_dtype,
                 precision_config.factor_matrix_dtype,
             )
             self._assert_equal_state_dtype(
@@ -764,6 +778,12 @@ class DistributedShampooPrecisionTest(unittest.TestCase):
                 inv_factor_matrix_dtype=torch.float64,
                 filtered_grad_dtype=torch.float64,
                 computation_dtype=torch.float64,
+            ),
+            PrecisionConfig(factor_matrix_computation_dtype=torch.float64),
+            PrecisionConfig(
+                factor_matrix_dtype=torch.float64,
+                inv_factor_matrix_dtype=torch.float64,
+                factor_matrix_computation_dtype=torch.float64,
             ),
         ]
 
