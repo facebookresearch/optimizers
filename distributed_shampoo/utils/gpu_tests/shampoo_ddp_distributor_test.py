@@ -35,7 +35,7 @@ from torch.testing._internal.common_distributed import MultiProcessTestCase
 
 class ShampooDDPDistributorTestBase:
     @property
-    def _device_type(self) -> str:
+    def _device(self) -> torch.device:
         raise NotImplementedError
 
     @staticmethod
@@ -97,12 +97,12 @@ class ShampooDDPDistributorTestBase:
     def _init_distributed(self) -> None:
         if not dist.is_initialized():
             dist.init_process_group(
-                dist.Backend.NCCL if self._device_type == "cuda" else dist.Backend.GLOO,
+                dist.Backend.NCCL if self._device.type == "cuda" else dist.Backend.GLOO,
                 init_method=f"file://{self.file_name}",
                 rank=self.rank,
                 world_size=self.world_size,
             )
-        if self._device_type == "cuda":
+        if self._device.type == "cuda":
             torch.cuda.set_device(self.rank)
 
     @property
@@ -165,7 +165,7 @@ class ShampooDDPDistributorTestBase:
                             communicate_params=communicate_params,
                         )
                     ),
-                    device=torch.device(self._device_type),
+                    device=self._device,
                 )
 
     # This mock is used to catch the number of calls to Shampoo's step(), which happened after __init__().
@@ -186,7 +186,7 @@ class ShampooDDPDistributorTestBase:
         ):
             ShampooDDPDistributorTestBase._train_model(
                 self._shampoo_optim_factory(distributed_config=DDPShampooConfig()),
-                device=torch.device(self._device_type),
+                device=self._device,
                 # Setting model_linear_layers_dims to (20, 1) creates an model with one linear layer with 20x1 weight.
                 # Because Shampoo's max_preconditioner_dim = 20, there will be only one block.
                 # In the case of two trainers per group, there will be one trainer has no params to work on.
@@ -202,12 +202,12 @@ class ShampooDDPDistributorTestBase:
 
 class ShampooDDPDistributorCPUTest(ShampooDDPDistributorTestBase, MultiProcessTestCase):
     @property
-    def _device_type(self) -> str:
-        return "cpu"
+    def _device(self) -> torch.device:
+        return torch.device("cpu")
 
 
 @unittest.skipIf(not torch.cuda.is_available(), "Skip when CUDA is not available")
 class ShampooDDPDistributorGPUTest(ShampooDDPDistributorTestBase, MultiProcessTestCase):
     @property
-    def _device_type(self) -> str:
-        return "cuda"
+    def _device(self) -> torch.device:
+        return torch.device("cuda")
