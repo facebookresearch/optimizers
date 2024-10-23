@@ -200,14 +200,14 @@ class ShampooDDPDistributorTestBase:
             mock_step.assert_not_called()
 
 
-class ShampooDDPDistributorCPUTest(MultiProcessTestCase, ShampooDDPDistributorTestBase):
+class ShampooDDPDistributorCPUTest(ShampooDDPDistributorTestBase, MultiProcessTestCase):
     @property
     def _device_type(self) -> str:
         return "cpu"
 
 
 @unittest.skipIf(not torch.cuda.is_available(), "Skip when CUDA is not available")
-class ShampooDDPDistributorGPUTest(MultiProcessTestCase, ShampooDDPDistributorTestBase):
+class ShampooDDPDistributorGPUTest(ShampooDDPDistributorTestBase, MultiProcessTestCase):
     @property
     def _device_type(self) -> str:
         return "cuda"
