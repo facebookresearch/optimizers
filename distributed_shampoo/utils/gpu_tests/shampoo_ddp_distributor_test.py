@@ -12,6 +12,7 @@ LICENSE file in the root directory of this source tree.
 import contextlib
 import pathlib
 import re
+import unittest
 from itertools import product
 
 from typing import Callable, Optional
@@ -32,7 +33,11 @@ from torch.optim.optimizer import ParamsT
 from torch.testing._internal.common_distributed import MultiProcessTestCase
 
 
-class ShampooDDPDistributorTest(MultiProcessTestCase):
+class ShampooDDPDistributorTestBase:
+    @property
+    def _device_type(self) -> str:
+        raise NotImplementedError
+
     @staticmethod
     def _train_model(
         optim_factory: Callable[
@@ -70,11 +75,11 @@ class ShampooDDPDistributorTest(MultiProcessTestCase):
         ],
         device: torch.device,
     ) -> None:
-        params1, loss1 = ShampooDDPDistributorTest._train_model(
+        params1, loss1 = ShampooDDPDistributorTestBase._train_model(
             optim_factory1,
             device=device,
         )
-        params2, loss2 = ShampooDDPDistributorTest._train_model(
+        params2, loss2 = ShampooDDPDistributorTestBase._train_model(
             optim_factory2,
             device=device,
         )
@@ -92,12 +97,12 @@ class ShampooDDPDistributorTest(MultiProcessTestCase):
     def _init_distributed(self) -> None:
         if not dist.is_initialized():
             dist.init_process_group(
-                dist.Backend.NCCL if torch.cuda.is_available() else dist.Backend.GLOO,
+                dist.Backend.NCCL if self._device_type == "cuda" else dist.Backend.GLOO,
                 init_method=f"file://{self.file_name}",
                 rank=self.rank,
                 world_size=self.world_size,
             )
-        if torch.cuda.is_available():
+        if self._device_type == "cuda":
             torch.cuda.set_device(self.rank)
 
     @property
@@ -149,7 +154,7 @@ class ShampooDDPDistributorTest(MultiProcessTestCase):
                 num_trainers_per_group=num_trainers_per_group,
                 communicate_params=communicate_params,
             ):
-                ShampooDDPDistributorTest._test_two_configs(
+                ShampooDDPDistributorTestBase._test_two_configs(
                     self._shampoo_optim_factory(
                         distributed_config=None,
                     ),
@@ -160,7 +165,7 @@ class ShampooDDPDistributorTest(MultiProcessTestCase):
                             communicate_params=communicate_params,
                         )
                     ),
-                    device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
+                    device=torch.device(self._device_type),
                 )
 
     # This mock is used to catch the number of calls to Shampoo's step(), which happened after __init__().
@@ -179,9 +184,9 @@ class ShampooDDPDistributorTest(MultiProcessTestCase):
                 AssertionError, re.escape("Some workers have no parameters to work on.")
             )
         ):
-            ShampooDDPDistributorTest._train_model(
+            ShampooDDPDistributorTestBase._train_model(
                 self._shampoo_optim_factory(distributed_config=DDPShampooConfig()),
-                device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
+                device=torch.device(self._device_type),
                 # Setting model_linear_layers_dims to (20, 1) creates an model with one linear layer with 20x1 weight.
                 # Because Shampoo's max_preconditioner_dim = 20, there will be only one block.
                 # In the case of two trainers per group, there will be one trainer has no params to work on.
@@ -193,3 +198,16 @@ class ShampooDDPDistributorTest(MultiProcessTestCase):
             mock_step.assert_called()
         else:
             mock_step.assert_not_called()
+
+
+class ShampooDDPDistributorCPUTest(MultiProcessTestCase, ShampooDDPDistributorTestBase):
+    @property
+    def _device_type(self) -> str:
+        return "cpu"
+
+
+@unittest.skipIf(not torch.cuda.is_available(), "Skip when CUDA is not available")
+class ShampooDDPDistributorGPUTest(MultiProcessTestCase, ShampooDDPDistributorTestBase):
+    @property
+    def _device_type(self) -> str:
+        return "cuda"
