@@ -97,12 +97,14 @@ class ShampooDDPDistributorTestBase:
     def _init_distributed(self) -> None:
         if not dist.is_initialized():
             dist.init_process_group(
-                dist.Backend.NCCL if self._device.type == "cuda" else dist.Backend.GLOO,
+                dist.Backend.NCCL
+                if self._device == torch.device("cuda")
+                else dist.Backend.GLOO,
                 init_method=f"file://{self.file_name}",
                 rank=self.rank,
                 world_size=self.world_size,
             )
-        if self._device.type == "cuda":
+        if self._device == torch.device("cuda"):
             torch.cuda.set_device(self.rank)
 
     @property
