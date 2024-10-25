@@ -263,7 +263,7 @@ class QuantizedTensorList:
         src_list: Tuple[Tensor, ...],
         target_dtype: torch.dtype,
         dest_list: Optional[Tuple[Tensor, ...]] = None,
-    ) -> Tuple[Tensor]:
+    ) -> Tuple[Tensor, ...]:
         if dest_list is None:
             dest_list = tuple(
                 torch.zeros_like(tensor, dtype=target_dtype) for tensor in src_list

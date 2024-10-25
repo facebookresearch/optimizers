@@ -35,7 +35,9 @@ class DummyOptimizerModule(OptimizerModule):
         self._field: Tensor = field
         self._thl: List[Tensor] = thl
 
-    def __eq__(self, other: "DummyOptimizerModule") -> bool:
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, DummyOptimizerModule):
+            return NotImplemented
         return bool((self._field == other._field).item()) and self._thl == other._thl
 
 

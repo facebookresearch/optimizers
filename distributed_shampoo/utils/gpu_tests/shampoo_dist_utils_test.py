@@ -42,7 +42,7 @@ class ShampooDistUtilsTest(DTensorTestBase):
             (shard_mesh.get_group(), replicate_mesh.get_group()),
         )
 
-    @with_comms
+    @with_comms  # type: ignore[arg-type]
     def test_get_device_mesh(self) -> None:
         mesh = tuple(
             map(
@@ -55,7 +55,7 @@ class ShampooDistUtilsTest(DTensorTestBase):
 
         self._verify_deivce_mesh(
             device_mesh=get_device_mesh(
-                device_type=self.device_type,
+                device_type=self.device_type,  # type: ignore[attr-defined]
                 mesh=mesh,
                 mesh_dim_names=("replicate", "shard"),
             )
@@ -69,7 +69,7 @@ class ShampooDistUtilsTest(DTensorTestBase):
             "__init__",
         ) as mock_device_mesh_init:
             device_mesh = get_device_mesh(
-                device_type=self.device_type,
+                device_type=self.device_type,  # type: ignore[attr-defined]
                 mesh=mesh,
                 mesh_dim_names=("replicate", "shard"),
             )

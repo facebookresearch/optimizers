@@ -466,18 +466,18 @@ class DistributedShampoo(torch.optim.Optimizer):
         if distributed_config is None:
             distributor = Distributor
         elif type(distributed_config) is DDPShampooConfig:
-            distributor = partial(DDPDistributor, distributed_config=distributed_config)
+            distributor = partial(DDPDistributor, distributed_config=distributed_config)  # type: ignore[assignment]
         elif type(distributed_config) is FSDPShampooConfig:
             distributor = partial(
                 FSDPDistributor, distributed_config=distributed_config
-            )
+            )  # type: ignore[assignment]
         elif type(distributed_config) is FullyShardShampooConfig:
             distributor = FullyShardDistributor
         elif type(distributed_config) is HSDPShampooConfig:
             distributor = partial(
                 HSDPDistributor,
                 distributed_config=distributed_config,
-            )
+            )  # type: ignore[assignment]
         else:
             raise NotImplementedError(f"{distributed_config=} not supported!")
 
@@ -786,24 +786,24 @@ class DistributedShampoo(torch.optim.Optimizer):
                 SHAMPOO_PRECONDITIONER_LIST
             ].compute_root_inverse_residuals()
 
-            relative_errors = torch.stack(relative_errors)
-            relative_residuals = torch.stack(relative_residuals)
+            relative_errors_tensor = torch.stack(relative_errors)
+            relative_residuals_tensor = torch.stack(relative_residuals)
 
             quantiles = torch.as_tensor(
                 [0, 0.25, 0.5, 0.75, 1],
-                device=relative_errors.device,
-                dtype=relative_errors.dtype,
+                device=relative_errors_tensor.device,
+                dtype=relative_errors_tensor.dtype,
             )
             logger.debug(f"Group Index: {group_index}")
             logger.debug(f"Expect Relative Error <= {expected_relative_error}")
             logger.debug(
-                f"Relative Error (||X - X_hat||_inf / ||X||_inf)       Average: {torch.mean(relative_errors)}, "
-                f"Quantiles [0, 25, 50, 75, 100]: {torch.quantile(relative_errors, quantiles, interpolation='nearest')}"
+                f"Relative Error (||X - X_hat||_inf / ||X||_inf)       Average: {torch.mean(relative_errors_tensor)}, "
+                f"Quantiles [0, 25, 50, 75, 100]: {torch.quantile(relative_errors_tensor, quantiles, interpolation='nearest')}"
             )
             logger.debug(
-                f"Relative Residual (||X_hat^-r - A||_inf / ||A||_inf) Average: {torch.mean(relative_residuals)}, "
+                f"Relative Residual (||X_hat^-r - A||_inf / ||A||_inf) Average: {torch.mean(relative_residuals_tensor)}, "
                 "Quantiles [0, 25, 50, 75, 100]: "
-                f"{torch.quantile(relative_residuals, quantiles, interpolation='nearest')}"
+                f"{torch.quantile(relative_residuals_tensor, quantiles, interpolation='nearest')}"
             )
 
     @torch.no_grad()
@@ -1102,7 +1102,7 @@ class DistributedShampoo(torch.optim.Optimizer):
         )
 
     @torch.no_grad()
-    def step(self, closure: Optional[Callable[[], float]] = None) -> Optional[float]:
+    def step(self, closure: Optional[Callable[[], float]] = None) -> Optional[float]:  # type: ignore[override]
         """Performs a single optimization step.
 
         Args:

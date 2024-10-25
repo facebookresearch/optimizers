@@ -10,7 +10,7 @@ LICENSE file in the root directory of this source tree.
 import re
 import unittest
 from types import ModuleType
-from typing import Any, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 from unittest import mock
 
 import torch
@@ -60,7 +60,7 @@ class PreconditionerListTest(unittest.TestCase):
     def _instantiate_preconditioner_list(self, **kwargs: Any) -> PreconditionerList:
         # Disable the abstract methods check from the interface so it is possible to instantiate PreconditionerList.
         PreconditionerList.__abstractmethods__ = frozenset()
-        return PreconditionerList(block_list=self._block_list)
+        return PreconditionerList(block_list=self._block_list)  # type: ignore[abstract]
 
     def _test_update_preconditioners_and_precondition(
         self,
@@ -143,7 +143,7 @@ class PreconditionerListTest(unittest.TestCase):
 
 
 class SGDPreconditionerListTest(PreconditionerListTest):
-    def _instantiate_preconditioner_list(self, **kwargs: Any) -> PreconditionerList:
+    def _instantiate_preconditioner_list(self, **kwargs: Any) -> SGDPreconditionerList:
         return SGDPreconditionerList(block_list=self._block_list, **kwargs)
 
     def test_update_preconditioners_and_precondition(self) -> None:
@@ -171,7 +171,9 @@ class AdagradPreconditionerListTest(PreconditionerListTest):
             self._params[2],
         )
 
-    def _instantiate_preconditioner_list(self, **kwargs: Any) -> PreconditionerList:
+    def _instantiate_preconditioner_list(
+        self, **kwargs: Any
+    ) -> AdagradPreconditionerList:  # type: ignore[override]
         kwargs = {"beta2": 1.0, "epsilon": 0.0, "use_bias_correction": True} | kwargs
         return AdagradPreconditionerList(
             block_list=self._block_list,
@@ -189,7 +191,7 @@ class AdagradPreconditionerListTest(PreconditionerListTest):
             # Following param will not be used due to the distributor selector below.
             torch.tensor([torch.nan, torch.nan]),
         )
-        self._state = {
+        self._state: Dict[Tensor, Dict] = {
             self._params[0]: {},
             self._params[1]: {},
             self._params[2]: {},
@@ -270,7 +272,9 @@ class AdagradPreconditionerListTest(PreconditionerListTest):
 
 
 class ShampooPreconditionerListTest(AdagradPreconditionerListTest):
-    def _instantiate_preconditioner_list(self, **kwargs: Any) -> PreconditionerList:
+    def _instantiate_preconditioner_list(  # type: ignore[override]
+        self, **kwargs: Any
+    ) -> ShampooPreconditionerList:
         kwargs = {
             "beta2": 1.0,
             "epsilon": 0.0,
@@ -335,7 +339,7 @@ class ShampooPreconditionerListTest(AdagradPreconditionerListTest):
             preconditioned_grad.clone() for preconditioned_grad in masked_grad_list2
         ]
         masked_expected_preconditioned_grad_list[2] /= torch.tensor(2.0 ** (1 / 4))
-        masked_expected_preconditioned_grad_list = tuple(
+        masked_expected_preconditioned_grad_tuple = tuple(
             masked_expected_preconditioned_grad_list
         )
 
@@ -345,7 +349,7 @@ class ShampooPreconditionerListTest(AdagradPreconditionerListTest):
                 use_bias_correction=True,
             ),
             masked_grad_lists=[masked_grad_list1, masked_grad_list2],
-            masked_expected_preconditioned_grad_list=masked_expected_preconditioned_grad_list,
+            masked_expected_preconditioned_grad_list=masked_expected_preconditioned_grad_tuple,
         )
 
         """
@@ -376,7 +380,7 @@ class ShampooPreconditionerListTest(AdagradPreconditionerListTest):
             for preconditioned_grad in beta2_compensated_grad_list2
         ]
         masked_expected_preconditioned_grad_list[2] /= torch.tensor(2.0 ** (1 / 4))
-        masked_expected_preconditioned_grad_list = tuple(
+        masked_expected_preconditioned_grad_tuple = tuple(
             masked_expected_preconditioned_grad_list
         )
 
@@ -389,7 +393,7 @@ class ShampooPreconditionerListTest(AdagradPreconditionerListTest):
                 beta2_compensated_grad_list1,
                 beta2_compensated_grad_list2,
             ],
-            masked_expected_preconditioned_grad_list=masked_expected_preconditioned_grad_list,
+            masked_expected_preconditioned_grad_list=masked_expected_preconditioned_grad_tuple,
         )
 
         """
@@ -419,7 +423,7 @@ class ShampooPreconditionerListTest(AdagradPreconditionerListTest):
             for preconditioned_grad in bias_compensated_grad_list2
         ]
         masked_expected_preconditioned_grad_list[2] /= torch.tensor(2.0 ** (1 / 4))
-        masked_expected_preconditioned_grad_list = tuple(
+        masked_expected_preconditioned_grad_tuple = tuple(
             masked_expected_preconditioned_grad_list
         )
 
@@ -432,7 +436,7 @@ class ShampooPreconditionerListTest(AdagradPreconditionerListTest):
                 bias_compensated_grad_list1,
                 bias_compensated_grad_list2,
             ],
-            masked_expected_preconditioned_grad_list=masked_expected_preconditioned_grad_list,
+            masked_expected_preconditioned_grad_list=masked_expected_preconditioned_grad_tuple,
         )
 
     def test_inv_root_override_and_exponent_multiplier(self) -> None:
@@ -522,7 +526,8 @@ class ShampooPreconditionerListTest(AdagradPreconditionerListTest):
                 PreconditionerValueError,
                 re.escape("Encountered inf values in bias-corrected factor matrix"),
             ):
-                self._preconditioner_list.compute_root_inverse()
+                if isinstance(self._preconditioner_list, ShampooPreconditionerList):
+                    self._preconditioner_list.compute_root_inverse()
 
     def test_raise_nan_in_factor_matrix_compute_root_inverse(self) -> None:
         with DequantizePreconditionersContext(
@@ -540,7 +545,8 @@ class ShampooPreconditionerListTest(AdagradPreconditionerListTest):
                 PreconditionerValueError,
                 re.escape("Encountered nan values in bias-corrected factor matrix"),
             ):
-                self._preconditioner_list.compute_root_inverse()
+                if isinstance(self._preconditioner_list, ShampooPreconditionerList):
+                    self._preconditioner_list.compute_root_inverse()
 
     # Note: This is needed for pyre to infer the type of argument into mock.patch.object.
     shampoo_preconditioner_list_module: ModuleType = shampoo_preconditioner_list
@@ -559,7 +565,8 @@ class ShampooPreconditionerListTest(AdagradPreconditionerListTest):
             PreconditionerValueError,
             re.escape("Encountered nan or inf values in inverse factor matrix"),
         ):
-            self._preconditioner_list.compute_root_inverse()
+            if isinstance(self._preconditioner_list, ShampooPreconditionerList):
+                self._preconditioner_list.compute_root_inverse()
         mock_matrix_inverse_root.assert_called_once()
 
     @mock.patch.object(
@@ -576,7 +583,8 @@ class ShampooPreconditionerListTest(AdagradPreconditionerListTest):
             PreconditionerValueError,
             re.escape("Encountered nan or inf values in inverse factor matrix"),
         ):
-            self._preconditioner_list.compute_root_inverse()
+            if isinstance(self._preconditioner_list, ShampooPreconditionerList):
+                self._preconditioner_list.compute_root_inverse()
         mock_matrix_inverse_root.assert_called_once()
 
     @mock.patch.object(
@@ -591,8 +599,9 @@ class ShampooPreconditionerListTest(AdagradPreconditionerListTest):
         with DequantizePreconditionersContext(
             preconditioner_list=self._preconditioner_list
         ), self.assertLogs(level="WARNING") as cm:
-            # Because use_protected_eigh is True, we expect the warning to be logged.
-            self._preconditioner_list.compute_root_inverse()
+            if isinstance(self._preconditioner_list, ShampooPreconditionerList):
+                # Because use_protected_eigh is True, we expect the warning to be logged.
+                self._preconditioner_list.compute_root_inverse()
         self.assertCountEqual(
             [r.msg for r in cm.records],
             [

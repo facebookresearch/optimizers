@@ -86,7 +86,7 @@ class DistributedShampooPytorchCompileTest(unittest.TestCase):
 
     @staticmethod
     def _shampoo_optim_factory(
-        shampoo_pt2_compile_config: ShampooPT2CompileConfig,
+        shampoo_pt2_compile_config: ShampooPT2CompileConfig | None,
         precondition_frequency: int,
         start_preconditioning_step: int,
         weight_decay: float,
@@ -134,6 +134,7 @@ class DistributedShampooPytorchCompileTest(unittest.TestCase):
             ),
             ((1, 1000, 5), (10, 10, 5)),
         ):
+            assert isinstance(grafting_config, GraftingConfig)
             shampoo_optim_factory = partial(
                 DistributedShampooPytorchCompileTest._shampoo_optim_factory,
                 precondition_frequency=precondition_frequency,

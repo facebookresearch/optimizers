@@ -12,7 +12,7 @@ import enum
 import logging
 import random
 from abc import ABC, abstractmethod
-from typing import Optional, Tuple, Union
+from typing import Optional, Tuple
 
 import numpy as np
 
@@ -32,7 +32,7 @@ from distributed_shampoo.shampoo_types import (
     SGDGraftingConfig,
 )
 from torch import nn
-from torchvision import datasets, transforms
+from torchvision import datasets, transforms  # type: ignore[import-untyped]
 
 logger = logging.getLogger(__name__)
 
@@ -65,10 +65,10 @@ class GraftingType(enum.Enum):
 ###### ARGPARSER ######
 def enum_type_parse(s: str, enum_type: enum.Enum):
     try:
-        return enum_type[s]
+        return enum_type[s]  # type: ignore[index]
     except KeyError:
         raise argparse.ArgumentTypeError(
-            "Use one of {}".format(", ".join([t.name for t in enum_type]))
+            "Use one of {}".format(", ".join([t.name for t in enum_type]))  # type: ignore[attr-defined]
         )
 
 
@@ -317,7 +317,7 @@ class Metrics(ABC):
     def reset(self): ...
 
     @abstractmethod
-    def update(self): ...
+    def update(self, loss: torch.Tensor): ...
 
 
 class LossMetrics(Metrics):
@@ -333,7 +333,7 @@ class LossMetrics(Metrics):
         self._device = device
         self._epoch = 0
         self._iteration = 0
-        self._window_losses = []
+        self._window_losses: list[torch.Tensor] = []
         self._window_loss = torch.tensor(0.0, device=device)
         self._accumulated_loss = torch.tensor(0.0, device=device)
         self._lifetime_loss = torch.tensor(0.0, device=device)
@@ -428,7 +428,7 @@ def instantiate_optimizer(
                 betas=betas,
                 eps=epsilon,
                 weight_decay=weight_decay,
-            )
+            )  # type: ignore[assignment]
         else:
             optimizer = torch.optim.Adam(
                 model.parameters(),
@@ -436,7 +436,7 @@ def instantiate_optimizer(
                 betas=betas,
                 eps=epsilon,
                 weight_decay=weight_decay,
-            )
+            )  # type: ignore[assignment]
     elif optimizer_type == OptimizerType.DISTRIBUTED_SHAMPOO:
         optimizer = DistributedShampoo(
             model.parameters(),
@@ -464,7 +464,7 @@ def instantiate_optimizer(
             precision_config=precision_config,
             use_protected_eigh=use_protected_eigh,
             track_root_inv_residuals=track_root_inv_residuals,
-        )
+        )  # type: ignore[assignment]
     else:
         raise ValueError(f"Invalid OptimizerType {optimizer_type}!")
 
@@ -514,8 +514,10 @@ def get_data_loader_and_sampler(
     dataset = datasets.CIFAR10(
         data_path, train=True, download=True, transform=transform
     )
-    sampler = torch.utils.data.distributed.DistributedSampler(
-        dataset, num_replicas=world_size, rank=rank, shuffle=True
+    sampler: torch.utils.data.distributed.DistributedSampler = (
+        torch.utils.data.distributed.DistributedSampler(
+            dataset, num_replicas=world_size, rank=rank, shuffle=True
+        )
     )
     return (
         torch.utils.data.DataLoader(
@@ -574,7 +576,7 @@ def train_model(
     sampler: torch.utils.data.Sampler,
     data_loader: torch.utils.data.DataLoader,
     optimizer: torch.optim.Optimizer,
-    device: Union[str, torch.device],
+    device: torch.device,
     epochs: int = 1,
     window_size: int = 100,
     local_rank: int = 0,
@@ -585,7 +587,7 @@ def train_model(
     # main training loop
     for epoch in range(epochs):
         metrics._epoch = epoch
-        sampler.set_epoch(epoch)
+        sampler.set_epoch(epoch)  # type: ignore[attr-defined]
 
         for inputs, labels in data_loader:
             inputs, labels = inputs.to(device), labels.to(device)

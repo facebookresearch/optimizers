@@ -33,7 +33,7 @@ from torch.optim.optimizer import ParamsT
 from torch.testing._internal.common_distributed import MultiProcessTestCase
 
 
-class ShampooDDPDistributorTestBase:
+class ShampooDDPDistributorTestBase(MultiProcessTestCase):
     @property
     def _device(self) -> torch.device:
         raise NotImplementedError
@@ -136,7 +136,9 @@ class ShampooDDPDistributorTestBase:
             distributed_config,
         )
 
-    def test_losses(self) -> None:
+    """Write tests as private methods to avoid running this base class as a test case."""
+
+    def _test_losses(self) -> None:
         self._init_distributed()
         for num_trainers_per_group, (
             communication_dtype,
@@ -170,11 +172,7 @@ class ShampooDDPDistributorTestBase:
                     device=self._device,
                 )
 
-    # This mock is used to catch the number of calls to Shampoo's step(), which happened after __init__().
-    # If there is no blocked params, __init__() will raise and step() should not be called.
-    # Otherwise, step() will be called.
-    @mock.patch.object(DistributedShampoo, "step")
-    def test_empty_local_blocked_params(self, mock_step: mock.Mock) -> None:
+    def _test_empty_local_blocked_params(self, mock_step: mock.Mock) -> None:
         self._init_distributed()
 
         # The test setting is only rank 0 has params, so all other ranks have no parameters to work on.
@@ -202,14 +200,34 @@ class ShampooDDPDistributorTestBase:
             mock_step.assert_not_called()
 
 
-class ShampooDDPDistributorCPUTest(ShampooDDPDistributorTestBase, MultiProcessTestCase):
+class ShampooDDPDistributorCPUTest(ShampooDDPDistributorTestBase):
     @property
     def _device(self) -> torch.device:
         return torch.device("cpu")
 
+    def test_losses(self) -> None:
+        self._test_losses()
+
+    # This mock is used to catch the number of calls to Shampoo's step(), which happened after __init__().
+    # If there is no blocked params, __init__() will raise and step() should not be called.
+    # Otherwise, step() will be called.
+    @mock.patch.object(DistributedShampoo, "step")
+    def test_empty_local_blocked_params(self, mock_step: mock.Mock) -> None:
+        self._test_empty_local_blocked_params(mock_step)
+
 
 @unittest.skipIf(not torch.cuda.is_available(), "Skip when CUDA is not available")
-class ShampooDDPDistributorGPUTest(ShampooDDPDistributorTestBase, MultiProcessTestCase):
+class ShampooDDPDistributorGPUTest(ShampooDDPDistributorTestBase):
     @property
     def _device(self) -> torch.device:
         return torch.device("cuda")
+
+    def test_losses(self) -> None:
+        self._test_losses()
+
+    # This mock is used to catch the number of calls to Shampoo's step(), which happened after __init__().
+    # If there is no blocked params, __init__() will raise and step() should not be called.
+    # Otherwise, step() will be called.
+    @mock.patch.object(DistributedShampoo, "step")
+    def test_empty_local_blocked_params(self, mock_step: mock.Mock) -> None:
+        self._test_empty_local_blocked_params(mock_step)

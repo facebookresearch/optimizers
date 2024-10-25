@@ -7,7 +7,7 @@ LICENSE file in the root directory of this source tree.
 
 """
 
-from typing import Iterable
+from typing import Any, Iterable, TypeGuard
 
 from distributed_shampoo.shampoo_types import PARAMS
 from distributed_shampoo.utils.shampoo_block_info import BlockInfo
@@ -47,9 +47,10 @@ class FullyShardDistributor(Distributor):
         """Construct global block info list from param_group and num_blocks_within_param."""
         rank = dist.get_rank()
 
-        non_empty_params = filter(
-            lambda p: p.to_local().numel() > 0, super()._get_params_or_grads()
-        )
+        def _is_tensor(p: Any) -> TypeGuard[Tensor]:
+            return isinstance(p, Tensor)
+
+        non_empty_params = filter(_is_tensor, self._get_params_or_grads())
         self._global_block_info_list = tuple(
             BlockInfo(
                 param=param,

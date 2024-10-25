@@ -152,15 +152,16 @@ class HSDPDistributor(DistributorInterface):
 
         # Determine communication type.
         if distributed_config.communication_dtype == CommunicationDType.BF16:
-            self._communication_dtype: torch.dtype = torch.bfloat16
+            communication_dtype = torch.bfloat16
         elif distributed_config.communication_dtype == CommunicationDType.FP16:
-            self._communication_dtype: torch.dtype = torch.float16
+            communication_dtype = torch.float16
         else:
             assert distributed_config.communication_dtype in [
                 CommunicationDType.FP32,
                 CommunicationDType.DEFAULT,
             ]
-            self._communication_dtype = torch.float32
+            communication_dtype = torch.float32
+        self._communication_dtype: torch.dtype = communication_dtype
 
         # Initialize _dist_group and _group_rank.
         # Note that this requires initializing all process groups.
@@ -351,7 +352,7 @@ class HSDPDistributor(DistributorInterface):
         # Note that for HSDP, we want to get the rank within each sharded group for the block id.
         # When using a device mesh, 0 corresponds to the replicated group and 1 corresponds to the sharded group.
         sharded_group_rank = self._hsdp_device_mesh.get_local_rank(1)
-        self._global_block_info_list = tuple(
+        self._global_block_info_list: Tuple[DDPBlockInfo, ...] = tuple(
             DDPBlockInfo(
                 param=param,
                 composable_block_ids=(
@@ -390,7 +391,7 @@ class HSDPDistributor(DistributorInterface):
         self,
     ) -> None:
         """Split, merge, and block parameters."""
-        global_blocked_params = []
+        global_blocked_params: List[Tensor] = []
         # self._global_num_splits_per_param refers to the total number of splits within each
         # flattened parameter (obtained by split tensor block recovery).
         # This has the same length as the number of flattened parameters contained in
@@ -584,7 +585,7 @@ class HSDPDistributor(DistributorInterface):
             local_masked_blocked_grads (Tuple[Tensor, ...]): Local gradients with grad not None.
 
         """
-        local_masked_blocked_grads = []
+        local_masked_blocked_grads: List[Tensor] = []
         global_grad_selector = []
 
         for (

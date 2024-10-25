@@ -57,11 +57,11 @@ class MergeSmallDimsTest(unittest.TestCase):
 
         self.assertEqual(merge_small_dims(dims, threshold), merged_dims)
 
-        dims = (0, 1)
-        self.assertEqual(merge_small_dims(dims, threshold), merged_dims)
+        dims2 = (0, 1)
+        self.assertEqual(merge_small_dims(dims2, threshold), merged_dims)
 
-        dims = (0, 1, 5, 10, 20)
-        self.assertEqual(merge_small_dims(dims, threshold), merged_dims)
+        dims3 = (0, 1, 5, 10, 20)
+        self.assertEqual(merge_small_dims(dims3, threshold), merged_dims)
 
 
 class MultiDimSplitTest(unittest.TestCase):
@@ -128,7 +128,7 @@ class GeneratePairwiseIndicesTest(unittest.TestCase):
 
     def test_generate_pairwise_indices_with_empty_list(self) -> None:
         input_tuple = ()
-        expected_pairwise_indices = []
+        expected_pairwise_indices: list = []
         self.assertListEqual(
             list(generate_pairwise_indices(input_tuple)), expected_pairwise_indices
         )

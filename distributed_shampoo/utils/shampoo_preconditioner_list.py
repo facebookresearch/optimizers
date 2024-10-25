@@ -14,7 +14,7 @@ from fractions import Fraction
 
 from itertools import chain
 from operator import methodcaller
-from typing import Any, DefaultDict, Sequence, Tuple, Union
+from typing import Any, Dict, Sequence, Tuple, Union
 
 import torch
 from distributed_shampoo.shampoo_types import PrecisionConfig, PreconditionerValueError
@@ -159,7 +159,7 @@ class AdagradPreconditionerList(PreconditionerList):
 
     Args:
         block_list (Tuple[Tensor, ...]): List of (blocks of) parameters.
-        state (DefaultDict[Tensor, Any]): Dictionary containing optimizer state.
+        state (Dict[Tensor, Any]): Dictionary containing optimizer state.
         block_info_list (Tuple[BlockInfo, ...]): List containing corresponding BlockInfo for each block/parameter in block_list.
             Note that this should have the same length as block_list.
         distributor_selector (Tuple[bool, ...]): Distributor selector is a boolean list indicating whether a blocked parameter
@@ -175,7 +175,7 @@ class AdagradPreconditionerList(PreconditionerList):
     def __init__(
         self,
         block_list: Tuple[Tensor, ...],
-        state: DefaultDict[Tensor, Any],
+        state: Dict[Tensor, Any],
         block_info_list: Tuple[BlockInfo, ...],
         distributor_selector: Tuple[bool, ...],
         precision_config: PrecisionConfig,
@@ -359,7 +359,7 @@ class ShampooPreconditionerList(PreconditionerList):
 
     Args:
         block_list (Tuple[Tensor, ...]): List of (blocks of) parameters.
-        state (DefaultDict[Tensor, Any]): Dictionary containing optimizer state.
+        state (Dict[Tensor, Any]): Dictionary containing optimizer state.
         block_info_list (Tuple[BlockInfo, ...]): List containing corresponding BlockInfo for each block/parameter in block_list.
             Note that this should have the same length as block_list.
         distributor_selector (Tuple[bool, ...]): Distributor selector is a boolean list indicating whether a blocked parameter
@@ -384,7 +384,7 @@ class ShampooPreconditionerList(PreconditionerList):
     def __init__(
         self,
         block_list: Tuple[Tensor, ...],
-        state: DefaultDict[Tensor, Any],
+        state: Dict[Tensor, Any],
         block_info_list: Tuple[BlockInfo, ...],
         distributor_selector: Tuple[bool, ...],
         precision_config: PrecisionConfig,
@@ -751,7 +751,7 @@ class ShampooPreconditionerList(PreconditionerList):
             self._masked_root_list = compress_list(
                 self._local_root_list, local_grad_selector
             )
-            self._masked_kronecker_factors_list: Tuple[
+            self._masked_kronecker_factors_list: Tuple[  # type: ignore[no-redef]
                 ShampooKroneckerFactorsList, ...
             ] = compress_list(self._local_kronecker_factors_list, local_grad_selector)
 
