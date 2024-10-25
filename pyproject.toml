@@ -36,6 +36,7 @@ classifiers = [
 dev = [
   "ruff",
   "usort",
+  "mypy",
   "expecttest",
 ]
 

@@ -5,6 +5,9 @@ format:
 	@usort format .
 	@ruff format
 
+type-check:
+	@mypy .
+
 test:
 	@python3 -m unittest discover -s tests/ -p "*_test.py"
 	@python3 -m unittest discover -s distributed_shampoo/tests/ -p "*_test.py"
