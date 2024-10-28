@@ -108,7 +108,7 @@ class DistributorInterface(ABC):
         Args:
             get_grad (bool): Whether to return the param or the grad of the param. (Default: False)
         Returns:
-            local (Iterable[Tensor | None]): Local params (or gradidents) from the param_group. Note
+            local (Iterable[Tensor | None]): Local params (or gradients) from the param_group. Note
               that gradients can be None.
         """
 

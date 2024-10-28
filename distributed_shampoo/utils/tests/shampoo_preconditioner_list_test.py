@@ -526,8 +526,8 @@ class ShampooPreconditionerListTest(AdagradPreconditionerListTest):
                 PreconditionerValueError,
                 re.escape("Encountered inf values in bias-corrected factor matrix"),
             ):
-                if isinstance(self._preconditioner_list, ShampooPreconditionerList):
-                    self._preconditioner_list.compute_root_inverse()
+                assert isinstance(self._preconditioner_list, ShampooPreconditionerList)
+                self._preconditioner_list.compute_root_inverse()
 
     def test_raise_nan_in_factor_matrix_compute_root_inverse(self) -> None:
         with DequantizePreconditionersContext(
@@ -545,8 +545,8 @@ class ShampooPreconditionerListTest(AdagradPreconditionerListTest):
                 PreconditionerValueError,
                 re.escape("Encountered nan values in bias-corrected factor matrix"),
             ):
-                if isinstance(self._preconditioner_list, ShampooPreconditionerList):
-                    self._preconditioner_list.compute_root_inverse()
+                assert isinstance(self._preconditioner_list, ShampooPreconditionerList)
+                self._preconditioner_list.compute_root_inverse()
 
     # Note: This is needed for pyre to infer the type of argument into mock.patch.object.
     shampoo_preconditioner_list_module: ModuleType = shampoo_preconditioner_list
@@ -565,8 +565,8 @@ class ShampooPreconditionerListTest(AdagradPreconditionerListTest):
             PreconditionerValueError,
             re.escape("Encountered nan or inf values in inverse factor matrix"),
         ):
-            if isinstance(self._preconditioner_list, ShampooPreconditionerList):
-                self._preconditioner_list.compute_root_inverse()
+            assert isinstance(self._preconditioner_list, ShampooPreconditionerList)
+            self._preconditioner_list.compute_root_inverse()
         mock_matrix_inverse_root.assert_called_once()
 
     @mock.patch.object(
@@ -583,8 +583,8 @@ class ShampooPreconditionerListTest(AdagradPreconditionerListTest):
             PreconditionerValueError,
             re.escape("Encountered nan or inf values in inverse factor matrix"),
         ):
-            if isinstance(self._preconditioner_list, ShampooPreconditionerList):
-                self._preconditioner_list.compute_root_inverse()
+            assert isinstance(self._preconditioner_list, ShampooPreconditionerList)
+            self._preconditioner_list.compute_root_inverse()
         mock_matrix_inverse_root.assert_called_once()
 
     @mock.patch.object(
@@ -599,9 +599,9 @@ class ShampooPreconditionerListTest(AdagradPreconditionerListTest):
         with DequantizePreconditionersContext(
             preconditioner_list=self._preconditioner_list
         ), self.assertLogs(level="WARNING") as cm:
-            if isinstance(self._preconditioner_list, ShampooPreconditionerList):
-                # Because use_protected_eigh is True, we expect the warning to be logged.
-                self._preconditioner_list.compute_root_inverse()
+            assert isinstance(self._preconditioner_list, ShampooPreconditionerList)
+            # Because use_protected_eigh is True, we expect the warning to be logged.
+            self._preconditioner_list.compute_root_inverse()
         self.assertCountEqual(
             [r.msg for r in cm.records],
             [
