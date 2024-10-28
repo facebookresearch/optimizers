@@ -1,0 +1,55 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "optimizers"
+version = "1.0.0"
+dependencies = [
+    "torch>=2.0.0",
+    "torchvision>=0.15.0",
+]
+requires-python = ">=3.10"
+authors = [
+  {name = "Hao-Jun Michael Shi"},
+  {name = "Tsung-Hsien Lee"},
+  {name = "Anna Cai"},
+  {name = "Shintaro Iwasaki"},
+  {name = "Ke Sang"},
+  {name = "Wang Zhou"},
+]
+description = "For optimization algorithm research and development."
+readme = "README.md"
+keywords = ["deep-learning", "neural-networks", "optimization", "shampoo"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+[project.optional-dependencies]
+dev = [
+  "ruff",
+  "usort",
+  "expecttest",
+]
+
+[project.urls]
+Repository = "https://github.com/facebookresearch/optimizers.git"
+"Bug Tracker" = "https://github.com/facebookresearch/optimizers/issues"
+
+[tool.setuptools]
+packages = ["distributed_shampoo"]
+py-modules = [
+    "matrix_functions",
+    "matrix_functions_types",
+    "optimizer_modules",
+]
+
+[tool.usort]
+first_party_detection = false

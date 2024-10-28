@@ -124,7 +124,7 @@ class DistributorTest(DistributorInterfaceTest):
 
     def test_local_blocked_params(self) -> None:
         # In Distributor, because there is no global vs. local boundary concept,
-        # globl and local blocked params are always identical.
+        # global and local blocked params are always identical.
         expected_local_params = (
             torch.zeros(5, 5, dtype=torch.float),
             torch.zeros(5, 5, dtype=torch.float),

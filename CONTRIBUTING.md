@@ -8,11 +8,11 @@ optimizers should be created in a separate public repo.
 ## Pull Requests
 We actively welcome your pull requests for existing optimizers.
 
-1. Fork the repo and create your branch from `main`.
+1. Fork the repo and create your branch from `main`. Install the package inside of your Python environment with `pip install -e ".[dev]"`.
 2. If you've added code that should be tested, add tests.
 3. If you've changed APIs, update the documentation.
-4. Ensure the test suite passes.
-5. Make sure your code lints.
+4. Ensure the test suite passes. To run the subset of the tests that can be run on CPU use `make test`; to run the subset of tests that require four GPUs use `make test-gpu`.
+5. Make sure your code lints. You can use `make lint` and `make format` to automatically lint and format the code where possible.
 6. If you haven't already, complete the Contributor License Agreement ("CLA").
 
 ## Contributor License Agreement ("CLA")
