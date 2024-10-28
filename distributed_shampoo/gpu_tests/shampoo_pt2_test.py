@@ -91,7 +91,7 @@ class DistributedShampooPytorchCompileTest(unittest.TestCase):
         start_preconditioning_step: int,
         weight_decay: float,
         betas: tuple[float, float],
-        grafting_config: GraftingConfig,
+        grafting_config: GraftingConfig | None,
     ) -> Callable[[ParamsT], torch.optim.Optimizer]:
         return lambda parameters: DistributedShampoo(
             parameters,
@@ -134,7 +134,6 @@ class DistributedShampooPytorchCompileTest(unittest.TestCase):
             ),
             ((1, 1000, 5), (10, 10, 5)),
         ):
-            assert isinstance(grafting_config, GraftingConfig)
             shampoo_optim_factory = partial(
                 DistributedShampooPytorchCompileTest._shampoo_optim_factory,
                 precondition_frequency=precondition_frequency,
