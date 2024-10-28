@@ -39,8 +39,7 @@ class AbstractTest:
     class ShampooDDPDistributorDeviceTest(abc.ABC, MultiProcessTestCase):
         @property
         @abc.abstractmethod
-        def _device(self) -> torch.device:
-            raise NotImplementedError
+        def _device(self) -> torch.device: ...
 
         @staticmethod
         def _train_model(
