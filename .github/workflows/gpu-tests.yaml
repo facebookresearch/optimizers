@@ -18,6 +18,7 @@ jobs:
         - name: Create venv and install the package.
           run: |
             uv venv && source .venv/bin/activate
+            uv pip install setuptools
             uv pip install -e ".[dev]"
         - name: Check Triton installation.
           run: |
