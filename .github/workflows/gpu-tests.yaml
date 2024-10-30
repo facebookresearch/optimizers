@@ -11,6 +11,7 @@ jobs:
         - name: Set up and update uv.
           run: |
             curl -LsSf https://astral.sh/uv/install.sh | sh
+            source $HOME/.cargo/env
             uv self update
         - name: Install Python.
           run: uv python install 3.10
