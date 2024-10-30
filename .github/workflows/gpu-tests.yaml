@@ -19,6 +19,10 @@ jobs:
           run: |
             uv venv && source .venv/bin/activate
             uv pip install -e ".[dev]"
+        - name: Check Triton installation.
+          run: |
+            source .venv/bin/activate
+            python3 -c "import triton; print(triton.__version__)"
         - name: Run tests.
           run: |
             source .venv/bin/activate
