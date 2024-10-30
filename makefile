@@ -14,6 +14,10 @@ test:
 	@torchrun --standalone --nnodes=1 --nproc_per_node=2 -m unittest distributed_shampoo/utils/gpu_tests/shampoo_ddp_distributor_test.py
 
 test-gpu:
+	@python3 -m unittest discover -s distributed_shampoo/gpu_tests/ -p "*_test.py"
+	@python3 -m unittest distributed_shampoo/utils/gpu_tests/shampoo_dist_utils_test.py
+
+test-multi-gpu:
 	@torchrun --standalone --nnodes=1 --nproc_per_node=2 -m unittest discover -s distributed_shampoo/gpu_tests/ -p "*_test.py"
 	@torchrun --standalone --nnodes=1 --nproc_per_node=2 -m unittest distributed_shampoo/utils/gpu_tests/shampoo_dist_utils_test.py
 	@torchrun --standalone --nnodes=1 --nproc_per_node=2 -m unittest distributed_shampoo/utils/gpu_tests/shampoo_ddp_distributor_test.py
