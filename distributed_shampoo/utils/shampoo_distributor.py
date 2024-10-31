@@ -63,7 +63,7 @@ class DistributorInterface(ABC):
         # Local masked blocked params are the parameters masked by the distributor selector AND the local grad selector.
         self._local_masked_blocked_params: Tuple[Tensor, ...]
         # Global block info list contains information about each global block.
-        self._global_block_info_list: Tuple[BlockInfo | DDPBlockInfo, ...]
+        self._global_block_info_list: Tuple[BlockInfo, ...] | Tuple[DDPBlockInfo, ...]
 
     @abstractmethod
     @torch.no_grad()

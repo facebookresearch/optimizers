@@ -763,10 +763,7 @@ class DistributedShampoo(torch.optim.Optimizer):
         Uses infinity norm to evaluate residuals and errors.
         """
 
-        # Accumulate relative errors/residuals
-        relative_errors = []
-        relative_residuals = []
-
+        # Compute relative errors/residuals for each group.
         for (group_index, group), state_lists in zip(
             enumerate(self.param_groups), self._per_group_state_lists, strict=True
         ):
@@ -782,28 +779,28 @@ class DistributedShampoo(torch.optim.Optimizer):
                 )
                 continue
 
-            relative_errors, relative_residuals = state_lists[
-                SHAMPOO_PRECONDITIONER_LIST
-            ].compute_root_inverse_residuals()
-
-            relative_errors_tensor = torch.stack(relative_errors)
-            relative_residuals_tensor = torch.stack(relative_residuals)
+            relative_errors, relative_residuals = map(
+                torch.stack,
+                state_lists[
+                    SHAMPOO_PRECONDITIONER_LIST
+                ].compute_root_inverse_residuals(),
+            )
 
             quantiles = torch.as_tensor(
                 [0, 0.25, 0.5, 0.75, 1],
-                device=relative_errors_tensor.device,
-                dtype=relative_errors_tensor.dtype,
+                device=relative_errors.device,
+                dtype=relative_errors.dtype,
             )
             logger.debug(f"Group Index: {group_index}")
             logger.debug(f"Expect Relative Error <= {expected_relative_error}")
             logger.debug(
-                f"Relative Error (||X - X_hat||_inf / ||X||_inf)       Average: {torch.mean(relative_errors_tensor)}, "
-                f"Quantiles [0, 25, 50, 75, 100]: {torch.quantile(relative_errors_tensor, quantiles, interpolation='nearest')}"
+                f"Relative Error (||X - X_hat||_inf / ||X||_inf)       Average: {torch.mean(relative_errors)}, "
+                f"Quantiles [0, 25, 50, 75, 100]: {torch.quantile(relative_errors, quantiles, interpolation='nearest')}"
             )
             logger.debug(
-                f"Relative Residual (||X_hat^-r - A||_inf / ||A||_inf) Average: {torch.mean(relative_residuals_tensor)}, "
+                f"Relative Residual (||X_hat^-r - A||_inf / ||A||_inf) Average: {torch.mean(relative_residuals)}, "
                 "Quantiles [0, 25, 50, 75, 100]: "
-                f"{torch.quantile(relative_residuals_tensor, quantiles, interpolation='nearest')}"
+                f"{torch.quantile(relative_residuals, quantiles, interpolation='nearest')}"
             )
 
     @torch.no_grad()
