@@ -62,6 +62,7 @@ class OptimizerModule:
         """
 
         def save_to_state_dict(
+            # type: ignore
             states: Iterable[Any],
             destination: StateDict,
         ) -> None:

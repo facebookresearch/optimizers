@@ -11,10 +11,10 @@ import itertools
 import re
 import unittest
 import unittest.mock as mock
+from collections.abc import Callable
 from fractions import Fraction
 from functools import partial
 from types import ModuleType
-from typing import Callable, List, Tuple
 
 import matrix_functions
 
@@ -23,7 +23,6 @@ import numpy as np
 import torch
 from matrix_functions import (
     _matrix_inverse_root_eigen,
-    _matrix_inverse_root_higher_order,
     _matrix_inverse_root_newton,
     check_diagonal,
     compute_matrix_root_inverse_residuals,
@@ -138,7 +137,7 @@ class MatrixInverseRootTest(unittest.TestCase):
                 rtol=rtol,
             )
 
-        for A, expected_root in zip(A_list, expected_root_list):
+        for A, expected_root in zip(A_list, expected_root_list, strict=True):
             for root_inv_config in (EigenConfig(), CoupledNewtonConfig()):
                 with self.subTest(f"Test with {A=}, {root_inv_config=}"):
                     torch.testing.assert_close(
@@ -187,9 +186,10 @@ class MatrixInverseRootTest(unittest.TestCase):
             re.escape(
                 "NaN/Inf in matrix inverse root (after powering for fractions), raising an exception!"
             ),
-            _matrix_inverse_root_higher_order,
+            matrix_inverse_root,
             A=A,
             root=Fraction(1, 20),
+            root_inv_config=CoupledHigherOrderConfig(),
         )
 
     def test_matrix_inverse_root_with_no_effect_exponent_multiplier(self) -> None:
@@ -209,8 +209,8 @@ class MatrixInverseRootTest(unittest.TestCase):
     def test_matrix_inverse_root_reach_max_iterations(self) -> None:
         A = torch.tensor([[1.0, 0.0], [0.0, 4.0]])
         root = Fraction(4)
-        root_inv_config_and_implementation_and_msg: List[
-            Tuple[RootInvConfig, str, str]
+        root_inv_config_and_implementation_and_msg: list[
+            tuple[RootInvConfig, str, str]
         ] = [
             (CoupledNewtonConfig(), "_matrix_inverse_root_newton", "Newton"),
             (
@@ -335,15 +335,15 @@ class EigenRootTest(unittest.TestCase):
         A_norm = torch.linalg.norm(A, ord=torch.inf)
         rel_error = abs_error / torch.maximum(torch.tensor(1.0), A_norm)
         torch.testing.assert_close(L, eig_sols)
-        self.assertTrue(rel_error <= tolerance)
+        self.assertLessEqual(rel_error.item(), tolerance)
 
     def _test_eigen_root_multi_dim(
         self,
         A: Callable[[int], Tensor],
-        dims: List[int],
-        roots: List[int],
+        dims: list[int],
+        roots: list[int],
         make_positive_semidefinite: bool,
-        epsilons: List[float],
+        epsilons: list[float],
         tolerance: float,
         eig_sols: Callable[[int], Tensor],
     ) -> None:
@@ -545,15 +545,15 @@ class NewtonRootInverseTest(unittest.TestCase):
         abs_A_error = torch.dist(torch.linalg.matrix_power(X, -root), A, p=torch.inf)
         A_norm = torch.linalg.norm(A, ord=torch.inf)
         rel_A_error = abs_A_error / torch.maximum(torch.tensor(1.0), A_norm)
-        self.assertTrue(M_error <= M_tol)
-        self.assertTrue(rel_A_error <= A_tol)
+        self.assertLessEqual(M_error.item(), M_tol)
+        self.assertLessEqual(rel_A_error.item(), A_tol)
 
     def _test_newton_root_inverse_multi_dim(
         self,
         A: Callable[[int], Tensor],
-        dims: List[int],
-        roots: List[int],
-        epsilons: List[float],
+        dims: list[int],
+        roots: list[int],
+        epsilons: list[float],
         max_iterations: int,
         A_tol: float,
         M_tol: float,

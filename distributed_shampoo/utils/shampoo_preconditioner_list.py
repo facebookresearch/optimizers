@@ -175,6 +175,7 @@ class AdagradPreconditionerList(PreconditionerList):
     def __init__(
         self,
         block_list: Tuple[Tensor, ...],
+        # type: ignore
         state: DefaultDict[Tensor, Any],
         block_info_list: Tuple[BlockInfo, ...],
         distributor_selector: Tuple[bool, ...],
@@ -384,6 +385,7 @@ class ShampooPreconditionerList(PreconditionerList):
     def __init__(
         self,
         block_list: Tuple[Tensor, ...],
+        # type: ignore
         state: DefaultDict[Tensor, Any],
         block_info_list: Tuple[BlockInfo, ...],
         distributor_selector: Tuple[bool, ...],

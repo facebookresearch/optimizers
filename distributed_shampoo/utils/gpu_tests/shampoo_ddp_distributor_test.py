@@ -11,7 +11,6 @@ LICENSE file in the root directory of this source tree.
 
 import abc
 import contextlib
-import pathlib
 import re
 import unittest
 from itertools import product
@@ -31,12 +30,14 @@ from distributed_shampoo.tests.shampoo_test_utils import construct_training_prob
 from torch import distributed as dist
 from torch.nn.parameter import Parameter
 from torch.optim.optimizer import ParamsT
-from torch.testing._internal.common_distributed import MultiProcessTestCase
+from torch.testing._internal.common_distributed import (
+    DynamoDistributedMultiProcTestCase,
+)
 
 
 # Use outer class as wrapper to avoid running the abstract test.
 class AbstractTest:
-    class ShampooDDPDistributorDeviceTest(abc.ABC, MultiProcessTestCase):
+    class ShampooDDPDistributorDeviceTest(abc.ABC, DynamoDistributedMultiProcTestCase):
         @property
         @abc.abstractmethod
         def _device(self) -> torch.device: ...
@@ -88,14 +89,6 @@ class AbstractTest:
             )
             torch.testing.assert_close(loss1, loss2)
             torch.testing.assert_close(params1, params2)
-
-        def setUp(self) -> None:
-            super().setUp()
-            self._spawn_processes()
-
-        def tearDown(self) -> None:
-            super().tearDown()
-            pathlib.Path(self.file_name).unlink(missing_ok=True)
 
         def _init_distributed(self) -> None:
             if not dist.is_initialized():
