@@ -104,7 +104,7 @@ if __name__ == "__main__":
 
     # instantiate data loader. Note that this is a single GPU training example,
     # so we do not need to instantiate a sampler.
-    data_loader, _ = get_data_loader_and_sampler(args.data_path, 1, 1, args.batch_size)
+    data_loader, _ = get_data_loader_and_sampler(args.data_path, 1, 0, args.batch_size)
 
     # instantiate optimizer (SGD, Adam, DistributedShampoo)
     optimizer = instantiate_optimizer(
@@ -135,12 +135,15 @@ if __name__ == "__main__":
             computation_dtype=args.computation_dtype.value,
             factor_matrix_dtype=args.factor_matrix_dtype.value,
             inv_factor_matrix_dtype=args.inv_factor_matrix_dtype.value,
+            corrected_eigenvalues_dtype=args.corrected_eigenvalues_dtype.value,
+            factor_matrix_eigenvectors_dtype=args.factor_matrix_eigenvectors_dtype.value,
             filtered_grad_dtype=args.filtered_grad_dtype.value,
             momentum_dtype=args.momentum_dtype.value,
             grafting_state_dtype=args.grafting_state_dtype.value,
         ),
         use_protected_eigh=args.use_protected_eigh,
         track_root_inv_residuals=args.track_root_inv_residuals,
+        preconditioner_computation_type=args.preconditioner_computation_type,
     )
 
     # train model

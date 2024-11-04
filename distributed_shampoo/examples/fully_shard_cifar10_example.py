@@ -137,12 +137,15 @@ def create_model_and_optimizer_and_loss_fn(args, device):
             computation_dtype=args.computation_dtype.value,
             factor_matrix_dtype=args.factor_matrix_dtype.value,
             inv_factor_matrix_dtype=args.inv_factor_matrix_dtype.value,
+            corrected_eigenvalues_dtype=args.corrected_eigenvalues_dtype.value,
+            factor_matrix_eigenvectors_dtype=args.factor_matrix_eigenvectors_dtype.value,
             filtered_grad_dtype=args.filtered_grad_dtype.value,
             momentum_dtype=args.momentum_dtype.value,
             grafting_state_dtype=args.grafting_state_dtype.value,
         ),
         use_protected_eigh=args.use_protected_eigh,
         track_root_inv_residuals=args.track_root_inv_residuals,
+        preconditioner_computation_type=args.preconditioner_computation_type,
     )
     return model, optimizer, loss_function
 
