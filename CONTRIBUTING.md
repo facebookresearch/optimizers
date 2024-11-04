@@ -11,7 +11,7 @@ We actively welcome your pull requests for existing optimizers.
 1. Fork the repo and create your branch from `main`. Install the package inside of your Python environment with `pip install -e ".[dev]"`.
 2. If you've added code that should be tested, add tests.
 3. If you've changed APIs, update the documentation.
-4. Ensure the test suite passes. To run the subset of the tests that can be run on CPU use `make test`; to run the subset of tests that require four GPUs use `make test-gpu`.
+4. Ensure the test suite passes. To run the subset of the tests that can be run on CPU use `make test`; to run the tests for a single GPU use `make test-gpu` and to run the subset of tests that require 2-4 GPUs use `make test-multi-gpu`.
 5. Make sure your code lints. You can use `make lint` and `make format` to automatically lint and format the code where possible. Use `make type-check` for type checking.
 6. If you haven't already, complete the Contributor License Agreement ("CLA").
 

@@ -42,10 +42,11 @@ class ShampooDistUtilsTest(DTensorTestBase):
             (shard_mesh.get_group(), replicate_mesh.get_group()),
         )
 
-    @with_comms  # type: ignore[arg-type]
+    @with_comms  # type: ignore
     def test_get_device_mesh(self) -> None:
         mesh = tuple(
             map(
+                # type: ignore
                 tuple,
                 torch.tensor(range(self.world_size))
                 .view(-1, self.world_size // 2)
@@ -55,7 +56,7 @@ class ShampooDistUtilsTest(DTensorTestBase):
 
         self._verify_deivce_mesh(
             device_mesh=get_device_mesh(
-                device_type=self.device_type,  # type: ignore[attr-defined]
+                device_type=self.device_type,  # type: ignore
                 mesh=mesh,
                 mesh_dim_names=("replicate", "shard"),
             )
