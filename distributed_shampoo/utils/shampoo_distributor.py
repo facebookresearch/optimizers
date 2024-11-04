@@ -9,7 +9,7 @@ LICENSE file in the root directory of this source tree.
 
 from abc import ABC, abstractmethod
 from operator import attrgetter
-from typing import Any, Dict, Iterable, Optional
+from typing import Any, Iterable, Optional
 
 import torch
 from distributed_shampoo.shampoo_types import (
@@ -34,11 +34,11 @@ class DistributorInterface(ABC):
     Functionally specifies the API for Distributor classes.
 
     Args:
-        param_group (Dict[str, Any]): Parameter group containing parameters.
+        param_group (dict[str, Any]): Parameter group containing parameters.
 
     """
 
-    def __init__(self, param_group: Dict[str, Any]) -> None:
+    def __init__(self, param_group: dict[str, Any]) -> None:
         self._param_group = param_group
         # Merge and block parameters creates self._global_blocked_params, self._global_num_blocks_per_param,
         # and self._global_merged_dims_list.
@@ -229,12 +229,12 @@ class Distributor(DistributorInterface):
     single-GPU training.
 
     Args:
-        param_group (Dict[str, Any]): Parameter group containing parameters.
+        param_group (dict[str, Any]): Parameter group containing parameters.
     """
 
     def __init__(
         self,
-        param_group: Dict[str, Any],
+        param_group: dict[str, Any],
     ) -> None:
         super().__init__(param_group)
         self._construct_global_block_info_list()

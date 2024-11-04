@@ -10,7 +10,7 @@ LICENSE file in the root directory of this source tree.
 import itertools
 import unittest
 from math import sqrt
-from typing import cast, Union
+from typing import cast
 
 import torch
 import torch.nn as nn
@@ -19,7 +19,7 @@ from distributed_shampoo.utils.shampoo_model_utils import CombinedLinear
 
 
 class CombinedLinearTest(unittest.TestCase):
-    def _init_weights(self, m: Union[nn.Linear, CombinedLinear], seed: int) -> None:
+    def _init_weights(self, m: nn.Linear | CombinedLinear, seed: int) -> None:
         torch.random.manual_seed(seed)
         if isinstance(m, nn.Linear):
             bound = 1 / sqrt(m.in_features)

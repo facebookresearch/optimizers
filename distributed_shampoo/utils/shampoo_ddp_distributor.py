@@ -10,7 +10,7 @@ LICENSE file in the root directory of this source tree.
 import heapq
 import logging
 from functools import partial
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 import torch
 import torch.distributed as dist
@@ -42,14 +42,14 @@ class DDPDistributor(DistributorInterface):
     The constructor internally sets up process groups, so torch.distributed must be initialized in advance.
 
     Args:
-        param_group (Dict[str, Any]): Parameter group containing parameters.
+        param_group (dict[str, Any]): Parameter group containing parameters.
         distributed_config (DDPShampooConfig): Configuration for DDP Shampoo.
 
     """
 
     def __init__(
         self,
-        param_group: Dict[str, Any],
+        param_group: dict[str, Any],
         distributed_config: DDPShampooConfig,
     ) -> None:
         super().__init__(param_group)

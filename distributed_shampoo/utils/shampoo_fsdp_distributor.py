@@ -8,7 +8,7 @@ LICENSE file in the root directory of this source tree.
 """
 
 from math import prod
-from typing import Any, Dict
+from typing import Any
 
 import torch
 from distributed_shampoo.shampoo_types import (
@@ -38,17 +38,17 @@ class FSDPDistributor(DistributorInterface):
     Note that no communication is performed in FSDP Distributor.
 
     Args:
-        param_group (Dict[str, Any]): Parameter group containing parameters.
+        param_group (dict[str, Any]): Parameter group containing parameters.
         distributed_config (FSDPShampooConfig): Configuration for FSDP Shampoo.
 
     """
 
     def __init__(
         self,
-        param_group: Dict[str, Any],
+        param_group: dict[str, Any],
         distributed_config: FSDPShampooConfig,
     ) -> None:
-        self._param_to_metadata: Dict[Parameter, FSDPParameterMetadata] = (
+        self._param_to_metadata: dict[Parameter, FSDPParameterMetadata] = (
             distributed_config.param_to_metadata
         )
         self._global_num_splits_per_param: tuple[int, ...] = ()

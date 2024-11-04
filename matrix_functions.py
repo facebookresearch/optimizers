@@ -14,7 +14,6 @@ import time
 from dataclasses import asdict
 from fractions import Fraction
 from math import isfinite
-from typing import Union
 
 import torch
 from matrix_functions_types import (
@@ -66,7 +65,7 @@ def matrix_inverse_root(
     root: Fraction,
     root_inv_config: RootInvConfig = DefaultEigenConfig,
     epsilon: float = 0.0,
-    is_diagonal: Union[Tensor, bool] = False,
+    is_diagonal: Tensor | bool = False,
 ) -> Tensor:
     """Computes matrix root inverse of square symmetric positive definite matrix.
 

@@ -9,7 +9,7 @@ LICENSE file in the root directory of this source tree.
 
 import enum
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 import torch
 from torch.distributed.device_mesh import DeviceMesh
@@ -170,11 +170,11 @@ class FSDPShampooConfig(DistributedConfig):
     Passes in additional metadata necessary to run FSDP Shampoo.
 
     Args:
-        param_to_metadata (Dict[Parameter, FSDPParameterMetadata]): Dictionary mapping parameter to its metadata from FSDP.
+        param_to_metadata (dict[Parameter, FSDPParameterMetadata]): Dictionary mapping parameter to its metadata from FSDP.
 
     """
 
-    param_to_metadata: Dict[Parameter, FSDPParameterMetadata]
+    param_to_metadata: dict[Parameter, FSDPParameterMetadata]
 
 
 @dataclass(kw_only=True)
@@ -196,7 +196,7 @@ class HSDPShampooConfig(FSDPShampooConfig, DDPShampooConfig):
 
     Args:
         device_mesh (torch.distributed.device_mesh.DeviceMesh): Device mesh for HSDP.
-        param_to_metadata (Dict[Parameter, FSDPParameterMetadata]): Dictionary mapping parameter to its metadata from HSDP.
+        param_to_metadata (dict[Parameter, FSDPParameterMetadata]): Dictionary mapping parameter to its metadata from HSDP.
         communication_dtype (CommunicationDType): Data type for communication between ranks. (Default: DEFAULT)
         num_trainers_per_group (int): Number of GPUs per distributed process group for distributed computation/memory.
             If num_trainers_per_group = -1 is used, then defaults to using the number of workers in each replicated HSDP

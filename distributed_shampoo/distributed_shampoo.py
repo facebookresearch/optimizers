@@ -12,7 +12,7 @@ import dataclasses
 import logging
 from copy import deepcopy
 from functools import partial
-from typing import Any, Callable, Dict, Iterator, NoReturn, Optional, Sequence, Union
+from typing import Any, Callable, Iterator, NoReturn, Optional, Sequence
 
 import torch
 
@@ -290,7 +290,7 @@ class DistributedShampoo(torch.optim.Optimizer):
         max_preconditioner_dim: int = 1024,
         precondition_frequency: int = 1,
         start_preconditioning_step: int = -1,
-        inv_root_override: Union[int, Sequence[int]] = 0,
+        inv_root_override: int | Sequence[int] = 0,
         exponent_multiplier: float | None = None,
         use_nesterov: bool = False,
         use_bias_correction: bool = True,
@@ -470,7 +470,7 @@ class DistributedShampoo(torch.optim.Optimizer):
         self._track_root_inv_residuals = track_root_inv_residuals
 
         # Initialize list containing group state dictionaries.
-        self._per_group_state_lists: list[Dict[str, Any]] = [
+        self._per_group_state_lists: list[dict[str, Any]] = [
             {} for _ in self.param_groups
         ]
 
@@ -716,7 +716,7 @@ class DistributedShampoo(torch.optim.Optimizer):
         # Use PT2 to compile the step function for each parameter group.
         self._per_group_step: Callable[
             [
-                Dict[str, Any],
+                dict[str, Any],
                 torch.Tensor,
                 torch.Tensor,
                 float,
@@ -748,7 +748,7 @@ class DistributedShampoo(torch.optim.Optimizer):
 
     @staticmethod
     @torch.no_grad()
-    def _mask_state_lists(state_lists: Dict[str, Any], group: Dict[str, Any]) -> None:
+    def _mask_state_lists(state_lists: dict[str, Any], group: dict[str, Any]) -> None:
         if (
             state_lists[DISTRIBUTOR].local_grad_selector
             == state_lists[PREVIOUS_GRAD_SELECTOR]
@@ -841,7 +841,7 @@ class DistributedShampoo(torch.optim.Optimizer):
     @torch.compiler.disable
     def _precondition_and_grafting(
         self,
-        state_lists: Dict[str, Any],
+        state_lists: dict[str, Any],
         masked_filtered_grad_list: tuple[torch.Tensor, ...],
         use_grafting_method: bool,
         grafting_config_not_none: bool,
@@ -885,7 +885,7 @@ class DistributedShampoo(torch.optim.Optimizer):
     @torch.no_grad()
     def _add_l2_regularization(
         self,
-        state_lists: Dict[str, Any],
+        state_lists: dict[str, Any],
         weight_decay: float,
         use_decoupled_weight_decay: bool,
     ) -> None:
@@ -900,7 +900,7 @@ class DistributedShampoo(torch.optim.Optimizer):
     @torch.no_grad()
     def _update_preconditioners(
         self,
-        state_lists: Dict[str, Any],
+        state_lists: dict[str, Any],
         step: torch.Tensor,
         perform_amortized_computation: bool,
         grafting_config_not_none: bool,
@@ -922,7 +922,7 @@ class DistributedShampoo(torch.optim.Optimizer):
     @torch.no_grad()
     def _compute_filtered_grad_list(
         self,
-        state_lists: Dict[str, Any],
+        state_lists: dict[str, Any],
         step: torch.Tensor,
         beta1: float,
         beta3: float,
@@ -965,7 +965,7 @@ class DistributedShampoo(torch.optim.Optimizer):
     @torch.no_grad()
     def _apply_decoupled_weight_decay(
         self,
-        state_lists: Dict[str, Any],
+        state_lists: dict[str, Any],
         masked_blocked_search_directions: tuple[torch.Tensor, ...],
         weight_decay: float,
         use_decoupled_weight_decay: bool,
@@ -981,7 +981,7 @@ class DistributedShampoo(torch.optim.Optimizer):
     @torch.no_grad()
     def _update_momentum(
         self,
-        state_lists: Dict[str, Any],
+        state_lists: dict[str, Any],
         masked_blocked_search_directions: tuple[torch.Tensor, ...],
         momentum_param: float,
         dampening: float,
@@ -1021,7 +1021,7 @@ class DistributedShampoo(torch.optim.Optimizer):
     @torch.no_grad()
     def _per_group_step_impl(
         self,
-        state_lists: Dict[str, Any],
+        state_lists: dict[str, Any],
         step: torch.Tensor,
         lr: torch.Tensor,
         beta1: float,
@@ -1227,7 +1227,7 @@ class DistributedShampoo(torch.optim.Optimizer):
 
     @staticmethod
     def _construct_param_group_key(
-        group: Dict[str, Any], param_to_key: Dict[torch.Tensor, str]
+        group: dict[str, Any], param_to_key: dict[torch.Tensor, str]
     ) -> str:
         return "/".join(sorted(param_to_key[param] for param in group[PARAMS]))
 

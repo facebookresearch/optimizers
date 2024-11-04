@@ -10,7 +10,7 @@ LICENSE file in the root directory of this source tree.
 import re
 import unittest
 from types import ModuleType
-from typing import Any, Optional, Union
+from typing import Any, Optional
 from unittest import mock
 
 import torch
@@ -472,7 +472,7 @@ class ShampooPreconditionerListTest(AdagradPreconditionerListTest):
         """
 
         def test_inverse_roots_from_override(
-            inv_root_override: Union[int, list[int]],
+            inv_root_override: int | list[int],
         ) -> None:
             """
             Tests that the inverse roots are computed correctly from inv_root_override.
@@ -975,7 +975,7 @@ class EigenvalueCorrectedShampooPreconditionerListTest(AdagradPreconditionerList
         """
 
         def test_inverse_roots_from_override(
-            inv_root_override: Union[int, list[int]],
+            inv_root_override: int | list[int],
         ) -> None:
             """
             Tests that the inverse roots are computed correctly from inv_root_override.

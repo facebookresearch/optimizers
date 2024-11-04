@@ -11,7 +11,7 @@ import heapq
 import logging
 from functools import partial
 from math import prod
-from typing import Any, Dict
+from typing import Any
 
 import torch
 from distributed_shampoo.shampoo_types import (
@@ -84,17 +84,17 @@ class HSDPDistributor(DistributorInterface):
     mesh {[3, 11, 19], [27, 35, 43]}.
 
     Args:
-        param_group (Dict[str, Any]): Parameter group containing parameters.
+        param_group (dict[str, Any]): Parameter group containing parameters.
         distributed_config (HSDPShampooConfig): Configuration for HSDP Shampoo.
 
     """
 
     def __init__(
         self,
-        param_group: Dict[str, Any],
+        param_group: dict[str, Any],
         distributed_config: HSDPShampooConfig,
     ) -> None:
-        self._param_to_metadata: Dict[Parameter, FSDPParameterMetadata] = (
+        self._param_to_metadata: dict[Parameter, FSDPParameterMetadata] = (
             distributed_config.param_to_metadata
         )
         self._hsdp_device_mesh: torch.distributed.device_mesh.DeviceMesh = (
