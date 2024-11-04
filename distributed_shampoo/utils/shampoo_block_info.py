@@ -8,7 +8,7 @@ LICENSE file in the root directory of this source tree.
 """
 
 from dataclasses import dataclass
-from typing import Callable, Tuple
+from typing import Callable
 
 import torch
 from torch import Tensor
@@ -20,7 +20,7 @@ class BlockInfo:
 
     Args:
         param (Tensor): The original parameter that contains the block.
-        composable_block_ids (Tuple[int, str]): Tuple containing the per-parameter, per-block index tuple.
+        composable_block_ids (tuple[int, str]): Tuple containing the per-parameter, per-block index tuple.
             In the DDP case, this will contain (param_index, block_index), where the param_index corresponds to
             the index of the parameter in the parameter group, and the block_index is the index of the block within
             the parameter.
@@ -44,7 +44,7 @@ class BlockInfo:
     """
 
     param: Tensor
-    composable_block_ids: Tuple[int, str]
+    composable_block_ids: tuple[int, str]
     allocate_zeros_tensor: Callable[..., Tensor] = (
         lambda shape, dtype, device: torch.zeros(size=shape, dtype=dtype, device=device)
     )

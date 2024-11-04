@@ -11,7 +11,7 @@ import heapq
 import logging
 from functools import partial
 from math import prod
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict
 
 import torch
 from distributed_shampoo.shampoo_types import (
@@ -100,8 +100,8 @@ class HSDPDistributor(DistributorInterface):
         self._hsdp_device_mesh: torch.distributed.device_mesh.DeviceMesh = (
             distributed_config.device_mesh
         )
-        self._global_num_splits_per_param: Tuple[int, ...] = ()
-        self._global_num_blocks_per_split_param: Tuple[int, ...] = ()
+        self._global_num_splits_per_param: tuple[int, ...] = ()
+        self._global_num_blocks_per_split_param: tuple[int, ...] = ()
 
         super().__init__(param_group)
         if not dist.is_initialized():
@@ -110,7 +110,7 @@ class HSDPDistributor(DistributorInterface):
             )
 
         # Construct global masked blocked parameters (which is DDP-specific).
-        self._global_masked_blocked_params: Tuple[Tensor, ...] = (
+        self._global_masked_blocked_params: tuple[Tensor, ...] = (
             self._global_blocked_params
         )
 
@@ -202,17 +202,17 @@ class HSDPDistributor(DistributorInterface):
         self._construct_global_block_info_list(buffer_size_ranks)
 
         # Initialize selectors and local blocked (masked) parameters.
-        self._distributor_selector: Tuple[bool, ...] = tuple(
+        self._distributor_selector: tuple[bool, ...] = tuple(
             block_info.group_source_rank == self._comms_group_rank
             for block_info in self._global_block_info_list
         )
-        self._local_blocked_params: Tuple[Tensor, ...] = compress_list(
+        self._local_blocked_params: tuple[Tensor, ...] = compress_list(
             self._global_blocked_params, self._distributor_selector
         )
-        self._local_masked_blocked_params: Tuple[Tensor, ...] = (
+        self._local_masked_blocked_params: tuple[Tensor, ...] = (
             self._local_blocked_params
         )
-        self._local_grad_selector: Tuple[bool, ...] = (True,) * len(
+        self._local_grad_selector: tuple[bool, ...] = (True,) * len(
             self._local_blocked_params
         )
 
@@ -231,12 +231,12 @@ class HSDPDistributor(DistributorInterface):
     @torch.no_grad()
     def update_params(
         self,
-        masked_blocked_search_directions: Tuple[Tensor, ...],
+        masked_blocked_search_directions: tuple[Tensor, ...],
     ) -> None:
         """Update params stored inside this distributor according to the input search directions argument.
 
         Args:
-            masked_blocked_search_directions (Tuple[Tensor, ...]): Search directions for each local blocked parameter.
+            masked_blocked_search_directions (tuple[Tensor, ...]): Search directions for each local blocked parameter.
 
         See the comment in the parent class for details.
 
@@ -280,8 +280,8 @@ class HSDPDistributor(DistributorInterface):
 
     def _distribute_buffer_sizes(
         self,
-        buffer_sizes: Tuple[int, ...],
-    ) -> Tuple[Tuple[int, int], ...]:
+        buffer_sizes: tuple[int, ...],
+    ) -> tuple[tuple[int, int], ...]:
         """Distribute given buffer sizes across ranks in a group.
 
         Buffer sizes will be rounded up for memory allocation. Buffers are distributed such that
@@ -293,10 +293,10 @@ class HSDPDistributor(DistributorInterface):
         between the most and the least allocated groups.
 
         Args:
-            buffer_sizes (Tuple[int, ...]): Buffer sizes of blocks to be distributed.
+            buffer_sizes (tuple[int, ...]): Buffer sizes of blocks to be distributed.
 
         Returns:
-            buffer_size_ranks (Tuple[Tuple[int, int], ...]): A list of tuples containing the
+            buffer_size_ranks (tuple[tuple[int, int], ...]): A list of tuples containing the
                 buffer size for each block and its assigned rank.
 
         Example:
@@ -346,13 +346,13 @@ class HSDPDistributor(DistributorInterface):
         return tuple(buffer_size_ranks)
 
     def _construct_global_block_info_list(
-        self, buffer_size_ranks: Tuple[Tuple[int, int], ...]
+        self, buffer_size_ranks: tuple[tuple[int, int], ...]
     ) -> None:
         """Construct global block info list from param_group and num_blocks_within_param."""
         # Note that for HSDP, we want to get the rank within each sharded group for the block id.
         # When using a device mesh, 0 corresponds to the replicated group and 1 corresponds to the sharded group.
         sharded_group_rank = self._hsdp_device_mesh.get_local_rank(1)
-        self._global_block_info_list: Tuple[DDPBlockInfo, ...] = tuple(
+        self._global_block_info_list: tuple[DDPBlockInfo, ...] = tuple(
             DDPBlockInfo(
                 param=param,
                 composable_block_ids=(
@@ -391,7 +391,7 @@ class HSDPDistributor(DistributorInterface):
         self,
     ) -> None:
         """Split, merge, and block parameters."""
-        global_blocked_params: List[Tensor] = []
+        global_blocked_params: list[Tensor] = []
         # self._global_num_splits_per_param refers to the total number of splits within each
         # flattened parameter (obtained by split tensor block recovery).
         # This has the same length as the number of flattened parameters contained in
@@ -463,20 +463,20 @@ class HSDPDistributor(DistributorInterface):
 
     @staticmethod
     def _split_local_dist_buffers(
-        buffer_size_ranks: Tuple[Tuple[int, int], ...],
-        local_dist_buffers: Tuple[torch.Tensor, ...],
-    ) -> Tuple[torch.Tensor, ...]:
+        buffer_size_ranks: tuple[tuple[int, int], ...],
+        local_dist_buffers: tuple[torch.Tensor, ...],
+    ) -> tuple[torch.Tensor, ...]:
         """Split distributed buffers for each local rank into views for each assigned block.
 
         Args:
-            buffer_size_ranks (Tuple[Tuple[int, int], ...]): A list of tuples containing the
+            buffer_size_ranks (tuple[tuple[int, int], ...]): A list of tuples containing the
                 buffer size and an assigned rank for each block.
-            local_dist_buffers (Tuple[torch.Tensor, ...]): A list of local distributed buffers that
+            local_dist_buffers (tuple[torch.Tensor, ...]): A list of local distributed buffers that
                 correspond to each rank. Each distributed buffer will be split according to the
                 assigned tensor blocks.
 
         Returns:
-            splitted_local_dist_buffers (Tuple[torch.Tensor, ...]): A list of tuples containing a view of the
+            splitted_local_dist_buffers (tuple[torch.Tensor, ...]): A list of tuples containing a view of the
                 local distributed buffer for each tensor block.
 
         Example:
@@ -521,7 +521,7 @@ class HSDPDistributor(DistributorInterface):
         return tuple(splitted_local_dist_buffers)
 
     def _construct_distributed_buffers(
-        self, buffer_size_ranks: Tuple[Tuple[int, int], ...]
+        self, buffer_size_ranks: tuple[tuple[int, int], ...]
     ) -> None:
         """Construct the distributed buffers for AllGather communications.
 
@@ -530,7 +530,7 @@ class HSDPDistributor(DistributorInterface):
         of the buffer corresponding to each block assigned to the current rank.
 
         Args:
-            buffer_size_ranks (Tuple[Tuple[int, int], ...]): A list of tuples containing the
+            buffer_size_ranks (tuple[tuple[int, int], ...]): A list of tuples containing the
                 buffer size and an assigned rank for each block.
 
         """
@@ -578,14 +578,14 @@ class HSDPDistributor(DistributorInterface):
 
     def _merge_and_block_gradients(
         self,
-    ) -> Tuple[Tensor, ...]:
+    ) -> tuple[Tensor, ...]:
         """Split, merge, and block gradients.
 
         Returns:
-            local_masked_blocked_grads (Tuple[Tensor, ...]): Local gradients with grad not None.
+            local_masked_blocked_grads (tuple[Tensor, ...]): Local gradients with grad not None.
 
         """
-        local_masked_blocked_grads: List[Tensor] = []
+        local_masked_blocked_grads: list[Tensor] = []
         global_grad_selector = []
 
         for (
@@ -659,14 +659,14 @@ class HSDPDistributor(DistributorInterface):
 
     def merge_and_block_gradients(
         self,
-    ) -> Tuple[Tensor, ...]:
+    ) -> tuple[Tensor, ...]:
         """Merge and block gradients.
 
         NOTE: This function MUST be called in the step function of the optimizer after the
         gradient has been updated.
 
         Returns:
-            local_masked_blocked_grads (Tuple[Tensor, ...]): Local blocked gradients masked with grad existence.
+            local_masked_blocked_grads (tuple[Tensor, ...]): Local blocked gradients masked with grad existence.
 
         """
         local_masked_blocked_grads = self._merge_and_block_gradients()
@@ -702,7 +702,7 @@ class HSDPDistributor(DistributorInterface):
         original_shape: torch.Size,
         start_idx: int,
         end_idx: int,
-    ) -> List[Tensor]:
+    ) -> list[Tensor]:
         """Chunks flattened tensor in order to re-construct valid blocks with respect to the original
         multi-dimensional tensor shape and parameter boundaries.
 
@@ -763,7 +763,7 @@ class HSDPDistributor(DistributorInterface):
             end_idx (int): Flattened index in the original tensor where tensor ends (exclusive).
 
         Returns:
-            split_tensors (List[Tensor]): List of tensors.
+            split_tensors (list[Tensor]): List of tensors.
 
         """
         if len(tensor_shard.size()) != 1:
@@ -776,7 +776,7 @@ class HSDPDistributor(DistributorInterface):
             dimension: int,
             block_start_idx: int,
             block_end_idx: int,
-        ) -> List[Tensor]:
+        ) -> list[Tensor]:
             assert (
                 block_end_idx - block_start_idx == block_within_tensor_shard.numel()
             ), f"Start/end indices do not match tensor size: {block_start_idx=}, "
@@ -887,7 +887,7 @@ class HSDPDistributor(DistributorInterface):
 
     def _allocate_zeros_distributed_tensor(
         self,
-        shape: Tuple[int, ...],
+        shape: tuple[int, ...],
         dtype: torch.dtype,
         device: torch.device,
         group_source_rank: int,
@@ -895,7 +895,7 @@ class HSDPDistributor(DistributorInterface):
         """Instantiates distributed tensor using DTensor.
 
         Args:
-            shape (shape type accepted by torch.zeros() including Tuple[int, ...]):
+            shape (shape type accepted by torch.zeros() including tuple[int, ...]):
                 Shape of desired tensor.
             dtype (dtype type accepted by torch.zeros() including torch.dtype):
                 DType of desired tensor.

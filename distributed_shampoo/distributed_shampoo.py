@@ -12,18 +12,7 @@ import dataclasses
 import logging
 from copy import deepcopy
 from functools import partial
-from typing import (
-    Any,
-    Callable,
-    Dict,
-    Iterator,
-    List,
-    NoReturn,
-    Optional,
-    Sequence,
-    Tuple,
-    Union,
-)
+from typing import Any, Callable, Dict, Iterator, NoReturn, Optional, Sequence, Union
 
 import torch
 
@@ -234,7 +223,7 @@ class DistributedShampoo(torch.optim.Optimizer):
     Args:
         params (ParamsT): Iterable of parameters to optimize or dicts defining parameter groups.
         lr (float): Learning rate. (Default: 1e-2)
-        betas (Tuple[float, float]): Coefficients used for computing running averages of gradient and its square.
+        betas (tuple[float, float]): Coefficients used for computing running averages of gradient and its square.
             (Default: (0.9, 1.0))
         beta3 (float): Coefficient used for computing running average of gradient only for the current iteration.
             This can be used to replicate a version of NAdam if set appropriately. For example, if beta1 = 0.9, then applying
@@ -292,7 +281,7 @@ class DistributedShampoo(torch.optim.Optimizer):
         self,
         params: ParamsT,
         lr: float = 1e-2,
-        betas: Tuple[float, float] = (0.9, 1.0),
+        betas: tuple[float, float] = (0.9, 1.0),
         beta3: float = -1.0,
         epsilon: float = 1e-12,
         momentum: float = 0.0,
@@ -481,7 +470,7 @@ class DistributedShampoo(torch.optim.Optimizer):
         self._track_root_inv_residuals = track_root_inv_residuals
 
         # Initialize list containing group state dictionaries.
-        self._per_group_state_lists: List[Dict[str, Any]] = [
+        self._per_group_state_lists: list[Dict[str, Any]] = [
             {} for _ in self.param_groups
         ]
 
@@ -853,10 +842,10 @@ class DistributedShampoo(torch.optim.Optimizer):
     def _precondition_and_grafting(
         self,
         state_lists: Dict[str, Any],
-        masked_filtered_grad_list: Tuple[torch.Tensor, ...],
+        masked_filtered_grad_list: tuple[torch.Tensor, ...],
         use_grafting_method: bool,
         grafting_config_not_none: bool,
-    ) -> Tuple[torch.Tensor, ...]:
+    ) -> tuple[torch.Tensor, ...]:
         # Precondition gradients.
         # If the step count is less than start_preconditioning_step, then we use the grafting method.
         # Assumes that the step state is consistent across all parameters.
@@ -938,7 +927,7 @@ class DistributedShampoo(torch.optim.Optimizer):
         beta1: float,
         beta3: float,
         use_bias_correction: bool,
-    ) -> Tuple[torch.Tensor, ...]:
+    ) -> tuple[torch.Tensor, ...]:
         if beta1 != 0.0:
             with DequantizeQuantizedTensorListContext(
                 quantized_tensor_list=state_lists[MASKED_FILTERED_GRAD_LIST]
@@ -977,7 +966,7 @@ class DistributedShampoo(torch.optim.Optimizer):
     def _apply_decoupled_weight_decay(
         self,
         state_lists: Dict[str, Any],
-        masked_blocked_search_directions: Tuple[torch.Tensor, ...],
+        masked_blocked_search_directions: tuple[torch.Tensor, ...],
         weight_decay: float,
         use_decoupled_weight_decay: bool,
     ) -> None:
@@ -993,7 +982,7 @@ class DistributedShampoo(torch.optim.Optimizer):
     def _update_momentum(
         self,
         state_lists: Dict[str, Any],
-        masked_blocked_search_directions: Tuple[torch.Tensor, ...],
+        masked_blocked_search_directions: tuple[torch.Tensor, ...],
         momentum_param: float,
         dampening: float,
         use_nesterov: bool,
@@ -1244,7 +1233,7 @@ class DistributedShampoo(torch.optim.Optimizer):
 
     def distributed_state_dict(
         self,
-        key_to_param: Iterator[Tuple[str, torch.Tensor]],
+        key_to_param: Iterator[tuple[str, torch.Tensor]],
         save_param_groups: bool = True,
     ) -> StateDict:
         """Distributed state dict simplified from TorchRec's KeyedOptimizer.
@@ -1258,7 +1247,7 @@ class DistributedShampoo(torch.optim.Optimizer):
         protocol.
 
         Args:
-            key_to_param (Iterator[Tuple[str, Tensor]]): Iterator (like model.named_parameters()) that
+            key_to_param (Iterator[tuple[str, Tensor]]): Iterator (like model.named_parameters()) that
                 maps a FQN to the parameters in the model.
             save_param_groups (bool): Flag for saving parameter groups. (Default: True)
 
@@ -1293,7 +1282,7 @@ class DistributedShampoo(torch.optim.Optimizer):
     def load_distributed_state_dict(
         self,
         state_dict: StateDict,
-        key_to_param: Iterator[Tuple[str, torch.Tensor]],
+        key_to_param: Iterator[tuple[str, torch.Tensor]],
         save_param_groups: bool = True,
         enable_missing_key_check: bool = True,
     ) -> None:
@@ -1315,7 +1304,7 @@ class DistributedShampoo(torch.optim.Optimizer):
         Args:
             state_dict (StateDict): State dictionary to load containing the optimizer state and
                 parameter groups.
-            key_to_param (Iterator[Tuple[str, Tensor]]): Iterator (like model.named_parameters()) that
+            key_to_param (Iterator[tuple[str, Tensor]]): Iterator (like model.named_parameters()) that
                 maps a FQN to the parameters in the model.
             save_param_groups (bool): Flag for saving parameter groups. (Default: True)
             enable_missing_key_check (bool): Flag for enabling missing key check. (Default: True)

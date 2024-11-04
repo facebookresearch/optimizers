@@ -12,7 +12,7 @@ import logging
 from copy import deepcopy
 from functools import reduce
 from operator import or_
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, Union
 
 import torch
 from optimizer_modules import OptimizerModule
@@ -33,7 +33,7 @@ def flatten(input_dict: Dict[str, Any]) -> Dict[str, Any]:
     """
 
     def flatten_with_parent_keys(
-        input_dict: Dict[str, Any], parent_keys: List[str]
+        input_dict: Dict[str, Any], parent_keys: list[str]
     ) -> Dict[str, Any]:
         # Given a dict to flatten containing child key and child value pairs where
         # each child value is either a dict or a tensor, this function recursively

@@ -11,7 +11,6 @@ LICENSE file in the root directory of this source tree.
 
 import re
 import unittest
-from typing import List
 
 import torch
 from distributed_shampoo.utils.shampoo_checkpoint_utils import (
@@ -29,11 +28,11 @@ class DummyOptimizerModule(OptimizerModule):
     def __init__(
         self,
         field: Tensor,
-        thl: List[Tensor],
+        thl: list[Tensor],
     ) -> None:
         super().__init__()
         self._field: Tensor = field
-        self._thl: List[Tensor] = thl
+        self._thl: list[Tensor] = thl
 
     def __eq__(self, other: "DummyOptimizerModule") -> bool:  # type: ignore[override]
         return bool((self._field == other._field).item()) and self._thl == other._thl

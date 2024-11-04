@@ -10,7 +10,7 @@ LICENSE file in the root directory of this source tree.
 import heapq
 import logging
 from functools import partial
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional
 
 import torch
 import torch.distributed as dist
@@ -55,7 +55,7 @@ class DDPDistributor(DistributorInterface):
         super().__init__(param_group)
 
         # Construct global masked blocked parameters (which is DDP-specific).
-        self._global_masked_blocked_params: Tuple[Tensor, ...] = (
+        self._global_masked_blocked_params: tuple[Tensor, ...] = (
             self._global_blocked_params
         )
 
@@ -108,17 +108,17 @@ class DDPDistributor(DistributorInterface):
         self._construct_global_block_info_list(buffer_size_ranks)
 
         # Initialize selectors and local blocked (masked) parameters.
-        self._distributor_selector: Tuple[bool, ...] = tuple(
+        self._distributor_selector: tuple[bool, ...] = tuple(
             block_info.group_source_rank == self._group_rank
             for block_info in self._global_block_info_list
         )
-        self._local_blocked_params: Tuple[Tensor, ...] = compress_list(
+        self._local_blocked_params: tuple[Tensor, ...] = compress_list(
             self._global_blocked_params, self._distributor_selector
         )
-        self._local_masked_blocked_params: Tuple[Tensor, ...] = (
+        self._local_masked_blocked_params: tuple[Tensor, ...] = (
             self._local_blocked_params
         )
-        self._local_grad_selector: Tuple[bool, ...] = (True,) * len(
+        self._local_grad_selector: tuple[bool, ...] = (True,) * len(
             self._local_blocked_params
         )
 
@@ -137,12 +137,12 @@ class DDPDistributor(DistributorInterface):
     @torch.no_grad()
     def update_params(
         self,
-        masked_blocked_search_directions: Tuple[Tensor, ...],
+        masked_blocked_search_directions: tuple[Tensor, ...],
     ) -> None:
         """Update params stored inside this distributor according to the input search directions argument.
 
         Args:
-            masked_blocked_search_directions (Tuple[Tensor, ...]): Search directions for each local blocked parameter.
+            masked_blocked_search_directions (tuple[Tensor, ...]): Search directions for each local blocked parameter.
 
         See the comment in the parent class for details.
 
@@ -186,8 +186,8 @@ class DDPDistributor(DistributorInterface):
 
     def _distribute_buffer_sizes(
         self,
-        buffer_sizes: Tuple[int, ...],
-    ) -> Tuple[Tuple[int, int], ...]:
+        buffer_sizes: tuple[int, ...],
+    ) -> tuple[tuple[int, int], ...]:
         """Distribute given buffer sizes across ranks in a group.
 
         Buffer sizes will be rounded up for memory allocation. Buffers are distributed such that
@@ -199,10 +199,10 @@ class DDPDistributor(DistributorInterface):
         between the most and the least allocated groups.
 
         Args:
-            buffer_sizes (Tuple[int, ...]): Buffer sizes of blocks to be distributed.
+            buffer_sizes (tuple[int, ...]): Buffer sizes of blocks to be distributed.
 
         Returns:
-            buffer_size_ranks (Tuple[Tuple[int, int], ...]): A list of tuples containing the
+            buffer_size_ranks (tuple[tuple[int, int], ...]): A list of tuples containing the
                 buffer size for each block and its assigned rank.
 
         Example:
@@ -253,17 +253,17 @@ class DDPDistributor(DistributorInterface):
         return tuple(buffer_size_ranks)
 
     def _construct_global_block_info_list(
-        self, buffer_size_ranks: Tuple[Tuple[int, int], ...]
+        self, buffer_size_ranks: tuple[tuple[int, int], ...]
     ) -> None:
         """Construct the global block info list.
 
         Args:
-            buffer_size_ranks (Tuple[Tuple[int, int], ...]): A list of tuples containing the buffer size
+            buffer_size_ranks (tuple[tuple[int, int], ...]): A list of tuples containing the buffer size
                 and an assigned rank for each block.
 
         """
         # Construct global block info list.
-        self._global_block_info_list: Tuple[DDPBlockInfo, ...] = tuple(
+        self._global_block_info_list: tuple[DDPBlockInfo, ...] = tuple(
             DDPBlockInfo(
                 param=param,
                 composable_block_ids=(param_index, f"block_{block_index}"),
@@ -298,20 +298,20 @@ class DDPDistributor(DistributorInterface):
 
     @staticmethod
     def _split_local_dist_buffers(
-        buffer_size_ranks: Tuple[Tuple[int, int], ...],
-        local_dist_buffers: Tuple[torch.Tensor, ...],
-    ) -> Tuple[torch.Tensor, ...]:
+        buffer_size_ranks: tuple[tuple[int, int], ...],
+        local_dist_buffers: tuple[torch.Tensor, ...],
+    ) -> tuple[torch.Tensor, ...]:
         """Split distributed buffers for each local rank into views for each assigned block.
 
         Args:
-            buffer_size_ranks (Tuple[Tuple[int, int], ...]): A list of tuples containing the
+            buffer_size_ranks (tuple[tuple[int, int], ...]): A list of tuples containing the
                 buffer size and an assigned rank for each block.
-            local_dist_buffers (Tuple[torch.Tensor, ...]): A list of local distributed buffers that
+            local_dist_buffers (tuple[torch.Tensor, ...]): A list of local distributed buffers that
                 correspond to each rank. Each distributed buffer will be split according to the
                 assigned tensor blocks.
 
         Returns:
-            splitted_local_dist_buffers (Tuple[torch.Tensor, ...]): A list of tuples containing a view of the
+            splitted_local_dist_buffers (tuple[torch.Tensor, ...]): A list of tuples containing a view of the
                 local distributed buffer for each tensor block.
 
         Example:
@@ -356,7 +356,7 @@ class DDPDistributor(DistributorInterface):
         return tuple(splitted_local_dist_buffers)
 
     def _construct_distributed_buffers(
-        self, buffer_size_ranks: Tuple[Tuple[int, int], ...]
+        self, buffer_size_ranks: tuple[tuple[int, int], ...]
     ) -> None:
         """Construct the distributed buffers for AllGather communications.
 
@@ -365,7 +365,7 @@ class DDPDistributor(DistributorInterface):
         of the buffer corresponding to each block assigned to the current rank.
 
         Args:
-            buffer_size_ranks (Tuple[Tuple[int, int], ...]): A list of tuples containing the
+            buffer_size_ranks (tuple[tuple[int, int], ...]): A list of tuples containing the
                 buffer size and an assigned rank for each block.
 
         """
@@ -413,14 +413,14 @@ class DDPDistributor(DistributorInterface):
 
     def merge_and_block_gradients(
         self,
-    ) -> Tuple[Tensor, ...]:
+    ) -> tuple[Tensor, ...]:
         """Merge and block gradients.
 
         NOTE: This function MUST be called in the step function of the optimizer after the
         gradient has been updated.
 
         Returns:
-            local_masked_blocked_grads (Tuple[Tensor, ...]): Local blocked gradients masked with grad existence.
+            local_masked_blocked_grads (tuple[Tensor, ...]): Local blocked gradients masked with grad existence.
 
         """
         local_masked_blocked_grads = self._merge_and_block_gradients()
@@ -452,7 +452,7 @@ class DDPDistributor(DistributorInterface):
 
     def _allocate_zeros_distributed_tensor(
         self,
-        shape: Tuple[int, ...],
+        shape: tuple[int, ...],
         dtype: torch.dtype,
         device: torch.device,
         group_source_rank: int,
@@ -460,7 +460,7 @@ class DDPDistributor(DistributorInterface):
         """Instantiates distributed tensor using DTensor.
 
         Args:
-            shape (shape type accepted by torch.zeros() including Tuple[int, ...]):
+            shape (shape type accepted by torch.zeros() including tuple[int, ...]):
                 Shape of desired tensor.
             dtype (dtype type accepted by torch.zeros() including torch.dtype):
                 DType of desired tensor.

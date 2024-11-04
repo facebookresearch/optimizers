@@ -13,7 +13,7 @@ import re
 import unittest
 from functools import partial
 from itertools import pairwise, product
-from typing import Callable, List, Optional, Tuple
+from typing import Callable, Optional
 from unittest import mock
 
 import torch
@@ -46,7 +46,7 @@ class ShampooHSDPDistributorTest(FSDPTest):
     def _construct_model(
         device: torch.device,
         distributed_config: Optional[HSDPShampooConfig],
-    ) -> Tuple[nn.Module, nn.Module, torch.Tensor, torch.Tensor]:
+    ) -> tuple[nn.Module, nn.Module, torch.Tensor, torch.Tensor]:
         # NOTE: We construct the model here specifically in order to ensure that
         #       HSDP Shampoo and default Shampoo produce equivalent results.
         #       This requires us to construct a model such that FSDP will split the
@@ -94,7 +94,7 @@ class ShampooHSDPDistributorTest(FSDPTest):
         ],
         model_factory: Callable[
             [torch.device],
-            Tuple[
+            tuple[
                 nn.Module,
                 nn.Module,
                 torch.Tensor,
@@ -102,7 +102,7 @@ class ShampooHSDPDistributorTest(FSDPTest):
             ],
         ],
         device: torch.device,
-    ) -> Tuple[List[torch.Tensor], torch.Tensor]:
+    ) -> tuple[list[torch.Tensor], torch.Tensor]:
         model, loss, data, target = model_factory(device)
         params = model.parameters()
         optimizer = optim_factory(params)
@@ -125,7 +125,7 @@ class ShampooHSDPDistributorTest(FSDPTest):
         ],
         model_factory1: Callable[
             [torch.device],
-            Tuple[
+            tuple[
                 nn.Module,
                 nn.Module,
                 torch.Tensor,
@@ -138,7 +138,7 @@ class ShampooHSDPDistributorTest(FSDPTest):
         ],
         model_factory2: Callable[
             [torch.device],
-            Tuple[
+            tuple[
                 nn.Module,
                 nn.Module,
                 torch.Tensor,
@@ -193,7 +193,7 @@ class ShampooHSDPDistributorTest(FSDPTest):
         distributed_config: Optional[HSDPShampooConfig],
     ) -> Callable[
         [torch.device],
-        Tuple[
+        tuple[
             nn.Module,
             nn.Module,
             torch.Tensor,

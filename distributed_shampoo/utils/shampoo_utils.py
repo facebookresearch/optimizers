@@ -11,13 +11,13 @@ import math
 from functools import partial
 from itertools import accumulate, chain, compress, pairwise
 from types import TracebackType
-from typing import Callable, Iterator, Optional, Sequence, Tuple, Type, TypeVar
+from typing import Callable, Iterator, Optional, Sequence, Type, TypeVar
 
 import torch
 from torch import Tensor
 
 
-def merge_small_dims(tensor_shape: Sequence[int], threshold: int) -> Tuple[int, ...]:
+def merge_small_dims(tensor_shape: Sequence[int], threshold: int) -> tuple[int, ...]:
     """Reshapes tensor by merging small dimensions.
 
     Args:
@@ -25,7 +25,7 @@ def merge_small_dims(tensor_shape: Sequence[int], threshold: int) -> Tuple[int, 
         threshold (int): Threshold on the maximum size of each dimension.
 
     Returns:
-        new_tensor_shape (List[int]): New tensor shape.
+        new_tensor_shape (list[int]): New tensor shape.
 
     """
 
@@ -41,7 +41,7 @@ def merge_small_dims(tensor_shape: Sequence[int], threshold: int) -> Tuple[int, 
     return tuple(new_tensor_shape)
 
 
-def multi_dim_split(tensor: Tensor, split_size: int) -> Tuple[Tensor, ...]:
+def multi_dim_split(tensor: Tensor, split_size: int) -> tuple[Tensor, ...]:
     """Chunks tensor across multiple dimensions based on splits.
 
     Args:
@@ -49,10 +49,10 @@ def multi_dim_split(tensor: Tensor, split_size: int) -> Tuple[Tensor, ...]:
         split_size (int): Size of a single chunk.
 
     Returns:
-        split_grad (List[Tensor]): List of tensors.
+        split_grad (list[Tensor]): List of tensors.
 
     """
-    split_tensors: Tuple[Tensor, ...] = (tensor,)
+    split_tensors: tuple[Tensor, ...] = (tensor,)
     if all(s <= split_size for s in tensor.size()):
         return split_tensors
 
@@ -68,7 +68,7 @@ CompressListType = TypeVar("CompressListType")
 
 def compress_list(
     complete_list: Sequence[CompressListType], selector: Sequence[bool]
-) -> Tuple[CompressListType, ...]:
+) -> tuple[CompressListType, ...]:
     """Compresses sequence based on selector.
 
     NOTE: Despite the name, this function can compress both lists and tuples, but will always return
@@ -79,7 +79,7 @@ def compress_list(
         selector (Sequence[bool]): Mask that is True if state is active, False otherwise.
 
     Returns:
-        compressed_tuple (Tuple[CompressListType, ...]): Compressed list of candidates based on selector.
+        compressed_tuple (tuple[CompressListType, ...]): Compressed list of candidates based on selector.
 
     """
     assert (
@@ -97,7 +97,7 @@ def get_dtype_size(dtype: torch.dtype) -> int:
     )
 
 
-def generate_pairwise_indices(input_list: Sequence[int]) -> Iterator[Tuple[int, int]]:
+def generate_pairwise_indices(input_list: Sequence[int]) -> Iterator[tuple[int, int]]:
     """Generates accumulated pairwise indices for a given input list.
 
     For example, if input_list = (1, 3, 2), then this will output [(0, 1), (1, 4), (4, 6)].
@@ -108,7 +108,7 @@ def generate_pairwise_indices(input_list: Sequence[int]) -> Iterator[Tuple[int, 
         input_list (Sequence[int]): A list of intergers specifying the number of elements within each partition.
 
     Returns:
-        partition_indices: Iterator[Tuple[int, int]]: An iterator containing pairs of indices which specify
+        partition_indices: Iterator[tuple[int, int]]: An iterator containing pairs of indices which specify
             the start and the ending indices of each partition specified in the input_list.
 
     """

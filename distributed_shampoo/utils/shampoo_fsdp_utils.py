@@ -8,7 +8,7 @@ LICENSE file in the root directory of this source tree.
 """
 
 from collections.abc import Callable
-from typing import Dict, Tuple
+from typing import Dict
 
 import torch
 from distributed_shampoo.shampoo_types import FSDPParameterMetadata
@@ -79,7 +79,7 @@ def _partition_params(
     fsdp_criteria: Callable[[Parameter], bool],
     hsdp_criteria: Callable[[Parameter], bool],
     other_criteria: Callable[[Parameter], bool],
-) -> Tuple[Dict[str, Parameter], Dict[str, Parameter], Dict[str, Parameter]]:
+) -> tuple[Dict[str, Parameter], Dict[str, Parameter], Dict[str, Parameter]]:
     """Partitions parameters into FSDP, HSDP, and the rest of parameters.
 
     NOTE: The output dictionaries are guaranteed to be the partitions of the input `named_params`.
@@ -126,7 +126,7 @@ def _partition_params(
 def parse_fsdp_params(
     named_params: Dict[str, Parameter],
     param_metadata: Dict[Parameter, FSDPParameterMetadata],
-) -> Tuple[Dict[str, Parameter], Dict[str, Parameter], Dict[str, Parameter]]:
+) -> tuple[Dict[str, Parameter], Dict[str, Parameter], Dict[str, Parameter]]:
     """Splits parameters into FSDP, HSDP, and the rest of parameters.
 
     This is useful for parsing the parameters when FSDP and HSDP are wrapping a subset of modules within a model.
@@ -158,7 +158,7 @@ def parse_fsdp_params(
 
 def parse_fully_shard_params(
     named_params: Dict[str, Parameter],
-) -> Tuple[Dict[str, Parameter], Dict[str, Parameter], Dict[str, Parameter]]:
+) -> tuple[Dict[str, Parameter], Dict[str, Parameter], Dict[str, Parameter]]:
     """Splits parameters into fully shard(per parameter FSDP), hybrid shard parameters(per parameter FSDP) and the rest of parameters.
 
     This is useful for parsing the parameters when fully shard or hybrid shard are wrapping a subset of modules within a model.

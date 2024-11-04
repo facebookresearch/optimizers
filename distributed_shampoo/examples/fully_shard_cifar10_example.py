@@ -9,7 +9,7 @@ LICENSE file in the root directory of this source tree.
 
 import logging
 import os
-from typing import Optional, Tuple
+from typing import Optional
 
 import torch
 import torch.distributed as dist
@@ -58,7 +58,7 @@ def train_fully_shard_model(
     window_size: int = 100,
     use_distributed_checkpoint: bool = False,
     checkpoint_dir: Optional[str] = None,
-) -> Tuple[float, float, int]:
+) -> tuple[float, float, int]:
     """Constructs the main training loop.
 
     Assumes torch.distributed is initialized.

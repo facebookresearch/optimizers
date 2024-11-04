@@ -11,7 +11,7 @@ LICENSE file in the root directory of this source tree.
 
 import unittest
 from functools import partial
-from typing import Callable, List, Optional, Tuple
+from typing import Callable, Optional
 
 import torch
 from distributed_shampoo.distributed_shampoo import DistributedShampoo
@@ -39,7 +39,7 @@ class ShampooFullyShardDistributorTest(FSDPTest):
     def _construct_model(
         device: torch.device,
         distributed_config: Optional[FullyShardShampooConfig],
-    ) -> Tuple[nn.Module, nn.Module, torch.Tensor, torch.Tensor, bool]:
+    ) -> tuple[nn.Module, nn.Module, torch.Tensor, torch.Tensor, bool]:
         IN_DIM = 16
         data = torch.arange(IN_DIM, dtype=torch.float, device=device)
         data /= torch.norm(data)
@@ -86,7 +86,7 @@ class ShampooFullyShardDistributorTest(FSDPTest):
         ],
         model_factory: Callable[
             [torch.device],
-            Tuple[
+            tuple[
                 nn.Module,
                 nn.Module,
                 torch.Tensor,
@@ -95,7 +95,7 @@ class ShampooFullyShardDistributorTest(FSDPTest):
             ],
         ],
         device: torch.device,
-    ) -> Tuple[List[torch.Tensor], torch.Tensor]:
+    ) -> tuple[list[torch.Tensor], torch.Tensor]:
         model, loss, data, target, uses_fully_shard = model_factory(device)
         params = model.parameters()
         optimizer = optim_factory(params)
@@ -127,7 +127,7 @@ class ShampooFullyShardDistributorTest(FSDPTest):
         ],
         model_factory1: Callable[
             [torch.device],
-            Tuple[
+            tuple[
                 nn.Module,
                 nn.Module,
                 torch.Tensor,
@@ -141,7 +141,7 @@ class ShampooFullyShardDistributorTest(FSDPTest):
         ],
         model_factory2: Callable[
             [torch.device],
-            Tuple[
+            tuple[
                 nn.Module,
                 nn.Module,
                 torch.Tensor,
@@ -201,7 +201,7 @@ class ShampooFullyShardDistributorTest(FSDPTest):
         distributed_config: Optional[FullyShardShampooConfig],
     ) -> Callable[
         [torch.device],
-        Tuple[
+        tuple[
             nn.Module,
             nn.Module,
             torch.Tensor,

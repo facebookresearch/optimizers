@@ -8,7 +8,7 @@ LICENSE file in the root directory of this source tree.
 """
 
 from math import prod
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict
 
 import torch
 from distributed_shampoo.shampoo_types import (
@@ -51,31 +51,31 @@ class FSDPDistributor(DistributorInterface):
         self._param_to_metadata: Dict[Parameter, FSDPParameterMetadata] = (
             distributed_config.param_to_metadata
         )
-        self._global_num_splits_per_param: Tuple[int, ...] = ()
-        self._global_num_blocks_per_split_param: Tuple[int, ...] = ()
+        self._global_num_splits_per_param: tuple[int, ...] = ()
+        self._global_num_blocks_per_split_param: tuple[int, ...] = ()
 
         super().__init__(param_group)
         self._construct_global_block_info_list()
 
         # Initialize selectors and local blocked (masked) parameters.
-        self._local_grad_selector: Tuple[bool, ...] = (True,) * len(
+        self._local_grad_selector: tuple[bool, ...] = (True,) * len(
             self._global_blocked_params
         )
-        self._distributor_selector: Tuple[bool, ...] = self._local_grad_selector
-        self._local_masked_blocked_params: Tuple[Tensor, ...] = (
+        self._distributor_selector: tuple[bool, ...] = self._local_grad_selector
+        self._local_masked_blocked_params: tuple[Tensor, ...] = (
             self._global_blocked_params
         )
-        self._local_blocked_params: Tuple[Tensor, ...] = self._global_blocked_params
+        self._local_blocked_params: tuple[Tensor, ...] = self._global_blocked_params
 
     @torch.no_grad()
     def update_params(
         self,
-        masked_blocked_search_directions: Tuple[Tensor, ...],
+        masked_blocked_search_directions: tuple[Tensor, ...],
     ) -> None:
         """Update params stored inside this distributor according to the input search directions argument.
 
         Args:
-            masked_blocked_search_directions (Tuple[Tensor, ...]): Search directions for each local blocked parameter.
+            masked_blocked_search_directions (tuple[Tensor, ...]): Search directions for each local blocked parameter.
 
         """
         torch._foreach_add_(
@@ -106,7 +106,7 @@ class FSDPDistributor(DistributorInterface):
         self,
     ) -> None:
         """Split, merge, and block parameters."""
-        global_blocked_params: List[Tensor] = []
+        global_blocked_params: list[Tensor] = []
         # self._global_num_splits_per_param refers to the total number of splits within each
         # flattened parameter (obtained by split tensor block recovery).
         # This has the same length as the number of flattened parameters contained in
@@ -178,14 +178,14 @@ class FSDPDistributor(DistributorInterface):
 
     def _merge_and_block_gradients(
         self,
-    ) -> Tuple[Tensor, ...]:
+    ) -> tuple[Tensor, ...]:
         """Split, merge, and block gradients.
 
         Returns:
-            local_masked_blocked_grads (Tuple[Tensor, ...]): Local gradients with grad not None.
+            local_masked_blocked_grads (tuple[Tensor, ...]): Local gradients with grad not None.
 
         """
-        local_masked_blocked_grads: List[Tensor] = []
+        local_masked_blocked_grads: list[Tensor] = []
         global_grad_selector = []
 
         for (
@@ -259,14 +259,14 @@ class FSDPDistributor(DistributorInterface):
 
     def merge_and_block_gradients(
         self,
-    ) -> Tuple[Tensor, ...]:
+    ) -> tuple[Tensor, ...]:
         """Merge and block gradients.
 
         NOTE: This function MUST be called in the step function of the optimizer after the
         gradient has been updated.
 
         Returns:
-            local_masked_blocked_grads (Tuple[Tensor, ...]): Local blocked gradients masked with grad existence.
+            local_masked_blocked_grads (tuple[Tensor, ...]): Local blocked gradients masked with grad existence.
 
         """
         local_masked_blocked_grads = self._merge_and_block_gradients()
@@ -291,7 +291,7 @@ class FSDPDistributor(DistributorInterface):
         original_shape: torch.Size,
         start_idx: int,
         end_idx: int,
-    ) -> List[Tensor]:
+    ) -> list[Tensor]:
         """Chunks flattened tensor in order to re-construct valid blocks with respect to the original
         multi-dimensional tensor shape and parameter boundaries.
 
@@ -352,7 +352,7 @@ class FSDPDistributor(DistributorInterface):
             end_idx (int): Flattened index in the original tensor where tensor ends (exclusive).
 
         Returns:
-            split_tensors (List[Tensor]): List of tensors.
+            split_tensors (list[Tensor]): List of tensors.
 
         """
         if len(tensor_shard.size()) != 1:
@@ -365,7 +365,7 @@ class FSDPDistributor(DistributorInterface):
             dimension: int,
             block_start_idx: int,
             block_end_idx: int,
-        ) -> List[Tensor]:
+        ) -> list[Tensor]:
             assert (
                 block_end_idx - block_start_idx == block_within_tensor_shard.numel()
             ), f"Start/end indices do not match tensor size: {block_start_idx=}, "

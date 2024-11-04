@@ -12,7 +12,7 @@ import enum
 import logging
 import random
 from abc import ABC, abstractmethod
-from typing import Optional, Tuple
+from typing import Optional
 
 import numpy as np
 
@@ -387,7 +387,7 @@ def instantiate_optimizer(
     optimizer_type: OptimizerType,
     model: nn.Module,
     lr: float,
-    betas: Tuple[float, float],
+    betas: tuple[float, float],
     beta3: float,
     epsilon: float,
     momentum: float,

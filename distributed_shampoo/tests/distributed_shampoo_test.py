@@ -13,7 +13,7 @@ import copy
 import re
 import unittest
 from itertools import chain
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict
 from unittest import mock
 
 import torch
@@ -64,8 +64,8 @@ class DistributedShampooInitTest(unittest.TestCase):
             )
 
     def test_invalid_with_incorrect_hyperparameter_setting(self) -> None:
-        incorrect_hyperparameter_setting_and_expected_error_msg: List[
-            Tuple[Dict[str, Any], str]
+        incorrect_hyperparameter_setting_and_expected_error_msg: list[
+            tuple[Dict[str, Any], str]
         ] = [
             (
                 {"lr": -0.1},
@@ -648,7 +648,7 @@ class DistributedShampooStateDictTest(unittest.TestCase):
 
 
 class DistributedShampooTrackRootInvResidualsTest(unittest.TestCase):
-    def _get_track_root_inverse_residuals_output(self, dtype: torch.dtype) -> List[str]:
+    def _get_track_root_inverse_residuals_output(self, dtype: torch.dtype) -> list[str]:
         # Create a model and a DistributedShampoo optimizer with enabled track_root_inv_residuals and corresponding dtype.
         # The dtype of the model and the optimizer are the same.
         model = nn.Sequential(nn.Linear(2, 1, bias=False))

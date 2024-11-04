@@ -10,7 +10,7 @@ LICENSE file in the root directory of this source tree.
 import logging
 import typing
 from operator import methodcaller
-from typing import Optional, Sequence, Tuple, Union
+from typing import Optional, Sequence, Union
 
 import torch
 from distributed_shampoo.utils.shampoo_block_info import BlockInfo
@@ -26,7 +26,7 @@ from torch import Tensor
 logger: logging.Logger = logging.getLogger(__name__)
 
 
-_FLOAT_DTYPES: Tuple[torch.dtype, ...] = (
+_FLOAT_DTYPES: tuple[torch.dtype, ...] = (
     torch.float16,
     torch.bfloat16,
     torch.float32,
@@ -98,7 +98,7 @@ class QuantizedTensor(OptimizerModule):
     def _quantize_and_return_metadata(
         dequantized_values: Tensor,
         quantized_values: Tensor,
-    ) -> Tuple[Optional[Tensor], Optional[Tensor]]:
+    ) -> tuple[Optional[Tensor], Optional[Tensor]]:
         quantized_dtype = quantized_values.dtype
         if quantized_dtype in _FLOAT_DTYPES:
             QuantizedTensor._convert_float_to_float(
@@ -119,15 +119,15 @@ class QuantizedTensorList:
     def __init__(
         self,
         quantized_data: Union[
-            Sequence[Tuple[Tensor, Optional[Tensor], Optional[Tensor]]],
+            Sequence[tuple[Tensor, Optional[Tensor], Optional[Tensor]]],
             Sequence[QuantizedTensor],
         ],
         quantized_dtype: torch.dtype,
         computation_dtype: torch.dtype = torch.float32,
     ) -> None:
-        self.quantized_value_list: Tuple[Tensor, ...]
-        self._min_values: Tuple[Optional[Tensor], ...]
-        self._max_values: Tuple[Optional[Tensor], ...]
+        self.quantized_value_list: tuple[Tensor, ...]
+        self._min_values: tuple[Optional[Tensor], ...]
+        self._max_values: tuple[Optional[Tensor], ...]
 
         if all(isinstance(x, QuantizedTensor) for x in quantized_data):
             self.quantized_value_list = tuple(
@@ -151,7 +151,7 @@ class QuantizedTensorList:
                 f"quantized_data must be {typing.get_type_hints(QuantizedTensorList.__init__)['quantized_data']} but get {type(quantized_data)}"
             )
 
-        self.dequantized_value_list: Optional[Tuple[Tensor, ...]] = None
+        self.dequantized_value_list: Optional[tuple[Tensor, ...]] = None
 
         assert all(
             value.dtype == quantized_dtype for value in self.quantized_value_list
@@ -174,7 +174,7 @@ class QuantizedTensorList:
     def __len__(self) -> int:
         return len(self.quantized_value_list)
 
-    def dequantize(self) -> Tuple[Tensor, ...]:
+    def dequantize(self) -> tuple[Tensor, ...]:
         if self.quantized_dtype == self.computation_dtype:
             return self.quantized_value_list
         elif self.quantized_dtype in _FLOAT_DTYPES:
@@ -194,7 +194,7 @@ class QuantizedTensorList:
 
         self.dequantized_value_list = self.dequantize()
 
-    def quantize(self, tensor_list: Tuple[Tensor, ...]) -> None:
+    def quantize(self, tensor_list: tuple[Tensor, ...]) -> None:
         if (
             tensor_list is not self.dequantized_value_list
             and self.is_dequantized_stored()
@@ -229,18 +229,18 @@ class QuantizedTensorList:
         self.dequantized_value_list = None
 
     @property
-    def dequantized_value(self) -> Tuple[Tensor, ...]:
+    def dequantized_value(self) -> tuple[Tensor, ...]:
         assert self.dequantized_value_list is not None  # make type checker happy
         return self.dequantized_value_list
 
     @property
-    def quantized_value(self) -> Tuple[Tensor, ...]:
+    def quantized_value(self) -> tuple[Tensor, ...]:
         return self.quantized_value_list
 
     def is_dequantized_stored(self) -> bool:
         return self.dequantized_value_list is not None
 
-    def compress(self, selector: Tuple[bool, ...]) -> "QuantizedTensorList":
+    def compress(self, selector: tuple[bool, ...]) -> "QuantizedTensorList":
         assert not self.is_dequantized_stored()
         masked_quantized_value_list = compress_list(self.quantized_value_list, selector)
         masked_min_values = compress_list(self._min_values, selector)
@@ -260,10 +260,10 @@ class QuantizedTensorList:
 
     @staticmethod
     def _convert_float_to_float(
-        src_list: Tuple[Tensor, ...],
+        src_list: tuple[Tensor, ...],
         target_dtype: torch.dtype,
-        dest_list: Optional[Tuple[Tensor, ...]] = None,
-    ) -> Tuple[Tensor, ...]:
+        dest_list: Optional[tuple[Tensor, ...]] = None,
+    ) -> tuple[Tensor, ...]:
         if dest_list is None:
             dest_list = tuple(
                 torch.zeros_like(tensor, dtype=target_dtype) for tensor in src_list
