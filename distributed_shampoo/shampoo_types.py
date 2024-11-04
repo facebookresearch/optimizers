@@ -9,7 +9,7 @@ LICENSE file in the root directory of this source tree.
 
 import enum
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 import torch
 from torch.distributed.device_mesh import DeviceMesh
@@ -219,7 +219,7 @@ class ShampooPT2CompileConfig:
     Args:
         pytorch_compile_backend (str): The backend for PT2 compilation. More info about PT2 backends:
             https://pytorch.org/docs/stable/torch.compiler.html (Default: inductor)
-        enable_shampoo_pt2_dynamic_shape (Optional[bool]): Compile Shampoo in static, dynamic or auto-dynamic shape mode (Default: False).
+        enable_shampoo_pt2_dynamic_shape (bool | None): Compile Shampoo in static, dynamic or auto-dynamic shape mode (Default: False).
             - False: Use 'static' mode. Static mode assumes tensors in Shampoo will NOT change shapes. We recommend using this mode if
                 you expect parameters and gradients to change shapes only a very small number of times (e.g. <=5).
             - True: Use 'dynamic' mode.  Dynamic mode assumes all tensors in Shampoo can change shapes during the run. In general, we do
@@ -231,7 +231,7 @@ class ShampooPT2CompileConfig:
     """
 
     pytorch_compile_backend: str = "inductor"
-    enable_shampoo_pt2_dynamic_shape: Optional[bool] = False
+    enable_shampoo_pt2_dynamic_shape: bool | None = False
 
 
 @dataclass

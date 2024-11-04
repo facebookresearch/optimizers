@@ -12,7 +12,7 @@ import dataclasses
 import logging
 from copy import deepcopy
 from functools import partial
-from typing import Any, Callable, Iterator, NoReturn, Optional, Sequence
+from typing import Any, Callable, Iterator, NoReturn, Sequence
 
 import torch
 
@@ -251,18 +251,18 @@ class DistributedShampoo(torch.optim.Optimizer):
         use_nesterov (bool): Flag for using Nesterov momentum. (default: False)
         use_bias_correction (bool): Flag for using bias correction. (Default: True)
         use_decoupled_weight_decay (bool): Flag for using AdamW-style decoupled weight decay. (Default: True)
-        grafting_config (Optional[GraftingConfig]): Configuration for grafting method. If None, ignores grafting.
+        grafting_config (GraftingConfig | None): Configuration for grafting method. If None, ignores grafting.
             (Default: None)
         use_merge_dims (bool): Merge dimensions if possible while respecting max_preconditioner_dim. (Default: True)
-        use_pytorch_compile (Optional[bool]): Use PyTorch 2.0 compiler feature to speed up training. Deprecating, please use
+        use_pytorch_compile (bool | None): Use PyTorch 2.0 compiler feature to speed up training. Deprecating, please use
             shampoo_pt2_compile_config instead; when this field is None, the use of PyTorch 2.0 compiler is decided by
             shampoo_pt2_compile_config. (Default: None)
-        shampoo_pt2_compile_config (Optional[ShampooPT2CompileConfig]): Configuration for Shampoo PT2 compilation. If None,
+        shampoo_pt2_compile_config (ShampooPT2CompileConfig | None): Configuration for Shampoo PT2 compilation. If None,
             ignores compilation, and Shampoo will run in eager mode. (Default: None)
-        distributed_config (Optional[DistributedConfig]): Configuration for applying Shampoo
+        distributed_config (DistributedConfig | None): Configuration for applying Shampoo
             to different distributed training frameworks, such as distributed-data parallel (DDP) training.
             Based on the configuration, determines which version of Shampoo to use. (Default: None)
-        preconditioner_dtype (Optional[torch.dtype]): **DEPRECATING** Data type for preconditioner. (Default: None)
+        preconditioner_dtype (torch.dtype | None): **DEPRECATING** Data type for preconditioner. (Default: None)
         precision_config (PrecisionConfig): Data types for optimizer states. (Default: all fields torch.float)
         use_protected_eigh (bool): **DEPRECATED** Flag for using two guards to prevent failures of torch.linalg.eigh. (Default: True)
             1. Attempts to compute root inverse in preconditioner_dtype precision.
@@ -295,13 +295,13 @@ class DistributedShampoo(torch.optim.Optimizer):
         use_nesterov: bool = False,
         use_bias_correction: bool = True,
         use_decoupled_weight_decay: bool = True,
-        grafting_config: Optional[GraftingConfig] = None,
+        grafting_config: GraftingConfig | None = None,
         use_merge_dims: bool = True,
-        use_pytorch_compile: Optional[bool] = None,
-        shampoo_pt2_compile_config: Optional[ShampooPT2CompileConfig] = None,
-        distributed_config: Optional[DistributedConfig] = None,
-        preconditioner_dtype: Optional[torch.dtype] = None,
-        precision_config: Optional[PrecisionConfig] = None,
+        use_pytorch_compile: bool | None = None,
+        shampoo_pt2_compile_config: ShampooPT2CompileConfig | None = None,
+        distributed_config: DistributedConfig | None = None,
+        preconditioner_dtype: torch.dtype | None = None,
+        precision_config: PrecisionConfig | None = None,
         use_protected_eigh: bool = True,
         track_root_inv_residuals: bool = False,
         preconditioner_computation_config: PreconditionerComputationConfig = DefaultEigenConfig,
@@ -1127,7 +1127,7 @@ class DistributedShampoo(torch.optim.Optimizer):
         )
 
     @torch.no_grad()
-    def step(self, closure: Optional[Callable[[], float]] = None) -> Optional[float]:  # type: ignore[override]
+    def step(self, closure: Callable[[], float] | None = None) -> float | None:  # type: ignore[override]
         """Performs a single optimization step.
 
         Args:

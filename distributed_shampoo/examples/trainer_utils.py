@@ -12,7 +12,6 @@ import enum
 import logging
 import random
 from abc import ABC, abstractmethod
-from typing import Optional
 
 import numpy as np
 
@@ -406,8 +405,8 @@ def instantiate_optimizer(
     grafting_epsilon: float,
     use_merge_dims: bool,
     use_pytorch_compile: bool,
-    distributed_config: Optional[DistributedConfig],
-    precision_config: Optional[PrecisionConfig],
+    distributed_config: DistributedConfig | None,
+    precision_config: PrecisionConfig | None,
     use_protected_eigh: bool,
     track_root_inv_residuals: bool,
 ) -> torch.optim.Optimizer:
@@ -475,7 +474,7 @@ def instantiate_grafting_config(
     grafting_type: GraftingType,
     grafting_beta2: float,
     grafting_epsilon: float,
-) -> Optional[GraftingConfig]:
+) -> GraftingConfig | None:
     if grafting_type == GraftingType.NONE:
         return None
     elif grafting_type == GraftingType.ADAGRAD:

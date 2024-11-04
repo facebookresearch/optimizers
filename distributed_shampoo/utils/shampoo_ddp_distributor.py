@@ -10,7 +10,7 @@ LICENSE file in the root directory of this source tree.
 import heapq
 import logging
 from functools import partial
-from typing import Any, Optional
+from typing import Any
 
 import torch
 import torch.distributed as dist
@@ -90,7 +90,7 @@ class DDPDistributor(DistributorInterface):
         self._communication_dtype: torch.dtype = communication_dtype
 
         # Initialize _dist_group and _group_rank.
-        self._dist_group: Optional[dist.ProcessGroup] = (
+        self._dist_group: dist.ProcessGroup | None = (
             dist.distributed_c10d.GroupMember.WORLD
             if self._group_size == self._global_size
             else dist.new_subgroups(group_size=self._group_size)[0]

@@ -9,7 +9,7 @@ LICENSE file in the root directory of this source tree.
 
 from abc import ABC, abstractmethod
 from operator import attrgetter
-from typing import Any, Iterable, Optional
+from typing import Any, Iterable
 
 import torch
 from distributed_shampoo.shampoo_types import (
@@ -51,7 +51,7 @@ class DistributorInterface(ABC):
             self._global_blocked_params
         )
         # In order to avoid redundant computation, we store the previous global grad selector.
-        self._previous_global_grad_selector: Optional[tuple[bool, ...]] = None
+        self._previous_global_grad_selector: tuple[bool, ...] | None = None
 
         # Declare properties that will be populated by subclasses.
         # Distributor selector masks all global parameter blocks that are NOT assigned to the local device.

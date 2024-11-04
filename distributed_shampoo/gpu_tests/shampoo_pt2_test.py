@@ -12,7 +12,7 @@ LICENSE file in the root directory of this source tree.
 import itertools
 import unittest
 from functools import partial
-from typing import Callable, Optional
+from typing import Callable
 
 import torch
 from distributed_shampoo.distributed_shampoo import DistributedShampoo
@@ -57,8 +57,8 @@ class DistributedShampooPytorchCompileTest(unittest.TestCase):
         baseline_optim_factory: Callable[[ParamsT], torch.optim.Optimizer],
         pt2_optim_factory: Callable[[ParamsT], torch.optim.Optimizer],
         total_steps: int = 5,
-        rtol: Optional[float] = None,
-        atol: Optional[float] = None,
+        rtol: float | None = None,
+        atol: float | None = None,
     ) -> None:
         (
             baseline_params,

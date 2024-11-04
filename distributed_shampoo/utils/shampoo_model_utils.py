@@ -8,7 +8,6 @@ LICENSE file in the root directory of this source tree.
 """
 
 import math
-from typing import Optional
 
 import torch
 from torch.nn.parameter import Parameter
@@ -69,8 +68,8 @@ class CombinedLinear(torch.nn.Module):
         in_features: int,
         out_features: int,
         bias: bool = True,
-        device: Optional[torch.device] = None,
-        dtype: Optional[torch.dtype] = None,
+        device: torch.device | None = None,
+        dtype: torch.dtype | None = None,
     ) -> None:
         super().__init__()
         self.in_features = in_features

@@ -11,7 +11,6 @@ LICENSE file in the root directory of this source tree.
 
 import unittest
 from dataclasses import dataclass
-from typing import Optional
 
 import torch
 from optimizer_modules import OptimizerModule
@@ -20,10 +19,10 @@ from optimizer_modules import OptimizerModule
 @dataclass
 class OptimizerTestModule(OptimizerModule):
     attribute: torch.Tensor | int
-    list_of_values: Optional[list[OptimizerModule | torch.Tensor]] = None
-    tuple_of_values: Optional[tuple[float, ...]] = None
-    dictionary_of_values: Optional[dict[str, torch.Tensor]] = None
-    other_module: Optional[OptimizerModule] = None
+    list_of_values: list[OptimizerModule | torch.Tensor] | None = None
+    tuple_of_values: tuple[float, ...] | None = None
+    dictionary_of_values: dict[str, torch.Tensor] | None = None
+    other_module: OptimizerModule | None = None
 
 
 class OptimizerModulesTest(unittest.TestCase):

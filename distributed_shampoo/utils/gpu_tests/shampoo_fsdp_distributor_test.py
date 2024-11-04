@@ -12,7 +12,7 @@ LICENSE file in the root directory of this source tree.
 import unittest
 from functools import partial
 from itertools import pairwise
-from typing import Callable, Optional
+from typing import Callable
 
 import torch
 from distributed_shampoo.distributed_shampoo import DistributedShampoo
@@ -38,7 +38,7 @@ class ShampooFSDPDistributorTest(FSDPTest):
     @staticmethod
     def _construct_model(
         device: torch.device,
-        distributed_config: Optional[FSDPShampooConfig],
+        distributed_config: FSDPShampooConfig | None,
     ) -> tuple[nn.Module, nn.Module, torch.Tensor, torch.Tensor]:
         # NOTE: We construct the model here specifically in order to ensure that
         #       FSDP Shampoo and default Shampoo produce equivalent results.
@@ -150,7 +150,7 @@ class ShampooFSDPDistributorTest(FSDPTest):
 
     @staticmethod
     def _shampoo_optim_factory(
-        distributed_config: Optional[FSDPShampooConfig],
+        distributed_config: FSDPShampooConfig | None,
     ) -> Callable[
         [ParamsT],
         torch.optim.Optimizer,
@@ -178,7 +178,7 @@ class ShampooFSDPDistributorTest(FSDPTest):
 
     @staticmethod
     def _model_factory(
-        distributed_config: Optional[FSDPShampooConfig],
+        distributed_config: FSDPShampooConfig | None,
     ) -> Callable[
         [torch.device],
         tuple[

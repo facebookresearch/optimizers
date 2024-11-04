@@ -10,7 +10,7 @@ LICENSE file in the root directory of this source tree.
 import re
 import unittest
 from types import ModuleType
-from typing import Any, Optional
+from typing import Any
 from unittest import mock
 
 import torch
@@ -67,7 +67,7 @@ class PreconditionerListTest(unittest.TestCase):
         self,
         preconditioner_list: PreconditionerList,
         masked_grad_lists: list[tuple[Tensor, ...]],
-        masked_expected_preconditioned_grad_list: Optional[tuple[Tensor, ...]],
+        masked_expected_preconditioned_grad_list: tuple[Tensor, ...] | None,
     ) -> None:
         with DequantizePreconditionersContext(preconditioner_list=preconditioner_list):
             for step, masked_grad_list in enumerate(masked_grad_lists, start=1):

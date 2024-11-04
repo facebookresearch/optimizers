@@ -13,7 +13,7 @@ import re
 import unittest
 from functools import partial
 from itertools import pairwise, product
-from typing import Callable, Optional
+from typing import Callable
 from unittest import mock
 
 import torch
@@ -45,7 +45,7 @@ class ShampooHSDPDistributorTest(FSDPTest):
     @staticmethod
     def _construct_model(
         device: torch.device,
-        distributed_config: Optional[HSDPShampooConfig],
+        distributed_config: HSDPShampooConfig | None,
     ) -> tuple[nn.Module, nn.Module, torch.Tensor, torch.Tensor]:
         # NOTE: We construct the model here specifically in order to ensure that
         #       HSDP Shampoo and default Shampoo produce equivalent results.
@@ -162,7 +162,7 @@ class ShampooHSDPDistributorTest(FSDPTest):
 
     @staticmethod
     def _shampoo_optim_factory(
-        distributed_config: Optional[HSDPShampooConfig],
+        distributed_config: HSDPShampooConfig | None,
     ) -> Callable[
         [ParamsT],
         torch.optim.Optimizer,
@@ -190,7 +190,7 @@ class ShampooHSDPDistributorTest(FSDPTest):
 
     @staticmethod
     def _model_factory(
-        distributed_config: Optional[HSDPShampooConfig],
+        distributed_config: HSDPShampooConfig | None,
     ) -> Callable[
         [torch.device],
         tuple[
