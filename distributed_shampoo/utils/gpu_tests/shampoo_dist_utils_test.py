@@ -43,7 +43,7 @@ class ShampooDistUtilsTest(DTensorTestBase):
         )
 
     # type: ignore
-    @with_comms()
+    @with_comms
     def test_get_device_mesh(self) -> None:
         mesh = tuple(
             map(
