@@ -104,7 +104,7 @@ if __name__ == "__main__":
 
     # instantiate data loader. Note that this is a single GPU training example,
     # so we do not need to instantiate a sampler.
-    data_loader, _ = get_data_loader_and_sampler(args.data_path, 1, 1, args.batch_size)
+    data_loader, _ = get_data_loader_and_sampler(args.data_path, 1, 0, args.batch_size)
 
     # instantiate optimizer (SGD, Adam, DistributedShampoo)
     optimizer = instantiate_optimizer(
