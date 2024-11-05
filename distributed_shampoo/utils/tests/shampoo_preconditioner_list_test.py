@@ -74,9 +74,13 @@ class PreconditionerListTest(unittest.TestCase):
                 preconditioner_list.update_preconditioners(
                     masked_grad_list=masked_grad_list,
                     step=torch.tensor(step),
-                    # Only compute the new layerwise direction when the update_preconditioners() reach the last step.
+                    # Only update the complete preconditioner during the last call to update_preconditioners().
                     perform_amortized_computation=isinstance(
-                        preconditioner_list, ShampooPreconditionerList
+                        preconditioner_list,
+                        (
+                            ShampooPreconditionerList,
+                            EigenvalueCorrectedShampooPreconditionerList,
+                        ),
                     )
                     and step == len(masked_grad_lists),
                 )
