@@ -20,6 +20,7 @@ from distributed_shampoo.utils import shampoo_preconditioner_list
 from distributed_shampoo.utils.shampoo_block_info import BlockInfo
 from distributed_shampoo.utils.shampoo_preconditioner_list import (
     AdagradPreconditionerList,
+    BaseShampooPreconditionerList,
     DequantizePreconditionersContext,
     EigenvalueCorrectedShampooPreconditionerList,
     PreconditionerList,
@@ -74,9 +75,9 @@ class PreconditionerListTest(unittest.TestCase):
                 preconditioner_list.update_preconditioners(
                     masked_grad_list=masked_grad_list,
                     step=torch.tensor(step),
-                    # Only compute the new layerwise direction when the update_preconditioners() reach the last step.
+                    # Only update the complete preconditioner during the last call to update_preconditioners().
                     perform_amortized_computation=isinstance(
-                        preconditioner_list, ShampooPreconditionerList
+                        preconditioner_list, BaseShampooPreconditionerList
                     )
                     and step == len(masked_grad_lists),
                 )
