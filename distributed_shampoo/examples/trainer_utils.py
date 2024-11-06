@@ -30,6 +30,13 @@ from distributed_shampoo.shampoo_types import (
     RMSpropGraftingConfig,
     SGDGraftingConfig,
 )
+from matrix_functions_types import (
+    CoupledHigherOrderConfig,
+    CoupledNewtonConfig,
+    EigenConfig,
+    EighEigenvalueCorrectionConfig,
+    PreconditionerComputationConfig,
+)
 from torch import nn
 from torchvision import datasets, transforms  # type: ignore[import-untyped]
 
@@ -59,6 +66,13 @@ class GraftingType(enum.Enum):
     ADAGRAD = 2
     RMSPROP = 3
     ADAM = 4
+
+
+class PreconditionerComputationType(enum.Enum):
+    EIGEN_ROOT_INV = 0
+    COUPLED_NEWTON_ROOT_INV = 1
+    COUPLED_HIGHER_ORDER_ROOT_INV = 2
+    EIGH_EIGENVALUE_CORRECTION = 3
 
 
 ###### ARGPARSER ######
@@ -194,6 +208,12 @@ class Parser:
             action="store_true",
             help="Use debug mode for examining root inverse residuals.",
         )
+        parser.add_argument(
+            "--preconditioner-computation-type",
+            type=lambda t: enum_type_parse(t, PreconditionerComputationType),
+            default=PreconditionerComputationType.EIGEN_ROOT_INV,
+            help="Preconditioner computation method for Shampoo.",
+        )
 
         # Arguments for grafting.
         parser.add_argument(
@@ -233,6 +253,18 @@ class Parser:
             type=lambda t: enum_type_parse(t, DType),
             default=DType.FP32,
             help="Data type for storing Shampoo inverse factor matrices.",
+        )
+        parser.add_argument(
+            "--corrected-eigenvalues-dtype",
+            type=lambda t: enum_type_parse(t, DType),
+            default=DType.FP32,
+            help="Data type for storing corrected eigenvalues of Shampoo preconditioner.",
+        )
+        parser.add_argument(
+            "--factor-matrix-eigenvectors-dtype",
+            type=lambda t: enum_type_parse(t, DType),
+            default=DType.FP32,
+            help="Data type for storing Shampoo factor matrices eigenvectors.",
         )
         parser.add_argument(
             "--filtered-grad-dtype",
@@ -409,6 +441,7 @@ def instantiate_optimizer(
     precision_config: PrecisionConfig | None,
     use_protected_eigh: bool,
     track_root_inv_residuals: bool,
+    preconditioner_computation_type: PreconditionerComputationType,
 ) -> torch.optim.Optimizer:
     if optimizer_type == OptimizerType.SGD:
         optimizer = torch.optim.SGD(
@@ -463,6 +496,9 @@ def instantiate_optimizer(
             precision_config=precision_config,
             use_protected_eigh=use_protected_eigh,
             track_root_inv_residuals=track_root_inv_residuals,
+            preconditioner_computation_config=instantiate_preconditioner_computation_config(
+                preconditioner_computation_type
+            ),
         )  # type: ignore[assignment]
     else:
         raise ValueError(f"Invalid OptimizerType {optimizer_type}!")
@@ -498,6 +534,32 @@ def instantiate_grafting_config(
         )
     else:
         raise ValueError(f"Invalid GraftingType {grafting_type}!")
+
+
+def instantiate_preconditioner_computation_config(
+    preconditioner_computation_type: PreconditionerComputationType,
+) -> PreconditionerComputationConfig:
+    if preconditioner_computation_type == PreconditionerComputationType.EIGEN_ROOT_INV:
+        return EigenConfig()
+    elif (
+        preconditioner_computation_type
+        == PreconditionerComputationType.COUPLED_NEWTON_ROOT_INV
+    ):
+        return CoupledNewtonConfig()
+    elif (
+        preconditioner_computation_type
+        == PreconditionerComputationType.COUPLED_HIGHER_ORDER_ROOT_INV
+    ):
+        return CoupledHigherOrderConfig()
+    elif (
+        preconditioner_computation_type
+        == PreconditionerComputationType.EIGH_EIGENVALUE_CORRECTION
+    ):
+        return EighEigenvalueCorrectionConfig()
+    else:
+        raise ValueError(
+            f"Invalid PreconditionerComputationType {preconditioner_computation_type}!"
+        )
 
 
 ###### DATA LOADER ######

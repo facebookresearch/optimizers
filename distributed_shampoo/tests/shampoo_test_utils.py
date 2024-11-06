@@ -8,6 +8,7 @@ LICENSE file in the root directory of this source tree.
 """
 
 import itertools
+from functools import reduce
 
 import torch
 from torch import nn
@@ -37,9 +38,7 @@ class _ModelWithLinearAndDeadLayers(nn.Module):
             )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        for linear_layer in self.linear_layers:
-            x = linear_layer(x)
-        return x
+        return reduce(lambda x, layer: layer(x), self.linear_layers, x)
 
 
 def construct_training_problem(

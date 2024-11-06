@@ -7,6 +7,7 @@ LICENSE file in the root directory of this source tree.
 
 """
 
+import abc
 import re
 import unittest
 from types import ModuleType
@@ -20,6 +21,7 @@ from distributed_shampoo.utils import shampoo_preconditioner_list
 from distributed_shampoo.utils.shampoo_block_info import BlockInfo
 from distributed_shampoo.utils.shampoo_preconditioner_list import (
     AdagradPreconditionerList,
+    BaseShampooPreconditionerList,
     DequantizePreconditionersContext,
     EigenvalueCorrectedShampooPreconditionerList,
     PreconditionerList,
@@ -74,9 +76,9 @@ class PreconditionerListTest(unittest.TestCase):
                 preconditioner_list.update_preconditioners(
                     masked_grad_list=masked_grad_list,
                     step=torch.tensor(step),
-                    # Only compute the new layerwise direction when the update_preconditioners() reach the last step.
+                    # Only update the complete preconditioner during the last call to update_preconditioners().
                     perform_amortized_computation=isinstance(
-                        preconditioner_list, ShampooPreconditionerList
+                        preconditioner_list, BaseShampooPreconditionerList
                     )
                     and step == len(masked_grad_lists),
                 )
@@ -275,10 +277,188 @@ class AdagradPreconditionerListTest(PreconditionerListTest):
         self._test_compress_preconditioner_list(expected_compress_list_call_count=1)
 
 
-class ShampooPreconditionerListTest(AdagradPreconditionerListTest):
-    def _instantiate_preconditioner_list(  # type: ignore[override]
-        self, **kwargs: Any
-    ) -> ShampooPreconditionerList:
+# Use outer class as wrapper to avoid running the abstract test.
+class AbstractTest:
+    class BaseShampooPreconditionerListTest(abc.ABC, AdagradPreconditionerListTest):
+        @abc.abstractmethod
+        def _amortized_computation_function(self) -> str: ...
+
+        @abc.abstractmethod
+        def _instantiate_preconditioner_list(  # type: ignore[override]
+            self, **kwargs: Any
+        ) -> PreconditionerList: ...
+
+        def _test_raise_invalid_value_in_factor_matrix(
+            self, invalid_value: float
+        ) -> None:
+            with DequantizePreconditionersContext(
+                preconditioner_list=self._preconditioner_list
+            ), self.assertRaisesRegex(
+                PreconditionerValueError,
+                re.escape(f"Encountered {str(invalid_value)} values in factor matrix"),
+            ):
+                self._preconditioner_list.update_preconditioners(
+                    masked_grad_list=(
+                        torch.tensor([invalid_value, invalid_value]),
+                        torch.eye(2) / torch.tensor(2.0).sqrt(),
+                        torch.tensor([[invalid_value, invalid_value]]),
+                    ),
+                    step=torch.tensor(1),
+                    perform_amortized_computation=True,
+                )
+
+        # Because nan as the input of self._preconditioner_list.update_preconditioners() would change the internal state to nan (and stayed as nan even after other updates),
+        # we need to test the cases of nan and inf separately.
+        def test_raise_inf_in_factor_matrix(self) -> None:
+            self._test_raise_invalid_value_in_factor_matrix(invalid_value=torch.inf)
+
+        def test_raise_nan_in_factor_matrix(self) -> None:
+            self._test_raise_invalid_value_in_factor_matrix(invalid_value=torch.nan)
+
+        def test_raise_nan_and_inf_in_inv_factor_matrix_amortized_computation(
+            self,
+        ) -> None:
+            for invalid_value in (torch.nan, torch.inf):
+                with DequantizePreconditionersContext(
+                    preconditioner_list=self._preconditioner_list
+                ), self.subTest(invalid_value=invalid_value), self.assertRaisesRegex(
+                    PreconditionerValueError,
+                    re.escape("Encountered nan or inf values in"),
+                ), mock.patch.object(
+                    shampoo_preconditioner_list,
+                    self._amortized_computation_function(),
+                    side_effect=(torch.tensor([invalid_value]),),
+                ) as mock_amortized_computation:
+                    self._preconditioner_list.update_preconditioners(
+                        masked_grad_list=(
+                            torch.tensor([1.0, 0.0]),
+                            torch.eye(2) / torch.tensor(2.0).sqrt(),
+                            torch.tensor([[1.0, 0.0]]),
+                        ),
+                        step=torch.tensor(1),
+                        perform_amortized_computation=True,
+                    )
+                mock_amortized_computation.assert_called_once()
+
+        def test_amortized_computation_internal_failure(self) -> None:
+            with mock.patch.object(
+                shampoo_preconditioner_list,
+                self._amortized_computation_function(),
+                # Simulate the situation throws an exception (not nan and inf) to test the warning
+                side_effect=ZeroDivisionError,
+            ) as mock_amortized_computation:
+                with DequantizePreconditionersContext(
+                    preconditioner_list=self._preconditioner_list
+                ), self.assertLogs(level="WARNING") as cm:
+                    # Because use_protected_eigh is True, we expect the warning to be logged.
+                    self._preconditioner_list.update_preconditioners(
+                        masked_grad_list=(
+                            torch.tensor([1.0, 0.0]),
+                            torch.eye(2) / torch.tensor(2.0).sqrt(),
+                            torch.tensor([[1.0, 0.0]]),
+                        ),
+                        step=torch.tensor(1),
+                        perform_amortized_computation=True,
+                    )
+                self.assertCountEqual(
+                    # Only extracts the first sentence in the warning message for simple comparison.
+                    [r.msg.split(". ", maxsplit=1)[0] for r in cm.records],
+                    [
+                        "Matrix computation failed for factor matrix 0.block_0.0 with exception=ZeroDivisionError()",
+                        "Matrix computation failed for factor matrix 1.block_0.0 with exception=ZeroDivisionError()",
+                        "Matrix computation failed for factor matrix 1.block_0.1 with exception=ZeroDivisionError()",
+                        "Matrix computation failed for factor matrix 1.block_1.0 with exception=ZeroDivisionError()",
+                        "Matrix computation failed for factor matrix 1.block_1.1 with exception=ZeroDivisionError()",
+                    ],
+                )
+                mock_amortized_computation.assert_called()
+                mock_amortized_computation.reset_mock()
+
+                # Turn off use_protected_eigh and expect ZeroDivisionError to be logged.
+                self._preconditioner_list = self._instantiate_preconditioner_list(
+                    use_protected_eigh=False,
+                )
+                with DequantizePreconditionersContext(
+                    preconditioner_list=self._preconditioner_list
+                ), self.assertRaises(ZeroDivisionError):
+                    self._preconditioner_list.update_preconditioners(
+                        masked_grad_list=(
+                            torch.tensor([1.0, 0.0]),
+                            torch.eye(2) / torch.tensor(2.0).sqrt(),
+                            torch.tensor([[1.0, 0.0]]),
+                        ),
+                        step=torch.tensor(1),
+                        perform_amortized_computation=True,
+                    )
+                mock_amortized_computation.assert_called()
+
+        # Note: This is needed for type checking to infer the type of argument into mock.patch.object.
+        shampoo_preconditioner_list_module: ModuleType = shampoo_preconditioner_list
+
+        @mock.patch.object(
+            shampoo_preconditioner_list_module,
+            "check_diagonal",
+            return_value=False,
+        )
+        def test_amortized_computation_factor_matrix_non_diagonal(
+            self, mock_check_diagonal: mock.Mock
+        ) -> None:
+            self._preconditioner_list = self._instantiate_preconditioner_list(
+                epsilon=1.0
+            )
+            with DequantizePreconditionersContext(
+                preconditioner_list=self._preconditioner_list
+            ), self.assertLogs(
+                level="DEBUG",
+            ) as cm:
+                self._preconditioner_list.update_preconditioners(
+                    masked_grad_list=(
+                        torch.tensor([1.0, 0.0]),
+                        torch.eye(2) / torch.tensor(2.0).sqrt(),
+                        torch.tensor([[1.0, 0.0]]),
+                    ),
+                    step=torch.tensor(1),
+                    perform_amortized_computation=True,
+                )
+            self.assertCountEqual(
+                [r.msg for r in cm.records],
+                [
+                    "Factor matrix 0.block_0.0 is not diagonal.",
+                    "Factor matrix 1.block_0.0 is not diagonal.",
+                    "Factor matrix 1.block_0.1 is not diagonal.",
+                    "Factor matrix 1.block_1.0 is not diagonal.",
+                    "Factor matrix 1.block_1.1 is not diagonal.",
+                ],
+            )
+            mock_check_diagonal.assert_called()
+
+        def test_numel_list(self) -> None:
+            self.assertEqual(self._preconditioner_list.numel_list, (8, 16, 10))
+
+        def test_dims_list(self) -> None:
+            self.assertEqual(
+                self._preconditioner_list.dims_list,
+                (torch.Size([2]), torch.Size([2, 2]), torch.Size([1, 2])),
+            )
+
+        def test_num_bytes_list(self) -> None:
+            self.assertEqual(self._preconditioner_list.num_bytes_list, (48, 96, 60))
+
+        def test_numel(self) -> None:
+            self.assertEqual(self._preconditioner_list.numel(), 34)
+
+        def test_num_bytes(self) -> None:
+            self.assertEqual(self._preconditioner_list.num_bytes(), 204)
+
+        def test_compress_preconditioner_list(self) -> None:
+            self._test_compress_preconditioner_list(expected_compress_list_call_count=3)
+
+
+class ShampooPreconditionerListTest(AbstractTest.BaseShampooPreconditionerListTest):
+    def _amortized_computation_function(self) -> str:
+        return "matrix_inverse_root"
+
+    def _instantiate_preconditioner_list(self, **kwargs: Any) -> PreconditionerList:  # type: ignore[override]
         kwargs = {
             "beta2": 1.0,
             "epsilon": 0.0,
@@ -511,213 +691,6 @@ class ShampooPreconditionerListTest(AdagradPreconditionerListTest):
         test_inverse_roots_from_override(inv_root_override=2)
         test_inverse_roots_from_override(inv_root_override=[2, 2, 2])
 
-    def test_raise_inf_in_factor_matrix_compute_root_inverse(self) -> None:
-        assert isinstance(self._preconditioner_list, ShampooPreconditionerList)
-        with DequantizePreconditionersContext(
-            preconditioner_list=self._preconditioner_list
-        ):
-            with self.assertRaisesRegex(
-                PreconditionerValueError,
-                re.escape("Encountered inf values in factor matrix"),
-            ):
-                self._preconditioner_list.update_preconditioners(
-                    masked_grad_list=(
-                        torch.tensor([torch.inf, torch.inf]),
-                        torch.eye(2) / torch.tensor(2.0).sqrt(),
-                        torch.tensor([[torch.inf, torch.inf]]),
-                    ),
-                    step=torch.tensor(1),
-                    perform_amortized_computation=True,
-                )
-
-    def test_raise_nan_in_factor_matrix_compute_root_inverse(self) -> None:
-        assert isinstance(self._preconditioner_list, ShampooPreconditionerList)
-        with DequantizePreconditionersContext(
-            preconditioner_list=self._preconditioner_list
-        ):
-            with self.assertRaisesRegex(
-                PreconditionerValueError,
-                re.escape("Encountered nan values in factor matrix"),
-            ):
-                self._preconditioner_list.update_preconditioners(
-                    masked_grad_list=(
-                        torch.tensor([torch.nan, torch.nan]),
-                        torch.eye(2) / torch.tensor(2.0).sqrt(),
-                        torch.tensor([[torch.nan, torch.nan]]),
-                    ),
-                    step=torch.tensor(1),
-                    perform_amortized_computation=True,
-                )
-
-    # Note: This is needed for pyre to infer the type of argument into mock.patch.object.
-    shampoo_preconditioner_list_module: ModuleType = shampoo_preconditioner_list
-
-    @mock.patch.object(
-        shampoo_preconditioner_list_module,
-        "matrix_inverse_root",
-        side_effect=(torch.tensor([torch.inf]),),
-    )
-    def test_raise_inf_in_inv_factor_matrix_compute_root_inverse(
-        self, mock_matrix_inverse_root: mock.Mock
-    ) -> None:
-        assert isinstance(self._preconditioner_list, ShampooPreconditionerList)
-        with DequantizePreconditionersContext(
-            preconditioner_list=self._preconditioner_list
-        ), self.assertRaisesRegex(
-            PreconditionerValueError,
-            re.escape("Encountered nan or inf values in inverse factor matrix"),
-        ):
-            self._preconditioner_list.update_preconditioners(
-                masked_grad_list=(
-                    torch.tensor([1.0, 0.0]),
-                    torch.eye(2) / torch.tensor(2.0).sqrt(),
-                    torch.tensor([[1.0, 0.0]]),
-                ),
-                step=torch.tensor(1),
-                perform_amortized_computation=True,
-            )
-        mock_matrix_inverse_root.assert_called_once()
-
-    @mock.patch.object(
-        shampoo_preconditioner_list_module,
-        "matrix_inverse_root",
-        side_effect=(torch.tensor([torch.nan]),),
-    )
-    def test_raise_nan_in_inv_factor_matrix_compute_root_inverse(
-        self, mock_matrix_inverse_root: mock.Mock
-    ) -> None:
-        assert isinstance(self._preconditioner_list, ShampooPreconditionerList)
-        with DequantizePreconditionersContext(
-            preconditioner_list=self._preconditioner_list
-        ), self.assertRaisesRegex(
-            PreconditionerValueError,
-            re.escape("Encountered nan or inf values in inverse factor matrix"),
-        ):
-            self._preconditioner_list.update_preconditioners(
-                masked_grad_list=(
-                    torch.tensor([1.0, 0.0]),
-                    torch.eye(2) / torch.tensor(2.0).sqrt(),
-                    torch.tensor([[1.0, 0.0]]),
-                ),
-                step=torch.tensor(1),
-                perform_amortized_computation=True,
-            )
-        mock_matrix_inverse_root.assert_called_once()
-
-    @mock.patch.object(
-        shampoo_preconditioner_list_module,
-        "matrix_inverse_root",
-        # Simulate the situation matrix_inverse_root throws an exception (not nan and inf) to test the warning
-        side_effect=ZeroDivisionError,
-    )
-    def test_matrix_compute_root_inverse_internal_failure(
-        self, mock_matrix_inverse_root: mock.Mock
-    ) -> None:
-        assert isinstance(self._preconditioner_list, ShampooPreconditionerList)
-        with DequantizePreconditionersContext(
-            preconditioner_list=self._preconditioner_list
-        ), self.assertLogs(level="WARNING") as cm:
-            # Because use_protected_eigh is True, we expect the warning to be logged.
-            self._preconditioner_list.update_preconditioners(
-                masked_grad_list=(
-                    torch.tensor([1.0, 0.0]),
-                    torch.eye(2) / torch.tensor(2.0).sqrt(),
-                    torch.tensor([[1.0, 0.0]]),
-                ),
-                step=torch.tensor(1),
-                perform_amortized_computation=True,
-            )
-        self.assertCountEqual(
-            [r.msg for r in cm.records],
-            [
-                "Matrix computation failed for factor matrix 0.block_0.0 with exception=ZeroDivisionError()."
-                " Using previous inversed factor matrix and continuing...",
-                "Matrix computation failed for factor matrix 1.block_0.0 with exception=ZeroDivisionError()."
-                " Using previous inversed factor matrix and continuing...",
-                "Matrix computation failed for factor matrix 1.block_0.1 with exception=ZeroDivisionError()."
-                " Using previous inversed factor matrix and continuing...",
-                "Matrix computation failed for factor matrix 1.block_1.0 with exception=ZeroDivisionError()."
-                " Using previous inversed factor matrix and continuing...",
-                "Matrix computation failed for factor matrix 1.block_1.1 with exception=ZeroDivisionError()."
-                " Using previous inversed factor matrix and continuing...",
-            ],
-        )
-        mock_matrix_inverse_root.assert_called()
-
-        # Turn off use_protected_eigh and expect ZeroDivisionError to be logged.
-        self._preconditioner_list = self._instantiate_preconditioner_list(
-            use_protected_eigh=False,
-        )
-        with DequantizePreconditionersContext(
-            preconditioner_list=self._preconditioner_list
-        ), self.assertRaises(ZeroDivisionError):
-            self._preconditioner_list.update_preconditioners(
-                masked_grad_list=(
-                    torch.tensor([1.0, 0.0]),
-                    torch.eye(2) / torch.tensor(2.0).sqrt(),
-                    torch.tensor([[1.0, 0.0]]),
-                ),
-                step=torch.tensor(1),
-                perform_amortized_computation=True,
-            )
-        mock_matrix_inverse_root.assert_called()
-
-    @mock.patch.object(
-        shampoo_preconditioner_list_module,
-        "check_diagonal",
-        return_value=False,
-    )
-    def test_matrix_compute_root_inverse_factor_matrix_non_diagonal(
-        self, mock_check_diagonal: mock.Mock
-    ) -> None:
-        self._preconditioner_list = self._instantiate_preconditioner_list(epsilon=1.0)
-        with DequantizePreconditionersContext(
-            preconditioner_list=self._preconditioner_list
-        ), self.assertLogs(
-            level="DEBUG",
-        ) as cm:
-            self._preconditioner_list.update_preconditioners(
-                masked_grad_list=(
-                    torch.tensor([1.0, 0.0]),
-                    torch.eye(2) / torch.tensor(2.0).sqrt(),
-                    torch.tensor([[1.0, 0.0]]),
-                ),
-                step=torch.tensor(1),
-                perform_amortized_computation=True,
-            )
-        self.assertCountEqual(
-            [r.msg for r in cm.records],
-            [
-                "Factor matrix 0.block_0.0 is not diagonal.",
-                "Factor matrix 1.block_0.0 is not diagonal.",
-                "Factor matrix 1.block_0.1 is not diagonal.",
-                "Factor matrix 1.block_1.0 is not diagonal.",
-                "Factor matrix 1.block_1.1 is not diagonal.",
-            ],
-        )
-        mock_check_diagonal.assert_called()
-
-    def test_numel_list(self) -> None:
-        self.assertEqual(self._preconditioner_list.numel_list, (8, 16, 10))
-
-    def test_dims_list(self) -> None:
-        self.assertEqual(
-            self._preconditioner_list.dims_list,
-            (torch.Size([2]), torch.Size([2, 2]), torch.Size([1, 2])),
-        )
-
-    def test_num_bytes_list(self) -> None:
-        self.assertEqual(self._preconditioner_list.num_bytes_list, (48, 96, 60))
-
-    def test_numel(self) -> None:
-        self.assertEqual(self._preconditioner_list.numel(), 34)
-
-    def test_num_bytes(self) -> None:
-        self.assertEqual(self._preconditioner_list.num_bytes(), 204)
-
-    def test_compress_preconditioner_list(self) -> None:
-        self._test_compress_preconditioner_list(expected_compress_list_call_count=3)
-
     def test_compute_root_inverse_residuals(self) -> None:
         """
         Create a factor matrix of size 2x2 by updating preconditioners in two steps:
@@ -762,7 +735,12 @@ class ShampooPreconditionerListTest(AdagradPreconditionerListTest):
         self.assertTupleEqual(relative_residuals, expected_relative_residuals)
 
 
-class EigenvalueCorrectedShampooPreconditionerListTest(AdagradPreconditionerListTest):
+class EigenvalueCorrectedShampooPreconditionerListTest(
+    AbstractTest.BaseShampooPreconditionerListTest
+):
+    def _amortized_computation_function(self) -> str:
+        return "matrix_eigenvectors"
+
     def _instantiate_preconditioner_list(self, **kwargs: Any) -> PreconditionerList:  # type: ignore[override]
         kwargs = {
             "beta2": 1.0,
@@ -1011,156 +989,3 @@ class EigenvalueCorrectedShampooPreconditionerListTest(AdagradPreconditionerList
 
         test_inverse_roots_from_override(inv_root_override=1)
         test_inverse_roots_from_override(inv_root_override=[1, 1, 1])
-
-    """Tests for compute_preconditioner_eigenvectors."""
-
-    def test_raise_inf_in_factor_matrix_compute_preconditioner_eigenvectors(
-        self,
-    ) -> None:
-        with DequantizePreconditionersContext(
-            preconditioner_list=self._preconditioner_list
-        ):
-            with self.assertRaisesRegex(
-                ValueError,
-                re.escape("Encountered inf values in factor matrix"),
-            ):
-                self._preconditioner_list.update_preconditioners(
-                    masked_grad_list=(
-                        torch.tensor([torch.inf, torch.inf]),
-                        torch.eye(2) / torch.tensor(2.0).sqrt(),
-                        torch.tensor([[torch.inf, torch.inf]]),
-                    ),
-                    step=torch.tensor(1),
-                    perform_amortized_computation=True,
-                )
-
-    def test_raise_nan_in_factor_matrix_compute_preconditioner_eigenvectors(
-        self,
-    ) -> None:
-        with DequantizePreconditionersContext(
-            preconditioner_list=self._preconditioner_list
-        ):
-            with self.assertRaisesRegex(
-                ValueError,
-                re.escape("Encountered nan values in factor matrix"),
-            ):
-                self._preconditioner_list.update_preconditioners(
-                    masked_grad_list=(
-                        torch.tensor([torch.nan, torch.nan]),
-                        torch.eye(2) / torch.tensor(2.0).sqrt(),
-                        torch.tensor([[torch.nan, torch.nan]]),
-                    ),
-                    step=torch.tensor(1),
-                    perform_amortized_computation=True,
-                )
-
-    # Note: This is needed for pyre to infer the type of argument into mock.patch.object.
-    shampoo_preconditioner_list_module: ModuleType = shampoo_preconditioner_list
-
-    @mock.patch.object(
-        shampoo_preconditioner_list_module,
-        "matrix_eigenvectors",
-        side_effect=(torch.tensor([torch.inf]),),
-    )
-    def test_raise_inf_in_inv_factor_matrix_compute_preconditioner_eigenvectors(
-        self, mock_matrix_eigenvectors: mock.Mock
-    ) -> None:
-        with DequantizePreconditionersContext(
-            preconditioner_list=self._preconditioner_list
-        ), self.assertRaisesRegex(
-            PreconditionerValueError,
-            re.escape("Encountered nan or inf values in eigenvectors of factor matrix"),
-        ):
-            self._preconditioner_list.update_preconditioners(
-                masked_grad_list=(
-                    torch.tensor([1.0, 0.0]),
-                    torch.eye(2) / torch.tensor(2.0).sqrt(),
-                    torch.tensor([[1.0, 0.0]]),
-                ),
-                step=torch.tensor(1),
-                perform_amortized_computation=True,
-            )
-        mock_matrix_eigenvectors.assert_called_once()
-
-    @mock.patch.object(
-        shampoo_preconditioner_list_module,
-        "matrix_eigenvectors",
-        side_effect=(torch.tensor([torch.nan]),),
-    )
-    def test_raise_nan_in_inv_factor_matrix_compute_preconditioner_eigenvectors(
-        self, mock_matrix_eigenvectors: mock.Mock
-    ) -> None:
-        with DequantizePreconditionersContext(
-            preconditioner_list=self._preconditioner_list
-        ), self.assertRaisesRegex(
-            PreconditionerValueError,
-            re.escape("Encountered nan or inf values in eigenvectors of factor matrix"),
-        ):
-            self._preconditioner_list.update_preconditioners(
-                masked_grad_list=(
-                    torch.tensor([1.0, 0.0]),
-                    torch.eye(2) / torch.tensor(2.0).sqrt(),
-                    torch.tensor([[1.0, 0.0]]),
-                ),
-                step=torch.tensor(1),
-                perform_amortized_computation=True,
-            )
-        mock_matrix_eigenvectors.assert_called_once()
-
-    @mock.patch.object(
-        shampoo_preconditioner_list_module,
-        "check_diagonal",
-        return_value=False,
-    )
-    def test_matrix_compute_preconditioner_eigenvectors_factor_matrix_non_diagonal(
-        self, mock_check_diagonal: mock.Mock
-    ) -> None:
-        self._preconditioner_list = self._instantiate_preconditioner_list(epsilon=1.0)
-        with DequantizePreconditionersContext(
-            preconditioner_list=self._preconditioner_list
-        ), self.assertLogs(
-            level="DEBUG",
-        ) as cm:
-            self._preconditioner_list.update_preconditioners(
-                masked_grad_list=(
-                    torch.tensor([1.0, 0.0]),
-                    torch.eye(2) / torch.tensor(2.0).sqrt(),
-                    torch.tensor([[1.0, 0.0]]),
-                ),
-                step=torch.tensor(1),
-                perform_amortized_computation=True,
-            )
-        self.assertCountEqual(
-            [r.msg for r in cm.records],
-            [
-                "Factor matrix 0.block_0.0 is not diagonal.",
-                "Factor matrix 1.block_0.0 is not diagonal.",
-                "Factor matrix 1.block_0.1 is not diagonal.",
-                "Factor matrix 1.block_1.0 is not diagonal.",
-                "Factor matrix 1.block_1.1 is not diagonal.",
-            ],
-        )
-        mock_check_diagonal.assert_called()
-
-    """End of tests for compute_preconditioner_eigenvectors."""
-
-    def test_numel_list(self) -> None:
-        self.assertEqual(self._preconditioner_list.numel_list, (8, 16, 10))
-
-    def test_dims_list(self) -> None:
-        self.assertEqual(
-            self._preconditioner_list.dims_list,
-            (torch.Size([2]), torch.Size([2, 2]), torch.Size([1, 2])),
-        )
-
-    def test_num_bytes_list(self) -> None:
-        self.assertEqual(self._preconditioner_list.num_bytes_list, (48, 96, 60))
-
-    def test_numel(self) -> None:
-        self.assertEqual(self._preconditioner_list.numel(), 34)
-
-    def test_num_bytes(self) -> None:
-        self.assertEqual(self._preconditioner_list.num_bytes(), 204)
-
-    def test_compress_preconditioner_list(self) -> None:
-        self._test_compress_preconditioner_list(expected_compress_list_call_count=3)
