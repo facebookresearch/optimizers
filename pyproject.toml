@@ -45,12 +45,14 @@ Repository = "https://github.com/facebookresearch/optimizers.git"
 "Bug Tracker" = "https://github.com/facebookresearch/optimizers/issues"
 
 [tool.setuptools]
-packages = ["distributed_shampoo"]
 py-modules = [
     "matrix_functions",
     "matrix_functions_types",
     "optimizer_modules",
 ]
+
+[tool.setuptools.packages.find]
+include = ["distributed_shampoo*"]
 
 [tool.usort]
 first_party_detection = false
