@@ -17,7 +17,7 @@ jobs:
         - name: Create venv and install the package.
           run: |
             uv venv && source .venv/bin/activate
-            uv pip install -e ".[dev]"
+            uv pip install ".[dev]"
         - name: Run tests.
           run: |
             source .venv/bin/activate

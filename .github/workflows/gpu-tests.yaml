@@ -19,7 +19,7 @@ jobs:
           run: |
             uv venv && source .venv/bin/activate
             uv pip install setuptools
-            uv pip install -e ".[dev]"
+            uv pip install ".[dev]"
         - name: Run tests.
           run: |
             source .venv/bin/activate
