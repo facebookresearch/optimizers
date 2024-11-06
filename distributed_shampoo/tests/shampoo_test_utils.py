@@ -8,7 +8,7 @@ LICENSE file in the root directory of this source tree.
 """
 
 import itertools
-from typing import Optional
+from functools import reduce
 
 import torch
 from torch import nn
@@ -18,7 +18,7 @@ class _ModelWithLinearAndDeadLayers(nn.Module):
     def __init__(
         self,
         model_linear_layers_dims: tuple[int, ...],
-        model_dead_layer_dims: Optional[tuple[int, ...]],
+        model_dead_layer_dims: tuple[int, ...] | None,
         bias: bool = False,
     ) -> None:
         super().__init__()
@@ -38,15 +38,13 @@ class _ModelWithLinearAndDeadLayers(nn.Module):
             )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        for linear_layer in self.linear_layers:
-            x = linear_layer(x)
-        return x
+        return reduce(lambda x, layer: layer(x), self.linear_layers, x)
 
 
 def construct_training_problem(
     model_linear_layers_dims: tuple[int, ...],
-    model_dead_layer_dims: Optional[tuple[int, ...]] = (10, 10),
-    device: Optional[torch.device] = None,
+    model_dead_layer_dims: tuple[int, ...] | None = (10, 10),
+    device: torch.device | None = None,
     bias: bool = False,
     fill: float | tuple[float, ...] = 0.0,
 ) -> tuple[nn.Module, nn.Module, torch.Tensor, torch.Tensor]:
@@ -55,8 +53,8 @@ def construct_training_problem(
 
     Args:
         model_linear_layers_dims (tuple[int, ...]): The dimensions of the model linear layers.
-        model_dead_layer_dims (Optional[tuple[int, ...]]): The dimensions of the model dead linear layers. (Default: (10, 10))
-        device (Optional[torch.device]): The device to use. (Default: None)
+        model_dead_layer_dims (tuple[int, ...] | None): The dimensions of the model dead linear layers. (Default: (10, 10))
+        device (torch.device | None): The device to use. (Default: None)
         bias (bool): Whether to use bias in the linear (non-dead) layers. (Default: False)
         fill (float | tuple[float, ...]): The value(s) to fill the model parameters. If a tuple, each element should correspond to one layer. (Default: 0.0)
 

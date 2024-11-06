@@ -9,6 +9,7 @@ LICENSE file in the root directory of this source tree.
 
 #!/usr/bin/env python3
 
+import math
 import unittest
 from functools import partial
 from itertools import product
@@ -118,7 +119,7 @@ class DistributedShampooGraftingTest(unittest.TestCase):
                         momentum=0.0,
                         max_preconditioner_dim=10,
                         precondition_frequency=1,
-                        start_preconditioning_step=1000,
+                        start_preconditioning_step=math.inf,
                         use_decoupled_weight_decay=False,
                         grafting_config=AdaGradGraftingConfig(
                             epsilon=1e-10,
@@ -153,7 +154,7 @@ class DistributedShampooGraftingTest(unittest.TestCase):
                         momentum=0.0,
                         max_preconditioner_dim=10,
                         precondition_frequency=1,
-                        start_preconditioning_step=1000,
+                        start_preconditioning_step=math.inf,
                         use_decoupled_weight_decay=False,
                         grafting_config=AdamGraftingConfig(
                             beta2=0.999,
@@ -189,7 +190,7 @@ class DistributedShampooGraftingTest(unittest.TestCase):
                         momentum=0.0,
                         max_preconditioner_dim=10,
                         precondition_frequency=1,
-                        start_preconditioning_step=1000,
+                        start_preconditioning_step=math.inf,
                         use_decoupled_weight_decay=True,
                         grafting_config=AdamGraftingConfig(
                             beta2=0.999,
@@ -228,7 +229,7 @@ class DistributedShampooGraftingTest(unittest.TestCase):
                         momentum=0.0,
                         max_preconditioner_dim=10,
                         precondition_frequency=1,
-                        start_preconditioning_step=1000,
+                        start_preconditioning_step=math.inf,
                         use_decoupled_weight_decay=False,
                         grafting_config=RMSpropGraftingConfig(
                             beta2=0.99,
@@ -269,7 +270,7 @@ class DistributedShampooGraftingTest(unittest.TestCase):
                         epsilon=1e-10,
                         max_preconditioner_dim=10,
                         precondition_frequency=1,
-                        start_preconditioning_step=1000,
+                        start_preconditioning_step=math.inf,
                         use_nesterov=use_nesterov,
                         use_decoupled_weight_decay=False,
                         grafting_config=SGDGraftingConfig(),
