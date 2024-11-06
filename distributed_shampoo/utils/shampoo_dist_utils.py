@@ -10,7 +10,7 @@ LICENSE file in the root directory of this source tree.
 from functools import cache
 from typing import Optional
 
-from torch.distributed import DeviceMesh
+from torch.distributed.device_mesh import DeviceMesh
 
 
 @cache
