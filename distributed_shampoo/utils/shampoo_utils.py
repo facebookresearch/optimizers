@@ -52,7 +52,7 @@ def multi_dim_split(tensor: Tensor, split_size: int) -> Tuple[Tensor, ...]:
         split_grad (List[Tensor]): List of tensors.
 
     """
-    split_tensors = (tensor,)
+    split_tensors: Tuple[Tensor, ...] = (tensor,)
     if all(s <= split_size for s in tensor.size()):
         return split_tensors
 

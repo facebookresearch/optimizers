@@ -17,7 +17,7 @@ from distributed_shampoo.shampoo_types import (
     PARAMS,
     USE_MERGE_DIMS,
 )
-from distributed_shampoo.utils.shampoo_block_info import BlockInfo
+from distributed_shampoo.utils.shampoo_block_info import BlockInfo, DDPBlockInfo
 from distributed_shampoo.utils.shampoo_utils import (
     compress_list,
     generate_pairwise_indices,
@@ -63,7 +63,7 @@ class DistributorInterface(ABC):
         # Local masked blocked params are the parameters masked by the distributor selector AND the local grad selector.
         self._local_masked_blocked_params: Tuple[Tensor, ...]
         # Global block info list contains information about each global block.
-        self._global_block_info_list: Tuple[BlockInfo, ...]
+        self._global_block_info_list: Tuple[BlockInfo, ...] | Tuple[DDPBlockInfo, ...]
 
     @abstractmethod
     @torch.no_grad()
@@ -108,7 +108,7 @@ class DistributorInterface(ABC):
         Args:
             get_grad (bool): Whether to return the param or the grad of the param. (Default: False)
         Returns:
-            local (Iterable[Tensor | None]): Local params (or gradidents) from the param_group. Note
+            local (Iterable[Tensor | None]): Local params (or gradients) from the param_group. Note
               that gradients can be None.
         """
 
@@ -141,8 +141,8 @@ class DistributorInterface(ABC):
         )
 
         # Generate blocked parameters list and number of blocks per parameter.
-        global_blocked_params = []
-        global_num_blocks_per_param = []
+        global_blocked_params: list[Tensor] = []
+        global_num_blocks_per_param: list[int] = []
 
         for param, merged_dims in zip(
             self._get_params_or_grads(), self._global_merged_dims_list, strict=True
@@ -185,7 +185,7 @@ class DistributorInterface(ABC):
 
         """
 
-        local_masked_blocked_grads = []
+        local_masked_blocked_grads: list[Tensor] = []
         global_grad_selector = []
 
         for grad, merged_dims, num_blocks, (block_index, next_block_index) in zip(

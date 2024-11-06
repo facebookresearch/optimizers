@@ -1,0 +1,23 @@
+name: type-check-mypy
+
+on: [push, pull_request]
+
+jobs:
+  mypy:
+    runs-on: ubuntu-latest
+    steps:
+        - uses: actions/checkout@v4
+        - name: Set up and update uv.
+          run: |
+            curl -LsSf https://astral.sh/uv/install.sh | sh
+            uv self update
+        - name: Install Python.
+          run: uv python install 3.10
+        - name: Create venv and install the package.
+          run: |
+            uv venv && source .venv/bin/activate
+            uv pip install -e ".[dev]"
+        - name: Run type checking with mypy.
+          run: |
+            source .venv/bin/activate
+            make type-check

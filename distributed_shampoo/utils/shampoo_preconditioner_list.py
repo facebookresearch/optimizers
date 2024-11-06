@@ -16,7 +16,7 @@ from functools import partial, reduce
 
 from itertools import chain
 from operator import methodcaller
-from typing import Any, cast, DefaultDict, Generic, Sequence, TypeVar
+from typing import Any, cast, Generic, Mapping, Sequence, TypeVar
 
 import torch
 from distributed_shampoo.shampoo_types import PrecisionConfig, PreconditionerValueError
@@ -169,7 +169,7 @@ class AdagradPreconditionerList(PreconditionerList):
 
     Args:
         block_list (tuple[Tensor, ...]): List of (blocks of) parameters.
-        state (DefaultDict[Tensor, Any]): Dictionary containing optimizer state.
+        state (Mapping[Tensor, Any]): Mapping containing optimizer state.
         block_info_list (tuple[BlockInfo, ...]): List containing corresponding BlockInfo for each block/parameter in block_list.
             Note that this should have the same length as block_list.
         distributor_selector (tuple[bool, ...]): Distributor selector is a boolean list indicating whether a blocked parameter
@@ -186,7 +186,7 @@ class AdagradPreconditionerList(PreconditionerList):
         self,
         block_list: tuple[Tensor, ...],
         # type: ignore
-        state: DefaultDict[Tensor, Any],
+        state: Mapping[Tensor, Any],
         block_info_list: tuple[BlockInfo, ...],
         distributor_selector: tuple[bool, ...],
         precision_config: PrecisionConfig,
@@ -422,7 +422,7 @@ class BaseShampooPreconditionerList(
 
     Args:
         block_list (tuple[Tensor, ...]): List of (blocks of) parameters.
-        state (DefaultDict[Tensor, Any]): Dictionary containing optimizer state.
+        state (Mapping[Tensor, Any]): Mapping containing optimizer state.
         block_info_list (tuple[BlockInfo, ...]): List containing corresponding BlockInfo for each block/parameter in block_list.
             Note that this should have the same length as block_list.
         distributor_selector (tuple[bool, ...]): Distributor selector is a boolean list indicating whether a blocked parameter
@@ -448,7 +448,7 @@ class BaseShampooPreconditionerList(
         self,
         block_list: tuple[Tensor, ...],
         # type: ignore
-        state: DefaultDict[Tensor, Any],
+        state: Mapping[Tensor, Any],
         block_info_list: tuple[BlockInfo, ...],
         distributor_selector: tuple[bool, ...],
         precision_config: PrecisionConfig,
@@ -565,7 +565,7 @@ class BaseShampooPreconditionerList(
         self,
         block_list: tuple[Tensor, ...],
         # type: ignore
-        state: DefaultDict[Tensor, Any],
+        state: Mapping[Tensor, Any],
         block_info_list: tuple[BlockInfo, ...],
     ) -> list[ShampooKroneckerFactorsListType]:
         # Instantiate (blocked) Kronecker factors and construct list of Kronecker factors.
@@ -660,9 +660,8 @@ class BaseShampooPreconditionerList(
     @abstractmethod
     def _amortized_computation(self) -> None:
         """
-        Computes the amortized computation needed for each Shampoo implementation.
-        This amortized computation is computation heavy work that could not be done for eeac step.
-        As a result, each Shampoo implementation may implement this method for its neeed.
+        Computes the amortized computation needed for each Shampoo preconditioner implementation.
+        This amortized computation is computation heavy work that cannot be done for each step.
         """
         ...
 
@@ -783,13 +782,13 @@ class BaseShampooPreconditionerList(
         with profiler.record_function(
             f"## {self.__class__.__name__}:{self.compress_preconditioner_list.__name__} ##"
         ):
-            self._masked_order_list = compress_list(
+            self._masked_order_list: tuple[int, ...] = compress_list(  # type: ignore[no-redef]
                 self._local_order_list, local_grad_selector
             )
-            self._masked_root_list = compress_list(
+            self._masked_root_list: tuple[int, ...] = compress_list(  # type: ignore[no-redef]
                 self._local_root_list, local_grad_selector
             )
-            self._masked_kronecker_factors_list: tuple[
+            self._masked_kronecker_factors_list: tuple[  # type: ignore[no-redef]
                 ShampooKroneckerFactorsListType,
                 ...,
             ] = compress_list(self._local_kronecker_factors_list, local_grad_selector)
@@ -819,7 +818,7 @@ class BaseShampooPreconditionerList(
                         grad,
                         grad,
                         # Contracts across all dimensions except for k.
-                        dims=[[*chain(range(k), range(k + 1, order))]] * 2,
+                        dims=[[*chain(range(k), range(k + 1, order))]] * 2,  # type: ignore[has-type]
                     )
                     for k in range(order)
                 )

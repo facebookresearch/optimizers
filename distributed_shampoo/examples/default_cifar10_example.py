@@ -40,7 +40,7 @@ def train_default_model(
     loss_function: nn.Module,
     data_loader: torch.utils.data.DataLoader,
     optimizer: torch.optim.Optimizer,
-    device: str,
+    device: torch.device,
     epochs: int = 1,
     window_size: int = 100,
 ) -> Tuple[float, float, int]:
@@ -62,7 +62,11 @@ def train_default_model(
             metrics.update(loss)
             metrics.log()
 
-    return metrics._lifetime_loss, metrics._window_loss, metrics._iteration
+    return (
+        metrics._lifetime_loss.item(),
+        metrics._window_loss.item(),
+        metrics._iteration,
+    )
 
 
 if __name__ == "__main__":
@@ -97,7 +101,7 @@ if __name__ == "__main__":
     set_seed(args.seed)
 
     # check cuda availability and set device
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # instantiate model and loss function
     model, loss_function = get_model_and_loss_fn(device)

@@ -63,7 +63,7 @@ class PreconditionerListTest(unittest.TestCase):
     def _instantiate_preconditioner_list(self, **kwargs: Any) -> PreconditionerList:
         # Disable the abstract methods check from the interface so it is possible to instantiate PreconditionerList.
         PreconditionerList.__abstractmethods__ = frozenset()
-        return PreconditionerList(block_list=self._block_list)
+        return PreconditionerList(block_list=self._block_list)  # type: ignore[abstract]
 
     def _test_update_preconditioners_and_precondition(
         self,
@@ -149,7 +149,7 @@ class PreconditionerListTest(unittest.TestCase):
 
 
 class SGDPreconditionerListTest(PreconditionerListTest):
-    def _instantiate_preconditioner_list(self, **kwargs: Any) -> PreconditionerList:
+    def _instantiate_preconditioner_list(self, **kwargs: Any) -> SGDPreconditionerList:
         return SGDPreconditionerList(block_list=self._block_list, **kwargs)
 
     def test_update_preconditioners_and_precondition(self) -> None:
@@ -177,7 +177,9 @@ class AdagradPreconditionerListTest(PreconditionerListTest):
             self._params[2],
         )
 
-    def _instantiate_preconditioner_list(self, **kwargs: Any) -> PreconditionerList:
+    def _instantiate_preconditioner_list(
+        self, **kwargs: Any
+    ) -> AdagradPreconditionerList:  # type: ignore[override]
         kwargs = {"beta2": 1.0, "epsilon": 0.0, "use_bias_correction": True} | kwargs
         return AdagradPreconditionerList(
             block_list=self._block_list,
@@ -195,7 +197,7 @@ class AdagradPreconditionerListTest(PreconditionerListTest):
             # Following param will not be used due to the distributor selector below.
             torch.tensor([torch.nan, torch.nan]),
         )
-        self._state = {
+        self._state = {  # type: ignore[var-annotated]
             self._params[0]: {},
             self._params[1]: {},
             self._params[2]: {},
@@ -282,7 +284,7 @@ class AbstractTest:
         def _amortized_computation_function(self) -> str: ...
 
         @abc.abstractmethod
-        def _instantiate_preconditioner_list(
+        def _instantiate_preconditioner_list(  # type: ignore[override]
             self, **kwargs: Any
         ) -> PreconditionerList: ...
 
@@ -456,7 +458,7 @@ class ShampooPreconditionerListTest(AbstractTest.BaseShampooPreconditionerListTe
     def _amortized_computation_function(self) -> str:
         return "matrix_inverse_root"
 
-    def _instantiate_preconditioner_list(self, **kwargs: Any) -> PreconditionerList:
+    def _instantiate_preconditioner_list(self, **kwargs: Any) -> PreconditionerList:  # type: ignore[override]
         kwargs = {
             "beta2": 1.0,
             "epsilon": 0.0,
@@ -521,9 +523,6 @@ class ShampooPreconditionerListTest(AbstractTest.BaseShampooPreconditionerListTe
             preconditioned_grad.clone() for preconditioned_grad in masked_grad_list2
         ]
         masked_expected_preconditioned_grad_list[2] /= torch.tensor(2.0 ** (1 / 4))
-        masked_expected_preconditioned_grad_list = tuple(
-            masked_expected_preconditioned_grad_list
-        )
 
         self._test_update_preconditioners_and_precondition(
             preconditioner_list=self._instantiate_preconditioner_list(
@@ -531,7 +530,9 @@ class ShampooPreconditionerListTest(AbstractTest.BaseShampooPreconditionerListTe
                 use_bias_correction=True,
             ),
             masked_grad_lists=[masked_grad_list1, masked_grad_list2],
-            masked_expected_preconditioned_grad_list=masked_expected_preconditioned_grad_list,
+            masked_expected_preconditioned_grad_list=tuple(
+                masked_expected_preconditioned_grad_list
+            ),
         )
 
         """
@@ -562,9 +563,6 @@ class ShampooPreconditionerListTest(AbstractTest.BaseShampooPreconditionerListTe
             for preconditioned_grad in beta2_compensated_grad_list2
         ]
         masked_expected_preconditioned_grad_list[2] /= torch.tensor(2.0 ** (1 / 4))
-        masked_expected_preconditioned_grad_list = tuple(
-            masked_expected_preconditioned_grad_list
-        )
 
         self._test_update_preconditioners_and_precondition(
             preconditioner_list=self._instantiate_preconditioner_list(
@@ -575,7 +573,9 @@ class ShampooPreconditionerListTest(AbstractTest.BaseShampooPreconditionerListTe
                 beta2_compensated_grad_list1,
                 beta2_compensated_grad_list2,
             ],
-            masked_expected_preconditioned_grad_list=masked_expected_preconditioned_grad_list,
+            masked_expected_preconditioned_grad_list=tuple(
+                masked_expected_preconditioned_grad_list
+            ),
         )
 
         """
@@ -605,9 +605,6 @@ class ShampooPreconditionerListTest(AbstractTest.BaseShampooPreconditionerListTe
             for preconditioned_grad in bias_compensated_grad_list2
         ]
         masked_expected_preconditioned_grad_list[2] /= torch.tensor(2.0 ** (1 / 4))
-        masked_expected_preconditioned_grad_list = tuple(
-            masked_expected_preconditioned_grad_list
-        )
 
         self._test_update_preconditioners_and_precondition(
             preconditioner_list=self._instantiate_preconditioner_list(
@@ -618,7 +615,9 @@ class ShampooPreconditionerListTest(AbstractTest.BaseShampooPreconditionerListTe
                 bias_compensated_grad_list1,
                 bias_compensated_grad_list2,
             ],
-            masked_expected_preconditioned_grad_list=masked_expected_preconditioned_grad_list,
+            masked_expected_preconditioned_grad_list=tuple(
+                masked_expected_preconditioned_grad_list
+            ),
         )
 
     def test_inv_root_override_and_exponent_multiplier(self) -> None:
@@ -742,7 +741,7 @@ class EigenvalueCorrectedShampooPreconditionerListTest(
     def _amortized_computation_function(self) -> str:
         return "matrix_eigenvectors"
 
-    def _instantiate_preconditioner_list(self, **kwargs: Any) -> PreconditionerList:
+    def _instantiate_preconditioner_list(self, **kwargs: Any) -> PreconditionerList:  # type: ignore[override]
         kwargs = {
             "beta2": 1.0,
             "epsilon": 1e-12,
@@ -757,7 +756,7 @@ class EigenvalueCorrectedShampooPreconditionerListTest(
             block_info_list=self._block_info_list,
             distributor_selector=self._distributor_selector,
             precision_config=PrecisionConfig(factor_matrix_dtype=torch.float64),
-            **kwargs,
+            **kwargs,  # type: ignore[arg-type]
         )
 
     def test_update_preconditioners_and_precondition(self) -> None:
@@ -848,11 +847,11 @@ class EigenvalueCorrectedShampooPreconditionerListTest(
             torch.tensor(1 - beta2).sqrt(),
         )
 
-        masked_expected_preconditioned_grad_list = [
+        masked_expected_preconditioned_grad_list = (
             torch.tensor([0.0, 1.0]),
             torch.eye(2) / torch.tensor(2.0).sqrt(),
             torch.tensor([[0.0, 1.0]]),
-        ]
+        )
         # Fix scaling due to EMA.
         torch._foreach_div_(
             masked_expected_preconditioned_grad_list,

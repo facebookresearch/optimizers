@@ -78,15 +78,16 @@ class DDPDistributor(DistributorInterface):
 
         # Determine communication type.
         if distributed_config.communication_dtype == CommunicationDType.BF16:
-            self._communication_dtype: torch.dtype = torch.bfloat16
+            communication_dtype = torch.bfloat16
         elif distributed_config.communication_dtype == CommunicationDType.FP16:
-            self._communication_dtype: torch.dtype = torch.float16
+            communication_dtype = torch.float16
         else:
             assert distributed_config.communication_dtype in [
                 CommunicationDType.FP32,
                 CommunicationDType.DEFAULT,
             ]
-            self._communication_dtype = torch.float32
+            communication_dtype = torch.float32
+        self._communication_dtype: torch.dtype = communication_dtype
 
         # Initialize _dist_group and _group_rank.
         self._dist_group: Optional[dist.ProcessGroup] = (
@@ -262,7 +263,7 @@ class DDPDistributor(DistributorInterface):
 
         """
         # Construct global block info list.
-        self._global_block_info_list = tuple(
+        self._global_block_info_list: Tuple[DDPBlockInfo, ...] = tuple(
             DDPBlockInfo(
                 param=param,
                 composable_block_ids=(param_index, f"block_{block_index}"),

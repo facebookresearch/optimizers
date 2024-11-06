@@ -502,18 +502,18 @@ class DistributedShampoo(torch.optim.Optimizer):
         if distributed_config is None:
             distributor = Distributor
         elif type(distributed_config) is DDPShampooConfig:
-            distributor = partial(DDPDistributor, distributed_config=distributed_config)
+            distributor = partial(DDPDistributor, distributed_config=distributed_config)  # type: ignore[assignment]
         elif type(distributed_config) is FSDPShampooConfig:
             distributor = partial(
                 FSDPDistributor, distributed_config=distributed_config
-            )
+            )  # type: ignore[assignment]
         elif type(distributed_config) is FullyShardShampooConfig:
             distributor = FullyShardDistributor
         elif type(distributed_config) is HSDPShampooConfig:
             distributor = partial(
                 HSDPDistributor,
                 distributed_config=distributed_config,
-            )
+            )  # type: ignore[assignment]
         else:
             raise NotImplementedError(f"{distributed_config=} not supported!")
 
@@ -808,10 +808,7 @@ class DistributedShampoo(torch.optim.Optimizer):
         Uses infinity norm to evaluate residuals and errors.
         """
 
-        # Accumulate relative errors/residuals
-        relative_errors = []
-        relative_residuals = []
-
+        # Compute relative errors/residuals for each group.
         for (group_index, group), state_lists in zip(
             enumerate(self.param_groups), self._per_group_state_lists, strict=True
         ):
@@ -827,12 +824,12 @@ class DistributedShampoo(torch.optim.Optimizer):
                 )
                 continue
 
-            relative_errors, relative_residuals = state_lists[
-                SHAMPOO_PRECONDITIONER_LIST
-            ].compute_root_inverse_residuals()
-
-            relative_errors = torch.stack(relative_errors)
-            relative_residuals = torch.stack(relative_residuals)
+            relative_errors, relative_residuals = map(
+                torch.stack,
+                state_lists[
+                    SHAMPOO_PRECONDITIONER_LIST
+                ].compute_root_inverse_residuals(),
+            )
 
             quantiles = torch.as_tensor(
                 [0, 0.25, 0.5, 0.75, 1],
@@ -1141,7 +1138,7 @@ class DistributedShampoo(torch.optim.Optimizer):
         )
 
     @torch.no_grad()
-    def step(self, closure: Optional[Callable[[], float]] = None) -> Optional[float]:
+    def step(self, closure: Optional[Callable[[], float]] = None) -> Optional[float]:  # type: ignore[override]
         """Performs a single optimization step.
 
         Args:

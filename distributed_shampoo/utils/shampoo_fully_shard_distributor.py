@@ -13,6 +13,7 @@ from distributed_shampoo.shampoo_types import PARAMS
 from distributed_shampoo.utils.shampoo_block_info import BlockInfo
 from distributed_shampoo.utils.shampoo_distributor import Distributor
 from torch import distributed as dist, Tensor
+from torch.distributed.tensor import DTensor
 
 
 class FullyShardDistributor(Distributor):
@@ -47,8 +48,11 @@ class FullyShardDistributor(Distributor):
         """Construct global block info list from param_group and num_blocks_within_param."""
         rank = dist.get_rank()
 
-        non_empty_params = filter(
-            lambda p: p.to_local().numel() > 0, super()._get_params_or_grads()
+        # Call `super()` instead of `self` as a performance optimization.
+        # This leads to O(1) instead of O(N) complexity to retrieve the parameters.
+        non_empty_params: Iterable[DTensor] = filter(
+            lambda p: p.to_local().numel() > 0,  # type: ignore[arg-type]
+            super()._get_params_or_grads(),
         )
         self._global_block_info_list = tuple(
             BlockInfo(

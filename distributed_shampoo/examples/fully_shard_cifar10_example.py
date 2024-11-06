@@ -9,7 +9,7 @@ LICENSE file in the root directory of this source tree.
 
 import logging
 import os
-from typing import Optional, Tuple, Union
+from typing import Optional, Tuple
 
 import torch
 import torch.distributed as dist
@@ -53,7 +53,7 @@ def train_fully_shard_model(
     sampler: torch.utils.data.Sampler,
     data_loader: torch.utils.data.DataLoader,
     optimizer: torch.optim.Optimizer,
-    device: Union[str, torch.device],
+    device: torch.device,
     epochs: int = 1,
     window_size: int = 100,
     use_distributed_checkpoint: bool = False,
@@ -71,7 +71,7 @@ def train_fully_shard_model(
     # main training loop
     for epoch in range(epochs):
         metrics._epoch = epoch
-        sampler.set_epoch(epoch)
+        sampler.set_epoch(epoch)  # type: ignore[attr-defined]
 
         for inputs, labels in data_loader:
             inputs, labels = inputs.to(device), labels.to(device)
@@ -89,6 +89,7 @@ def train_fully_shard_model(
 
     # checkpoint optimizer and model using distributed checkpointing solution
     if use_distributed_checkpoint and isinstance(optimizer, DistributedShampoo):
+        assert checkpoint_dir is not None
         state_dict = {
             "model": model.state_dict(),
             "optim": optimizer.distributed_state_dict(
@@ -100,7 +101,11 @@ def train_fully_shard_model(
             storage_writer=dist_checkpoint.FileSystemWriter(checkpoint_dir),
         )
 
-    return metrics._lifetime_loss, metrics._window_loss, metrics._iteration
+    return (
+        metrics._lifetime_loss.item(),
+        metrics._window_loss.item(),
+        metrics._iteration,
+    )
 
 
 def create_model_and_optimizer_and_loss_fn(args, device):

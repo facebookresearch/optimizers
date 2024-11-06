@@ -86,12 +86,12 @@ class DistributedShampooPytorchCompileTest(unittest.TestCase):
 
     @staticmethod
     def _shampoo_optim_factory(
-        shampoo_pt2_compile_config: ShampooPT2CompileConfig,
+        shampoo_pt2_compile_config: ShampooPT2CompileConfig | None,
         precondition_frequency: int,
         start_preconditioning_step: int,
         weight_decay: float,
         betas: tuple[float, float],
-        grafting_config: GraftingConfig,
+        grafting_config: GraftingConfig | None,
     ) -> Callable[[ParamsT], torch.optim.Optimizer]:
         return lambda parameters: DistributedShampoo(
             parameters,

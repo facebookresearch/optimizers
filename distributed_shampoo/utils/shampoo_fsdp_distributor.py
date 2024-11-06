@@ -106,7 +106,7 @@ class FSDPDistributor(DistributorInterface):
         self,
     ) -> None:
         """Split, merge, and block parameters."""
-        global_blocked_params = []
+        global_blocked_params: List[Tensor] = []
         # self._global_num_splits_per_param refers to the total number of splits within each
         # flattened parameter (obtained by split tensor block recovery).
         # This has the same length as the number of flattened parameters contained in
@@ -185,7 +185,7 @@ class FSDPDistributor(DistributorInterface):
             local_masked_blocked_grads (Tuple[Tensor, ...]): Local gradients with grad not None.
 
         """
-        local_masked_blocked_grads = []
+        local_masked_blocked_grads: List[Tensor] = []
         global_grad_selector = []
 
         for (

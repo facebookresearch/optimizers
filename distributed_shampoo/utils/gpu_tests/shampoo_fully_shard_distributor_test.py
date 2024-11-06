@@ -108,14 +108,16 @@ class ShampooFullyShardDistributorTest(FSDPTest):
         if uses_fully_shard:
             # When FullyShard is used, model parameters are DTensors. We obtain the full value of
             # parameters from DTensors.
-            params = []
+            params_list = []
             for param in model.parameters():
                 # Need this assertion to get pass type-checking test.
                 assert isinstance(param, DTensor)
-                params.append(param.full_tensor().view(-1).detach().cpu())
+                params_list.append(param.full_tensor().view(-1).detach().cpu())
         else:
-            params = [param.view(-1).detach().cpu() for param in model.parameters()]
-        return params, objective.detach().cpu()
+            params_list = [
+                param.view(-1).detach().cpu() for param in model.parameters()
+            ]
+        return params_list, objective.detach().cpu()
 
     @staticmethod
     def _test_two_configs(

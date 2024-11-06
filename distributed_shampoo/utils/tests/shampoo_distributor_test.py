@@ -54,7 +54,7 @@ class DistributorInterfaceTest(unittest.TestCase):
 
     def test_update_params(self) -> None:
         self.assertIsNone(
-            self._distributor.update_params(masked_blocked_search_directions=[])
+            self._distributor.update_params(masked_blocked_search_directions=())
         )
 
     def test_merge_and_block_gradients(self) -> None:
