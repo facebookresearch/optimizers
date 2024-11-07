@@ -24,6 +24,7 @@ from matrix_functions_types import (
     EigenConfig,
     EigenvalueCorrectionConfig,
     EighEigenvalueCorrectionConfig,
+    QREigenvalueCorrectionConfig,
     RootInvConfig,
 )
 
@@ -597,6 +598,7 @@ def compute_matrix_root_inverse_residuals(
 
 def matrix_eigenvectors(
     A: Tensor,
+    eigenvectors_estimate: Tensor | None = None,
     eigenvector_computation_config: EigenvalueCorrectionConfig = DefaultEighEigenvalueCorrectionConfig,
     is_diagonal: Tensor | bool = False,
 ) -> Tensor:
@@ -608,6 +610,8 @@ def matrix_eigenvectors(
 
     Args:
         A (Tensor): Square matrix of interest.
+        eigenvectors_estimate (Tensor | None): The current estimate of the eigenvectors of A.
+            (Default: None)
         eigenvector_computation_config (EigenvalueCorrectionConfig): Determines how eigenvectors are computed.
             (Default: DefaultEighEigenvalueCorrectionConfig)
         is_diagonal (Tensor | bool): Whether A is diagonal. (Default: False)
@@ -639,7 +643,44 @@ def matrix_eigenvectors(
             A,
             retry_double_precision=eigenvector_computation_config.retry_double_precision,
         )[1]
+    elif type(eigenvector_computation_config) is QREigenvalueCorrectionConfig:
+        assert (
+            eigenvectors_estimate is not None
+        ), "Estimate of eigenvectors is required when using QREigenvalueCorrectionConfig."
+        return _compute_one_step_power_iter_qr_eigenvectors(
+            A,
+            eigenvectors_estimate=eigenvectors_estimate,
+        )
     else:
         raise NotImplementedError(
             f"Eigenvector computation method is not implemented! Specified eigenvector method is {eigenvector_computation_config=}."
         )
+
+
+def _compute_one_step_power_iter_qr_eigenvectors(
+    A: Tensor,
+    eigenvectors_estimate: Tensor,
+) -> Tensor:
+    """
+    Approximately compute the eigenvectors of a symmetric matrix by performing a single power iteration followed by a QR decomposition.
+
+    Given an initial estimate of the eigenvectors Q of matrix A, a single power iteration and a QR decomposition is performed, i.e. Q, _ <- QR(A @ Q).
+    When the initial estimate is the zero matrix, the eigenvectors are computed using an eigendecomposition.
+
+    Used in https://arxiv.org/abs/2405.18144 (see Appendix B) and https://arxiv.org/abs/2409.11321.
+
+    Args:
+        A (Tensor): The symmetric input matrix.
+        eigenvectors_estimate (Tensor): The current estimate of the eigenvectors of A.
+
+    Returns:
+        Tensor: The approximate eigenvectors of the input matrix A.
+
+    """
+    if not eigenvectors_estimate.any():
+        return _compute_eigenvalue_decomposition(A)[1]
+
+    power_iteration = A @ eigenvectors_estimate
+    Q = torch.linalg.qr(power_iteration).Q
+
+    return Q

@@ -86,14 +86,14 @@ class CoupledHigherOrderConfig(RootInvConfig):
 
 @dataclass
 class EigenvalueCorrectionConfig(PreconditionerComputationConfig):
-    """Base dataclass for matrix eigenvector method configurations in Shampoo."""
+    """Base dataclass for matrix eigenvector method configurations in eigenvalue-corrected Shampoo."""
 
     ...
 
 
 @dataclass(kw_only=True)
 class EighEigenvalueCorrectionConfig(EigenvalueCorrectionConfig):
-    """Configuration for eigendecomposition method used in eigenvalue corrected Shampoo.
+    """Configuration for eigendecomposition method used in eigenvalue-corrected Shampoo.
 
     Args:
         retry_double_precision (bool): Whether to re-trying eigendecomposition with higher(double) precision if lower precision fails due
@@ -105,3 +105,8 @@ class EighEigenvalueCorrectionConfig(EigenvalueCorrectionConfig):
 
 
 DefaultEighEigenvalueCorrectionConfig = EighEigenvalueCorrectionConfig()
+
+
+@dataclass(kw_only=True)
+class QREigenvalueCorrectionConfig(EigenvalueCorrectionConfig):
+    """Configuration for one-step power iteration and subsequent QR decomposition used in eigenvalue-corrected Shampoo."""

@@ -1282,6 +1282,7 @@ class EigenvalueCorrectedShampooPreconditionerList(
                     try:
                         computed_eigenvectors = matrix_eigenvectors(
                             A=factor_matrix,
+                            eigenvectors_estimate=factor_matrix_eigenvectors,
                             eigenvector_computation_config=cast(
                                 EigenvalueCorrectionConfig,
                                 self._preconditioner_computation_config,

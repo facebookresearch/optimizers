@@ -35,6 +35,7 @@ from matrix_functions_types import (
     CoupledNewtonConfig,
     EigenConfig,
     EigenvalueCorrectionConfig,
+    QREigenvalueCorrectionConfig,
     RootInvConfig,
 )
 from torch import Tensor
@@ -841,6 +842,22 @@ class MatrixEigenvectorsTest(unittest.TestCase):
                     matrix_eigenvectors(
                         A,
                         is_diagonal=False,
+                    ),
+                    atol=atol,
+                    rtol=rtol,
+                )
+        with self.subTest(
+            "Test with QREigenvalueCorrectionConfig with zero initialization."
+        ):
+            qr_config = QREigenvalueCorrectionConfig()
+            for A, expected_eigenvectors in zip(A_list, expected_eigenvectors_list):
+                torch.testing.assert_close(
+                    expected_eigenvectors,
+                    matrix_eigenvectors(
+                        A,
+                        eigenvectors_estimate=torch.zeros_like(A),
+                        is_diagonal=False,
+                        eigenvector_computation_config=qr_config,
                     ),
                     atol=atol,
                     rtol=rtol,
