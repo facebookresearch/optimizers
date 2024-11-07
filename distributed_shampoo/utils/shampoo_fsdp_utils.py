@@ -8,7 +8,6 @@ LICENSE file in the root directory of this source tree.
 """
 
 from collections.abc import Callable
-from typing import Dict, Tuple
 
 import torch
 from distributed_shampoo.shampoo_types import FSDPParameterMetadata
@@ -20,17 +19,17 @@ from torch.nn import Parameter
 
 def compile_fsdp_parameter_metadata(
     module: torch.nn.Module,
-) -> Dict[Parameter, FSDPParameterMetadata]:
+) -> dict[Parameter, FSDPParameterMetadata]:
     """Compiles parameter metadata necessary for FSDP Shampoo.
 
     Args:
         module (nn.Module): Module to compile metadata for.
 
     Returns:
-        param_metadata (Dict[Parameter, FSDPParameterMetadata]): Dictionary mapping each parameter to its FSDP metadata.
+        param_metadata (dict[Parameter, FSDPParameterMetadata]): Dictionary mapping each parameter to its FSDP metadata.
 
     """
-    param_metadata: Dict[Parameter, FSDPParameterMetadata] = {}
+    param_metadata: dict[Parameter, FSDPParameterMetadata] = {}
 
     for fsdp_module in FSDP.fsdp_modules(module):
         if (flat_param := fsdp_module._flat_param) is None:
@@ -75,25 +74,25 @@ def compile_fsdp_parameter_metadata(
 
 
 def _partition_params(
-    named_params: Dict[str, Parameter],
+    named_params: dict[str, Parameter],
     fsdp_criteria: Callable[[Parameter], bool],
     hsdp_criteria: Callable[[Parameter], bool],
     other_criteria: Callable[[Parameter], bool],
-) -> Tuple[Dict[str, Parameter], Dict[str, Parameter], Dict[str, Parameter]]:
+) -> tuple[dict[str, Parameter], dict[str, Parameter], dict[str, Parameter]]:
     """Partitions parameters into FSDP, HSDP, and the rest of parameters.
 
     NOTE: The output dictionaries are guaranteed to be the partitions of the input `named_params`.
 
     Args:
-        named_params (Dict[str, Parameter]): Dictionary mapping each parameter name to its corresponding parameter.
+        named_params (dict[str, Parameter]): Dictionary mapping each parameter name to its corresponding parameter.
         fsdp_criteria (Callable[[Parameter], bool]): Criteria for determining if a parameter is FSDP.
         hsdp_criteria (Callable[[Parameter], bool]): Criteria for determining if a parameter is HSDP.
         other_criteria (Callable[[Parameter], bool]): Criteria for determining if a parameter is not FSDP or HSDP.
 
     Returns:
-        fsdp_params (Dict[str, Parameter]): Dictionary mapping each parameter name to its corresponding FSDP parameter.
-        hsdp_params (Dict[str, Parameter]): Dictionary mapping each parameter name to its corresponding HSDP parameter.
-        other_params (Dict[str, Parameter]): Dictionary mapping each parameter name to its corresponding non-FSDP parameter.
+        fsdp_params (dict[str, Parameter]): Dictionary mapping each parameter name to its corresponding FSDP parameter.
+        hsdp_params (dict[str, Parameter]): Dictionary mapping each parameter name to its corresponding HSDP parameter.
+        other_params (dict[str, Parameter]): Dictionary mapping each parameter name to its corresponding non-FSDP parameter.
 
     """
     fsdp_params = {
@@ -124,9 +123,9 @@ def _partition_params(
 
 
 def parse_fsdp_params(
-    named_params: Dict[str, Parameter],
-    param_metadata: Dict[Parameter, FSDPParameterMetadata],
-) -> Tuple[Dict[str, Parameter], Dict[str, Parameter], Dict[str, Parameter]]:
+    named_params: dict[str, Parameter],
+    param_metadata: dict[Parameter, FSDPParameterMetadata],
+) -> tuple[dict[str, Parameter], dict[str, Parameter], dict[str, Parameter]]:
     """Splits parameters into FSDP, HSDP, and the rest of parameters.
 
     This is useful for parsing the parameters when FSDP and HSDP are wrapping a subset of modules within a model.
@@ -134,13 +133,13 @@ def parse_fsdp_params(
     NOTE: The output dictionaries are guaranteed to be the partitions of the input `named_params`.
 
     Args:
-        named_params (Dict[str, Parameter]): Dictionary mapping each parameter name to its corresponding parameter.
-        param_metadata (Dict[Parameter, FSDPParameterMetadata]): Dictionary mapping each parameter to its FSDP metadata.
+        named_params (dict[str, Parameter]): Dictionary mapping each parameter name to its corresponding parameter.
+        param_metadata (dict[Parameter, FSDPParameterMetadata]): Dictionary mapping each parameter to its FSDP metadata.
 
     Returns:
-        fsdp_params (Dict[str, Parameter]): Dictionary mapping each parameter name to its corresponding FSDP parameter.
-        hsdp_params (Dict[str, Parameter]): Dictionary mapping each parameter name to its corresponding HSDP parameter.
-        other_params (Dict[str, Parameter]): Dictionary mapping each parameter name to its corresponding non-FSDP parameter.
+        fsdp_params (dict[str, Parameter]): Dictionary mapping each parameter name to its corresponding FSDP parameter.
+        hsdp_params (dict[str, Parameter]): Dictionary mapping each parameter name to its corresponding HSDP parameter.
+        other_params (dict[str, Parameter]): Dictionary mapping each parameter name to its corresponding non-FSDP parameter.
 
     """
     return _partition_params(
@@ -157,8 +156,8 @@ def parse_fsdp_params(
 
 
 def parse_fully_shard_params(
-    named_params: Dict[str, Parameter],
-) -> Tuple[Dict[str, Parameter], Dict[str, Parameter], Dict[str, Parameter]]:
+    named_params: dict[str, Parameter],
+) -> tuple[dict[str, Parameter], dict[str, Parameter], dict[str, Parameter]]:
     """Splits parameters into fully shard(per parameter FSDP), hybrid shard parameters(per parameter FSDP) and the rest of parameters.
 
     This is useful for parsing the parameters when fully shard or hybrid shard are wrapping a subset of modules within a model.
@@ -166,12 +165,12 @@ def parse_fully_shard_params(
     NOTE: The output dictionaries are guaranteed to be the partitions of the input `named_params`.
 
     Args:
-        named_params (Dict[str, Parameter]): Dictionary mapping each parameter name to its corresponding parameter.
+        named_params (dict[str, Parameter]): Dictionary mapping each parameter name to its corresponding parameter.
 
     Returns:
-        fully_shard_params (Dict[str, Parameter]): Dictionary mapping each parameter name to its corresponding fully shard parameter.
-        hybrid_shard_params (Dict[str, Parameter]): Dictionary mapping each parameter name to its corresponding hybrid shard parameter.
-        other_params (Dict[str, Parameter]): Dictionary mapping each parameter name to its corresponding non fully shard parameter.
+        fully_shard_params (dict[str, Parameter]): Dictionary mapping each parameter name to its corresponding fully shard parameter.
+        hybrid_shard_params (dict[str, Parameter]): Dictionary mapping each parameter name to its corresponding hybrid shard parameter.
+        other_params (dict[str, Parameter]): Dictionary mapping each parameter name to its corresponding non fully shard parameter.
     """
     return _partition_params(
         named_params=named_params,

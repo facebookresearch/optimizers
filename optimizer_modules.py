@@ -9,7 +9,7 @@ LICENSE file in the root directory of this source tree.
 
 import logging
 from copy import deepcopy
-from typing import Any, Iterable, Optional
+from typing import Any, Iterable
 
 import torch
 from torch.optim.optimizer import StateDict
@@ -31,7 +31,7 @@ class OptimizerModule:
 
     def state_dict(
         self,
-        destination: Optional[StateDict] = None,
+        destination: StateDict | None = None,
         keep_vars: bool = False,
         store_non_tensors: bool = False,
     ) -> StateDict:
@@ -44,7 +44,7 @@ class OptimizerModule:
             designed for end-users.
 
         Args:
-            destination (Optional[StateDict]): If provided, the state of module will
+            destination (StateDict | None): If provided, the state of module will
                 be updated into the dict and the same object is returned.
                 Otherwise, an ``OrderedDict`` will be created and returned.
                 Default: ``None``.

@@ -10,7 +10,6 @@ LICENSE file in the root directory of this source tree.
 import logging
 import re
 import unittest
-from typing import List
 
 import torch
 
@@ -24,7 +23,7 @@ class SplitTensorBlockRecoveryTest(unittest.TestCase):
     def _test_split_tensor_block_recovery(
         self,
         original_tensor: Tensor,
-        expected_split_tensors: List[Tensor],
+        expected_split_tensors: list[Tensor],
         start_idx: int,
         end_idx: int,
     ) -> None:

@@ -8,7 +8,6 @@ LICENSE file in the root directory of this source tree.
 """
 
 import unittest
-from typing import List, Tuple
 
 import torch
 from distributed_shampoo.shampoo_types import FSDPParameterMetadata
@@ -32,7 +31,7 @@ from torch.testing._internal.common_fsdp import FSDPTest
 #       separately.
 def _create_model_and_params(
     model_linear_layers_dims: tuple[int, ...] = (2, 5, 3),
-) -> Tuple[nn.Module, List[Parameter]]:
+) -> tuple[nn.Module, list[Parameter]]:
     model, _, _, _ = construct_training_problem(
         model_linear_layers_dims, model_dead_layer_dims=None, fill=(1.0, 2.0)
     )

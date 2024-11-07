@@ -15,7 +15,7 @@ import re
 import unittest
 from itertools import product
 
-from typing import Callable, Optional
+from typing import Callable
 from unittest import mock
 
 import torch
@@ -50,7 +50,7 @@ class AbstractTest:
             ],
             device: torch.device,
             model_linear_layers_dims: tuple[int, ...] = (80, 40, 1),
-            model_dead_layer_dims: Optional[tuple[int, ...]] = (20, 20),
+            model_dead_layer_dims: tuple[int, ...] | None = (20, 20),
         ) -> tuple[Parameter, torch.Tensor]:
             model, loss, data, target = construct_training_problem(
                 model_linear_layers_dims=model_linear_layers_dims,
@@ -109,7 +109,7 @@ class AbstractTest:
 
         @staticmethod
         def _shampoo_optim_factory(
-            distributed_config: Optional[DDPShampooConfig],
+            distributed_config: DDPShampooConfig | None,
         ) -> Callable[[ParamsT], torch.optim.Optimizer]:
             return lambda parameters: (
                 lambda distributed_config: DistributedShampoo(

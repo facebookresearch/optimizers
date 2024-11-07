@@ -12,7 +12,7 @@ import logging
 from copy import deepcopy
 from functools import reduce
 from operator import or_
-from typing import Any, Dict, List, Union
+from typing import Any
 
 import torch
 from optimizer_modules import OptimizerModule
@@ -21,20 +21,20 @@ from optimizer_modules import OptimizerModule
 logger: logging.Logger = logging.getLogger(__name__)
 
 
-def flatten(input_dict: Dict[str, Any]) -> Dict[str, Any]:
+def flatten(input_dict: dict[str, Any]) -> dict[str, Any]:
     """Recursive flattening function for checkpointing support.
 
     Args:
-        input_dict (Dict[str, Any]): Input dictionary to flatten.
+        input_dict (dict[str, Any]): Input dictionary to flatten.
 
     Returns:
-        output_dict (Dict[str, Any]): Flattened dictionary of the input dictionary.
+        output_dict (dict[str, Any]): Flattened dictionary of the input dictionary.
 
     """
 
     def flatten_with_parent_keys(
-        input_dict: Dict[str, Any], parent_keys: List[str]
-    ) -> Dict[str, Any]:
+        input_dict: dict[str, Any], parent_keys: list[str]
+    ) -> dict[str, Any]:
         # Given a dict to flatten containing child key and child value pairs where
         # each child value is either a dict or a tensor, this function recursively
         # flattens each child value and combines those child key and flattened child values
@@ -55,8 +55,8 @@ def flatten(input_dict: Dict[str, Any]) -> Dict[str, Any]:
         #
         # The process above is a reduce bitwise OR operation over all flattened dicts of child values.
         def parse_key_value(
-            key: str, value: Union[Dict[str, Any], torch.Tensor]
-        ) -> Dict[str, Any]:
+            key: str, value: dict[str, Any] | torch.Tensor
+        ) -> dict[str, Any]:
             # If the value is a dict, then recursively flatten it.
             # If the value is a tensor, then return a dict with the key being the
             # flattened parent keys and the value being the tensor.
@@ -84,9 +84,9 @@ def flatten(input_dict: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def unflatten(
-    flattened_dict: Dict[str, Any],
-) -> Dict[str, Any]:
-    result: Dict[str, Any] = {}
+    flattened_dict: dict[str, Any],
+) -> dict[str, Any]:
+    result: dict[str, Any] = {}
     for flattened_key, value in flattened_dict.items():
         *parent_keys, key = json.loads(flattened_key)
         immediate_input_dict = reduce(
@@ -99,8 +99,8 @@ def unflatten(
 
 
 def update_param_state_dict_object(
-    current_param_state_dict: Dict[str, Any],
-    param_state_dict_to_load: Dict[str, Any],
+    current_param_state_dict: dict[str, Any],
+    param_state_dict_to_load: dict[str, Any],
     enable_missing_key_check: bool = True,
 ) -> None:
     for k, v in current_param_state_dict.items():
@@ -126,23 +126,23 @@ def update_param_state_dict_object(
 
 
 def extract_state_dict_content(
-    input_dict: Dict[str, Any],
-) -> Dict[str, Any]:
+    input_dict: dict[str, Any],
+) -> dict[str, Any]:
     """Converts nested dictionary with objects with state dict functionality.
 
     Args:
-        input_dict (Dict[str, Any]): Nested dictionary containing objects with
+        input_dict (dict[str, Any]): Nested dictionary containing objects with
             state dict functionality.
 
     Output:
-        output_dict (Dict[str, Any]): Nested dictionary where the terminal values
+        output_dict (dict[str, Any]): Nested dictionary where the terminal values
             cannot have state dict functionality.
 
     """
 
     def parse_value(
-        value: Union[Dict[str, Any], torch.Tensor, OptimizerModule],
-    ) -> Union[Dict[str, Any], torch.Tensor]:
+        value: dict[str, Any] | torch.Tensor | OptimizerModule,
+    ) -> dict[str, Any] | torch.Tensor:
         if isinstance(value, dict):
             return extract_state_dict_content(value)
         elif isinstance(value, OptimizerModule):

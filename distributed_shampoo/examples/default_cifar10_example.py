@@ -9,7 +9,6 @@ LICENSE file in the root directory of this source tree.
 
 import logging
 import os
-from typing import Tuple
 
 import torch
 
@@ -43,7 +42,7 @@ def train_default_model(
     device: torch.device,
     epochs: int = 1,
     window_size: int = 100,
-) -> Tuple[float, float, int]:
+) -> tuple[float, float, int]:
     """Constructs the main training loop."""
 
     # initialize metrics

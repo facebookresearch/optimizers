@@ -14,7 +14,6 @@ import time
 from dataclasses import asdict
 from fractions import Fraction
 from math import isfinite
-from typing import Tuple, Union
 
 import torch
 from matrix_functions_types import (
@@ -66,7 +65,7 @@ def matrix_inverse_root(
     root: Fraction,
     root_inv_config: RootInvConfig = DefaultEigenConfig,
     epsilon: float = 0.0,
-    is_diagonal: Union[Tensor, bool] = False,
+    is_diagonal: Tensor | bool = False,
 ) -> Tensor:
     """Computes matrix root inverse of square symmetric positive definite matrix.
 
@@ -169,7 +168,7 @@ def _matrix_inverse_root_diagonal(
 def _compute_eigenvalue_decomposition(
     A: Tensor,
     retry_double_precision: bool = True,
-) -> Tuple[Tensor, Tensor]:
+) -> tuple[Tensor, Tensor]:
     """
     Compute the eigendecomposition of a symmetric matrix.
 
@@ -178,7 +177,7 @@ def _compute_eigenvalue_decomposition(
         retry_double_precision (bool, optional): Whether to retry the computation in double precision if it fails in the current precision. Defaults to True.
 
     Returns:
-        Tuple[Tensor, Tensor]: A tuple containing the eigenvalues and eigenvectors of the input matrix.
+        tuple[Tensor, Tensor]: A tuple containing the eigenvalues and eigenvectors of the input matrix.
     """
     try:
         # Attempt to compute the eigendecomposition in the current precision
@@ -204,7 +203,7 @@ def _matrix_inverse_root_eigen(
     epsilon: float = 0.0,
     make_positive_semidefinite: bool = True,
     retry_double_precision: bool = True,
-) -> Tuple[Tensor, Tensor, Tensor]:
+) -> tuple[Tensor, Tensor, Tensor]:
     """Compute matrix inverse root using eigendecomposition of symmetric positive (semi-)definite matrix.
 
             A^{-1/r} = Q L^{-1/r} Q^T
@@ -256,7 +255,7 @@ def _matrix_inverse_root_newton(
     epsilon: float = 0.0,
     max_iterations: int = 100,
     tolerance: float = 1e-6,
-) -> Tuple[Tensor, Tensor, NewtonConvergenceFlag, int, Tensor]:
+) -> tuple[Tensor, Tensor, NewtonConvergenceFlag, int, Tensor]:
     """Compute matrix inverse root using coupled inverse Newton iteration.
 
         alpha <- -1 / p
@@ -331,7 +330,7 @@ def _matrix_inverse_root_higher_order(
     tolerance: float = 1e-20,
     order: int = 3,  # 2 represents Newton's method
     disable_tf32: bool = True,
-) -> Tuple[Tensor, Tensor, NewtonConvergenceFlag, int, Tensor]:
+) -> tuple[Tensor, Tensor, NewtonConvergenceFlag, int, Tensor]:
     """Compute matrix inverse root using coupled iterations, similar to above but generalized to support higher order.
 
         Rough sketch (at order = 2, i.e., Newton)
@@ -537,7 +536,7 @@ def compute_matrix_root_inverse_residuals(
     root: Fraction,
     epsilon: float,
     root_inv_config: RootInvConfig = DefaultEigenConfig,
-) -> Tuple[Tensor, Tensor]:
+) -> tuple[Tensor, Tensor]:
     """Compute residual of matrix root inverse for debugging purposes.
 
         relative error    = ||X - X_hat||_inf / ||X||_inf

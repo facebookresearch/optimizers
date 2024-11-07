@@ -9,7 +9,7 @@ LICENSE file in the root directory of this source tree.
 
 import re
 import unittest
-from typing import Type, Union
+from typing import Type
 
 from distributed_shampoo.shampoo_types import (
     AbstractDataclass,
@@ -47,11 +47,11 @@ class AdaGradGraftingConfigTest(unittest.TestCase):
 
     def _get_grafting_config_type(
         self,
-    ) -> Union[
-        Type[AdaGradGraftingConfig],
-        Type[RMSpropGraftingConfig],
-        Type[AdamGraftingConfig],
-    ]:
+    ) -> (
+        Type[AdaGradGraftingConfig]
+        | Type[RMSpropGraftingConfig]
+        | Type[AdamGraftingConfig]
+    ):
         return AdaGradGraftingConfig
 
 
@@ -73,12 +73,12 @@ class RMSpropGraftingConfigTest(AdaGradGraftingConfigTest):
 
     def _get_grafting_config_type(
         self,
-    ) -> Union[Type[RMSpropGraftingConfig], Type[AdamGraftingConfig]]:
+    ) -> Type[RMSpropGraftingConfig] | Type[AdamGraftingConfig]:
         return RMSpropGraftingConfig
 
 
 class AdamGraftingConfigTest(RMSpropGraftingConfigTest):
     def _get_grafting_config_type(
         self,
-    ) -> Union[Type[RMSpropGraftingConfig], Type[AdamGraftingConfig]]:
+    ) -> Type[RMSpropGraftingConfig] | Type[AdamGraftingConfig]:
         return AdamGraftingConfig

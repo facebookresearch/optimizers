@@ -11,7 +11,7 @@ import abc
 import re
 import unittest
 from types import ModuleType
-from typing import Any, List, Optional, Tuple, Union
+from typing import Any
 from unittest import mock
 
 import torch
@@ -54,7 +54,7 @@ class PreconditionerListTest(unittest.TestCase):
         self._block_list = self._instantiate_block_list()
         self._preconditioner_list = self._instantiate_preconditioner_list()
 
-    def _instantiate_block_list(self) -> Tuple[Tensor, ...]:
+    def _instantiate_block_list(self) -> tuple[Tensor, ...]:
         return (
             torch.tensor([1.0, 2.0]),
             torch.tensor([[3.0, 4.0], [5.0, 6.0]]),
@@ -68,8 +68,8 @@ class PreconditionerListTest(unittest.TestCase):
     def _test_update_preconditioners_and_precondition(
         self,
         preconditioner_list: PreconditionerList,
-        masked_grad_lists: List[Tuple[Tensor, ...]],
-        masked_expected_preconditioned_grad_list: Optional[Tuple[Tensor, ...]],
+        masked_grad_lists: list[tuple[Tensor, ...]],
+        masked_expected_preconditioned_grad_list: tuple[Tensor, ...] | None,
     ) -> None:
         with DequantizePreconditionersContext(preconditioner_list=preconditioner_list):
             for step, masked_grad_list in enumerate(masked_grad_lists, start=1):
@@ -168,7 +168,7 @@ class SGDPreconditionerListTest(PreconditionerListTest):
 
 
 class AdagradPreconditionerListTest(PreconditionerListTest):
-    def _instantiate_block_list(self) -> Tuple[Tensor, ...]:
+    def _instantiate_block_list(self) -> tuple[Tensor, ...]:
         # Because maximum_preconditioner_dim = 2, self._params[0] forms a block by itself,
         # self._params[1] are split into two blocks, and self._params[2] forms a block by itself.
         return (
@@ -652,7 +652,7 @@ class ShampooPreconditionerListTest(AbstractTest.BaseShampooPreconditionerListTe
         """
 
         def test_inverse_roots_from_override(
-            inv_root_override: Union[int, List[int]],
+            inv_root_override: int | list[int],
         ) -> None:
             """
             Tests that the inverse roots are computed correctly from inv_root_override.
@@ -953,7 +953,7 @@ class EigenvalueCorrectedShampooPreconditionerListTest(
         """
 
         def test_inverse_roots_from_override(
-            inv_root_override: Union[int, List[int]],
+            inv_root_override: int | list[int],
         ) -> None:
             """
             Tests that the inverse roots are computed correctly from inv_root_override.

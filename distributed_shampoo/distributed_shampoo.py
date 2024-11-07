@@ -12,18 +12,7 @@ import dataclasses
 import logging
 from copy import deepcopy
 from functools import partial
-from typing import (
-    Any,
-    Callable,
-    Dict,
-    Iterator,
-    List,
-    NoReturn,
-    Optional,
-    Sequence,
-    Tuple,
-    Union,
-)
+from typing import Any, Callable, Iterator, NoReturn, Sequence
 
 import torch
 
@@ -234,7 +223,7 @@ class DistributedShampoo(torch.optim.Optimizer):
     Args:
         params (ParamsT): Iterable of parameters to optimize or dicts defining parameter groups.
         lr (float): Learning rate. (Default: 1e-2)
-        betas (Tuple[float, float]): Coefficients used for computing running averages of gradient and its square.
+        betas (tuple[float, float]): Coefficients used for computing running averages of gradient and its square.
             (Default: (0.9, 1.0))
         beta3 (float): Coefficient used for computing running average of gradient only for the current iteration.
             This can be used to replicate a version of NAdam if set appropriately. For example, if beta1 = 0.9, then applying
@@ -262,18 +251,18 @@ class DistributedShampoo(torch.optim.Optimizer):
         use_nesterov (bool): Flag for using Nesterov momentum. (default: False)
         use_bias_correction (bool): Flag for using bias correction. (Default: True)
         use_decoupled_weight_decay (bool): Flag for using AdamW-style decoupled weight decay. (Default: True)
-        grafting_config (Optional[GraftingConfig]): Configuration for grafting method. If None, ignores grafting.
+        grafting_config (GraftingConfig | None): Configuration for grafting method. If None, ignores grafting.
             (Default: None)
         use_merge_dims (bool): Merge dimensions if possible while respecting max_preconditioner_dim. (Default: True)
-        use_pytorch_compile (Optional[bool]): Use PyTorch 2.0 compiler feature to speed up training. Deprecating, please use
+        use_pytorch_compile (bool | None): Use PyTorch 2.0 compiler feature to speed up training. Deprecating, please use
             shampoo_pt2_compile_config instead; when this field is None, the use of PyTorch 2.0 compiler is decided by
             shampoo_pt2_compile_config. (Default: None)
-        shampoo_pt2_compile_config (Optional[ShampooPT2CompileConfig]): Configuration for Shampoo PT2 compilation. If None,
+        shampoo_pt2_compile_config (ShampooPT2CompileConfig | None): Configuration for Shampoo PT2 compilation. If None,
             ignores compilation, and Shampoo will run in eager mode. (Default: None)
-        distributed_config (Optional[DistributedConfig]): Configuration for applying Shampoo
+        distributed_config (DistributedConfig | None): Configuration for applying Shampoo
             to different distributed training frameworks, such as distributed-data parallel (DDP) training.
             Based on the configuration, determines which version of Shampoo to use. (Default: None)
-        preconditioner_dtype (Optional[torch.dtype]): **DEPRECATING** Data type for preconditioner. (Default: None)
+        preconditioner_dtype (torch.dtype | None): **DEPRECATING** Data type for preconditioner. (Default: None)
         precision_config (PrecisionConfig): Data types for optimizer states. (Default: all fields torch.float)
         use_protected_eigh (bool): **DEPRECATED** Flag for using two guards to prevent failures of torch.linalg.eigh. (Default: True)
             1. Attempts to compute root inverse in preconditioner_dtype precision.
@@ -292,7 +281,7 @@ class DistributedShampoo(torch.optim.Optimizer):
         self,
         params: ParamsT,
         lr: float = 1e-2,
-        betas: Tuple[float, float] = (0.9, 1.0),
+        betas: tuple[float, float] = (0.9, 1.0),
         beta3: float = -1.0,
         epsilon: float = 1e-12,
         momentum: float = 0.0,
@@ -301,18 +290,18 @@ class DistributedShampoo(torch.optim.Optimizer):
         max_preconditioner_dim: int = 1024,
         precondition_frequency: int = 1,
         start_preconditioning_step: int = -1,
-        inv_root_override: Union[int, Sequence[int]] = 0,
+        inv_root_override: int | Sequence[int] = 0,
         exponent_multiplier: float | None = None,
         use_nesterov: bool = False,
         use_bias_correction: bool = True,
         use_decoupled_weight_decay: bool = True,
-        grafting_config: Optional[GraftingConfig] = None,
+        grafting_config: GraftingConfig | None = None,
         use_merge_dims: bool = True,
-        use_pytorch_compile: Optional[bool] = None,
-        shampoo_pt2_compile_config: Optional[ShampooPT2CompileConfig] = None,
-        distributed_config: Optional[DistributedConfig] = None,
-        preconditioner_dtype: Optional[torch.dtype] = None,
-        precision_config: Optional[PrecisionConfig] = None,
+        use_pytorch_compile: bool | None = None,
+        shampoo_pt2_compile_config: ShampooPT2CompileConfig | None = None,
+        distributed_config: DistributedConfig | None = None,
+        preconditioner_dtype: torch.dtype | None = None,
+        precision_config: PrecisionConfig | None = None,
         use_protected_eigh: bool = True,
         track_root_inv_residuals: bool = False,
         preconditioner_computation_config: PreconditionerComputationConfig = DefaultEigenConfig,
@@ -481,7 +470,7 @@ class DistributedShampoo(torch.optim.Optimizer):
         self._track_root_inv_residuals = track_root_inv_residuals
 
         # Initialize list containing group state dictionaries.
-        self._per_group_state_lists: List[Dict[str, Any]] = [
+        self._per_group_state_lists: list[dict[str, Any]] = [
             {} for _ in self.param_groups
         ]
 
@@ -727,7 +716,7 @@ class DistributedShampoo(torch.optim.Optimizer):
         # Use PT2 to compile the step function for each parameter group.
         self._per_group_step: Callable[
             [
-                Dict[str, Any],
+                dict[str, Any],
                 torch.Tensor,
                 torch.Tensor,
                 float,
@@ -759,7 +748,7 @@ class DistributedShampoo(torch.optim.Optimizer):
 
     @staticmethod
     @torch.no_grad()
-    def _mask_state_lists(state_lists: Dict[str, Any], group: Dict[str, Any]) -> None:
+    def _mask_state_lists(state_lists: dict[str, Any], group: dict[str, Any]) -> None:
         if (
             state_lists[DISTRIBUTOR].local_grad_selector
             == state_lists[PREVIOUS_GRAD_SELECTOR]
@@ -852,11 +841,11 @@ class DistributedShampoo(torch.optim.Optimizer):
     @torch.compiler.disable
     def _precondition_and_grafting(
         self,
-        state_lists: Dict[str, Any],
-        masked_filtered_grad_list: Tuple[torch.Tensor, ...],
+        state_lists: dict[str, Any],
+        masked_filtered_grad_list: tuple[torch.Tensor, ...],
         use_grafting_method: bool,
         grafting_config_not_none: bool,
-    ) -> Tuple[torch.Tensor, ...]:
+    ) -> tuple[torch.Tensor, ...]:
         # Precondition gradients.
         # If the step count is less than start_preconditioning_step, then we use the grafting method.
         # Assumes that the step state is consistent across all parameters.
@@ -896,7 +885,7 @@ class DistributedShampoo(torch.optim.Optimizer):
     @torch.no_grad()
     def _add_l2_regularization(
         self,
-        state_lists: Dict[str, Any],
+        state_lists: dict[str, Any],
         weight_decay: float,
         use_decoupled_weight_decay: bool,
     ) -> None:
@@ -911,7 +900,7 @@ class DistributedShampoo(torch.optim.Optimizer):
     @torch.no_grad()
     def _update_preconditioners(
         self,
-        state_lists: Dict[str, Any],
+        state_lists: dict[str, Any],
         step: torch.Tensor,
         perform_amortized_computation: bool,
         grafting_config_not_none: bool,
@@ -933,12 +922,12 @@ class DistributedShampoo(torch.optim.Optimizer):
     @torch.no_grad()
     def _compute_filtered_grad_list(
         self,
-        state_lists: Dict[str, Any],
+        state_lists: dict[str, Any],
         step: torch.Tensor,
         beta1: float,
         beta3: float,
         use_bias_correction: bool,
-    ) -> Tuple[torch.Tensor, ...]:
+    ) -> tuple[torch.Tensor, ...]:
         if beta1 != 0.0:
             with DequantizeQuantizedTensorListContext(
                 quantized_tensor_list=state_lists[MASKED_FILTERED_GRAD_LIST]
@@ -976,8 +965,8 @@ class DistributedShampoo(torch.optim.Optimizer):
     @torch.no_grad()
     def _apply_decoupled_weight_decay(
         self,
-        state_lists: Dict[str, Any],
-        masked_blocked_search_directions: Tuple[torch.Tensor, ...],
+        state_lists: dict[str, Any],
+        masked_blocked_search_directions: tuple[torch.Tensor, ...],
         weight_decay: float,
         use_decoupled_weight_decay: bool,
     ) -> None:
@@ -992,8 +981,8 @@ class DistributedShampoo(torch.optim.Optimizer):
     @torch.no_grad()
     def _update_momentum(
         self,
-        state_lists: Dict[str, Any],
-        masked_blocked_search_directions: Tuple[torch.Tensor, ...],
+        state_lists: dict[str, Any],
+        masked_blocked_search_directions: tuple[torch.Tensor, ...],
         momentum_param: float,
         dampening: float,
         use_nesterov: bool,
@@ -1032,7 +1021,7 @@ class DistributedShampoo(torch.optim.Optimizer):
     @torch.no_grad()
     def _per_group_step_impl(
         self,
-        state_lists: Dict[str, Any],
+        state_lists: dict[str, Any],
         step: torch.Tensor,
         lr: torch.Tensor,
         beta1: float,
@@ -1138,7 +1127,7 @@ class DistributedShampoo(torch.optim.Optimizer):
         )
 
     @torch.no_grad()
-    def step(self, closure: Optional[Callable[[], float]] = None) -> Optional[float]:  # type: ignore[override]
+    def step(self, closure: Callable[[], float] | None = None) -> float | None:  # type: ignore[override]
         """Performs a single optimization step.
 
         Args:
@@ -1238,13 +1227,13 @@ class DistributedShampoo(torch.optim.Optimizer):
 
     @staticmethod
     def _construct_param_group_key(
-        group: Dict[str, Any], param_to_key: Dict[torch.Tensor, str]
+        group: dict[str, Any], param_to_key: dict[torch.Tensor, str]
     ) -> str:
         return "/".join(sorted(param_to_key[param] for param in group[PARAMS]))
 
     def distributed_state_dict(
         self,
-        key_to_param: Iterator[Tuple[str, torch.Tensor]],
+        key_to_param: Iterator[tuple[str, torch.Tensor]],
         save_param_groups: bool = True,
     ) -> StateDict:
         """Distributed state dict simplified from TorchRec's KeyedOptimizer.
@@ -1258,7 +1247,7 @@ class DistributedShampoo(torch.optim.Optimizer):
         protocol.
 
         Args:
-            key_to_param (Iterator[Tuple[str, Tensor]]): Iterator (like model.named_parameters()) that
+            key_to_param (Iterator[tuple[str, Tensor]]): Iterator (like model.named_parameters()) that
                 maps a FQN to the parameters in the model.
             save_param_groups (bool): Flag for saving parameter groups. (Default: True)
 
@@ -1293,7 +1282,7 @@ class DistributedShampoo(torch.optim.Optimizer):
     def load_distributed_state_dict(
         self,
         state_dict: StateDict,
-        key_to_param: Iterator[Tuple[str, torch.Tensor]],
+        key_to_param: Iterator[tuple[str, torch.Tensor]],
         save_param_groups: bool = True,
         enable_missing_key_check: bool = True,
     ) -> None:
@@ -1315,7 +1304,7 @@ class DistributedShampoo(torch.optim.Optimizer):
         Args:
             state_dict (StateDict): State dictionary to load containing the optimizer state and
                 parameter groups.
-            key_to_param (Iterator[Tuple[str, Tensor]]): Iterator (like model.named_parameters()) that
+            key_to_param (Iterator[tuple[str, Tensor]]): Iterator (like model.named_parameters()) that
                 maps a FQN to the parameters in the model.
             save_param_groups (bool): Flag for saving parameter groups. (Default: True)
             enable_missing_key_check (bool): Flag for enabling missing key check. (Default: True)
