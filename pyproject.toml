@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "optimizers"
 version = "1.0.0"
 dependencies = [
-    "torch>=2.0.0",
+    "torch>=2.2.0",
     "torchvision>=0.15.0",
 ]
 requires-python = ">=3.10"
@@ -45,12 +45,14 @@ Repository = "https://github.com/facebookresearch/optimizers.git"
 "Bug Tracker" = "https://github.com/facebookresearch/optimizers/issues"
 
 [tool.setuptools]
-packages = ["distributed_shampoo"]
 py-modules = [
     "matrix_functions",
     "matrix_functions_types",
     "optimizer_modules",
 ]
+
+[tool.setuptools.packages.find]
+include = ["distributed_shampoo*"]
 
 [tool.usort]
 first_party_detection = false
