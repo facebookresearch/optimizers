@@ -756,7 +756,7 @@ class DistributedShampoo(torch.optim.Optimizer):
             return
 
         if state_lists[STEP].item() >= 1:
-            logger.warn(
+            logger.warning(
                 "PT2 will recompile because the gradient selction of model parameters have changed from the previous step. Possible reasons include some gradients are None. If this is not intended, please check the data and/or model."
             )
         # Updates masked state lists if previous block selector disagrees with current selector.
