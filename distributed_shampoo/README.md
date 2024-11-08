@@ -10,6 +10,7 @@ Developers:
 - Hao-Jun Michael Shi (Meta Platforms, Inc.)
 - Tsung-Hsien Lee
 - Anna Cai (Meta Platforms, Inc.)
+- Runa Eschenhagen (University of Cambridge)
 - Shintaro Iwasaki (Meta Platforms, Inc.)
 - Ke Sang (Meta Platforms, Inc.)
 - Wang Zhou (Meta Platforms, Inc.)
@@ -43,7 +44,7 @@ Key distinctives of this implementation include:
 
 We have tested this implementation on the following versions of PyTorch:
 
-- PyTorch >= 2.0;
+- PyTorch >= 2.2;
 - Python >= 3.10;
 - CUDA 11.3-11.4; 12.2+;
 
