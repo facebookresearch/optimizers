@@ -10,7 +10,6 @@ Developers:
 - Hao-Jun Michael Shi (Meta Platforms, Inc.)
 - Tsung-Hsien Lee
 - Anna Cai (Meta Platforms, Inc.)
-- Runa Eschenhagen (University of Cambridge)
 - Shintaro Iwasaki (Meta Platforms, Inc.)
 - Ke Sang (Meta Platforms, Inc.)
 - Wang Zhou (Meta Platforms, Inc.)
@@ -44,7 +43,7 @@ Key distinctives of this implementation include:
 
 We have tested this implementation on the following versions of PyTorch:
 
-- PyTorch >= 2.2;
+- PyTorch >= 2.0;
 - Python >= 3.10;
 - CUDA 11.3-11.4; 12.2+;
 
@@ -475,6 +474,22 @@ When encountering those errors, following are things you could try:
 2. Adjust the learning rate scheduler.
 3. Increase `start_preconditioning_step`.
 4. Consider applying gradient clipping.
+
+## Citing PyTorch Distributed Shampoo
+
+If you use PyTorch Distributed Shampoo in your work, please use the following BibTeX entry.
+
+```BibTeX
+@misc{shi2023pytorchshampoo,
+    title={A Distributed Data-Parallel PyTorch Implementation of the Distributed Shampoo Optimizer for Training Neural Networks At-Scale},
+    author={Hao-Jun Michael Shi and Tsung-Hsien Lee and Shintaro Iwasaki and Jose Gallego-Posada and Zhijing Li and Kaushik Rangadurai and Dheevatsa Mudigere and Michael Rabbat},
+    howpublished={\url{https://github.com/facebookresearch/optimizers/tree/main/distributed_shampoo}},
+    year ={2023},
+    eprint={2309.06497},
+    archivePrefix={arXiv},
+    primaryClass={cs.LG}
+}
+```
 
 ## References
 
