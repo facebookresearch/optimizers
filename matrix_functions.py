@@ -650,7 +650,8 @@ def matrix_eigenvectors(
         return _compute_orthogonal_iterations(
             A,
             eigenvectors_estimate=eigenvectors_estimate,
-            num_iterations=eigenvector_computation_config.num_iterations,
+            max_iterations=eigenvector_computation_config.max_iterations,
+            tolerance=eigenvector_computation_config.tolerance,
         )
     else:
         raise NotImplementedError(
@@ -661,7 +662,8 @@ def matrix_eigenvectors(
 def _compute_orthogonal_iterations(
     A: Tensor,
     eigenvectors_estimate: Tensor,
-    num_iterations: int = 1,
+    max_iterations: int = 1,
+    tolerance: float = 1e-5,
 ) -> Tensor:
     """
     Approximately compute the eigenvectors of a symmetric matrix by performing orthogonal/simultaneous iterations (QR algorithm).
@@ -674,7 +676,8 @@ def _compute_orthogonal_iterations(
     Args:
         A (Tensor): The symmetric input matrix.
         eigenvectors_estimate (Tensor): The current estimate of the eigenvectors of A.
-        num_iterations (int): The number of iterations to perform. (Default: 1)
+        max_iterations (int): The maximum number of iterations to perform. (Default: 1)
+        tolerance (float): The tolerance for determining convergence. (Default: 1e-5)
 
     Returns:
         Tensor: The approximate eigenvectors of the input matrix A.
@@ -685,9 +688,14 @@ def _compute_orthogonal_iterations(
 
     # Perform orthogonal/simultaneous iterations (QR algorithm).
     Q = eigenvectors_estimate
-    for _ in range(num_iterations):
+    iteration = 0
+    error = torch.inf
+    while iteration < max_iterations and error > tolerance:
         power_iteration = A @ Q
+        last_Q = Q
         Q = torch.linalg.qr(power_iteration).Q
+        iteration += 1
+        error = last_Q.sub_(Q).norm().div_(last_Q.norm())
 
     # Ensure consistent ordering of estimated eigenvectors.
     estimated_eigenvalues = torch.einsum("ij, ik, kj -> j", Q, A, Q)

@@ -865,8 +865,8 @@ class MatrixEigenvectorsTest(unittest.TestCase):
         with self.subTest(
             "Test with QREigenvalueCorrectionConfig with exact initialization."
         ):
-            # Setting `num_iterations=2` is necessary to preserve the solution.
-            qr_config = QREigenvalueCorrectionConfig(num_iterations=2)
+            # Set `max_iterations` to large int to run until numerical tolerance is hit.
+            qr_config = QREigenvalueCorrectionConfig(max_iterations=10_000)
             for A, expected_eigenvectors in zip(A_list, expected_eigenvectors_list):
                 eigenvectors = matrix_eigenvectors(A)  # Eigendecomposition.
                 estimated_eigenvectors = matrix_eigenvectors(

@@ -112,8 +112,10 @@ class QREigenvalueCorrectionConfig(EigenvalueCorrectionConfig):
     """Configuration for orthogonal/simultaneous iterations (QR algorithm) used in eigenvalue-corrected Shampoo.
 
     Args:
-        num_iterations (int): The number of iterations to perform. (Default: 1)
+        max_iterations (int): The maximum number of iterations to perform. (Default: 1)
+        tolerance (float): The tolerance for determining convergence. (Default: 1e-5)
 
     """
 
-    num_iterations: int = 1
+    max_iterations: int = 1
+    tolerance: float = 1e-5
