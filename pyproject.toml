@@ -7,7 +7,6 @@ name = "optimizers"
 version = "1.0.0"
 dependencies = [
     "torch>=2.2.0",
-    "torchvision>=0.15.0",
 ]
 requires-python = ">=3.10"
 authors = [
@@ -34,7 +33,12 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
+examples = [
+  "torchvision>=0.15.0",
+]
+
 dev = [
+  "optimizers[examples]",
   "ruff",
   "usort",
   "mypy",
@@ -46,6 +50,7 @@ Repository = "https://github.com/facebookresearch/optimizers.git"
 "Bug Tracker" = "https://github.com/facebookresearch/optimizers/issues"
 
 [tool.setuptools]
+include-package-data = false
 py-modules = [
     "matrix_functions",
     "matrix_functions_types",
@@ -54,6 +59,7 @@ py-modules = [
 
 [tool.setuptools.packages.find]
 include = ["distributed_shampoo*"]
+exclude = ["*examples", "*tests"]
 
 [tool.usort]
 first_party_detection = false

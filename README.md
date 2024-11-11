@@ -28,8 +28,9 @@ Install `distributed_shampoo` with all dependencies:
 ```
 git clone git@github.com:facebookresearch/optimizers.git
 cd optimizers
-pip install -e .
+pip install .
 ```
+If you also want to try the [examples](./distributed_shampoo/examples/), replace the last line with `pip install ".[examples]"`.
 
 ## Usage
 
