@@ -109,4 +109,11 @@ DefaultEighEigenvalueCorrectionConfig = EighEigenvalueCorrectionConfig()
 
 @dataclass(kw_only=True)
 class QREigenvalueCorrectionConfig(EigenvalueCorrectionConfig):
-    """Configuration for one-step power iteration and subsequent QR decomposition used in eigenvalue-corrected Shampoo."""
+    """Configuration for orthogonal/simultaneous iterations (QR algorithm) used in eigenvalue-corrected Shampoo.
+
+    Args:
+        num_iterations (int): The number of iterations to perform. (Default: 1)
+
+    """
+
+    num_iterations: int = 1

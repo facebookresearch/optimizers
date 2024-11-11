@@ -647,9 +647,10 @@ def matrix_eigenvectors(
         assert (
             eigenvectors_estimate is not None
         ), "Estimate of eigenvectors is required when using QREigenvalueCorrectionConfig."
-        return _compute_one_step_power_iter_qr_eigenvectors(
+        return _compute_orthogonal_iterations(
             A,
             eigenvectors_estimate=eigenvectors_estimate,
+            num_iterations=eigenvector_computation_config.num_iterations,
         )
     else:
         raise NotImplementedError(
@@ -657,14 +658,15 @@ def matrix_eigenvectors(
         )
 
 
-def _compute_one_step_power_iter_qr_eigenvectors(
+def _compute_orthogonal_iterations(
     A: Tensor,
     eigenvectors_estimate: Tensor,
+    num_iterations: int = 1,
 ) -> Tensor:
     """
-    Approximately compute the eigenvectors of a symmetric matrix by performing a single power iteration followed by a QR decomposition.
+    Approximately compute the eigenvectors of a symmetric matrix by performing orthogonal/simultaneous iterations (QR algorithm).
 
-    Given an initial estimate of the eigenvectors Q of matrix A, a single power iteration and a QR decomposition is performed, i.e. Q, _ <- QR(A @ Q).
+    Given an initial estimate of the eigenvectors Q of matrix A, a power iteration and a QR decomposition is performed each iteration, i.e. Q, _ <- QR(A @ Q).
     When the initial estimate is the zero matrix, the eigenvectors are computed using an eigendecomposition.
 
     Used in https://arxiv.org/abs/2405.18144 (see Appendix B) and https://arxiv.org/abs/2409.11321.
@@ -672,6 +674,7 @@ def _compute_one_step_power_iter_qr_eigenvectors(
     Args:
         A (Tensor): The symmetric input matrix.
         eigenvectors_estimate (Tensor): The current estimate of the eigenvectors of A.
+        num_iterations (int): The number of iterations to perform. (Default: 1)
 
     Returns:
         Tensor: The approximate eigenvectors of the input matrix A.
@@ -680,7 +683,14 @@ def _compute_one_step_power_iter_qr_eigenvectors(
     if not eigenvectors_estimate.any():
         return _compute_eigenvalue_decomposition(A)[1]
 
-    power_iteration = A @ eigenvectors_estimate
-    Q = torch.linalg.qr(power_iteration).Q
+    # Perform orthogonal/simultaneous iterations (QR algorithm).
+    Q = eigenvectors_estimate
+    for _ in range(num_iterations):
+        power_iteration = A @ Q
+        Q = torch.linalg.qr(power_iteration).Q
+
+    # Ensure consistent ordering of estimated eigenvectors.
+    estimated_eigenvalues = torch.einsum("ij, ik, kj -> j", Q, A, Q)
+    Q = Q[:, estimated_eigenvalues.argsort()]
 
     return Q

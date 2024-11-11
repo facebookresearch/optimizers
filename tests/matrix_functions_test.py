@@ -862,6 +862,32 @@ class MatrixEigenvectorsTest(unittest.TestCase):
                     atol=atol,
                     rtol=rtol,
                 )
+        with self.subTest(
+            "Test with QREigenvalueCorrectionConfig with exact initialization."
+        ):
+            # Setting `num_iterations=2` is necessary to preserve the solution.
+            qr_config = QREigenvalueCorrectionConfig(num_iterations=2)
+            for A, expected_eigenvectors in zip(A_list, expected_eigenvectors_list):
+                eigenvectors = matrix_eigenvectors(A)  # Eigendecomposition.
+                estimated_eigenvectors = matrix_eigenvectors(
+                    A,
+                    eigenvectors_estimate=eigenvectors,
+                    is_diagonal=False,
+                    eigenvector_computation_config=qr_config,
+                )
+                # Ensure that the signs of the eigenvectors are consistent.
+                for col in range(A.shape[1]):
+                    if (
+                        expected_eigenvectors[0, col] / estimated_eigenvectors[0, col]
+                        < 0
+                    ):
+                        estimated_eigenvectors[:, col] *= -1
+                torch.testing.assert_close(
+                    expected_eigenvectors,
+                    estimated_eigenvectors,
+                    atol=atol,
+                    rtol=rtol,
+                )
 
     def test_invalid_eigenvalue_correction_config(
         self,
