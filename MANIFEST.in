@@ -1,0 +1,3 @@
+recursive-include distributed_shampoo *
+recursive-include tests *
+recursive-exclude * __pycache__/*
