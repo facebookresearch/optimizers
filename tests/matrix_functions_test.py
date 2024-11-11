@@ -863,6 +863,33 @@ class MatrixEigenvectorsTest(unittest.TestCase):
                     rtol=rtol,
                 )
         with self.subTest(
+            "Test with QREigenvalueCorrectionConfig with identity initialization."
+        ):
+            # Set `max_iterations` to large int to run until numerical tolerance is hit.
+            qr_config = QREigenvalueCorrectionConfig(max_iterations=10_000)
+            for A, expected_eigenvectors in zip(A_list, expected_eigenvectors_list):
+                estimated_eigenvectors = matrix_eigenvectors(
+                    A,
+                    eigenvectors_estimate=torch.eye(
+                        A.shape[0], dtype=A.dtype, device=A.device
+                    ),
+                    is_diagonal=False,
+                    eigenvector_computation_config=qr_config,
+                )
+                # Ensure that the signs of the eigenvectors are consistent.
+                for col in range(A.shape[1]):
+                    if (
+                        expected_eigenvectors[0, col] / estimated_eigenvectors[0, col]
+                        < 0
+                    ):
+                        estimated_eigenvectors[:, col] *= -1
+                torch.testing.assert_close(
+                    expected_eigenvectors,
+                    estimated_eigenvectors,
+                    atol=atol,
+                    rtol=rtol,
+                )
+        with self.subTest(
             "Test with QREigenvalueCorrectionConfig with exact initialization."
         ):
             # Set `max_iterations` to large int to run until numerical tolerance is hit.

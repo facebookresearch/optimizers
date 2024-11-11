@@ -695,7 +695,7 @@ def _compute_orthogonal_iterations(
         last_Q = Q
         Q = torch.linalg.qr(power_iteration).Q
         iteration += 1
-        error = last_Q.sub_(Q).norm().div_(last_Q.norm())
+        error = last_Q.sub(Q).norm().div_(last_Q.norm())
 
     # Ensure consistent ordering of estimated eigenvectors.
     estimated_eigenvalues = torch.einsum("ij, ik, kj -> j", Q, A, Q)
