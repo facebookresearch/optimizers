@@ -113,7 +113,8 @@ class QREigenvalueCorrectionConfig(EigenvalueCorrectionConfig):
 
     Args:
         max_iterations (int): The maximum number of iterations to perform. (Default: 1)
-        tolerance (float): The tolerance for determining convergence. (Default: 1e-5)
+        tolerance (float): The tolerance for determining convergence in terms of the relative change of the eigenvectors estimate.
+            (Default: 1e-5)
 
     """
 

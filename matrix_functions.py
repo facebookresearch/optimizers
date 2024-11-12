@@ -677,7 +677,8 @@ def _compute_orthogonal_iterations(
         A (Tensor): The symmetric input matrix.
         eigenvectors_estimate (Tensor): The current estimate of the eigenvectors of A.
         max_iterations (int): The maximum number of iterations to perform. (Default: 1)
-        tolerance (float): The tolerance for determining convergence. (Default: 1e-5)
+        tolerance (float): The tolerance for determining convergence in terms of the relative change of the eigenvectors estimate.
+            (Default: 1e-5)
 
     Returns:
         Tensor: The approximate eigenvectors of the input matrix A.
@@ -692,8 +693,7 @@ def _compute_orthogonal_iterations(
     error = torch.inf
     while iteration < max_iterations and error > tolerance:
         power_iteration = A @ Q
-        last_Q = Q
-        Q = torch.linalg.qr(power_iteration).Q
+        last_Q, Q = Q, torch.linalg.qr(power_iteration).Q
         iteration += 1
         error = last_Q.sub(Q).norm().div_(last_Q.norm())
 
