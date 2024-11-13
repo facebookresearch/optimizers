@@ -3,7 +3,7 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "optimizers"
+name = "torch-shampoo"
 version = "1.0.0"
 dependencies = [
     "torch>=2.2.0",
@@ -38,7 +38,7 @@ examples = [
 ]
 
 dev = [
-  "optimizers[examples]",
+  "torch-shampoo[examples]",
   "ruff",
   "usort",
   "mypy",
