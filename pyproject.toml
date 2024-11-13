@@ -52,6 +52,7 @@ Repository = "https://github.com/facebookresearch/optimizers.git"
 [tool.setuptools]
 include-package-data = false
 py-modules = [
+    "commons",
     "matrix_functions",
     "matrix_functions_types",
     "optimizer_modules",
