@@ -11,9 +11,9 @@ LICENSE file in the root directory of this source tree.
 
 import re
 import unittest
+from collections.abc import Callable
 from functools import partial
 from itertools import pairwise, product
-from typing import Callable
 from unittest import mock
 
 import torch

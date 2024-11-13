@@ -8,8 +8,9 @@ LICENSE file in the root directory of this source tree.
 """
 
 import logging
+from collections.abc import Iterable
 from copy import deepcopy
-from typing import Any, Iterable
+from typing import Any
 
 import torch
 from torch.optim.optimizer import StateDict

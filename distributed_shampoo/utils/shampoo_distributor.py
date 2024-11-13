@@ -8,8 +8,9 @@ LICENSE file in the root directory of this source tree.
 """
 
 from abc import ABC, abstractmethod
+from collections.abc import Iterable
 from operator import attrgetter
-from typing import Any, Iterable
+from typing import Any
 
 import torch
 from distributed_shampoo.shampoo_types import (

@@ -13,9 +13,9 @@ import abc
 import contextlib
 import re
 import unittest
-from itertools import product
 
-from typing import Callable
+from collections.abc import Callable
+from itertools import product
 from unittest import mock
 
 import torch

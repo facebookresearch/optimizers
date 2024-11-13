@@ -7,7 +7,7 @@ LICENSE file in the root directory of this source tree.
 
 """
 
-from typing import Iterable
+from collections.abc import Iterable
 
 from distributed_shampoo.shampoo_types import PARAMS
 from distributed_shampoo.utils.shampoo_block_info import BlockInfo

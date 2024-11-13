@@ -8,10 +8,11 @@ LICENSE file in the root directory of this source tree.
 """
 
 import math
+from collections.abc import Callable, Iterator, Sequence
 from functools import partial
 from itertools import accumulate, chain, compress, pairwise
 from types import TracebackType
-from typing import Callable, Iterator, Sequence, Type, TypeVar
+from typing import Type, TypeVar
 
 import torch
 from torch import Tensor
@@ -25,7 +26,7 @@ def merge_small_dims(tensor_shape: Sequence[int], threshold: int) -> tuple[int, 
         threshold (int): Threshold on the maximum size of each dimension.
 
     Returns:
-        new_tensor_shape (list[int]): New tensor shape.
+        new_tensor_shape (tuple[int, ...]): New tensor shape.
 
     """
 
@@ -49,7 +50,7 @@ def multi_dim_split(tensor: Tensor, split_size: int) -> tuple[Tensor, ...]:
         split_size (int): Size of a single chunk.
 
     Returns:
-        split_grad (list[Tensor]): List of tensors.
+        split_tensors (tuple[Tensor, ...]): List of tensors.
 
     """
     split_tensors: tuple[Tensor, ...] = (tensor,)

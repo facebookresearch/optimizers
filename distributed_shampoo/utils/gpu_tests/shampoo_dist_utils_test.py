@@ -46,8 +46,7 @@ class ShampooDistUtilsTest(DTensorTestBase):
     def test_get_device_mesh(self) -> None:
         mesh = tuple(
             map(
-                # type: ignore
-                tuple,
+                tuple,  # type: ignore
                 torch.tensor(range(self.world_size))
                 .view(-1, self.world_size // 2)
                 .tolist(),
@@ -70,7 +69,7 @@ class ShampooDistUtilsTest(DTensorTestBase):
             "__init__",
         ) as mock_device_mesh_init:
             device_mesh = get_device_mesh(
-                device_type=self.device_type,  # type: ignore[attr-defined]
+                device_type=self.device_type,  # type: ignore
                 mesh=mesh,
                 mesh_dim_names=("replicate", "shard"),
             )

@@ -11,9 +11,10 @@ LICENSE file in the root directory of this source tree.
 
 import math
 import unittest
+from collections.abc import Callable
 from functools import partial
 from itertools import product
-from typing import Any, Callable, Type
+from typing import Any, Type
 
 import torch
 from distributed_shampoo.distributed_shampoo import DistributedShampoo

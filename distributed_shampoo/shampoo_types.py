@@ -9,9 +9,10 @@ LICENSE file in the root directory of this source tree.
 
 import enum
 from dataclasses import dataclass
-from typing import Any
 
 import torch
+
+from commons import AbstractDataclass
 from torch.distributed.device_mesh import DeviceMesh
 from torch.distributed.fsdp import ShardingStrategy
 from torch.nn.parameter import Parameter
@@ -129,18 +130,8 @@ class PrecisionConfig:
 
 
 @dataclass
-class AbstractDataclass:
-    def __new__(cls, *args: Any, **kwargs: Any) -> "AbstractDataclass":
-        if cls == AbstractDataclass or cls.__bases__[0] == AbstractDataclass:
-            raise TypeError(f"Cannot instantiate abstract class: {cls.__name__}.")
-        return super().__new__(cls)
-
-
-@dataclass
 class DistributedConfig(AbstractDataclass):
     """Abstract dataclass for distributed configs in Shampoo."""
-
-    ...
 
 
 @dataclass(kw_only=True)
@@ -183,8 +174,6 @@ class FullyShardShampooConfig(DistributedConfig):
 
     Currently only a placeholder used for Shampoo optimizer to select FullyShardDistributor.
     """
-
-    pass
 
 
 @dataclass
@@ -238,14 +227,10 @@ class ShampooPT2CompileConfig:
 class GraftingConfig(AbstractDataclass):
     """Abstract dataclass for grafting configurations in Shampoo."""
 
-    ...
-
 
 @dataclass
 class SGDGraftingConfig(GraftingConfig):
     """Configuration for grafting from SGD."""
-
-    ...
 
 
 @dataclass(kw_only=True)

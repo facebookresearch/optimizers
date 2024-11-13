@@ -9,8 +9,8 @@ LICENSE file in the root directory of this source tree.
 
 import logging
 import typing
+from collections.abc import Sequence
 from operator import methodcaller
-from typing import Sequence
 
 import torch
 from distributed_shampoo.utils.shampoo_block_info import BlockInfo
@@ -118,10 +118,8 @@ class QuantizedTensor(OptimizerModule):
 class QuantizedTensorList:
     def __init__(
         self,
-        quantized_data: (
-            Sequence[tuple[Tensor, Tensor | None, Tensor | None]]
-            | Sequence[QuantizedTensor]
-        ),
+        quantized_data: Sequence[tuple[Tensor, Tensor | None, Tensor | None]]
+        | Sequence[QuantizedTensor],
         quantized_dtype: torch.dtype,
         computation_dtype: torch.dtype = torch.float32,
     ) -> None:

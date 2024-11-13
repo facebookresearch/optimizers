@@ -115,7 +115,7 @@ class QuantizedTensorListInitTest(unittest.TestCase):
         ), self.assertRaisesRegex(
             TypeError,
             re.escape(
-                "quantized_data must be typing.Union[typing.Sequence[tuple[torch.Tensor, torch.Tensor | None, torch.Tensor | None]], typing.Sequence[distributed_shampoo.utils.shampoo_quantization.QuantizedTensor]] but get <class 'list'>"
+                "quantized_data must be collections.abc.Sequence[tuple[torch.Tensor, torch.Tensor | None, torch.Tensor | None]] | collections.abc.Sequence[distributed_shampoo.utils.shampoo_quantization.QuantizedTensor] but get <class 'list'>"
             ),
         ):
             QuantizedTensorList(

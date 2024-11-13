@@ -78,9 +78,9 @@ class DDPDistributor(DistributorInterface):
 
         # Determine communication type.
         if distributed_config.communication_dtype == CommunicationDType.BF16:
-            communication_dtype = torch.bfloat16
+            communication_dtype: torch.dtype = torch.bfloat16
         elif distributed_config.communication_dtype == CommunicationDType.FP16:
-            communication_dtype = torch.float16
+            communication_dtype: torch.dtype = torch.float16
         else:
             assert distributed_config.communication_dtype in [
                 CommunicationDType.FP32,

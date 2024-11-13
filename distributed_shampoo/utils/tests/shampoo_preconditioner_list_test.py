@@ -458,7 +458,9 @@ class ShampooPreconditionerListTest(AbstractTest.BaseShampooPreconditionerListTe
     def _amortized_computation_function(self) -> str:
         return "matrix_inverse_root"
 
-    def _instantiate_preconditioner_list(self, **kwargs: Any) -> PreconditionerList:  # type: ignore[override]
+    def _instantiate_preconditioner_list(  # type: ignore[override]
+        self, **kwargs: Any
+    ) -> ShampooPreconditionerList:
         kwargs = {
             "beta2": 1.0,
             "epsilon": 0.0,
@@ -741,7 +743,9 @@ class EigenvalueCorrectedShampooPreconditionerListTest(
     def _amortized_computation_function(self) -> str:
         return "matrix_eigenvectors"
 
-    def _instantiate_preconditioner_list(self, **kwargs: Any) -> PreconditionerList:  # type: ignore[override]
+    def _instantiate_preconditioner_list(  # type: ignore[override]
+        self, **kwargs: Any
+    ) -> EigenvalueCorrectedShampooPreconditionerList:
         kwargs = {
             "beta2": 1.0,
             "epsilon": 1e-12,

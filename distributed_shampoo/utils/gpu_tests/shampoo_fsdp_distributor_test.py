@@ -10,9 +10,9 @@ LICENSE file in the root directory of this source tree.
 #!/usr/bin/env python3
 
 import unittest
+from collections.abc import Callable
 from functools import partial
 from itertools import pairwise
-from typing import Callable
 
 import torch
 from distributed_shampoo.distributed_shampoo import DistributedShampoo

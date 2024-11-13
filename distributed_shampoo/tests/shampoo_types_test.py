@@ -12,25 +12,10 @@ import unittest
 from typing import Type
 
 from distributed_shampoo.shampoo_types import (
-    AbstractDataclass,
     AdaGradGraftingConfig,
     AdamGraftingConfig,
-    DistributedConfig,
-    GraftingConfig,
     RMSpropGraftingConfig,
 )
-
-
-class InvalidAbstractDataclassInitTest(unittest.TestCase):
-    def test_invalid_init(self) -> None:
-        for abstract_cls in (AbstractDataclass, DistributedConfig, GraftingConfig):
-            with self.subTest(abstract_cls=abstract_cls), self.assertRaisesRegex(
-                TypeError,
-                re.escape(
-                    f"Cannot instantiate abstract class: {abstract_cls.__name__}."
-                ),
-            ):
-                abstract_cls()
 
 
 class AdaGradGraftingConfigTest(unittest.TestCase):

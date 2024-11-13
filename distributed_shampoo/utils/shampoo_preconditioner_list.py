@@ -9,14 +9,14 @@ LICENSE file in the root directory of this source tree.
 
 import logging
 from abc import ABC, abstractmethod
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from fractions import Fraction
 from functools import partial, reduce
 
 from itertools import chain
 from operator import methodcaller
-from typing import Any, cast, Generic, Mapping, Sequence, TypeVar
+from typing import Any, cast, Generic, TypeVar
 
 import torch
 from distributed_shampoo.shampoo_types import PrecisionConfig, PreconditionerValueError

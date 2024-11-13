@@ -53,9 +53,16 @@ class MergeSmallDimsTest(unittest.TestCase):
     def test_merge_small_dims_empty(self) -> None:
         merged_dims = (0,)
         threshold = 10
-        self.assertEqual(merge_small_dims((0,), threshold), merged_dims)
-        self.assertEqual(merge_small_dims((0, 1), threshold), merged_dims)
-        self.assertEqual(merge_small_dims((0, 1, 5, 10, 20), threshold), merged_dims)
+        self.assertEqual(
+            merge_small_dims(tensor_shape=(0,), threshold=threshold), merged_dims
+        )
+        self.assertEqual(
+            merge_small_dims(tensor_shape=(0, 1), threshold=threshold), merged_dims
+        )
+        self.assertEqual(
+            merge_small_dims(tensor_shape=(0, 1, 5, 10, 20), threshold=threshold),
+            merged_dims,
+        )
 
 
 class MultiDimSplitTest(unittest.TestCase):

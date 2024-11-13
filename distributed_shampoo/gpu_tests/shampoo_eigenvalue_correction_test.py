@@ -11,14 +11,18 @@ LICENSE file in the root directory of this source tree.
 
 import math
 import unittest
+from collections.abc import Callable
 from functools import partial
 from itertools import product
-from typing import Any, Callable, Type
+from typing import Any, Type
 
 import torch
 from distributed_shampoo.distributed_shampoo import DistributedShampoo
 from distributed_shampoo.tests.shampoo_test_utils import construct_training_problem
-from matrix_functions_types import DefaultEighEigenvalueCorrectionConfig
+from matrix_functions_types import (
+    DefaultEighEigenvalueCorrectionConfig,
+    QREigenvalueCorrectionConfig,
+)
 from torch.nn.parameter import Parameter
 from torch.optim.adagrad import Adagrad
 from torch.optim.adam import Adam
@@ -97,19 +101,24 @@ class DistributedShampooEigenvalueCorrectionTest(unittest.TestCase):
         return optim_cls(parameters, **kwargs)
 
     def test_adagrad_eigenvalue_correction_on_quadratic(self) -> None:
-        # Test with and without weight decay, and with CPU or GPU
-        for weight_decay, device in product(
+        # Test with and without weight decay, with CPU or GPU, and using eigendecomposition or QR algorithm.
+        for weight_decay, device, preconditioner_computation_config in product(
             (0.0, 0.3),
             (torch.device("cpu"),) + (torch.device("cuda"),)
             if torch.cuda.is_available()
             else (),
+            (DefaultEighEigenvalueCorrectionConfig, QREigenvalueCorrectionConfig()),
         ):
             optim_factory = partial(
                 DistributedShampooEigenvalueCorrectionTest._optim_factory,
                 lr=0.01,
                 weight_decay=weight_decay,
             )
-            with self.subTest(weight_decay=weight_decay, device=device):
+            with self.subTest(
+                weight_decay=weight_decay,
+                device=device,
+                preconditioner_computation_config=preconditioner_computation_config,
+            ):
                 DistributedShampooEigenvalueCorrectionTest._test_baseline_and_shampoo(
                     baseline_optim_factory=partial(
                         optim_factory, optim_cls=Adagrad, eps=1e-15
@@ -125,18 +134,19 @@ class DistributedShampooEigenvalueCorrectionTest(unittest.TestCase):
                         start_preconditioning_step=math.inf,
                         use_decoupled_weight_decay=False,
                         grafting_config=None,
-                        preconditioner_computation_config=DefaultEighEigenvalueCorrectionConfig,
+                        preconditioner_computation_config=preconditioner_computation_config,
                     ),
                     device=device,
                 )
 
     def test_adam_eigenvalue_correction_on_quadratic(self) -> None:
-        # Test with and without weight decay, and with CPU or GPU
-        for weight_decay, device in product(
+        # Test with and without weight decay, with CPU or GPU, and using eigendecomposition or QR algorithm.
+        for weight_decay, device, preconditioner_computation_config in product(
             (0.0, 0.3),
             (torch.device("cpu"),) + (torch.device("cuda"),)
             if torch.cuda.is_available()
             else (),
+            (DefaultEighEigenvalueCorrectionConfig, QREigenvalueCorrectionConfig()),
         ):
             optim_factory = partial(
                 DistributedShampooEigenvalueCorrectionTest._optim_factory,
@@ -144,7 +154,11 @@ class DistributedShampooEigenvalueCorrectionTest(unittest.TestCase):
                 betas=(0.9, 0.999),
                 weight_decay=weight_decay,
             )
-            with self.subTest(weight_decay=weight_decay, device=device):
+            with self.subTest(
+                weight_decay=weight_decay,
+                device=device,
+                preconditioner_computation_config=preconditioner_computation_config,
+            ):
                 DistributedShampooEigenvalueCorrectionTest._test_baseline_and_shampoo(
                     baseline_optim_factory=partial(
                         optim_factory,
@@ -161,18 +175,19 @@ class DistributedShampooEigenvalueCorrectionTest(unittest.TestCase):
                         start_preconditioning_step=math.inf,
                         use_decoupled_weight_decay=False,
                         grafting_config=None,
-                        preconditioner_computation_config=DefaultEighEigenvalueCorrectionConfig,
+                        preconditioner_computation_config=preconditioner_computation_config,
                     ),
                     device=device,
                 )
 
     def test_adamw_eigenvalue_correction_on_quadratic(self) -> None:
-        # Test with and without weight decay, and with CPU or GPU
-        for weight_decay, device in product(
+        # Test with and without weight decay, with CPU or GPU, and using eigendecomposition or QR algorithm.
+        for weight_decay, device, preconditioner_computation_config in product(
             (0.0, 0.3),
             (torch.device("cpu"),) + (torch.device("cuda"),)
             if torch.cuda.is_available()
             else (),
+            (DefaultEighEigenvalueCorrectionConfig, QREigenvalueCorrectionConfig()),
         ):
             optim_factory = partial(
                 DistributedShampooEigenvalueCorrectionTest._optim_factory,
@@ -180,7 +195,11 @@ class DistributedShampooEigenvalueCorrectionTest(unittest.TestCase):
                 betas=(0.9, 0.999),
                 weight_decay=weight_decay,
             )
-            with self.subTest(weight_decay=weight_decay, device=device):
+            with self.subTest(
+                weight_decay=weight_decay,
+                device=device,
+                preconditioner_computation_config=preconditioner_computation_config,
+            ):
                 DistributedShampooEigenvalueCorrectionTest._test_baseline_and_shampoo(
                     baseline_optim_factory=partial(
                         optim_factory,
@@ -197,25 +216,30 @@ class DistributedShampooEigenvalueCorrectionTest(unittest.TestCase):
                         start_preconditioning_step=math.inf,
                         use_decoupled_weight_decay=True,
                         grafting_config=None,
-                        preconditioner_computation_config=DefaultEighEigenvalueCorrectionConfig,
+                        preconditioner_computation_config=preconditioner_computation_config,
                     ),
                     device=device,
                 )
 
     def test_rmsprop_eigenvalue_correction_on_quadratic(self) -> None:
-        # Test with and without weight decay, and with CPU or GPU
-        for weight_decay, device in product(
+        # Test with and without weight decay, with CPU or GPU, and using eigendecomposition or QR algorithm.
+        for weight_decay, device, preconditioner_computation_config in product(
             (0.0, 0.3),
             (torch.device("cpu"),) + (torch.device("cuda"),)
             if torch.cuda.is_available()
             else (),
+            (DefaultEighEigenvalueCorrectionConfig, QREigenvalueCorrectionConfig()),
         ):
             optim_factory = partial(
                 DistributedShampooEigenvalueCorrectionTest._optim_factory,
                 lr=0.01,
                 weight_decay=weight_decay,
             )
-            with self.subTest(weight_decay=weight_decay, device=device):
+            with self.subTest(
+                weight_decay=weight_decay,
+                device=device,
+                preconditioner_computation_config=preconditioner_computation_config,
+            ):
                 DistributedShampooEigenvalueCorrectionTest._test_baseline_and_shampoo(
                     baseline_optim_factory=partial(
                         optim_factory,
@@ -235,7 +259,7 @@ class DistributedShampooEigenvalueCorrectionTest(unittest.TestCase):
                         use_decoupled_weight_decay=False,
                         grafting_config=None,
                         use_bias_correction=False,
-                        preconditioner_computation_config=DefaultEighEigenvalueCorrectionConfig,
+                        preconditioner_computation_config=preconditioner_computation_config,
                     ),
                     device=device,
                 )

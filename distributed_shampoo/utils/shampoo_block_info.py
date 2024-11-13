@@ -7,8 +7,8 @@ LICENSE file in the root directory of this source tree.
 
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
 import torch
 from torch import Tensor

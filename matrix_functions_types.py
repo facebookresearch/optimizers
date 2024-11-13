@@ -9,21 +9,17 @@ LICENSE file in the root directory of this source tree.
 
 from dataclasses import dataclass
 
-from distributed_shampoo.shampoo_types import AbstractDataclass
+from commons import AbstractDataclass
 
 
 @dataclass
 class PreconditionerComputationConfig(AbstractDataclass):
     """Configuration for preconditioner computation in Shampoo."""
 
-    ...
-
 
 @dataclass
 class RootInvConfig(PreconditionerComputationConfig):
     """Base dataclass for matrix root inverse method configurations in Shampoo."""
-
-    ...
 
 
 @dataclass(kw_only=True)
@@ -87,8 +83,6 @@ class CoupledHigherOrderConfig(RootInvConfig):
 @dataclass
 class EigenvalueCorrectionConfig(PreconditionerComputationConfig):
     """Base dataclass for matrix eigenvector method configurations in eigenvalue-corrected Shampoo."""
-
-    ...
 
 
 @dataclass(kw_only=True)
