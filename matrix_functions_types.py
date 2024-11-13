@@ -86,14 +86,14 @@ class CoupledHigherOrderConfig(RootInvConfig):
 
 @dataclass
 class EigenvalueCorrectionConfig(PreconditionerComputationConfig):
-    """Base dataclass for matrix eigenvector method configurations in Shampoo."""
+    """Base dataclass for matrix eigenvector method configurations in eigenvalue-corrected Shampoo."""
 
     ...
 
 
 @dataclass(kw_only=True)
 class EighEigenvalueCorrectionConfig(EigenvalueCorrectionConfig):
-    """Configuration for eigendecomposition method used in eigenvalue corrected Shampoo.
+    """Configuration for eigendecomposition method used in eigenvalue-corrected Shampoo.
 
     Args:
         retry_double_precision (bool): Whether to re-trying eigendecomposition with higher(double) precision if lower precision fails due
@@ -105,3 +105,18 @@ class EighEigenvalueCorrectionConfig(EigenvalueCorrectionConfig):
 
 
 DefaultEighEigenvalueCorrectionConfig = EighEigenvalueCorrectionConfig()
+
+
+@dataclass(kw_only=True)
+class QREigenvalueCorrectionConfig(EigenvalueCorrectionConfig):
+    """Configuration for orthogonal/simultaneous iterations (QR algorithm) used in eigenvalue-corrected Shampoo.
+
+    Args:
+        max_iterations (int): The maximum number of iterations to perform. (Default: 1)
+        tolerance (float): The tolerance for determining convergence in terms of the relative change of the eigenvectors estimate.
+            (Default: 1e-5)
+
+    """
+
+    max_iterations: int = 1
+    tolerance: float = 1e-5

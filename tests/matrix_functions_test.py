@@ -35,6 +35,7 @@ from matrix_functions_types import (
     CoupledNewtonConfig,
     EigenConfig,
     EigenvalueCorrectionConfig,
+    QREigenvalueCorrectionConfig,
     RootInvConfig,
 )
 from torch import Tensor
@@ -835,7 +836,9 @@ class MatrixEigenvectorsTest(unittest.TestCase):
                 rtol=rtol,
             )
         with self.subTest("Test with EIGEN."):
-            for A, expected_eigenvectors in zip(A_list, expected_eigenvectors_list):
+            for A, expected_eigenvectors in zip(
+                A_list, expected_eigenvectors_list, strict=True
+            ):
                 torch.testing.assert_close(
                     expected_eigenvectors,
                     matrix_eigenvectors(
@@ -845,6 +848,42 @@ class MatrixEigenvectorsTest(unittest.TestCase):
                     atol=atol,
                     rtol=rtol,
                 )
+
+        # Tests for `QREigenvalueCorrectionConfig`.
+        initialization_strategies = {
+            "zero": lambda A: torch.zeros_like(A),
+            "identity": lambda A: torch.eye(A.shape[0], dtype=A.dtype, device=A.device),
+            "exact": lambda A: matrix_eigenvectors(A),  # Eigendecomposition.
+        }
+        for name, initialization_fn in initialization_strategies.items():
+            with self.subTest(
+                f"Test with QREigenvalueCorrectionConfig with {name} initialization."
+            ):
+                # Set `max_iterations` to large int to run until numerical tolerance.
+                qr_config = QREigenvalueCorrectionConfig(max_iterations=10_000)
+                for A, expected_eigenvectors in zip(
+                    A_list, expected_eigenvectors_list, strict=True
+                ):
+                    estimated_eigenvectors = matrix_eigenvectors(
+                        A,
+                        eigenvectors_estimate=initialization_fn(A),
+                        is_diagonal=False,
+                        eigenvector_computation_config=qr_config,
+                    )
+                    # Ensure that the signs of the eigenvectors are consistent.
+                    for col in range(A.shape[1]):
+                        if (
+                            expected_eigenvectors[0, col]
+                            / estimated_eigenvectors[0, col]
+                            < 0
+                        ):
+                            estimated_eigenvectors[:, col] *= -1
+                    torch.testing.assert_close(
+                        expected_eigenvectors,
+                        estimated_eigenvectors,
+                        atol=atol,
+                        rtol=rtol,
+                    )
 
     def test_invalid_eigenvalue_correction_config(
         self,

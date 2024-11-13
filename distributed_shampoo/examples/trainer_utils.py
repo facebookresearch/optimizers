@@ -36,6 +36,7 @@ from matrix_functions_types import (
     EigenConfig,
     EighEigenvalueCorrectionConfig,
     PreconditionerComputationConfig,
+    QREigenvalueCorrectionConfig,
 )
 from torch import nn
 from torchvision import datasets, transforms  # type: ignore[import-untyped]
@@ -73,6 +74,7 @@ class PreconditionerComputationType(enum.Enum):
     COUPLED_NEWTON_ROOT_INV = 1
     COUPLED_HIGHER_ORDER_ROOT_INV = 2
     EIGH_EIGENVALUE_CORRECTION = 3
+    QR_EIGENVALUE_CORRECTION = 4
 
 
 ###### ARGPARSER ######
@@ -556,6 +558,11 @@ def instantiate_preconditioner_computation_config(
         == PreconditionerComputationType.EIGH_EIGENVALUE_CORRECTION
     ):
         return EighEigenvalueCorrectionConfig()
+    elif (
+        preconditioner_computation_type
+        == PreconditionerComputationType.QR_EIGENVALUE_CORRECTION
+    ):
+        return QREigenvalueCorrectionConfig()
     else:
         raise ValueError(
             f"Invalid PreconditionerComputationType {preconditioner_computation_type}!"

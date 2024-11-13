@@ -24,6 +24,7 @@ from matrix_functions_types import (
     EigenConfig,
     EigenvalueCorrectionConfig,
     EighEigenvalueCorrectionConfig,
+    QREigenvalueCorrectionConfig,
     RootInvConfig,
 )
 
@@ -597,6 +598,7 @@ def compute_matrix_root_inverse_residuals(
 
 def matrix_eigenvectors(
     A: Tensor,
+    eigenvectors_estimate: Tensor | None = None,
     eigenvector_computation_config: EigenvalueCorrectionConfig = DefaultEighEigenvalueCorrectionConfig,
     is_diagonal: Tensor | bool = False,
 ) -> Tensor:
@@ -608,6 +610,8 @@ def matrix_eigenvectors(
 
     Args:
         A (Tensor): Square matrix of interest.
+        eigenvectors_estimate (Tensor | None): The current estimate of the eigenvectors of A.
+            (Default: None)
         eigenvector_computation_config (EigenvalueCorrectionConfig): Determines how eigenvectors are computed.
             (Default: DefaultEighEigenvalueCorrectionConfig)
         is_diagonal (Tensor | bool): Whether A is diagonal. (Default: False)
@@ -639,7 +643,62 @@ def matrix_eigenvectors(
             A,
             retry_double_precision=eigenvector_computation_config.retry_double_precision,
         )[1]
+    elif type(eigenvector_computation_config) is QREigenvalueCorrectionConfig:
+        assert (
+            eigenvectors_estimate is not None
+        ), "Estimate of eigenvectors is required when using QREigenvalueCorrectionConfig."
+        return _compute_orthogonal_iterations(
+            A,
+            eigenvectors_estimate=eigenvectors_estimate,
+            max_iterations=eigenvector_computation_config.max_iterations,
+            tolerance=eigenvector_computation_config.tolerance,
+        )
     else:
         raise NotImplementedError(
             f"Eigenvector computation method is not implemented! Specified eigenvector method is {eigenvector_computation_config=}."
         )
+
+
+def _compute_orthogonal_iterations(
+    A: Tensor,
+    eigenvectors_estimate: Tensor,
+    max_iterations: int = 1,
+    tolerance: float = 1e-5,
+) -> Tensor:
+    """
+    Approximately compute the eigenvectors of a symmetric matrix by performing orthogonal/simultaneous iterations (QR algorithm).
+
+    Given an initial estimate of the eigenvectors Q of matrix A, a power iteration and a QR decomposition is performed each iteration, i.e. Q, _ <- QR(A @ Q).
+    When the initial estimate is the zero matrix, the eigenvectors are computed using an eigendecomposition.
+
+    Used in https://arxiv.org/abs/2405.18144 (see Appendix B) and https://arxiv.org/abs/2409.11321.
+
+    Args:
+        A (Tensor): The symmetric input matrix.
+        eigenvectors_estimate (Tensor): The current estimate of the eigenvectors of A.
+        max_iterations (int): The maximum number of iterations to perform. (Default: 1)
+        tolerance (float): The tolerance for determining convergence in terms of the relative change of the eigenvectors estimate.
+            (Default: 1e-5)
+
+    Returns:
+        Tensor: The approximate eigenvectors of the input matrix A.
+
+    """
+    if not eigenvectors_estimate.any():
+        return _compute_eigenvalue_decomposition(A)[1]
+
+    # Perform orthogonal/simultaneous iterations (QR algorithm).
+    Q = eigenvectors_estimate
+    iteration = 0
+    error = torch.inf
+    while iteration < max_iterations and error > tolerance:
+        power_iteration = A @ Q
+        last_Q, Q = Q, torch.linalg.qr(power_iteration).Q
+        iteration += 1
+        error = last_Q.sub(Q).norm().div_(last_Q.norm())
+
+    # Ensure consistent ordering of estimated eigenvectors.
+    estimated_eigenvalues = torch.einsum("ij, ik, kj -> j", Q, A, Q)
+    Q = Q[:, estimated_eigenvalues.argsort()]
+
+    return Q
