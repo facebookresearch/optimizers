@@ -871,13 +871,10 @@ class MatrixEigenvectorsTest(unittest.TestCase):
                         eigenvector_computation_config=qr_config,
                     )
                     # Ensure that the signs of the eigenvectors are consistent.
-                    for col in range(A.shape[1]):
-                        if (
-                            expected_eigenvectors[0, col]
-                            / estimated_eigenvectors[0, col]
-                            < 0
-                        ):
-                            estimated_eigenvectors[:, col] *= -1
+                    estimated_eigenvectors[
+                        :,
+                        expected_eigenvectors[0, :] / estimated_eigenvectors[0, :] < 0,
+                    ] *= -1
                     torch.testing.assert_close(
                         expected_eigenvectors,
                         estimated_eigenvectors,
