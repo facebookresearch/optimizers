@@ -18,7 +18,7 @@ class PreconditionerComputationConfig(AbstractDataclass):
 
 
 @dataclass
-class RootInvConfig(PreconditionerComputationConfig):
+class RootInvConfig(PreconditionerComputationConfig, AbstractDataclass):
     """Base dataclass for matrix root inverse method configurations in Shampoo."""
 
 
@@ -81,7 +81,7 @@ class CoupledHigherOrderConfig(RootInvConfig):
 
 
 @dataclass
-class EigenvalueCorrectionConfig(PreconditionerComputationConfig):
+class EigenvalueCorrectionConfig(PreconditionerComputationConfig, AbstractDataclass):
     """Base dataclass for matrix eigenvector method configurations in eigenvalue-corrected Shampoo."""
 
 

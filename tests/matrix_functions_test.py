@@ -12,6 +12,7 @@ import re
 import unittest
 import unittest.mock as mock
 from collections.abc import Callable
+from dataclasses import dataclass
 from fractions import Fraction
 from functools import partial
 from types import ModuleType
@@ -39,6 +40,11 @@ from matrix_functions_types import (
     RootInvConfig,
 )
 from torch import Tensor
+
+
+@dataclass
+class InvalidRootInvConfig:
+    """Dummy dataclass for testing."""
 
 
 class CheckDiagonalTest(unittest.TestCase):
@@ -290,13 +296,13 @@ class MatrixInverseRootTest(unittest.TestCase):
         with self.assertRaisesRegex(
             NotImplementedError,
             re.escape(
-                "Root inverse config is not implemented! Specified root inverse config is root_inv_config=RootInvConfig()."
+                "Root inverse config is not implemented! Specified root inverse config is root_inv_config=InvalidRootInvConfig()."
             ),
         ):
             matrix_inverse_root(
                 A=A,
                 root=root,
-                root_inv_config=RootInvConfig(),
+                root_inv_config=InvalidRootInvConfig(),
                 is_diagonal=False,
             )
 
