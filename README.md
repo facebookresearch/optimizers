@@ -38,8 +38,7 @@ If you also want to try the [examples](./distributed_shampoo/examples/), replace
 After installation, basic usage looks like:
 ```
 import torch
-from distributed_shampoo.distributed_shampoo import DistributedShampoo
-from distributed_shampoo.shampoo_types import AdamGraftingConfig
+from distributed_shampoo import AdamGraftingConfig, DistributedShampoo
 
 model = ...  # Instantiate model
 
