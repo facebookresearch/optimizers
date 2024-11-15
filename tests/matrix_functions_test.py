@@ -43,7 +43,7 @@ from torch import Tensor
 
 
 @dataclass
-class InvalidRootInvConfig:
+class InvalidRootInvConfig(RootInvConfig):
     """Dummy dataclass for testing."""
 
 
