@@ -56,7 +56,7 @@ __all__ = [
     "CoupledHigherOrderConfig",
     "EigenvalueCorrectionConfig",  # Abstract base class (based on `PreconditionerComputationConfig`).
     "EighEigenvalueCorrectionConfig",
-    "DefaultEighEigenvalueCorrectionConfig",  # Default `EighEigenvalueCorrectionConfig`.
+    "DefaultEighEigenvalueCorrectionConfig",  # Default `EigenvalueCorrectionConfig`.
     "QREigenvalueCorrectionConfig",
     # Other utilities.
     "compile_fsdp_parameter_metadata",  # For `FSDPShampooConfig` and `HSDPShampooConfig`.
