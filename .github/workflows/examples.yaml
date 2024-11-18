@@ -3,7 +3,7 @@ name: examples
 on: [pull_request]
 
 jobs:
-  gpu-tests:
+  examples:
     name: "Python 3.10"
     runs-on: 4-core-ubuntu-gpu-t4
     steps:
