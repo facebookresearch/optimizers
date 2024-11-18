@@ -66,7 +66,7 @@ def matrix_inverse_root(
     root: Fraction,
     root_inv_config: RootInvConfig = DefaultEigenConfig,
     epsilon: float = 0.0,
-    is_diagonal: Tensor | bool = False,
+    is_diagonal: bool = False,
 ) -> Tensor:
     """Computes matrix root inverse of square symmetric positive definite matrix.
 
@@ -75,7 +75,7 @@ def matrix_inverse_root(
         root (Fraction): Root of interest. Any rational number.
         root_inv_config (RootInvConfig): Configuration for root inverse computation. (Default: DefaultEigenConfig)
         epsilon (float): Adds epsilon * I to matrix before taking matrix root. (Default: 0.0)
-        is_diagonal (Tensor, bool): Flag for whether or not matrix is diagonal. If so, will compute root inverse by computing
+        is_diagonal (bool): Flag for whether or not matrix is diagonal. If so, will compute root inverse by computing
             root inverse of diagonal entries. (Default: False)
 
     Returns:
@@ -600,7 +600,7 @@ def matrix_eigenvectors(
     A: Tensor,
     eigenvectors_estimate: Tensor | None = None,
     eigenvector_computation_config: EigenvalueCorrectionConfig = DefaultEighEigenvalueCorrectionConfig,
-    is_diagonal: Tensor | bool = False,
+    is_diagonal: bool = False,
 ) -> Tensor:
     """Compute eigenvectors of matrix using eigendecomposition of symmetric positive (semi-)definite matrix.
 
@@ -614,7 +614,7 @@ def matrix_eigenvectors(
             (Default: None)
         eigenvector_computation_config (EigenvalueCorrectionConfig): Determines how eigenvectors are computed.
             (Default: DefaultEighEigenvalueCorrectionConfig)
-        is_diagonal (Tensor | bool): Whether A is diagonal. (Default: False)
+        is_diagonal (bool): Whether A is diagonal. (Default: False)
 
     Returns:
         Q (Tensor): Orthogonal matrix containing eigenvectors of A.

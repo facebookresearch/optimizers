@@ -976,7 +976,7 @@ class ShampooPreconditionerList(
                                 RootInvConfig, self._preconditioner_computation_config
                             ),
                             epsilon=self._epsilon,
-                            is_diagonal=is_factor_matrix_diagonal,
+                            is_diagonal=bool(is_factor_matrix_diagonal),
                         ).to(dtype=inv_factor_matrix.dtype)
                     except Exception as exception:
                         # If self._use_protected_eigh is True, will reuse previous matrix if matrix inverse root computation fails.
@@ -1287,7 +1287,7 @@ class EigenvalueCorrectedShampooPreconditionerList(
                                 EigenvalueCorrectionConfig,
                                 self._preconditioner_computation_config,
                             ),
-                            is_diagonal=is_factor_matrix_diagonal,
+                            is_diagonal=bool(is_factor_matrix_diagonal),
                         )
                     except Exception as exception:
                         # If self._use_protected_eigh is True, will reuse previous matrix if matrix eigenvector computation fails.
