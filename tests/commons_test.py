@@ -20,9 +20,20 @@ class DummyOptimizerConfig(AbstractDataclass):
     """Dummy abstract dataclass for testing. Instantiation should fail."""
 
 
+@dataclass
+class DummyOptimizerChildConfig(DummyOptimizerConfig, AbstractDataclass):
+    """Dummy abstract dataclass inheriting from other abstract dataclass for testing.
+    Instantiation should fail.
+    """
+
+
 class InvalidAbstractDataclassInitTest(unittest.TestCase):
     def test_invalid_init(self) -> None:
-        for abstract_cls in (AbstractDataclass, DummyOptimizerConfig):
+        for abstract_cls in (
+            AbstractDataclass,
+            DummyOptimizerConfig,
+            DummyOptimizerChildConfig,
+        ):
             with self.subTest(abstract_cls=abstract_cls), self.assertRaisesRegex(
                 TypeError,
                 re.escape(

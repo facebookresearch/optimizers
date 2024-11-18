@@ -14,6 +14,6 @@ from typing import Any
 @dataclass
 class AbstractDataclass:
     def __new__(cls, *args: Any, **kwargs: Any) -> "AbstractDataclass":
-        if cls == AbstractDataclass or cls.__bases__[0] == AbstractDataclass:
+        if cls == AbstractDataclass or AbstractDataclass in cls.__bases__:
             raise TypeError(f"Cannot instantiate abstract class: {cls.__name__}.")
         return super().__new__(cls)
