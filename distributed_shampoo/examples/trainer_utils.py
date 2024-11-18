@@ -616,13 +616,15 @@ def setup_distribution(
         rank=world_rank,
         world_size=world_size,
     )
-    device = torch.device("cuda:{}".format(local_rank))
+    use_cuda = torch.cuda.is_available()
+    device = torch.device("cuda" if use_cuda else "cpu", local_rank)
 
-    # Necessary to ensure DTensor's local tensors are instantiated
-    # on the correct device.
-    #
-    # TODO: DTensor zeros instantiation needs to be fixed.
-    torch.cuda.set_device(local_rank)
+    if use_cuda:
+        # Necessary to ensure DTensor's local tensors are instantiated
+        # on the correct device.
+        #
+        # TODO: DTensor zeros instantiation needs to be fixed.
+        torch.cuda.set_device(local_rank)
 
     return device
 

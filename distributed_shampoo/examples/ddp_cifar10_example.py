@@ -46,7 +46,7 @@ if __name__ == "__main__":
     Uses torch.distributed to launch distributed training run.
 
     Requirements:
-        - Python 3.8 or above
+        - Python 3.10 or above
         - PyTorch / TorchVision
 
     To run this training script with a single node, one can run from the optimizers directory:
@@ -82,9 +82,12 @@ if __name__ == "__main__":
 
     # instantiate model and loss function
     model, loss_function = get_model_and_loss_fn(device)
-    model = nn.parallel.DistributedDataParallel(
-        model, device_ids=[LOCAL_RANK], output_device=LOCAL_RANK
+    device_kwargs = (
+        {"device_ids": [LOCAL_RANK], "output_device": LOCAL_RANK}
+        if args.backend == "nccl"
+        else {}
     )
+    model = nn.parallel.DistributedDataParallel(model, **device_kwargs)  # type: ignore
 
     # instantiate data loader
     data_loader, sampler = get_data_loader_and_sampler(
