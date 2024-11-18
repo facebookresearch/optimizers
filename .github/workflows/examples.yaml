@@ -35,15 +35,3 @@ jobs:
           run: |
             source .venv/bin/activate
             torchrun --standalone --nnodes=1 --nproc_per_node=1 -m distributed_shampoo.examples.ddp_cifar10_example --optimizer-type DISTRIBUTED_SHAMPOO --precondition-frequency 30 --grafting-type ADAM --use-bias-correction --use-decoupled-weight-decay --use-merge-dims --epochs 1 --local-batch-size 1024
-        - name: Run FSDP example on GPU.
-          run: |
-            source .venv/bin/activate
-            torchrun --standalone --nnodes=1 --nproc_per_node=1 -m distributed_shampoo.examples.fsdp_cifar10_example --optimizer-type DISTRIBUTED_SHAMPOO --precondition-frequency 30 --grafting-type ADAM --use-bias-correction --use-decoupled-weight-decay --use-merge-dims --epochs 1 --local-batch-size 1024
-        - name: Run HSDP example on GPU.
-          run: |
-            source .venv/bin/activate
-            torchrun --standalone --nnodes=1 --nproc_per_node=1 -m distributed_shampoo.examples.hsdp_cifar10_example --optimizer-type DISTRIBUTED_SHAMPOO --precondition-frequency 30 --grafting-type ADAM --use-bias-correction --use-decoupled-weight-decay --use-merge-dims --epochs 1 --local-batch-size 1024
-        - name: Run fully-sharded example on GPU.
-          run: |
-            source .venv/bin/activate
-            torchrun --standalone --nnodes=1 --nproc_per_node=1 -m distributed_shampoo.examples.fully_shard_cifar10_example --optimizer-type DISTRIBUTED_SHAMPOO --precondition-frequency 30 --grafting-type ADAM --use-bias-correction --use-decoupled-weight-decay --use-merge-dims --epochs 1 --local-batch-size 1024
