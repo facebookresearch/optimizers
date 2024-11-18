@@ -18,26 +18,25 @@ import numpy as np
 import torch
 import torch.distributed as dist
 
-from distributed_shampoo.distributed_shampoo import DistributedShampoo
-from distributed_shampoo.examples.convnet import ConvNet
-from distributed_shampoo.shampoo_types import (
+from distributed_shampoo import (
     AdaGradGraftingConfig,
     AdamGraftingConfig,
     CommunicationDType,
+    CoupledHigherOrderConfig,
+    CoupledNewtonConfig,
     DistributedConfig,
+    DistributedShampoo,
+    EigenConfig,
+    EighEigenvalueCorrectionConfig,
     GraftingConfig,
     PrecisionConfig,
+    PreconditionerComputationConfig,
+    QREigenvalueCorrectionConfig,
     RMSpropGraftingConfig,
     SGDGraftingConfig,
 )
-from matrix_functions_types import (
-    CoupledHigherOrderConfig,
-    CoupledNewtonConfig,
-    EigenConfig,
-    EighEigenvalueCorrectionConfig,
-    PreconditionerComputationConfig,
-    QREigenvalueCorrectionConfig,
-)
+from distributed_shampoo.examples.convnet import ConvNet
+
 from torch import nn
 from torchvision import datasets, transforms  # type: ignore[import-untyped]
 

@@ -11,6 +11,7 @@ import logging
 import os
 
 import torch
+from distributed_shampoo import PrecisionConfig
 
 from distributed_shampoo.examples.trainer_utils import (
     get_data_loader_and_sampler,
@@ -20,7 +21,6 @@ from distributed_shampoo.examples.trainer_utils import (
     Parser,
     set_seed,
 )
-from distributed_shampoo.shampoo_types import PrecisionConfig
 from torch import nn
 
 logging.basicConfig(

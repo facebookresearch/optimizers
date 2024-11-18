@@ -15,6 +15,9 @@ We actively welcome your pull requests for existing optimizers.
 5. Make sure your code lints. You can use `make lint` and `make format` to automatically lint and format the code where possible. Use `make type-check` for type checking.
 6. If you haven't already, complete the Contributor License Agreement ("CLA").
 
+> [!NOTE]
+> If you add a new class or function that a user of the package might want to interact with directly, make sure to add it [here](distributed_shampoo/__init__.py).
+
 ## Contributor License Agreement ("CLA")
 In order to accept your pull request, we need you to submit a CLA. You only need
 to do this once to work on any of Meta's open source projects.

@@ -14,7 +14,11 @@ import torch
 import torch.distributed as dist
 import torch.distributed.checkpoint as dist_checkpoint
 
-from distributed_shampoo.distributed_shampoo import DistributedShampoo
+from distributed_shampoo import (
+    DistributedShampoo,
+    FullyShardShampooConfig,
+    PrecisionConfig,
+)
 from distributed_shampoo.examples.trainer_utils import (
     get_data_loader_and_sampler,
     get_model_and_loss_fn,
@@ -24,8 +28,6 @@ from distributed_shampoo.examples.trainer_utils import (
     set_seed,
     setup_distribution,
 )
-
-from distributed_shampoo.shampoo_types import FullyShardShampooConfig, PrecisionConfig
 
 from torch import nn
 from torch.distributed._composable.fsdp import fully_shard

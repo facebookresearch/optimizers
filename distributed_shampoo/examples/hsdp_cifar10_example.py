@@ -12,6 +12,12 @@ import os
 
 import torch.distributed as dist
 
+from distributed_shampoo import (
+    compile_fsdp_parameter_metadata,
+    HSDPShampooConfig,
+    PrecisionConfig,
+)
+
 from distributed_shampoo.examples.trainer_utils import (
     get_data_loader_and_sampler,
     get_model_and_loss_fn,
@@ -21,9 +27,6 @@ from distributed_shampoo.examples.trainer_utils import (
     setup_distribution,
     train_model,
 )
-
-from distributed_shampoo.shampoo_types import HSDPShampooConfig, PrecisionConfig
-from distributed_shampoo.utils.shampoo_fsdp_utils import compile_fsdp_parameter_metadata
 from torch.distributed.device_mesh import init_device_mesh
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP, ShardingStrategy
 
