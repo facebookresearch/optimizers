@@ -161,10 +161,10 @@ class DistributedShampooPytorchCompileTest(unittest.TestCase):
                 )
 
     def test_pt2_shampoo_after_preconditioning_on_quadratic(self) -> None:
-        # NOTE: Test on steps after start_preconditioning_step
-        #       b/c of PT2 compile with inductor + root inverse after starting preconditioning
-        #       the numerical differences between non-pt2 baseline and pt2 has a bigger
-        #       precision gap; however, this num diff would NOT cause NEX for (ads) model training.
+        # NOTE: Test on steps after start_preconditioning_step.
+        #       PT2 compilation with Inductor + root inverse introduces larger numerical differences
+        #       compared to the non-PT2 baseline after preconditioning starts. However, these differences
+        #       do NOT impact model quality.
         #       So we still want to add some numerical diff guardrails to prevent PT2 degradation.
         #       - It appears if torch.float16 precision tolerance is a good threshold:
         #       rtol = 1e-3; atol = 1e-5;

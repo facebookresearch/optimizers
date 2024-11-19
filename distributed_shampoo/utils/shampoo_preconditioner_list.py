@@ -554,10 +554,10 @@ class BaseShampooPreconditionerList(
         Creates a ShampooKroneckerFactorsList object from the given ShampooKroneckerFactorsState.
 
         Args:
-            kronecker_factors_state (ShampooKroneckerFactorsState): The state containing the Kronecker factors.
+            kronecker_factors_state (ShampooKroneckerFactorsState | EigenvalueCorrectedShampooKroneckerFactorsState): The state containing the Kronecker factors.
 
         Returns:
-            kronecker_factors_list: A list of ShampooKroneckerFactors objects.
+            kronecker_factors_list (ShampooKroneckerFactorsListType): A list of ShampooKroneckerFactors objects.
         """
         ...
 
@@ -591,9 +591,7 @@ class BaseShampooPreconditionerList(
             )
 
             logger.info(
-                f"Instantiated Shampoo Preconditioner {str(param_index) + '.' + str(block_index)} "
-                f"({[(factor_matrix.quantized_values.shape, factor_matrix.quantized_values.dtype) for factor_matrix in block_state[SHAMPOO].factor_matrices]}) "
-                f"for Parameter {param_index} ({block_info.param.shape}), Block {block_index} ({block.shape})."
+                f"Instantiated Shampoo Preconditioner {str(param_index) + '.' + str(block_index)} for Parameter {param_index} ({block_info.param.shape}), Block {block_index} ({block.shape})."
             )
 
         return kronecker_factors_list

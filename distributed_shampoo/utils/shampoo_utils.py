@@ -9,7 +9,7 @@ LICENSE file in the root directory of this source tree.
 
 import math
 from collections.abc import Callable, Iterator, Sequence
-from functools import partial
+from functools import partial, reduce
 from itertools import accumulate, chain, compress, pairwise
 from types import TracebackType
 from typing import Type, TypeVar
@@ -53,15 +53,13 @@ def multi_dim_split(tensor: Tensor, split_size: int) -> tuple[Tensor, ...]:
         split_tensors (tuple[Tensor, ...]): List of tensors.
 
     """
-    split_tensors: tuple[Tensor, ...] = (tensor,)
-    if all(s <= split_size for s in tensor.size()):
-        return split_tensors
-
-    for dim in range(tensor.dim()):
-        split_tensors = tuple(
+    return reduce(
+        lambda split_tensors, dim: tuple(
             s for t in split_tensors for s in torch.split(t, split_size, dim=dim)
-        )
-    return split_tensors
+        ),
+        range(tensor.dim()),
+        (tensor,),
+    )
 
 
 CompressListType = TypeVar("CompressListType")

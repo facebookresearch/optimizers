@@ -277,6 +277,47 @@ class AdagradPreconditionerListTest(PreconditionerListTest):
         self._test_compress_preconditioner_list(expected_compress_list_call_count=1)
 
 
+class BaseShampooPreconditionerListTest(unittest.TestCase):
+    def test_abstract_methods(self) -> None:
+        # Basic setup for instantiating BaseShampooPreconditionerList.
+        params = (torch.tensor([1.0, 2.0]),)
+        block_list = (params[0],)
+        state = {params[0]: {}}
+        block_info_list = (
+            BlockInfo(
+                param=params[0],
+                composable_block_ids=(0, "block_0"),
+            ),
+        )
+        distributor_selector = (True,)
+
+        # Disable the abstract methods check from the interface so it is possible to instantiate BaseShampooPreconditionerList.
+        BaseShampooPreconditionerList.__abstractmethods__ = frozenset()
+
+        # Mock _update_factor_matrices() otherwise the access of factor_matrices will throw errors.
+        with mock.patch.object(
+            BaseShampooPreconditionerList, "_update_factor_matrices"
+        ) as mock_update_factor_matrices:
+            # Test the abstract methods _create_kronecker_factors_state_for_block(), _create_kronecker_factors_list(), and _get_inverse_roots_from_override().
+            preconditioner_list = BaseShampooPreconditionerList(  # type: ignore
+                block_list=block_list,
+                state=state,
+                block_info_list=block_info_list,
+                distributor_selector=distributor_selector,
+                precision_config=PrecisionConfig(),
+                beta2=1.0,
+            )
+
+            # Test the abstract_method _amortized_computation().
+            preconditioner_list.update_preconditioners(
+                masked_grad_list=(torch.tensor([1.0, 1.0]),),
+                step=torch.tensor(1),
+                perform_amortized_computation=True,
+            )
+
+            mock_update_factor_matrices.assert_called_once()
+
+
 # Use outer class as wrapper to avoid running the abstract test.
 class AbstractTest:
     class BaseShampooPreconditionerListTest(abc.ABC, AdagradPreconditionerListTest):

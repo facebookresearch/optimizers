@@ -1085,7 +1085,7 @@ class DistributedShampoo(torch.optim.Optimizer):
 
             # Precondition and graft filtered gradients.
             # PT2 compile is currently disabled for preconditioning and grafting.
-            # TODO: Resolve preconditioning and grafting PT2 NEX issue and enable them.
+            # NOTE: Preconditioning and grafting is not compatible with PT2 compile.
             #
             #   P_shampoo <- L_inv * G_bar * R_inv (and similar)
             #   P_grafting <- G_bar / (sqrt(V) + epsilon)

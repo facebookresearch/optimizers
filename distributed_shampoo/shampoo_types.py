@@ -129,7 +129,7 @@ class PrecisionConfig:
     grafting_state_dtype: torch.dtype = torch.float32
 
 
-@dataclass
+@dataclass(init=False)
 class DistributedConfig(AbstractDataclass):
     """Abstract dataclass for distributed configs in Shampoo."""
 
@@ -223,7 +223,7 @@ class ShampooPT2CompileConfig:
     enable_shampoo_pt2_dynamic_shape: bool | None = False
 
 
-@dataclass
+@dataclass(init=False)
 class GraftingConfig(AbstractDataclass):
     """Abstract dataclass for grafting configurations in Shampoo."""
 

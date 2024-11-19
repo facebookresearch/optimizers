@@ -15,16 +15,9 @@ from dataclasses import dataclass
 from commons import AbstractDataclass
 
 
-@dataclass
+@dataclass(init=False)
 class DummyOptimizerConfig(AbstractDataclass):
     """Dummy abstract dataclass for testing. Instantiation should fail."""
-
-
-@dataclass
-class DummyOptimizerChildConfig(DummyOptimizerConfig, AbstractDataclass):
-    """Dummy abstract dataclass inheriting from other abstract dataclass for testing.
-    Instantiation should fail.
-    """
 
 
 class InvalidAbstractDataclassInitTest(unittest.TestCase):
@@ -32,12 +25,12 @@ class InvalidAbstractDataclassInitTest(unittest.TestCase):
         for abstract_cls in (
             AbstractDataclass,
             DummyOptimizerConfig,
-            DummyOptimizerChildConfig,
         ):
-            with self.subTest(abstract_cls=abstract_cls), self.assertRaisesRegex(
-                TypeError,
-                re.escape(
-                    f"Cannot instantiate abstract class: {abstract_cls.__name__}."
-                ),
-            ):
-                abstract_cls()
+            with self.subTest(abstract_cls=abstract_cls):
+                self.assertRaisesRegex(
+                    TypeError,
+                    re.escape(
+                        f"Can't instantiate abstract class {abstract_cls.__name__} with abstract method __init__"
+                    ),
+                    abstract_cls,
+                )

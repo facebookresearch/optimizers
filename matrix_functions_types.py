@@ -12,13 +12,13 @@ from dataclasses import dataclass
 from commons import AbstractDataclass
 
 
-@dataclass
+@dataclass(init=False)
 class PreconditionerComputationConfig(AbstractDataclass):
     """Configuration for preconditioner computation in Shampoo."""
 
 
-@dataclass
-class RootInvConfig(PreconditionerComputationConfig, AbstractDataclass):
+@dataclass(init=False)
+class RootInvConfig(PreconditionerComputationConfig):
     """Base dataclass for matrix root inverse method configurations in Shampoo."""
 
 
@@ -80,8 +80,8 @@ class CoupledHigherOrderConfig(RootInvConfig):
     disable_tf32: bool = True
 
 
-@dataclass
-class EigenvalueCorrectionConfig(PreconditionerComputationConfig, AbstractDataclass):
+@dataclass(init=False)
+class EigenvalueCorrectionConfig(PreconditionerComputationConfig):
     """Base dataclass for matrix eigenvector method configurations in eigenvalue-corrected Shampoo."""
 
 
