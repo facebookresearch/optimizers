@@ -8,6 +8,7 @@
 ![format-ruff](https://github.com/facebookresearch/optimizers/actions/workflows/format-ruff.yaml/badge.svg)
 ![format-usort](https://github.com/facebookresearch/optimizers/actions/workflows/format-usort.yaml/badge.svg)
 ![type-check-mypy](https://github.com/facebookresearch/optimizers/actions/workflows/type-check-mypy.yaml/badge.svg)
+![examples](https://github.com/facebookresearch/optimizers/actions/workflows/examples.yaml/badge.svg)
 
 *Copyright (c) Meta Platforms, Inc. and affiliates.
 All rights reserved.*
