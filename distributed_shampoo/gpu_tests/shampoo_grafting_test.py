@@ -274,7 +274,7 @@ class DistributedShampooGraftingTest(unittest.TestCase):
                         start_preconditioning_step=math.inf,
                         use_nesterov=use_nesterov,
                         use_decoupled_weight_decay=False,
-                        grafting_config=SGDGraftingConfig(),
+                        grafting_config=SGDGraftingConfig(),  # type: ignore[abstract]
                     ),
                     device=device,
                 )

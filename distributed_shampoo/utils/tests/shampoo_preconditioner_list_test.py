@@ -282,7 +282,7 @@ class BaseShampooPreconditionerListTest(unittest.TestCase):
         # Basic setup for instantiating BaseShampooPreconditionerList.
         params = (torch.tensor([1.0, 2.0]),)
         block_list = (params[0],)
-        state = {params[0]: {}}
+        state: dict[Tensor, dict] = {params[0]: {}}
         block_info_list = (
             BlockInfo(
                 param=params[0],

@@ -529,7 +529,7 @@ def instantiate_grafting_config(
             epsilon=grafting_epsilon,
         )
     elif grafting_type == GraftingType.SGD:
-        return SGDGraftingConfig(
+        return SGDGraftingConfig(  # type: ignore[abstract]
             beta2=grafting_beta2,
             epsilon=grafting_epsilon,
         )

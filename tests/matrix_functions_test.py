@@ -302,7 +302,7 @@ class MatrixInverseRootTest(unittest.TestCase):
             matrix_inverse_root(
                 A=A,
                 root=root,
-                root_inv_config=InvalidRootInvConfig(),
+                root_inv_config=InvalidRootInvConfig(),  # type: ignore[abstract]
                 is_diagonal=False,
             )
 

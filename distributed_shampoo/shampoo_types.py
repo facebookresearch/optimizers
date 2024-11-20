@@ -246,7 +246,6 @@ class AdaGradGraftingConfig(GraftingConfig):
     epsilon: float = 1e-10
 
     def __post_init__(self) -> None:
-        super().__init__()
         if not self.epsilon > 0.0:
             raise ValueError(f"Invalid epsilon value: {self.epsilon}. Must be > 0.0.")
 
