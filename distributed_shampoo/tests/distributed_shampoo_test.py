@@ -60,7 +60,7 @@ class DistributedShampooInitTest(unittest.TestCase):
         ):
             DistributedShampoo(
                 self._model.parameters(),
-                grafting_config=SGDGraftingConfig(),
+                grafting_config=SGDGraftingConfig(),  # type: ignore[abstract]
             )
 
     def test_invalid_with_incorrect_hyperparameter_setting(self) -> None:

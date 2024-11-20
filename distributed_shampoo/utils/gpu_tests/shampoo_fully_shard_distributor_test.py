@@ -216,7 +216,7 @@ class ShampooFullyShardDistributorTest(FSDPTest):
 
     @skip_if_lt_x_gpu(2)
     def test_fully_shard_shampoo_against_default_shampoo(self) -> None:
-        fully_shard_config = FullyShardShampooConfig()
+        fully_shard_config = FullyShardShampooConfig()  # type: ignore[abstract]
         ShampooFullyShardDistributorTest._test_two_configs(
             ShampooFullyShardDistributorTest._shampoo_optim_factory(
                 None,
