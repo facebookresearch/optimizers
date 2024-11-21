@@ -280,16 +280,7 @@ class AdagradPreconditionerListTest(PreconditionerListTest):
 class BaseShampooPreconditionerListTest(unittest.TestCase):
     def test_abstract_methods(self) -> None:
         # Basic setup for instantiating BaseShampooPreconditionerList.
-        params = (torch.tensor([1.0, 2.0]),)
-        block_list = (params[0],)
-        state: dict[Tensor, dict] = {params[0]: {}}
-        block_info_list = (
-            BlockInfo(
-                param=params[0],
-                composable_block_ids=(0, "block_0"),
-            ),
-        )
-        distributor_selector = (True,)
+        param = torch.tensor([1.0, 2.0])
 
         # Disable the abstract methods check from the interface so it is possible to instantiate BaseShampooPreconditionerList.
         BaseShampooPreconditionerList.__abstractmethods__ = frozenset()
@@ -300,10 +291,15 @@ class BaseShampooPreconditionerListTest(unittest.TestCase):
         ) as mock_update_factor_matrices:
             # Test the abstract methods _create_kronecker_factors_state_for_block(), _create_kronecker_factors_list(), and _get_inverse_roots_from_override().
             preconditioner_list = BaseShampooPreconditionerList(  # type: ignore
-                block_list=block_list,
-                state=state,
-                block_info_list=block_info_list,
-                distributor_selector=distributor_selector,
+                block_list=(param,),
+                state={param: {}},
+                block_info_list=(
+                    BlockInfo(
+                        param=param,
+                        composable_block_ids=(0, "block_0"),
+                    ),
+                ),
+                distributor_selector=(True,),
                 precision_config=PrecisionConfig(),
                 beta2=1.0,
             )
