@@ -47,12 +47,15 @@ class DistributedShampooInitTest(unittest.TestCase):
         )
 
     def test_invalid_grafting_config(self) -> None:
-        with mock.patch.object(
-            distributed_shampoo, "type", side_effect=lambda object: GraftingConfig
-        ), self.assertRaisesRegex(
-            NotImplementedError,
-            re.escape(
-                "Unsupported grafting config: group[GRAFTING_CONFIG]=SGDGraftingConfig"
+        with (
+            mock.patch.object(
+                distributed_shampoo, "type", side_effect=lambda object: GraftingConfig
+            ),
+            self.assertRaisesRegex(
+                NotImplementedError,
+                re.escape(
+                    "Unsupported grafting config: group[GRAFTING_CONFIG]=SGDGraftingConfig"
+                ),
             ),
         ):
             DistributedShampoo(
@@ -126,22 +129,26 @@ class DistributedShampooInitTest(unittest.TestCase):
             incorrect_hyperparameter_setting,
             expected_error_msg,
         ) in incorrect_hyperparameter_setting_and_expected_error_msg:
-            with self.subTest(
-                incorrect_hyperparameter_setting=incorrect_hyperparameter_setting,
-                expected_error_msg=expected_error_msg,
-            ), self.assertRaisesRegex(ValueError, re.escape(expected_error_msg)):
+            with (
+                self.subTest(
+                    incorrect_hyperparameter_setting=incorrect_hyperparameter_setting,
+                    expected_error_msg=expected_error_msg,
+                ),
+                self.assertRaisesRegex(ValueError, re.escape(expected_error_msg)),
+            ):
                 DistributedShampoo(
                     self._model.parameters(),
                     **incorrect_hyperparameter_setting,
                 )
 
     def test_invalid_pytorch_compile_setting(self) -> None:
-        with mock.patch.object(
-            torch.cuda, "is_available", return_value=False
-        ), self.assertRaisesRegex(
-            ValueError,
-            re.escape(
-                "Both use_pytorch_compile and shampoo_pt2_compile_config are provided. Please use only shampoo_pt2_compile_config as use_pytorch_compile is deprecating."
+        with (
+            mock.patch.object(torch.cuda, "is_available", return_value=False),
+            self.assertRaisesRegex(
+                ValueError,
+                re.escape(
+                    "Both use_pytorch_compile and shampoo_pt2_compile_config are provided. Please use only shampoo_pt2_compile_config as use_pytorch_compile is deprecating."
+                ),
             ),
         ):
             DistributedShampoo(
@@ -150,12 +157,13 @@ class DistributedShampooInitTest(unittest.TestCase):
                 shampoo_pt2_compile_config=ShampooPT2CompileConfig(),
             )
 
-        with mock.patch.object(
-            torch.cuda, "is_available", return_value=False
-        ), self.assertRaisesRegex(
-            ValueError,
-            re.escape(
-                "use_pytorch_compile=False conflicts with non-None shampoo_pt2_compile_config arg. Please use only shampoo_pt2_compile_config as use_pytorch_compile is deprecating."
+        with (
+            mock.patch.object(torch.cuda, "is_available", return_value=False),
+            self.assertRaisesRegex(
+                ValueError,
+                re.escape(
+                    "use_pytorch_compile=False conflicts with non-None shampoo_pt2_compile_config arg. Please use only shampoo_pt2_compile_config as use_pytorch_compile is deprecating."
+                ),
             ),
         ):
             DistributedShampoo(
@@ -165,11 +173,12 @@ class DistributedShampooInitTest(unittest.TestCase):
             )
 
     def test_warning_pytorch_compile_setting(self) -> None:
-        with mock.patch.object(
-            torch.cuda, "is_available", return_value=True
-        ), self.assertLogs(
-            level="WARNING",
-        ) as cm:
+        with (
+            mock.patch.object(torch.cuda, "is_available", return_value=True),
+            self.assertLogs(
+                level="WARNING",
+            ) as cm,
+        ):
             DistributedShampoo(
                 self._model.parameters(),
                 lr=0.01,
@@ -183,12 +192,13 @@ class DistributedShampooInitTest(unittest.TestCase):
             )
 
     def test_invalid_cuda_pytorch_compile_setting(self) -> None:
-        with mock.patch.object(
-            torch.cuda, "is_available", return_value=False
-        ), self.assertRaisesRegex(
-            ValueError,
-            re.escape(
-                "Backend does NOT support Pytorch 2.0 compile. Switch to use_pytorch_compile in (False, None) and shampoo_pt2_compile_config=None."
+        with (
+            mock.patch.object(torch.cuda, "is_available", return_value=False),
+            self.assertRaisesRegex(
+                ValueError,
+                re.escape(
+                    "Backend does NOT support Pytorch 2.0 compile. Switch to use_pytorch_compile in (False, None) and shampoo_pt2_compile_config=None."
+                ),
             ),
         ):
             DistributedShampoo(
@@ -213,16 +223,19 @@ class DistributedShampooInitTest(unittest.TestCase):
             )
 
     def test_invalid_distributed_config(self) -> None:
-        with self.assertRaisesRegex(
-            NotImplementedError,
-            re.escape(
-                "distributed_config=DDPShampooConfig(communication_dtype=<CommunicationDType.DEFAULT: 0>, "
-                "num_trainers_per_group=-1, communicate_params=False) not supported!"
+        with (
+            self.assertRaisesRegex(
+                NotImplementedError,
+                re.escape(
+                    "distributed_config=DDPShampooConfig(communication_dtype=<CommunicationDType.DEFAULT: 0>, "
+                    "num_trainers_per_group=-1, communicate_params=False) not supported!"
+                ),
             ),
-        ), mock.patch.object(
-            distributed_shampoo,
-            "type",
-            side_effect=lambda object: DistributedConfig,
+            mock.patch.object(
+                distributed_shampoo,
+                "type",
+                side_effect=lambda object: DistributedConfig,
+            ),
         ):
             DistributedShampoo(
                 params=self._model.parameters(),
