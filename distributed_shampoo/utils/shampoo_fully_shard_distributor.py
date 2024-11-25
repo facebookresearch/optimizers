@@ -9,6 +9,8 @@ LICENSE file in the root directory of this source tree.
 
 from collections.abc import Iterable
 
+import torch
+
 from distributed_shampoo.shampoo_types import PARAMS
 from distributed_shampoo.utils.shampoo_block_info import BlockInfo
 from distributed_shampoo.utils.shampoo_distributor import Distributor
@@ -26,6 +28,7 @@ class FullyShardDistributor(Distributor):
 
     """
 
+    @torch.no_grad()
     def _get_params_or_grads(self, get_grad: bool = False) -> Iterable[Tensor | None]:
         """Helper function to get the local params (or grad) from the param_group, where params are represented as DTensors.
 
@@ -42,6 +45,7 @@ class FullyShardDistributor(Distributor):
             if (local_p := p.to_local()).numel() > 0
         )
 
+    @torch.no_grad()
     def _construct_global_block_info_list(
         self,
     ) -> None:

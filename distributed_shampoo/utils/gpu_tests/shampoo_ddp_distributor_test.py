@@ -25,10 +25,12 @@ from distributed_shampoo.shampoo_types import (
     CommunicationDType,
     DDPShampooConfig,
 )
-from distributed_shampoo.tests.shampoo_test_utils import construct_training_problem
+from distributed_shampoo.tests.shampoo_test_utils import (
+    compare_two_optimizers_on_weight_and_loss,
+    construct_training_problem,
+)
 
 from torch import distributed as dist
-from torch.nn.parameter import Parameter
 from torch.optim.optimizer import ParamsT
 from torch.testing._internal.common_distributed import (
     DynamoDistributedMultiProcTestCase,
@@ -51,44 +53,21 @@ class AbstractTest:
             device: torch.device,
             model_linear_layers_dims: tuple[int, ...] = (80, 40, 1),
             model_dead_layer_dims: tuple[int, ...] | None = (20, 20),
-        ) -> tuple[Parameter, torch.Tensor]:
+        ) -> tuple[torch.Tensor, torch.Tensor]:
             model, loss, data, target = construct_training_problem(
                 model_linear_layers_dims=model_linear_layers_dims,
                 model_dead_layer_dims=model_dead_layer_dims,
                 device=device,
                 fill=0.01,
             )
-            params = model.parameters()
+            params = list(model.parameters())
             optimizer = optim_factory(params)
             for _ in range(5):
                 optimizer.zero_grad()
                 objective = loss(model(data), target)
                 objective.backward()
                 optimizer.step()
-            return model.linear_layers[0].weight.data.cpu(), objective.detach().cpu()
-
-        @staticmethod
-        def _test_two_configs(
-            optim_factory1: Callable[
-                [ParamsT],
-                torch.optim.Optimizer,
-            ],
-            optim_factory2: Callable[
-                [ParamsT],
-                torch.optim.Optimizer,
-            ],
-            device: torch.device,
-        ) -> None:
-            params1, loss1 = AbstractTest.ShampooDDPDistributorDeviceTest._train_model(
-                optim_factory1,
-                device=device,
-            )
-            params2, loss2 = AbstractTest.ShampooDDPDistributorDeviceTest._train_model(
-                optim_factory2,
-                device=device,
-            )
-            torch.testing.assert_close(loss1, loss2)
-            torch.testing.assert_close(params1, params2)
+            return params[0], objective.detach()
 
         def _init_distributed(self) -> None:
             if not dist.is_initialized():
@@ -152,18 +131,21 @@ class AbstractTest:
                     num_trainers_per_group=num_trainers_per_group,
                     communicate_params=communicate_params,
                 ):
-                    AbstractTest.ShampooDDPDistributorDeviceTest._test_two_configs(
-                        self._shampoo_optim_factory(
+                    compare_two_optimizers_on_weight_and_loss(
+                        control_optim_factory=self._shampoo_optim_factory(
                             distributed_config=None,
                         ),
-                        self._shampoo_optim_factory(
+                        experimental_optim_factory=self._shampoo_optim_factory(
                             distributed_config=DDPShampooConfig(
                                 communication_dtype=communication_dtype,
                                 num_trainers_per_group=num_trainers_per_group,
                                 communicate_params=communicate_params,
                             )
                         ),
+                        model_linear_layers_dims=(80, 40, 1),
+                        model_dead_layer_dims=(20, 20),
                         device=self._device,
+                        fill=0.01,
                     )
 
         # This mock is used to catch the number of calls to Shampoo's step(), which happened after __init__().

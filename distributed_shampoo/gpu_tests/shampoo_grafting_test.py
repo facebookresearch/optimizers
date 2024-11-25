@@ -11,7 +11,6 @@ LICENSE file in the root directory of this source tree.
 
 import math
 import unittest
-from collections.abc import Callable
 from functools import partial
 from itertools import product
 from typing import Any, Type
@@ -24,8 +23,9 @@ from distributed_shampoo.shampoo_types import (
     RMSpropGraftingConfig,
     SGDGraftingConfig,
 )
-from distributed_shampoo.tests.shampoo_test_utils import construct_training_problem
-from torch.nn.parameter import Parameter
+from distributed_shampoo.tests.shampoo_test_utils import (
+    compare_two_optimizers_on_weight_and_loss,
+)
 from torch.optim.adagrad import Adagrad
 from torch.optim.adam import Adam
 from torch.optim.adamw import AdamW
@@ -35,57 +35,6 @@ from torch.optim.sgd import SGD
 
 
 class DistributedShampooGraftingTest(unittest.TestCase):
-    @staticmethod
-    def _train_quadratic(
-        optim_factory: Callable[
-            [ParamsT],
-            torch.optim.Optimizer,
-        ],
-        device: torch.device,
-    ) -> tuple[Parameter, torch.Tensor]:
-        model, loss, data, target = construct_training_problem(
-            model_linear_layers_dims=(10, 1, 1),
-            device=device,
-            fill=1.0,
-        )
-        params = model.parameters()
-        optimizer = optim_factory(params)
-        for _ in range(5):
-            optimizer.zero_grad()
-            objective = loss(model(data), target)
-            objective.backward()
-            optimizer.step()
-        return model.linear_layers[0].weight.data.cpu(), objective.detach().cpu()
-
-    @staticmethod
-    def _test_baseline_and_shampoo(
-        baseline_optim_factory: Callable[
-            [ParamsT],
-            torch.optim.Optimizer,
-        ],
-        shampoo_optim_factory: Callable[
-            [ParamsT],
-            torch.optim.Optimizer,
-        ],
-        device: torch.device,
-    ) -> None:
-        (
-            baseline_params,
-            baseline_loss,
-        ) = DistributedShampooGraftingTest._train_quadratic(
-            baseline_optim_factory,
-            device=device,
-        )
-        shampoo_params, shampoo_loss = DistributedShampooGraftingTest._train_quadratic(
-            shampoo_optim_factory,
-            device=device,
-        )
-        torch.testing.assert_close(shampoo_loss, baseline_loss)
-        torch.testing.assert_close(
-            shampoo_params,
-            baseline_params,
-        )
-
     @staticmethod
     def _optim_factory(
         parameters: ParamsT,
@@ -108,11 +57,11 @@ class DistributedShampooGraftingTest(unittest.TestCase):
                 weight_decay=weight_decay,
             )
             with self.subTest(weight_decay=weight_decay, device=device):
-                DistributedShampooGraftingTest._test_baseline_and_shampoo(
-                    baseline_optim_factory=partial(
+                compare_two_optimizers_on_weight_and_loss(
+                    control_optim_factory=partial(
                         optim_factory, optim_cls=Adagrad, eps=1e-10
                     ),
-                    shampoo_optim_factory=partial(
+                    experimental_optim_factory=partial(
                         optim_factory,
                         optim_cls=DistributedShampoo,
                         betas=(0.0, 1.0),
@@ -144,11 +93,11 @@ class DistributedShampooGraftingTest(unittest.TestCase):
                 weight_decay=weight_decay,
             )
             with self.subTest(weight_decay=weight_decay, device=device):
-                DistributedShampooGraftingTest._test_baseline_and_shampoo(
-                    baseline_optim_factory=partial(
+                compare_two_optimizers_on_weight_and_loss(
+                    control_optim_factory=partial(
                         optim_factory, optim_cls=Adam, eps=1e-8
                     ),
-                    shampoo_optim_factory=partial(
+                    experimental_optim_factory=partial(
                         optim_factory,
                         optim_cls=DistributedShampoo,
                         epsilon=1e-8,
@@ -180,11 +129,11 @@ class DistributedShampooGraftingTest(unittest.TestCase):
                 weight_decay=weight_decay,
             )
             with self.subTest(weight_decay=weight_decay, device=device):
-                DistributedShampooGraftingTest._test_baseline_and_shampoo(
-                    baseline_optim_factory=partial(
+                compare_two_optimizers_on_weight_and_loss(
+                    control_optim_factory=partial(
                         optim_factory, optim_cls=AdamW, eps=1e-8
                     ),
-                    shampoo_optim_factory=partial(
+                    experimental_optim_factory=partial(
                         optim_factory,
                         optim_cls=DistributedShampoo,
                         epsilon=1e-8,
@@ -215,14 +164,14 @@ class DistributedShampooGraftingTest(unittest.TestCase):
                 weight_decay=weight_decay,
             )
             with self.subTest(weight_decay=weight_decay, device=device):
-                DistributedShampooGraftingTest._test_baseline_and_shampoo(
-                    baseline_optim_factory=partial(
+                compare_two_optimizers_on_weight_and_loss(
+                    control_optim_factory=partial(
                         optim_factory,
                         optim_cls=RMSprop,
                         alpha=0.99,
                         eps=1e-8,
                     ),
-                    shampoo_optim_factory=partial(
+                    experimental_optim_factory=partial(
                         optim_factory,
                         optim_cls=DistributedShampoo,
                         betas=(0.0, 0.99),
@@ -258,13 +207,13 @@ class DistributedShampooGraftingTest(unittest.TestCase):
             with self.subTest(
                 weight_decay=weight_decay, use_nesterov=use_nesterov, device=device
             ):
-                DistributedShampooGraftingTest._test_baseline_and_shampoo(
-                    baseline_optim_factory=partial(
+                compare_two_optimizers_on_weight_and_loss(
+                    control_optim_factory=partial(
                         optim_factory,
                         optim_cls=SGD,
                         nesterov=use_nesterov,
                     ),
-                    shampoo_optim_factory=partial(
+                    experimental_optim_factory=partial(
                         optim_factory,
                         optim_cls=DistributedShampoo,
                         betas=(0.0, 0.9),

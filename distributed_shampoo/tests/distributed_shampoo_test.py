@@ -32,9 +32,6 @@ from distributed_shampoo.shampoo_types import (
     SHAMPOO_PRECONDITIONER_LIST,
     ShampooPT2CompileConfig,
 )
-from distributed_shampoo.utils.shampoo_preconditioner_list import (
-    ShampooPreconditionerList,
-)
 from distributed_shampoo.utils.shampoo_quantization import QuantizedTensorList
 from matrix_functions_types import (
     DefaultEigenConfig,
@@ -300,15 +297,22 @@ class DistributedShampooTest(unittest.TestCase):
 
         self.assertEqual(self._optimizer.step(closure=closure), 1.0)
 
-    @mock.patch.object(ShampooPreconditionerList, "update_preconditioners")
-    def test_step_with_empty_grad_list(
-        self, mock_upgrade_preconditioners: mock.Mock
-    ) -> None:
-        # Test the case that the grad_list is empty.
-        self._optimizer.zero_grad()
-        self._optimizer.step()
-        # Because the gradient list is empty, the preconditioners should not be updated.
-        mock_upgrade_preconditioners.assert_not_called()
+    def test_step_with_empty_grad_list(self) -> None:
+        # Because the grad_list is empty, after taking five steps, the internal step should be 0.
+        for _ in range(5):
+            self._optimizer.zero_grad()
+            self._optimizer.step()
+
+        actual_step = self._optimizer.distributed_state_dict(
+            key_to_param=self._model.named_parameters(),
+            save_param_groups=True,
+        )["state"]["0.weight"]['["step"]']
+        torch.testing.assert_close(
+            actual_step,
+            torch.as_tensor(0),
+            rtol=0,
+            atol=0,
+        )
 
 
 class DistributedShampooStateDictTest(unittest.TestCase):

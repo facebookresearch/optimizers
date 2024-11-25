@@ -21,69 +21,14 @@ from distributed_shampoo.shampoo_types import (
     GraftingConfig,
     ShampooPT2CompileConfig,
 )
-from distributed_shampoo.tests.shampoo_test_utils import construct_training_problem
-from torch.nn.parameter import Parameter
+from distributed_shampoo.tests.shampoo_test_utils import (
+    compare_two_optimizers_on_weight_and_loss,
+)
 from torch.optim.optimizer import ParamsT
 
 
 @unittest.skipIf(not torch.cuda.is_available(), "Skip when CUDA is not available")
 class DistributedShampooPytorchCompileTest(unittest.TestCase):
-    @staticmethod
-    def _train_quadratic(
-        shampoo_optim_factory: Callable[[ParamsT], torch.optim.Optimizer],
-        total_steps: int = 5,
-    ) -> tuple[Parameter, torch.Tensor]:
-        (
-            model,
-            loss,
-            data,
-            target,
-        ) = construct_training_problem(
-            model_linear_layers_dims=(10, 1, 1),
-            device=torch.device("cuda"),
-            fill=1.0,
-        )
-        params = model.parameters()
-        optimizer = shampoo_optim_factory(params)
-        for _ in range(total_steps):
-            optimizer.zero_grad()
-            objective = loss(model(data), target)
-            objective.backward()
-            optimizer.step()
-        return model.linear_layers[0].weight.data.cpu(), objective.detach().cpu()
-
-    @staticmethod
-    def _test_shampoo_baseline_and_pt2(
-        baseline_optim_factory: Callable[[ParamsT], torch.optim.Optimizer],
-        pt2_optim_factory: Callable[[ParamsT], torch.optim.Optimizer],
-        total_steps: int = 5,
-        rtol: float | None = None,
-        atol: float | None = None,
-    ) -> None:
-        (
-            baseline_params,
-            baseline_loss,
-        ) = DistributedShampooPytorchCompileTest._train_quadratic(
-            baseline_optim_factory,
-            total_steps=total_steps,
-        )
-        pt2_params, pt2_loss = DistributedShampooPytorchCompileTest._train_quadratic(
-            pt2_optim_factory,
-            total_steps=total_steps,
-        )
-        torch.testing.assert_close(
-            pt2_loss,
-            baseline_loss,
-            rtol=rtol,
-            atol=atol,
-        )
-        torch.testing.assert_close(
-            pt2_params,
-            baseline_params,
-            rtol=rtol,
-            atol=atol,
-        )
-
     @staticmethod
     def _shampoo_optim_factory(
         shampoo_pt2_compile_config: ShampooPT2CompileConfig | None,
@@ -150,13 +95,14 @@ class DistributedShampooPytorchCompileTest(unittest.TestCase):
                 betas=betas,
                 grafting_config=grafting_config,
             ):
-                DistributedShampooPytorchCompileTest._test_shampoo_baseline_and_pt2(
-                    baseline_optim_factory=shampoo_optim_factory(
+                compare_two_optimizers_on_weight_and_loss(
+                    control_optim_factory=shampoo_optim_factory(
                         shampoo_pt2_compile_config=None,
                     ),
-                    pt2_optim_factory=shampoo_optim_factory(
+                    experimental_optim_factory=shampoo_optim_factory(
                         shampoo_pt2_compile_config=ShampooPT2CompileConfig()
                     ),
+                    device=torch.device("cuda"),
                     total_steps=total_steps,
                 )
 
@@ -164,7 +110,7 @@ class DistributedShampooPytorchCompileTest(unittest.TestCase):
         # NOTE: Test on steps after start_preconditioning_step.
         #       PT2 compilation with Inductor + root inverse introduces larger numerical differences
         #       compared to the non-PT2 baseline after preconditioning starts. However, these differences
-        #       do NOT impact model quality.
+        #       should NOT impact model quality.
         #       So we still want to add some numerical diff guardrails to prevent PT2 degradation.
         #       - It appears if torch.float16 precision tolerance is a good threshold:
         #       rtol = 1e-3; atol = 1e-5;
@@ -211,13 +157,14 @@ class DistributedShampooPytorchCompileTest(unittest.TestCase):
                 betas=betas,
                 grafting_config=grafting_config,
             ):
-                DistributedShampooPytorchCompileTest._test_shampoo_baseline_and_pt2(
-                    baseline_optim_factory=shampoo_optim_factory(
+                compare_two_optimizers_on_weight_and_loss(
+                    control_optim_factory=shampoo_optim_factory(
                         shampoo_pt2_compile_config=None,
                     ),
-                    pt2_optim_factory=shampoo_optim_factory(
+                    experimental_optim_factory=shampoo_optim_factory(
                         shampoo_pt2_compile_config=ShampooPT2CompileConfig()
                     ),
+                    device=torch.device("cuda"),
                     total_steps=total_steps,
                     rtol=1.0e-3,
                     atol=1.0e-5,
