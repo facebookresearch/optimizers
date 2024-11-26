@@ -6,7 +6,7 @@
 ![gpu-tests](https://github.com/facebookresearch/optimizers/actions/workflows/gpu-tests.yaml/badge.svg)
 ![lint](https://github.com/facebookresearch/optimizers/actions/workflows/lint.yaml/badge.svg)
 ![format](https://github.com/facebookresearch/optimizers/actions/workflows/format.yaml/badge.svg)
-![type-check-mypy](https://github.com/facebookresearch/optimizers/actions/workflows/type-check-mypy.yaml/badge.svg)
+![type-check](https://github.com/facebookresearch/optimizers/actions/workflows/type-check.yaml/badge.svg)
 ![examples](https://github.com/facebookresearch/optimizers/actions/workflows/examples.yaml/badge.svg)
 
 *Copyright (c) Meta Platforms, Inc. and affiliates.
