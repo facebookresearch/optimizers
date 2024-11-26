@@ -1044,14 +1044,17 @@ class DistributedShampoo(torch.optim.Optimizer):
             use_decoupled_weight_decay,
         )
 
-        with DequantizePreconditionersContext(
-            preconditioner_list=state_lists[SHAMPOO_PRECONDITIONER_LIST]
-        ), (
+        with (
             DequantizePreconditionersContext(
-                preconditioner_list=state_lists[GRAFTING_PRECONDITIONER_LIST]
-            )
-            if grafting_config_not_none
-            else contextlib.nullcontext()
+                preconditioner_list=state_lists[SHAMPOO_PRECONDITIONER_LIST]
+            ),
+            (
+                DequantizePreconditionersContext(
+                    preconditioner_list=state_lists[GRAFTING_PRECONDITIONER_LIST]
+                )
+                if grafting_config_not_none
+                else contextlib.nullcontext()
+            ),
         ):
             # Update Shampoo and grafting preconditioners.
             # Example for AdaGrad accumulation:
