@@ -231,23 +231,27 @@ class MatrixInverseRootTest(unittest.TestCase):
             implementation,
             msg,
         ) in root_inv_config_and_implementation_and_msg:
-            with mock.patch.object(
-                matrix_functions,
-                implementation,
-                return_value=(
-                    None,
-                    None,
-                    NewtonConvergenceFlag.REACHED_MAX_ITERS,
-                    None,
-                    None,
+            with (
+                mock.patch.object(
+                    matrix_functions,
+                    implementation,
+                    return_value=(
+                        None,
+                        None,
+                        NewtonConvergenceFlag.REACHED_MAX_ITERS,
+                        None,
+                        None,
+                    ),
                 ),
-            ), self.subTest(
-                root_inv_config=root_inv_config,
-                implementation=implementation,
-                msg=msg,
-            ), self.assertLogs(
-                level="WARNING",
-            ) as cm:
+                self.subTest(
+                    root_inv_config=root_inv_config,
+                    implementation=implementation,
+                    msg=msg,
+                ),
+                self.assertLogs(
+                    level="WARNING",
+                ) as cm,
+            ):
                 matrix_inverse_root(
                     A=A,
                     root=root,
@@ -891,14 +895,17 @@ class MatrixEigenvectorsTest(unittest.TestCase):
     def test_invalid_eigenvalue_correction_config(
         self,
     ) -> None:
-        with mock.patch.object(
-            matrix_functions,
-            "type",
-            side_effect=lambda object: EigenvalueCorrectionConfig,
-        ), self.assertRaisesRegex(
-            NotImplementedError,
-            re.escape(
-                "Eigenvector computation method is not implemented! Specified eigenvector method is eigenvector_computation_config=EighEigenvalueCorrectionConfig(retry_double_precision=True)."
+        with (
+            mock.patch.object(
+                matrix_functions,
+                "type",
+                side_effect=lambda object: EigenvalueCorrectionConfig,
+            ),
+            self.assertRaisesRegex(
+                NotImplementedError,
+                re.escape(
+                    "Eigenvector computation method is not implemented! Specified eigenvector method is eigenvector_computation_config=EighEigenvalueCorrectionConfig(retry_double_precision=True)."
+                ),
             ),
         ):
             matrix_eigenvectors(

@@ -1,4 +1,4 @@
-name: format-ruff
+name: lint
 
 on: [push, pull_request]
 
@@ -8,5 +8,3 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/ruff-action@v1
-        with:
-          args: "format --check"

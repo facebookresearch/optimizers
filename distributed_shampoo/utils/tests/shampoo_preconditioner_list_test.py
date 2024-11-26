@@ -125,13 +125,16 @@ class PreconditionerListTest(unittest.TestCase):
         self,
         expected_compress_list_call_count: int,
     ) -> None:
-        with mock.patch.object(
-            shampoo_preconditioner_list,
-            "compress_list",
-        ) as mock_compress_list, mock.patch.object(
-            QuantizedTensorList,
-            "compress",
-        ) as mock_compress_quant_list:
+        with (
+            mock.patch.object(
+                shampoo_preconditioner_list,
+                "compress_list",
+            ) as mock_compress_list,
+            mock.patch.object(
+                QuantizedTensorList,
+                "compress",
+            ) as mock_compress_quant_list,
+        ):
             # Count the number of list compressions at the preconditioner list level, including compressions of QuantizedTensorList.
             # Each call to compress() under QuantizedTensorList counts once, though note that it calls compress_list() three times inside.
             self.assertIsNone(
@@ -328,11 +331,16 @@ class AbstractTest:
         def _test_raise_invalid_value_in_factor_matrix(
             self, invalid_value: float
         ) -> None:
-            with DequantizePreconditionersContext(
-                preconditioner_list=self._preconditioner_list
-            ), self.assertRaisesRegex(
-                PreconditionerValueError,
-                re.escape(f"Encountered {str(invalid_value)} values in factor matrix"),
+            with (
+                DequantizePreconditionersContext(
+                    preconditioner_list=self._preconditioner_list
+                ),
+                self.assertRaisesRegex(
+                    PreconditionerValueError,
+                    re.escape(
+                        f"Encountered {str(invalid_value)} values in factor matrix"
+                    ),
+                ),
             ):
                 self._preconditioner_list.update_preconditioners(
                     masked_grad_list=(
@@ -356,16 +364,21 @@ class AbstractTest:
             self,
         ) -> None:
             for invalid_value in (torch.nan, torch.inf):
-                with DequantizePreconditionersContext(
-                    preconditioner_list=self._preconditioner_list
-                ), self.subTest(invalid_value=invalid_value), self.assertRaisesRegex(
-                    PreconditionerValueError,
-                    re.escape("Encountered nan or inf values in"),
-                ), mock.patch.object(
-                    shampoo_preconditioner_list,
-                    self._amortized_computation_function(),
-                    side_effect=(torch.tensor([invalid_value]),),
-                ) as mock_amortized_computation:
+                with (
+                    DequantizePreconditionersContext(
+                        preconditioner_list=self._preconditioner_list
+                    ),
+                    self.subTest(invalid_value=invalid_value),
+                    self.assertRaisesRegex(
+                        PreconditionerValueError,
+                        re.escape("Encountered nan or inf values in"),
+                    ),
+                    mock.patch.object(
+                        shampoo_preconditioner_list,
+                        self._amortized_computation_function(),
+                        side_effect=(torch.tensor([invalid_value]),),
+                    ) as mock_amortized_computation,
+                ):
                     self._preconditioner_list.update_preconditioners(
                         masked_grad_list=(
                             torch.tensor([1.0, 0.0]),
@@ -384,9 +397,12 @@ class AbstractTest:
                 # Simulate the situation throws an exception (not nan and inf) to test the warning
                 side_effect=ZeroDivisionError,
             ) as mock_amortized_computation:
-                with DequantizePreconditionersContext(
-                    preconditioner_list=self._preconditioner_list
-                ), self.assertLogs(level="WARNING") as cm:
+                with (
+                    DequantizePreconditionersContext(
+                        preconditioner_list=self._preconditioner_list
+                    ),
+                    self.assertLogs(level="WARNING") as cm,
+                ):
                     # Because use_protected_eigh is True, we expect the warning to be logged.
                     self._preconditioner_list.update_preconditioners(
                         masked_grad_list=(
@@ -415,9 +431,12 @@ class AbstractTest:
                 self._preconditioner_list = self._instantiate_preconditioner_list(
                     use_protected_eigh=False,
                 )
-                with DequantizePreconditionersContext(
-                    preconditioner_list=self._preconditioner_list
-                ), self.assertRaises(ZeroDivisionError):
+                with (
+                    DequantizePreconditionersContext(
+                        preconditioner_list=self._preconditioner_list
+                    ),
+                    self.assertRaises(ZeroDivisionError),
+                ):
                     self._preconditioner_list.update_preconditioners(
                         masked_grad_list=(
                             torch.tensor([1.0, 0.0]),
@@ -443,11 +462,14 @@ class AbstractTest:
             self._preconditioner_list = self._instantiate_preconditioner_list(
                 epsilon=1.0
             )
-            with DequantizePreconditionersContext(
-                preconditioner_list=self._preconditioner_list
-            ), self.assertLogs(
-                level="DEBUG",
-            ) as cm:
+            with (
+                DequantizePreconditionersContext(
+                    preconditioner_list=self._preconditioner_list
+                ),
+                self.assertLogs(
+                    level="DEBUG",
+                ) as cm,
+            ):
                 self._preconditioner_list.update_preconditioners(
                     masked_grad_list=(
                         torch.tensor([1.0, 0.0]),

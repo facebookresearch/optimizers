@@ -1,4 +1,4 @@
-name: type-check-mypy
+name: type-check
 
 on: [push, pull_request]
 

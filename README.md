@@ -4,10 +4,9 @@
 3.10 | 3.11 | 3.12](https://img.shields.io/badge/python-3.10_|_3.11_|_3.12-blue.svg)](https://www.python.org/downloads/)
 ![tests](https://github.com/facebookresearch/optimizers/actions/workflows/tests.yaml/badge.svg)
 ![gpu-tests](https://github.com/facebookresearch/optimizers/actions/workflows/gpu-tests.yaml/badge.svg)
-![lint-ruff](https://github.com/facebookresearch/optimizers/actions/workflows/lint-ruff.yaml/badge.svg)
-![format-ruff](https://github.com/facebookresearch/optimizers/actions/workflows/format-ruff.yaml/badge.svg)
-![format-usort](https://github.com/facebookresearch/optimizers/actions/workflows/format-usort.yaml/badge.svg)
-![type-check-mypy](https://github.com/facebookresearch/optimizers/actions/workflows/type-check-mypy.yaml/badge.svg)
+![linting](https://github.com/facebookresearch/optimizers/actions/workflows/lint.yaml/badge.svg)
+![formatting](https://github.com/facebookresearch/optimizers/actions/workflows/format.yaml/badge.svg)
+![type-checking](https://github.com/facebookresearch/optimizers/actions/workflows/type-check.yaml/badge.svg)
 ![examples](https://github.com/facebookresearch/optimizers/actions/workflows/examples.yaml/badge.svg)
 
 *Copyright (c) Meta Platforms, Inc. and affiliates.

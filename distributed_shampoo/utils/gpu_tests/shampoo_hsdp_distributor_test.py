@@ -313,11 +313,12 @@ class ShampooHSDPDistributorTest(FSDPTest):
             device_mesh=mesh_2d,
         )
 
-        with mock.patch.object(
-            torch.distributed, "is_initialized", return_value=False
-        ), self.assertRaisesRegex(
-            RuntimeError,
-            re.escape("HSDPDistributor needs torch.distributed to be initialized!"),
+        with (
+            mock.patch.object(torch.distributed, "is_initialized", return_value=False),
+            self.assertRaisesRegex(
+                RuntimeError,
+                re.escape("HSDPDistributor needs torch.distributed to be initialized!"),
+            ),
         ):
             ShampooHSDPDistributorTest._train_model(
                 optim_factory=ShampooHSDPDistributorTest._shampoo_optim_factory(
@@ -339,12 +340,15 @@ class ShampooHSDPDistributorTest(FSDPTest):
         )
 
         # Hijack the DeviceMesh.size() method to return 4 instead of 2 to bypass the check of num_trainers_per_group.
-        with mock.patch.object(
-            torch.distributed.device_mesh.DeviceMesh, "size", return_value=4
-        ), self.assertRaisesRegex(
-            ValueError,
-            re.escape(
-                "distributed_config.num_trainers_per_group=3 must divide self._replicated_group_size=4!"
+        with (
+            mock.patch.object(
+                torch.distributed.device_mesh.DeviceMesh, "size", return_value=4
+            ),
+            self.assertRaisesRegex(
+                ValueError,
+                re.escape(
+                    "distributed_config.num_trainers_per_group=3 must divide self._replicated_group_size=4!"
+                ),
             ),
         ):
             ShampooHSDPDistributorTest._train_model(
