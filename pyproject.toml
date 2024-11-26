@@ -39,6 +39,7 @@ examples = [
 
 dev = [
   "torch-shampoo[examples]",
+  "pre-commit",
   "ruff",
   "usort",
   "mypy",
