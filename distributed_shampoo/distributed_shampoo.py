@@ -211,10 +211,10 @@ class DistributedShampoo(torch.optim.Optimizer):
                     particular tensor shape. Recommended to use `static` mode here for Shampoo.
                     More about dynamic shape: https://pytorch.org/docs/stable/torch.compiler_dynamic_shapes.html
 
-    5. [EXPERIMENTAL] Eigenvalue correction: We can (approximately) correct the eigenvalues of Shampoo's preconditioner by accumulating a running
+    5. [EXPERIMENTAL] Eigenvalue correction (SOAP): We can (approximately) correct the eigenvalues of Shampoo's preconditioner by accumulating a running
         average of the squared gradient in the eigenbasis of Shampoo's preconditioner. This running average (with hyperparameter `betas[1]`) is
         updated every iteration while the eigenbasis of Shampoo's preconditioner is only computed every `precondition_frequency` steps.
-        Alternatively, this can be seen as running Adam in the eigenbasis of Shampoo's preconditioner.
+        Alternatively, this can be seen as running Adam in the eigenbasis of Shampoo's preconditioner, also known as SOAP.
 
         When setting `preconditioner_computation_config` as an instance of `EigenvalueCorrectionConfig`, there is typically no need to use learning
         rate grafting from Adam (`grafting_config=None`) and, when they are available, Adam's optimal `lr`, `betas`, and `weight_decay` should be

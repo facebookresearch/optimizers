@@ -36,7 +36,7 @@ If you also want to try the [examples](./distributed_shampoo/examples/), replace
 ## Usage
 
 After installation, basic usage looks like:
-```
+```python
 import torch
 from distributed_shampoo import AdamGraftingConfig, DistributedShampoo
 

@@ -38,7 +38,7 @@ Key distinctives of this implementation include:
 - Choice of precision for preconditioner accumulation and root inverse computation.
 - Ability to cache split parameters.
 - Merging of small dimensions.
-- [EXPERIMENTAL] Option to (approximately) correct the eigenvalues/run Adam in the eigenbasis of Shampoo's preconditioner [2,6,7].
+- [EXPERIMENTAL] Option to (approximately) correct the eigenvalues/run Adam in the eigenbasis of Shampoo's preconditioner (SOAP) [2,6,7].
 
 ## Requirements
 
@@ -52,7 +52,7 @@ Note: We have observed known instabilities with the torch.linalg.eigh operator o
 
 ## How to Use
 
-**Given a learning rate schedule for your previous base optimizer, we can replace the optimizer with Shampoo and "graft" from the learning rate schedule of the base method.**
+**Given a learning rate schedule for your previous base optimizer, we can replace the optimizer with Shampoo and "graft" from the learning rate schedule of the base method. Alternatively, you can consider replacing Adam(W) by eigenvalue-corrected Shampoo (SOAP).**
 
 A few notes on hyperparameters:
 
@@ -69,7 +69,7 @@ A few notes on hyperparameters:
 ### Example 1: [SGD](https://pytorch.org/docs/stable/generated/torch.optim.SGD.html) with Momentum
 
 If we previously used the optimizer:
-```
+```python
 import torch
 from torch.optim import SGD
 
@@ -83,7 +83,7 @@ optimizer = SGD(
 )
 ```
 we would instead use:
-```
+```python
 import torch
 from distributed_shampoo import DistributedShampoo, SGDGraftingConfig
 
@@ -106,7 +106,7 @@ optimizer = DistributedShampoo(
 ### Example 2: [Adam](https://pytorch.org/docs/stable/generated/torch.optim.Adam.html)
 
 If we previously used the optimizer:
-```
+```python
 import torch
 from torch.optim import Adam
 
@@ -121,7 +121,7 @@ optimizer = Adam(
 )
 ```
 we would instead use:
-```
+```python
 import torch
 from distributed_shampoo import AdamGraftingConfig, DistributedShampoo
 
@@ -146,7 +146,7 @@ optimizer = DistributedShampoo(
 ### Example 3: [Adagrad](https://pytorch.org/docs/stable/generated/torch.optim.Adagrad.html)
 
 If we previously used the optimizer:
-```
+```python
 import torch
 from torch.optim import Adagrad
 
@@ -160,7 +160,7 @@ optimizer = Adagrad(
 )
 ```
 we would instead use:
-```
+```python
 import torch
 from distributed_shampoo import AdaGradGraftingConfig, DistributedShampoo
 
@@ -184,7 +184,7 @@ optimizer = DistributedShampoo(
 ### Example 4: [AdamW](https://pytorch.org/docs/stable/generated/torch.optim.AdamW.html)
 
 If we previously used the optimizer:
-```
+```python
 import torch
 from torch.optim import AdamW
 
@@ -199,7 +199,7 @@ optimizer = AdamW(
 )
 ```
 we would instead use:
-```
+```python
 import torch
 from distributed_shampoo import AdamGraftingConfig, DistributedShampoo
 
@@ -218,6 +218,45 @@ optimizer = DistributedShampoo(
         beta2=0.999,
         epsilon=1e-08,
     ),
+)
+```
+
+### Example 5: eigenvalue-corrected Shampoo (SOAP)
+
+If we previously used the optimizer:
+```python
+import torch
+from torch.optim import AdamW
+
+model = instantiate_model()
+
+optimizer = AdamW(
+    model.parameters(),
+    lr=0.001,
+    betas=(0.9, 0.999),
+    eps=1e-08,
+    weight_decay=1e-05,
+)
+```
+we would instead use:
+```python
+import torch
+from distributed_shampoo import DistributedShampoo, EighEigenvalueCorrectionConfig
+
+model = instantiate_model()
+
+optimizer = DistributedShampoo(
+    model.parameters(),
+    lr=0.001,
+    betas=(0.9, 0.999),
+    epsilon=1e-12,
+    weight_decay=1e-05,
+    max_preconditioner_dim=8192,
+    precondition_frequency=100,
+    use_decoupled_weight_decay=True,
+    # This can also be set to `QREigenvalueCorrectionConfig` which is less expensive
+    # and might therefore allow for a smaller `precondition_frequency`.
+    preconditioner_computation_config=EighEigenvalueCorrectionConfig(),
 )
 ```
 
