@@ -274,7 +274,7 @@ We support:
 - Option to communicate updated parameters.
 
 To use DDP Shampoo, simply configure the `distributed_config` as `DDPShampooConfig`:
-```
+```python
 import os
 
 import torch
@@ -333,7 +333,7 @@ Please see `ddp_cifar10_example.py` as an example.
 FSDP training will create flattened parameters by flattening and concatenating all parameters within each FSDP module. By default, this removes all information about each parameter's tensor shape that Shampoo aims to exploit. Therefore, in order to support FSDP training, we have to use additional FSDP metadata in order to recover valid tensor blocks of the original parameters.
 
 Note that we only support PyTorch FSDP with the `use_orig_params=True` option.
-```
+```python
 import os
 
 import torch
@@ -389,7 +389,7 @@ To checkpoint Distributed Shampoo, we have to use the `torch.distributed.checkpo
 Distributed checkpointing requires a fully-qualified name (FQN) mapping for each parameter, unlike the identifier used in `torch.optim.Optimizer`. The easiest way to handle this requirement is to use the model's `named_parameters()` function and pass this as the `key_to_param` argument of `distributed_state_dict` and `load_distributed_state_dict`.
 
 Given a `CHECKPOINT_DIR`, to store the checkpoint:
-```
+```python
 import torch.distributed.checkpoint as dist_checkpoint
 
 state_dict = {
@@ -403,7 +403,7 @@ dist_checkpoint.save_state_dict(
 ```
 
 To load the checkpoint:
-```
+```python
 dist_checkpoint.load_state_dict(
     state_dict=state_dict,
     storage_reader=dist_checkpoint.FileSystemReader(CHECKPOINT_DIR),
@@ -437,7 +437,7 @@ With the inclusion of learning rate grafting, we can extract a good learning rat
     * For efficiency purposes, it is best to set this value as a multiple of 2.
 
     * The following is an example of setting `max_preconditioner_dim = 4096` with SGD grafting:
-    ```
+    ```python
     optimizer = DistributedShampoo(
         nn.parameters(),
         lr=0.01,
@@ -458,7 +458,7 @@ With the inclusion of learning rate grafting, we can extract a good learning rat
     * In practice, we have found that an upper bound to `precondition_frequency` is on the order of thousands. This approach will offer diminishing performance gains if the bottleneck is due to preconditioning, which is performed at every iteration.
 
     * The following is an example of setting `precondition_frequency = 100`:
-    ```
+    ```python
     optimizer = DistributedShampoo(
         nn.parameters(),
         lr=0.01,
@@ -477,7 +477,7 @@ With the inclusion of learning rate grafting, we can extract a good learning rat
     * If the `precondition_frequency = 1`, then set `start_preconditioning_step = -1` in order to use Shampoo from the start.
 
     * Following is an example of setting `start_preconditioning_step = 300`:
-    ```
+    ```python
     optimizer = DistributedShampoo(
         nn.parameters(),
         lr=0.01,
