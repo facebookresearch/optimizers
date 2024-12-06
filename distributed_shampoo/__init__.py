@@ -13,14 +13,20 @@ from distributed_shampoo.shampoo_types import (
     AdamGraftingConfig,
     CommunicationDType,
     DDPShampooConfig,
+    DefaultEigenvalueCorrectedShampooConfig,
+    DefaultShampooConfig,
+    DefaultSOAPConfig,
     DistributedConfig,
+    EigenvalueCorrectedShampooPreconditionerConfig,
     FSDPShampooConfig,
     FullyShardShampooConfig,
     GraftingConfig,
     HSDPShampooConfig,
     PrecisionConfig,
+    PreconditionerComputationConfig,
     RMSpropGraftingConfig,
     SGDGraftingConfig,
+    ShampooPreconditionerConfig,
     ShampooPT2CompileConfig,
 )
 from distributed_shampoo.utils.shampoo_fsdp_utils import compile_fsdp_parameter_metadata
@@ -28,12 +34,9 @@ from matrix_functions_types import (
     CoupledHigherOrderConfig,
     CoupledNewtonConfig,
     DefaultEigenConfig,
-    DefaultEighEigenvalueCorrectionConfig,
     EigenConfig,
-    EigenvalueCorrectionConfig,
-    EighEigenvalueCorrectionConfig,
-    PreconditionerComputationConfig,
-    QREigenvalueCorrectionConfig,
+    EigenvectorConfig,
+    MatrixFunctionConfig,
     RootInvConfig,
 )
 
@@ -58,15 +61,22 @@ __all__ = [
     "PrecisionConfig",
     # `preconditioner_computation_config` options.
     "PreconditionerComputationConfig",  # Abstract base class.
-    "RootInvConfig",  # Abstract base class (based on `PreconditionerComputationConfig`).
-    "EigenConfig",
-    "DefaultEigenConfig",  # Default `RootInvConfig`.
-    "CoupledNewtonConfig",
-    "CoupledHigherOrderConfig",
-    "EigenvalueCorrectionConfig",  # Abstract base class (based on `PreconditionerComputationConfig`).
-    "EighEigenvalueCorrectionConfig",
-    "DefaultEighEigenvalueCorrectionConfig",  # Default `EigenvalueCorrectionConfig`.
-    "QREigenvalueCorrectionConfig",
+    "ShampooPreconditionerConfig",  # Based on `PreconditionerComputationConfig`.
+    "DefaultShampooConfig",  # Default `ShampooPreconditionerConfig` using `EigenConfig`.
+    "EigenvalueCorrectedShampooPreconditionerConfig",  # Based on `PreconditionerComputationConfig`.
+    "DefaultEigenvalueCorrectedShampooConfig",  # Default `EigenvalueCorrectedShampooPreconditionerConfig` using `EighConfig`.
+    "DefaultSOAPConfig",  # Default `EigenvalueCorrectedShampooPreconditionerConfig` using `QRConfig`.
+    # matrix functions configs.
+    "MatrixFunctionConfig",  # Abstract base class.
+    "RootInvConfig",  # Abstract base class (based on `MatrixFunctionConfig`).
+    "EigenConfig",  # Based on `RootInvConfig`.
+    "DefaultEigenConfig",  # Default `RootInvConfig` using `EigenConfig`.
+    "CoupledNewtonConfig",  # Based on `RootInvConfig`.
+    "CoupledHigherOrderConfig",  # Based on `RootInvConfig`.
+    "EigenvectorConfig",  # Abstract base class (based on `MatrixFunctionConfig`).
+    "EighConfig",  # Based on `EigenvectorConfig`.
+    "DefaultEighConfig",  # Default `EigenvectorConfig` using `EighConfig`.
+    "QRConfig",  # Based on `EigenvectorConfig`.
     # Other utilities.
     "compile_fsdp_parameter_metadata",  # For `FSDPShampooConfig` and `HSDPShampooConfig`.
     "CommunicationDType",  # For `DDPShampooConfig` and `HSDPShampooConfig`.
