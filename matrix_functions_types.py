@@ -13,18 +13,18 @@ from commons import AbstractDataclass
 
 
 @dataclass(init=False)
-class PreconditionerComputationConfig(AbstractDataclass):
-    """Configuration for preconditioner computation in Shampoo."""
+class MatrixFunctionConfig(AbstractDataclass):
+    """Base dataclass for matrix function configurations."""
 
 
 @dataclass(init=False)
-class RootInvConfig(PreconditionerComputationConfig):
-    """Base dataclass for matrix root inverse method configurations in Shampoo."""
+class RootInvConfig(MatrixFunctionConfig):
+    """Base dataclass for matrix root inverse (`matrix_inverse_root`) method configurations."""
 
 
 @dataclass(kw_only=True)
 class EigenConfig(RootInvConfig):
-    """Configuration for eigendecomposition method in Shampoo.
+    """Configuration for eigendecomposition (`_matrix_inverse_root_eigen`) method.
 
     Args:
         make_positive_semidefinite (bool): Perturbs matrix eigenvalues to ensure it is numerically positive semi-definite. (Default: True)
@@ -45,7 +45,7 @@ DefaultEigenConfig = EigenConfig()
 
 @dataclass(kw_only=True)
 class CoupledNewtonConfig(RootInvConfig):
-    """Configuration for coupled Newton method in Shampoo.
+    """Configuration for coupled Newton (`_matrix_inverse_root_newton`) method.
 
     Args:
         max_iterations (int): Maximum number of iterations for coupled Newton iteration. (Default: 100)
@@ -59,7 +59,7 @@ class CoupledNewtonConfig(RootInvConfig):
 
 @dataclass(kw_only=True)
 class CoupledHigherOrderConfig(RootInvConfig):
-    """Configuration for coupled higher-order method in Shampoo.
+    """Configuration for coupled higher-order (`_matrix_inverse_root_higher_order`) method.
 
     Args:
         rel_epsilon (float): Relative epsilon for coupled higher order method. Adds epsilon * lambda_max * I to matrix
@@ -81,13 +81,13 @@ class CoupledHigherOrderConfig(RootInvConfig):
 
 
 @dataclass(init=False)
-class EigenvalueCorrectionConfig(PreconditionerComputationConfig):
-    """Base dataclass for matrix eigenvector method configurations in eigenvalue-corrected Shampoo."""
+class EigenvectorConfig(MatrixFunctionConfig):
+    """Base dataclass for matrix eigenvector (`matrix_eigenvectors`) method."""
 
 
 @dataclass(kw_only=True)
-class EighEigenvalueCorrectionConfig(EigenvalueCorrectionConfig):
-    """Configuration for eigendecomposition method used in eigenvalue-corrected Shampoo.
+class EighConfig(EigenvectorConfig):
+    """Configuration for eigendecomposition (`_compute_eigenvalue_decomposition`) method.
 
     Args:
         retry_double_precision (bool): Whether to re-trying eigendecomposition with higher(double) precision if lower precision fails due
@@ -98,12 +98,12 @@ class EighEigenvalueCorrectionConfig(EigenvalueCorrectionConfig):
     retry_double_precision: bool = True
 
 
-DefaultEighEigenvalueCorrectionConfig = EighEigenvalueCorrectionConfig()
+DefaultEighConfig = EighConfig()
 
 
 @dataclass(kw_only=True)
-class QREigenvalueCorrectionConfig(EigenvalueCorrectionConfig):
-    """Configuration for orthogonal/simultaneous iterations (QR algorithm) used in eigenvalue-corrected Shampoo.
+class QRConfig(EigenvectorConfig):
+    """Configuration for orthogonal/simultaneous iterations/QR algorithm (`_compute_orthogonal_iterations`).
 
     Args:
         max_iterations (int): The maximum number of iterations to perform. (Default: 1)
