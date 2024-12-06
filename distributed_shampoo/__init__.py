@@ -23,7 +23,7 @@ from distributed_shampoo.shampoo_types import (
     GraftingConfig,
     HSDPShampooConfig,
     PrecisionConfig,
-    PreconditionerComputationConfig,
+    PreconditionerConfig,
     RMSpropGraftingConfig,
     SGDGraftingConfig,
     ShampooPreconditionerConfig,
@@ -59,11 +59,11 @@ __all__ = [
     "HSDPShampooConfig",
     # `precision_config`.
     "PrecisionConfig",
-    # `preconditioner_computation_config` options.
-    "PreconditionerComputationConfig",  # Abstract base class.
-    "ShampooPreconditionerConfig",  # Based on `PreconditionerComputationConfig`.
+    # `preconditioner_config` options.
+    "PreconditionerConfig",  # Abstract base class.
+    "ShampooPreconditionerConfig",  # Based on `PreconditionerConfig`.
     "DefaultShampooConfig",  # Default `ShampooPreconditionerConfig` using `EigenConfig`.
-    "EigenvalueCorrectedShampooPreconditionerConfig",  # Based on `PreconditionerComputationConfig`.
+    "EigenvalueCorrectedShampooPreconditionerConfig",  # Based on `PreconditionerConfig`.
     "DefaultEigenvalueCorrectedShampooConfig",  # Default `EigenvalueCorrectedShampooPreconditionerConfig` using `EighConfig`.
     "DefaultSOAPConfig",  # Default `EigenvalueCorrectedShampooPreconditionerConfig` using `QRConfig`.
     # matrix functions configs.

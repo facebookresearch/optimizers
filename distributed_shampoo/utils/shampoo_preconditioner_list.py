@@ -21,7 +21,7 @@ from typing import Any, cast, Generic, TypeVar
 import torch
 from distributed_shampoo.shampoo_types import (
     PrecisionConfig,
-    PreconditionerComputationConfig,
+    PreconditionerConfig,
     PreconditionerValueError,
 )
 from distributed_shampoo.utils.shampoo_block_info import BlockInfo
@@ -427,7 +427,7 @@ class BaseShampooPreconditionerList(
         distributor_selector (tuple[bool, ...]): Distributor selector is a boolean list indicating whether a blocked parameter
             is selected by the current Distributor.
         precision_config (PrecisionConfig): Data types for optimizer states. (Default: all fields torch.float)
-        preconditioner_computation_config (PreconditionerComputationConfig): Configuration for preconditioner computation. (Default: DefaultShampooConfig)
+        preconditioner_config (PreconditionerConfig): Configuration for preconditioner computation. (Default: DefaultShampooConfig)
         beta2 (float): Exponential moving average factor for Shampoo factor matrices. If beta2 = 1., will use unweighted sum.
             (Default: 1.0)
         epsilon (float): Epsilon term for regularizing preconditioner to ensure positive definiteness. (Default: 1e-12)
@@ -451,7 +451,7 @@ class BaseShampooPreconditionerList(
         block_info_list: tuple[BlockInfo, ...],
         distributor_selector: tuple[bool, ...],
         precision_config: PrecisionConfig,
-        preconditioner_computation_config: PreconditionerComputationConfig,
+        preconditioner_config: PreconditionerConfig,
         beta2: float = 1.0,
         epsilon: float = 1e-12,
         inv_root_override: int | tuple[int, ...] = 0,
@@ -462,7 +462,7 @@ class BaseShampooPreconditionerList(
 
         # Initialize parameters.
         self._precision_config = precision_config
-        self._preconditioner_computation_config = preconditioner_computation_config
+        self._preconditioner_config = preconditioner_config
         self._beta2 = beta2
         self._epsilon = epsilon
         self._inv_root_override = inv_root_override
@@ -960,7 +960,7 @@ class ShampooPreconditionerList(
                     # Compute inverse preconditioner.
                     root_inv_config = cast(
                         RootInvConfig,
-                        self._preconditioner_computation_config.amortized_computation_config,
+                        self._preconditioner_config.amortized_computation_config,
                     )
                     try:
                         computed_inv_factor_matrix = matrix_inverse_root(
@@ -1023,7 +1023,7 @@ class ShampooPreconditionerList(
     ) -> tuple[tuple[Tensor, ...], tuple[Tensor, ...]]:
         root_inv_config = cast(
             RootInvConfig,
-            self._preconditioner_computation_config.amortized_computation_config,
+            self._preconditioner_config.amortized_computation_config,
         )
         relative_errors = []
         relative_residuals = []
@@ -1282,7 +1282,7 @@ class EigenvalueCorrectedShampooPreconditionerList(
                     # Compute eigenvectors of factor matrix.
                     eigenvector_computation_config = cast(
                         EigenvectorConfig,
-                        self._preconditioner_computation_config.amortized_computation_config,
+                        self._preconditioner_config.amortized_computation_config,
                     )
                     try:
                         computed_eigenvectors = matrix_eigenvectors(

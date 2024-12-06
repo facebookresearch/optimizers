@@ -31,7 +31,7 @@ from distributed_shampoo import (
     DistributedShampoo,
     GraftingConfig,
     PrecisionConfig,
-    PreconditionerComputationConfig,
+    PreconditionerConfig,
     RMSpropGraftingConfig,
     SGDGraftingConfig,
     ShampooPreconditionerConfig,
@@ -498,7 +498,7 @@ def instantiate_optimizer(
             precision_config=precision_config,
             use_protected_eigh=use_protected_eigh,
             track_root_inv_residuals=track_root_inv_residuals,
-            preconditioner_computation_config=instantiate_preconditioner_computation_config(
+            preconditioner_config=instantiate_preconditioner_config(
                 preconditioner_computation_type
             ),
         )  # type: ignore[assignment]
@@ -538,9 +538,9 @@ def instantiate_grafting_config(
         raise ValueError(f"Invalid GraftingType {grafting_type}!")
 
 
-def instantiate_preconditioner_computation_config(
+def instantiate_preconditioner_config(
     preconditioner_computation_type: PreconditionerComputationType,
-) -> PreconditionerComputationConfig:
+) -> PreconditionerConfig:
     if preconditioner_computation_type == PreconditionerComputationType.EIGEN_ROOT_INV:
         return DefaultShampooConfig
     elif (

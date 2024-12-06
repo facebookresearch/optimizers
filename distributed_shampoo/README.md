@@ -64,7 +64,7 @@ A few notes on hyperparameters:
 
 - We allow for decoupled and coupled weight decay. If one sets `use_decoupled_weight_decay=True`, then you are enabling AdamW-style weight decay, while `use_decoupled_weight_decay=False` corresponds to the normal L2-regularization style weight decay.
 
-- When setting `preconditioner_computation_config` as an instance of `EigenvalueCorrectedShampooPreconditionerConfig` (see Example 5), there is typically no need to use learning rate grafting from Adam (`grafting_config=None`) and, when they are available, Adam's optimal `lr`, `betas`, and `weight_decay` should be a good starting point for further tuning. However, the case of `beta2=1.0`, i.e. an AdaGrad-like accumulation, has not been explored yet.  Also, in settings where Shampoo would usually graft its learning rate from SGD, grafting might still be beneficial.
+- When setting `preconditioner_config` as an instance of `EigenvalueCorrectedShampooPreconditionerConfig` (see Example 5), there is typically no need to use learning rate grafting from Adam (`grafting_config=None`) and, when they are available, Adam's optimal `lr`, `betas`, and `weight_decay` should be a good starting point for further tuning. However, the case of `beta2=1.0`, i.e. an AdaGrad-like accumulation, has not been explored yet.  Also, in settings where Shampoo would usually graft its learning rate from SGD, grafting might still be beneficial.
 
 ### Example 1: [SGD](https://pytorch.org/docs/stable/generated/torch.optim.SGD.html) with Momentum
 
@@ -259,7 +259,7 @@ optimizer = DistributedShampoo(
     use_decoupled_weight_decay=True,
     # This can also be set to `DefaultSOAPConfig` which uses QR decompositions, hence is
     # less expensive and might thereby allow for a smaller `precondition_frequency`.
-    preconditioner_computation_config=DefaultEigenvalueCorrectedShampooConfig,
+    preconditioner_config=DefaultEigenvalueCorrectedShampooConfig,
 )
 ```
 

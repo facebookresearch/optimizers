@@ -30,8 +30,10 @@ from distributed_shampoo.shampoo_types import (
     MASKED_FILTERED_GRAD_LIST,
     MASKED_MOMENTUM_LIST,
     PrecisionConfig,
+    PreconditionerConfig,
     SGDGraftingConfig,
     SHAMPOO_PRECONDITIONER_LIST,
+    ShampooPreconditionerConfig,
     ShampooPT2CompileConfig,
 )
 from distributed_shampoo.utils.shampoo_quantization import QuantizedTensorList
@@ -44,20 +46,37 @@ class DistributedShampooInitTest(unittest.TestCase):
             nn.Linear(5, 10, bias=False),
         )
 
+    def test_invalid_preconditioner_config(self) -> None:
+        with (
+            mock.patch.object(
+                distributed_shampoo,
+                "type",
+                side_effect=lambda object: {
+                    ShampooPreconditionerConfig: PreconditionerConfig
+                }.get(type(object), type(object)),
+            ),
+            self.assertRaisesRegex(
+                NotImplementedError,
+                re.escape("group[PRECONDITIONER_CONFIG]=ShampooPreconditionerConfig"),
+            ),
+        ):
+            DistributedShampoo(
+                self._model.parameters(),
+                preconditioner_config=DefaultShampooConfig,
+            )
+
     def test_invalid_grafting_config(self) -> None:
         with (
             mock.patch.object(
                 distributed_shampoo,
                 "type",
-                side_effect=lambda object: GraftingConfig
-                if type(object) is SGDGraftingConfig
-                else type(object),
+                side_effect=lambda object: {SGDGraftingConfig: GraftingConfig}.get(
+                    type(object), type(object)
+                ),
             ),
             self.assertRaisesRegex(
                 NotImplementedError,
-                re.escape(
-                    "Unsupported grafting config: group[GRAFTING_CONFIG]=SGDGraftingConfig"
-                ),
+                re.escape("group[GRAFTING_CONFIG]=SGDGraftingConfig"),
             ),
         ):
             DistributedShampoo(
@@ -253,7 +272,7 @@ class DistributedShampooInitTest(unittest.TestCase):
                 lr=0.01,
                 start_preconditioning_step=1,
                 exponent_multiplier=2.0,
-                preconditioner_computation_config=DefaultShampooConfig,
+                preconditioner_config=DefaultShampooConfig,
             )
             self.assertCountEqual(
                 [r.msg for r in cm.records],
@@ -274,7 +293,7 @@ class DistributedShampooInitTest(unittest.TestCase):
                 lr=0.01,
                 start_preconditioning_step=1,
                 track_root_inv_residuals=True,
-                preconditioner_computation_config=DefaultEigenvalueCorrectedShampooConfig,
+                preconditioner_config=DefaultEigenvalueCorrectedShampooConfig,
             )
 
 
@@ -497,7 +516,7 @@ class DistributedShampooStateDictTest(unittest.TestCase):
                     ),
                     "use_merge_dims": True,
                     "precision_config": PrecisionConfig(),
-                    "preconditioner_computation_config": DefaultShampooConfig,
+                    "preconditioner_config": DefaultShampooConfig,
                 }
             },
         }
@@ -891,7 +910,7 @@ class EigenvalueCorrectedDistributedShampooPrecisionTest(
             distributed_config=None,
             grafting_config=None,
             precision_config=precision_config,
-            preconditioner_computation_config=DefaultEigenvalueCorrectedShampooConfig,
+            preconditioner_config=DefaultEigenvalueCorrectedShampooConfig,
         )
 
     def _assert_state_list_dtype(

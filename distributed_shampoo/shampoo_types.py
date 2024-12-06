@@ -44,7 +44,7 @@ PARAMS = "params"  # While this is stored in groups by default, we do not checkp
 PRECISION_CONFIG = "precision_config"
 PRECONDITION_FREQUENCY = "precondition_frequency"
 PRECONDITIONER_DTYPE = "preconditioner_dtype"
-PRECONDITIONER_COMPUTATION_CONFIG = "preconditioner_computation_config"
+PRECONDITIONER_CONFIG = "preconditioner_config"
 START_PRECONDITIONING_STEP = "start_preconditioning_step"
 USE_EIGENVALUE_CORRECTION = "use_eigenvalue_correction"
 USE_BIAS_CORRECTION = "use_bias_correction"
@@ -81,7 +81,7 @@ class PreconditionerValueError(ValueError):
 
 ###### DATACLASSES ######
 @dataclass(init=False)
-class PreconditionerComputationConfig(AbstractDataclass):
+class PreconditionerConfig(AbstractDataclass):
     """Configuration for preconditioner computation in DistributedShampoo.
 
     Args:
@@ -93,7 +93,7 @@ class PreconditionerComputationConfig(AbstractDataclass):
 
 
 @dataclass(kw_only=True)
-class ShampooPreconditionerConfig(PreconditionerComputationConfig):
+class ShampooPreconditionerConfig(PreconditionerConfig):
     """Configuration for Shampoo preconditioner computation.
 
     Args:
@@ -110,7 +110,7 @@ DefaultShampooConfig = ShampooPreconditionerConfig(
 
 
 @dataclass(kw_only=True)
-class EigenvalueCorrectedShampooPreconditionerConfig(PreconditionerComputationConfig):
+class EigenvalueCorrectedShampooPreconditionerConfig(PreconditionerConfig):
     """Configuration for eigenvalue-corrected Shampoo/SOAP preconditioner computation.
 
     Args:
