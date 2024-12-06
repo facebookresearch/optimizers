@@ -19,7 +19,11 @@ from operator import methodcaller
 from typing import Any, cast, Generic, TypeVar
 
 import torch
-from distributed_shampoo.shampoo_types import PrecisionConfig, PreconditionerValueError
+from distributed_shampoo.shampoo_types import (
+    PrecisionConfig,
+    PreconditionerComputationConfig,
+    PreconditionerValueError,
+)
 from distributed_shampoo.utils.shampoo_block_info import BlockInfo
 from distributed_shampoo.utils.shampoo_quantization import (
     QuantizedTensor,
@@ -38,12 +42,7 @@ from matrix_functions import (
     matrix_inverse_root,
 )
 
-from matrix_functions_types import (
-    DefaultEigenConfig,
-    EigenvalueCorrectionConfig,
-    PreconditionerComputationConfig,
-    RootInvConfig,
-)
+from matrix_functions_types import EigenvectorConfig, RootInvConfig
 from optimizer_modules import OptimizerModule
 from torch import Tensor
 from torch.autograd import profiler
@@ -428,7 +427,7 @@ class BaseShampooPreconditionerList(
         distributor_selector (tuple[bool, ...]): Distributor selector is a boolean list indicating whether a blocked parameter
             is selected by the current Distributor.
         precision_config (PrecisionConfig): Data types for optimizer states. (Default: all fields torch.float)
-        preconditioner_computation_config (PreconditionerComputationConfig): Configuration for preconditioner computation. (Default: DefaultEigenConfig)
+        preconditioner_computation_config (PreconditionerComputationConfig): Configuration for preconditioner computation. (Default: DefaultShampooConfig)
         beta2 (float): Exponential moving average factor for Shampoo factor matrices. If beta2 = 1., will use unweighted sum.
             (Default: 1.0)
         epsilon (float): Epsilon term for regularizing preconditioner to ensure positive definiteness. (Default: 1e-12)
@@ -452,7 +451,7 @@ class BaseShampooPreconditionerList(
         block_info_list: tuple[BlockInfo, ...],
         distributor_selector: tuple[bool, ...],
         precision_config: PrecisionConfig,
-        preconditioner_computation_config: PreconditionerComputationConfig = DefaultEigenConfig,
+        preconditioner_computation_config: PreconditionerComputationConfig,
         beta2: float = 1.0,
         epsilon: float = 1e-12,
         inv_root_override: int | tuple[int, ...] = 0,
@@ -959,20 +958,22 @@ class ShampooPreconditionerList(
                     )
 
                     # Compute inverse preconditioner.
+                    root_inv_config = cast(
+                        RootInvConfig,
+                        self._preconditioner_computation_config.amortized_computation_config,
+                    )
                     try:
                         computed_inv_factor_matrix = matrix_inverse_root(
                             A=bias_corrected_factor_matrix,
                             root=Fraction(
                                 root
                                 / getattr(
-                                    self._preconditioner_computation_config,
+                                    root_inv_config,
                                     "exponent_multiplier",
                                     1,
                                 )
                             ),
-                            root_inv_config=cast(
-                                RootInvConfig, self._preconditioner_computation_config
-                            ),
+                            root_inv_config=root_inv_config,
                             epsilon=self._epsilon,
                             is_diagonal=bool(is_factor_matrix_diagonal),
                         ).to(dtype=inv_factor_matrix.dtype)
@@ -983,7 +984,7 @@ class ShampooPreconditionerList(
                         else:
                             logger.warning(
                                 f"Matrix computation failed for factor matrix {factor_matrix_index} "
-                                f"with {exception=}. Using previous inversed factor matrix and continuing..."
+                                f"with {exception=}. Using previous inverted factor matrix and continuing..."
                             )
                             # Define computed_inv_factor_matrix to prevent undefined local variable error.
                             computed_inv_factor_matrix = inv_factor_matrix
@@ -1020,6 +1021,10 @@ class ShampooPreconditionerList(
     def compute_root_inverse_residuals(
         self,
     ) -> tuple[tuple[Tensor, ...], tuple[Tensor, ...]]:
+        root_inv_config = cast(
+            RootInvConfig,
+            self._preconditioner_computation_config.amortized_computation_config,
+        )
         relative_errors = []
         relative_residuals = []
 
@@ -1043,15 +1048,13 @@ class ShampooPreconditionerList(
                     root=Fraction(
                         root
                         / getattr(
-                            self._preconditioner_computation_config,
+                            root_inv_config,
                             "exponent_multiplier",
                             1,
                         )
                     ),
                     epsilon=self._epsilon,
-                    root_inv_config=cast(
-                        RootInvConfig, self._preconditioner_computation_config
-                    ),
+                    root_inv_config=root_inv_config,
                 )
                 relative_errors.append(relative_error)
                 relative_residuals.append(relative_residual)
@@ -1277,14 +1280,15 @@ class EigenvalueCorrectedShampooPreconditionerList(
                     )
 
                     # Compute eigenvectors of factor matrix.
+                    eigenvector_computation_config = cast(
+                        EigenvectorConfig,
+                        self._preconditioner_computation_config.amortized_computation_config,
+                    )
                     try:
                         computed_eigenvectors = matrix_eigenvectors(
                             A=factor_matrix,
                             eigenvectors_estimate=factor_matrix_eigenvectors,
-                            eigenvector_computation_config=cast(
-                                EigenvalueCorrectionConfig,
-                                self._preconditioner_computation_config,
-                            ),
+                            eigenvector_computation_config=eigenvector_computation_config,
                             is_diagonal=bool(is_factor_matrix_diagonal),
                         )
                     except Exception as exception:

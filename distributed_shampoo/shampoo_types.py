@@ -13,6 +13,15 @@ from dataclasses import dataclass
 import torch
 
 from commons import AbstractDataclass
+
+from matrix_functions_types import (
+    DefaultEigenConfig,
+    DefaultEighConfig,
+    EigenvectorConfig,
+    MatrixFunctionConfig,
+    QRConfig,
+    RootInvConfig,
+)
 from torch.distributed.device_mesh import DeviceMesh
 from torch.distributed.fsdp import ShardingStrategy
 from torch.nn.parameter import Parameter
@@ -71,6 +80,57 @@ class PreconditionerValueError(ValueError):
 
 
 ###### DATACLASSES ######
+@dataclass(init=False)
+class PreconditionerComputationConfig(AbstractDataclass):
+    """Configuration for preconditioner computation in DistributedShampoo.
+
+    Args:
+        amortized_computation_config (MatrixFunctionConfig): Configuration for the amortized computation, e.g., inverse-root or eigenvector computation.
+
+    """
+
+    amortized_computation_config: MatrixFunctionConfig
+
+
+@dataclass(kw_only=True)
+class ShampooPreconditionerConfig(PreconditionerComputationConfig):
+    """Configuration for Shampoo preconditioner computation.
+
+    Args:
+        amortized_computation_config (RootInvConfig): Configuration for the inverse-root computation.
+
+    """
+
+    amortized_computation_config: RootInvConfig
+
+
+DefaultShampooConfig = ShampooPreconditionerConfig(
+    amortized_computation_config=DefaultEigenConfig
+)
+
+
+@dataclass(kw_only=True)
+class EigenvalueCorrectedShampooPreconditionerConfig(PreconditionerComputationConfig):
+    """Configuration for eigenvalue-corrected Shampoo/SOAP preconditioner computation.
+
+    Args:
+        amortized_computation_config (EigenvectorConfig): Configuration for the eigenvector computation.
+
+    """
+
+    amortized_computation_config: EigenvectorConfig
+
+
+DefaultEigenvalueCorrectedShampooConfig = (
+    EigenvalueCorrectedShampooPreconditionerConfig(
+        amortized_computation_config=DefaultEighConfig,
+    )
+)
+DefaultSOAPConfig = EigenvalueCorrectedShampooPreconditionerConfig(
+    amortized_computation_config=QRConfig(),
+)
+
+
 @dataclass
 class FSDPParameterMetadata:
     """FSDP Metadata for a parameter.

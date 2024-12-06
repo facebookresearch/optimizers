@@ -17,12 +17,12 @@ from typing import Any, Type
 
 import torch
 from distributed_shampoo.distributed_shampoo import DistributedShampoo
+from distributed_shampoo.shampoo_types import (
+    DefaultEigenvalueCorrectedShampooConfig,
+    DefaultSOAPConfig,
+)
 from distributed_shampoo.tests.shampoo_test_utils import (
     compare_two_optimizers_on_weight_and_loss,
-)
-from matrix_functions_types import (
-    DefaultEighEigenvalueCorrectionConfig,
-    QREigenvalueCorrectionConfig,
 )
 from torch.optim.adagrad import Adagrad
 from torch.optim.adam import Adam
@@ -54,7 +54,7 @@ class DistributedShampooEigenvalueCorrectionTest(unittest.TestCase):
             (torch.device("cpu"),) + (torch.device("cuda"),)
             if torch.cuda.is_available()
             else (),
-            (DefaultEighEigenvalueCorrectionConfig, QREigenvalueCorrectionConfig()),
+            (DefaultEigenvalueCorrectedShampooConfig, DefaultSOAPConfig),
         ):
             optim_factory = partial(
                 DistributedShampooEigenvalueCorrectionTest._optim_factory,
@@ -93,7 +93,7 @@ class DistributedShampooEigenvalueCorrectionTest(unittest.TestCase):
             (torch.device("cpu"),) + (torch.device("cuda"),)
             if torch.cuda.is_available()
             else (),
-            (DefaultEighEigenvalueCorrectionConfig, QREigenvalueCorrectionConfig()),
+            (DefaultEigenvalueCorrectedShampooConfig, DefaultSOAPConfig),
         ):
             optim_factory = partial(
                 DistributedShampooEigenvalueCorrectionTest._optim_factory,
@@ -134,7 +134,7 @@ class DistributedShampooEigenvalueCorrectionTest(unittest.TestCase):
             (torch.device("cpu"),) + (torch.device("cuda"),)
             if torch.cuda.is_available()
             else (),
-            (DefaultEighEigenvalueCorrectionConfig, QREigenvalueCorrectionConfig()),
+            (DefaultEigenvalueCorrectedShampooConfig, DefaultSOAPConfig),
         ):
             optim_factory = partial(
                 DistributedShampooEigenvalueCorrectionTest._optim_factory,
@@ -175,7 +175,7 @@ class DistributedShampooEigenvalueCorrectionTest(unittest.TestCase):
             (torch.device("cpu"),) + (torch.device("cuda"),)
             if torch.cuda.is_available()
             else (),
-            (DefaultEighEigenvalueCorrectionConfig, QREigenvalueCorrectionConfig()),
+            (DefaultEigenvalueCorrectedShampooConfig, DefaultSOAPConfig),
         ):
             optim_factory = partial(
                 DistributedShampooEigenvalueCorrectionTest._optim_factory,

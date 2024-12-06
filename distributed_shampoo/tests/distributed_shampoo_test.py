@@ -22,6 +22,8 @@ from distributed_shampoo.distributed_shampoo import DistributedShampoo
 from distributed_shampoo.shampoo_types import (
     AdaGradGraftingConfig,
     DDPShampooConfig,
+    DefaultEigenvalueCorrectedShampooConfig,
+    DefaultShampooConfig,
     DistributedConfig,
     GRAFTING_PRECONDITIONER_LIST,
     GraftingConfig,
@@ -33,10 +35,6 @@ from distributed_shampoo.shampoo_types import (
     ShampooPT2CompileConfig,
 )
 from distributed_shampoo.utils.shampoo_quantization import QuantizedTensorList
-from matrix_functions_types import (
-    DefaultEigenConfig,
-    DefaultEighEigenvalueCorrectionConfig,
-)
 from torch import nn
 
 
@@ -49,7 +47,11 @@ class DistributedShampooInitTest(unittest.TestCase):
     def test_invalid_grafting_config(self) -> None:
         with (
             mock.patch.object(
-                distributed_shampoo, "type", side_effect=lambda object: GraftingConfig
+                distributed_shampoo,
+                "type",
+                side_effect=lambda object: GraftingConfig
+                if type(object) is SGDGraftingConfig
+                else type(object),
             ),
             self.assertRaisesRegex(
                 NotImplementedError,
@@ -251,7 +253,7 @@ class DistributedShampooInitTest(unittest.TestCase):
                 lr=0.01,
                 start_preconditioning_step=1,
                 exponent_multiplier=2.0,
-                preconditioner_computation_config=DefaultEigenConfig,
+                preconditioner_computation_config=DefaultShampooConfig,
             )
             self.assertCountEqual(
                 [r.msg for r in cm.records],
@@ -264,7 +266,7 @@ class DistributedShampooInitTest(unittest.TestCase):
         with self.assertRaisesRegex(
             ValueError,
             re.escape(
-                "track_root_inv_residuals=True has to be set to False when preconditioner_computation_config=EighEigenvalueCorrectionConfig(retry_double_precision=True) is not an instance of RootInvConfig."
+                "track_root_inv_residuals=True has to be set to False when amortized_computation_config=EighConfig(retry_double_precision=True) is not an instance of RootInvConfig."
             ),
         ):
             DistributedShampoo(
@@ -272,7 +274,7 @@ class DistributedShampooInitTest(unittest.TestCase):
                 lr=0.01,
                 start_preconditioning_step=1,
                 track_root_inv_residuals=True,
-                preconditioner_computation_config=DefaultEighEigenvalueCorrectionConfig,
+                preconditioner_computation_config=DefaultEigenvalueCorrectedShampooConfig,
             )
 
 
@@ -495,7 +497,7 @@ class DistributedShampooStateDictTest(unittest.TestCase):
                     ),
                     "use_merge_dims": True,
                     "precision_config": PrecisionConfig(),
-                    "preconditioner_computation_config": DefaultEigenConfig,
+                    "preconditioner_computation_config": DefaultShampooConfig,
                 }
             },
         }
@@ -889,7 +891,7 @@ class EigenvalueCorrectedDistributedShampooPrecisionTest(
             distributed_config=None,
             grafting_config=None,
             precision_config=precision_config,
-            preconditioner_computation_config=DefaultEighEigenvalueCorrectionConfig,
+            preconditioner_computation_config=DefaultEigenvalueCorrectedShampooConfig,
         )
 
     def _assert_state_list_dtype(

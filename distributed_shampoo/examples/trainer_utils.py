@@ -24,16 +24,17 @@ from distributed_shampoo import (
     CommunicationDType,
     CoupledHigherOrderConfig,
     CoupledNewtonConfig,
+    DefaultEigenvalueCorrectedShampooConfig,
+    DefaultShampooConfig,
+    DefaultSOAPConfig,
     DistributedConfig,
     DistributedShampoo,
-    EigenConfig,
-    EighEigenvalueCorrectionConfig,
     GraftingConfig,
     PrecisionConfig,
     PreconditionerComputationConfig,
-    QREigenvalueCorrectionConfig,
     RMSpropGraftingConfig,
     SGDGraftingConfig,
+    ShampooPreconditionerConfig,
 )
 from distributed_shampoo.examples.convnet import ConvNet
 
@@ -541,27 +542,31 @@ def instantiate_preconditioner_computation_config(
     preconditioner_computation_type: PreconditionerComputationType,
 ) -> PreconditionerComputationConfig:
     if preconditioner_computation_type == PreconditionerComputationType.EIGEN_ROOT_INV:
-        return EigenConfig()
+        return DefaultShampooConfig
     elif (
         preconditioner_computation_type
         == PreconditionerComputationType.COUPLED_NEWTON_ROOT_INV
     ):
-        return CoupledNewtonConfig()
+        return ShampooPreconditionerConfig(
+            amortized_computation_config=CoupledNewtonConfig(),
+        )
     elif (
         preconditioner_computation_type
         == PreconditionerComputationType.COUPLED_HIGHER_ORDER_ROOT_INV
     ):
-        return CoupledHigherOrderConfig()
+        return ShampooPreconditionerConfig(
+            amortized_computation_config=CoupledHigherOrderConfig(),
+        )
     elif (
         preconditioner_computation_type
         == PreconditionerComputationType.EIGH_EIGENVALUE_CORRECTION
     ):
-        return EighEigenvalueCorrectionConfig()
+        return DefaultEigenvalueCorrectedShampooConfig
     elif (
         preconditioner_computation_type
         == PreconditionerComputationType.QR_EIGENVALUE_CORRECTION
     ):
-        return QREigenvalueCorrectionConfig()
+        return DefaultSOAPConfig
     else:
         raise ValueError(
             f"Invalid PreconditionerComputationType {preconditioner_computation_type}!"
