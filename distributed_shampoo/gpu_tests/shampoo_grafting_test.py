@@ -180,6 +180,7 @@ class DistributedShampooGraftingTest(unittest.TestCase):
                         max_preconditioner_dim=10,
                         precondition_frequency=1,
                         start_preconditioning_step=math.inf,
+                        use_bias_correction=False,
                         use_decoupled_weight_decay=False,
                         grafting_config=RMSpropGraftingConfig(
                             beta2=0.99,
