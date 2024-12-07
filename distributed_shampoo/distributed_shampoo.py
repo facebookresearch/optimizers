@@ -272,7 +272,7 @@ class DistributedShampoo(torch.optim.Optimizer):
         preconditioner_config (PreconditionerConfig): Configuration for preconditioner computation.
             If this field is an instance ShampooPreconditionerConfig, Shampoo uses the root inverse of the preconditioner.
             If this field is an instance EigenvalueCorrectedShampooPreconditionerConfig Shampoo uses corrected the eigenvalues/running Adam in the eigenbasis of preconditioner.
-            (Default: DefaultEigenConfig)
+            (Default: DefaultShampooConfig)
 
     """
 
