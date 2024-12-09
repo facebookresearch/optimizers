@@ -771,7 +771,6 @@ class BaseShampooPreconditionerList(
         self._local_failed_amortized_computation_counter_list: list[list[int]] = [
             [0] * len(kronecker_factors.factor_matrices)
             for kronecker_factors in self._local_kronecker_factors_list
-            if kronecker_factors is not None
         ]
 
         # Masked lists are the list of active preconditioners or values after filtering out gradients with None.
