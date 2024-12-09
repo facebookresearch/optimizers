@@ -15,7 +15,13 @@ from typing import Any
 from unittest import mock
 
 import torch
-from distributed_shampoo.shampoo_types import PrecisionConfig, PreconditionerValueError
+from distributed_shampoo.shampoo_types import (
+    DefaultEigenvalueCorrectedShampooConfig,
+    DefaultShampooConfig,
+    PrecisionConfig,
+    PreconditionerValueError,
+    ShampooPreconditionerConfig,
+)
 
 from distributed_shampoo.utils import shampoo_preconditioner_list
 from distributed_shampoo.utils.shampoo_block_info import BlockInfo
@@ -29,7 +35,7 @@ from distributed_shampoo.utils.shampoo_preconditioner_list import (
     ShampooPreconditionerList,
 )
 from distributed_shampoo.utils.shampoo_quantization import QuantizedTensorList
-from matrix_functions_types import DefaultEighEigenvalueCorrectionConfig, EigenConfig
+from matrix_functions import EigenConfig
 from torch import Tensor
 
 
@@ -304,6 +310,7 @@ class BaseShampooPreconditionerListTest(unittest.TestCase):
                 ),
                 distributor_selector=(True,),
                 precision_config=PrecisionConfig(),
+                preconditioner_config=DefaultShampooConfig,
                 beta2=1.0,
             )
 
@@ -526,6 +533,7 @@ class ShampooPreconditionerListTest(AbstractTest.BaseShampooPreconditionerListTe
             "inv_root_override": 0,
             "use_bias_correction": True,
             "use_protected_eigh": True,
+            "preconditioner_config": DefaultShampooConfig,
         } | kwargs
         return ShampooPreconditionerList(
             block_list=self._block_list,
@@ -533,7 +541,7 @@ class ShampooPreconditionerListTest(AbstractTest.BaseShampooPreconditionerListTe
             block_info_list=self._block_info_list,
             distributor_selector=self._distributor_selector,
             precision_config=PrecisionConfig(factor_matrix_dtype=torch.float64),
-            **kwargs,
+            **kwargs,  # type: ignore[arg-type]
         )
 
     def test_update_preconditioners_and_precondition(self) -> None:
@@ -718,7 +726,9 @@ class ShampooPreconditionerListTest(AbstractTest.BaseShampooPreconditionerListTe
             """
             Tests that the inverse roots are computed correctly from inv_root_override.
             """
-            preconditioner_computation_config = EigenConfig(exponent_multiplier=2.0)
+            preconditioner_config = ShampooPreconditionerConfig(
+                amortized_computation_config=EigenConfig(exponent_multiplier=2.0),
+            )
 
             masked_grad_list1 = (
                 torch.tensor([1.0, 0.0]),
@@ -743,7 +753,7 @@ class ShampooPreconditionerListTest(AbstractTest.BaseShampooPreconditionerListTe
                         beta2=1.0,
                         use_bias_correction=True,
                         inv_root_override=inv_root_override,
-                        preconditioner_computation_config=preconditioner_computation_config,
+                        preconditioner_config=preconditioner_config,
                     ),
                     masked_grad_lists=[masked_grad_list1, masked_grad_list2],
                     masked_expected_preconditioned_grad_list=masked_expected_preconditioned_grad_list,
@@ -766,6 +776,7 @@ class ShampooPreconditionerListTest(AbstractTest.BaseShampooPreconditionerListTe
             block_info_list=(self._block_info_list[0],),
             distributor_selector=(self._distributor_selector[0],),
             precision_config=PrecisionConfig(),
+            preconditioner_config=DefaultShampooConfig,
             epsilon=0.0,
         )
 
@@ -811,7 +822,7 @@ class EigenvalueCorrectedShampooPreconditionerListTest(
             "inv_root_override": 0,
             "use_bias_correction": True,
             "use_protected_eigh": True,
-            "preconditioner_computation_config": DefaultEighEigenvalueCorrectionConfig,
+            "preconditioner_config": DefaultEigenvalueCorrectedShampooConfig,
         } | kwargs
         return EigenvalueCorrectedShampooPreconditionerList(
             block_list=self._block_list,
@@ -1044,7 +1055,7 @@ class EigenvalueCorrectedShampooPreconditionerListTest(
                         beta2=1.0,
                         use_bias_correction=True,
                         inv_root_override=inv_root_override,
-                        preconditioner_computation_config=DefaultEighEigenvalueCorrectionConfig,
+                        preconditioner_config=DefaultEigenvalueCorrectedShampooConfig,
                     ),
                     masked_grad_lists=[masked_grad_list1, masked_grad_list2],
                     masked_expected_preconditioned_grad_list=masked_expected_preconditioned_grad_list,
