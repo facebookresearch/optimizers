@@ -86,10 +86,12 @@ class PreconditionerConfig(AbstractDataclass):
 
     Args:
         amortized_computation_config (MatrixFunctionConfig): Configuration for the amortized computation, e.g., inverse-root or eigenvector computation.
+        num_tolerated_failed_amortized_computations (int): Number of failed amortized computations to tolerate before raising an error. (Default: 3)
 
     """
 
     amortized_computation_config: MatrixFunctionConfig
+    num_tolerated_failed_amortized_computations: int = 3
 
 
 @dataclass(kw_only=True)
