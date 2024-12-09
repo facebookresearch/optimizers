@@ -93,6 +93,12 @@ class PreconditionerConfig(AbstractDataclass):
     amortized_computation_config: MatrixFunctionConfig
     num_tolerated_failed_amortized_computations: int = 3
 
+    def __post_init__(self) -> None:
+        if self.num_tolerated_failed_amortized_computations < 0:
+            raise ValueError(
+                f"Invalid num_tolerated_failed_amortized_computations value: {self.num_tolerated_failed_amortized_computations}. Must be >= 0."
+            )
+
 
 @dataclass(kw_only=True)
 class ShampooPreconditionerConfig(PreconditionerConfig):
