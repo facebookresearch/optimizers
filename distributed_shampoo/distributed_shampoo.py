@@ -780,14 +780,12 @@ class DistributedShampoo(torch.optim.Optimizer):
             )
         if group[BETAS][0] != 0.0:
             state_lists[MASKED_FILTERED_GRAD_LIST] = state_lists[
-                MASKED_FILTERED_GRAD_LIST
+                FILTERED_GRAD_LIST
             ].compress(
                 state_lists[DISTRIBUTOR].local_grad_selector,
             )
         if group[MOMENTUM] != 0.0:
-            state_lists[MASKED_MOMENTUM_LIST] = state_lists[
-                MASKED_MOMENTUM_LIST
-            ].compress(
+            state_lists[MASKED_MOMENTUM_LIST] = state_lists[MOMENTUM_LIST].compress(
                 state_lists[DISTRIBUTOR].local_grad_selector,
             )
 
