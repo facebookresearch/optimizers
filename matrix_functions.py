@@ -20,11 +20,11 @@ from matrix_functions_types import (
     CoupledHigherOrderConfig,
     CoupledNewtonConfig,
     DefaultEigenConfig,
-    DefaultEighEigenvalueCorrectionConfig,
+    DefaultEighConfig,
     EigenConfig,
-    EigenvalueCorrectionConfig,
-    EighEigenvalueCorrectionConfig,
-    QREigenvalueCorrectionConfig,
+    EigenvectorConfig,
+    EighConfig,
+    QRConfig,
     RootInvConfig,
 )
 
@@ -599,7 +599,7 @@ def compute_matrix_root_inverse_residuals(
 def matrix_eigenvectors(
     A: Tensor,
     eigenvectors_estimate: Tensor | None = None,
-    eigenvector_computation_config: EigenvalueCorrectionConfig = DefaultEighEigenvalueCorrectionConfig,
+    eigenvector_computation_config: EigenvectorConfig = DefaultEighConfig,
     is_diagonal: bool = False,
 ) -> Tensor:
     """Compute eigenvectors of matrix using eigendecomposition of symmetric positive (semi-)definite matrix.
@@ -612,8 +612,8 @@ def matrix_eigenvectors(
         A (Tensor): Square matrix of interest.
         eigenvectors_estimate (Tensor | None): The current estimate of the eigenvectors of A.
             (Default: None)
-        eigenvector_computation_config (EigenvalueCorrectionConfig): Determines how eigenvectors are computed.
-            (Default: DefaultEighEigenvalueCorrectionConfig)
+        eigenvector_computation_config (EigenvectorConfig): Determines how eigenvectors are computed.
+            (Default: DefaultEighConfig)
         is_diagonal (bool): Whether A is diagonal. (Default: False)
 
     Returns:
@@ -638,15 +638,15 @@ def matrix_eigenvectors(
             device=A.device,
         )
 
-    if type(eigenvector_computation_config) is EighEigenvalueCorrectionConfig:
+    if type(eigenvector_computation_config) is EighConfig:
         return _compute_eigenvalue_decomposition(
             A,
             retry_double_precision=eigenvector_computation_config.retry_double_precision,
         )[1]
-    elif type(eigenvector_computation_config) is QREigenvalueCorrectionConfig:
+    elif type(eigenvector_computation_config) is QRConfig:
         assert (
             eigenvectors_estimate is not None
-        ), "Estimate of eigenvectors is required when using QREigenvalueCorrectionConfig."
+        ), "Estimate of eigenvectors is required when using QRConfig."
         return _compute_orthogonal_iterations(
             A,
             eigenvectors_estimate=eigenvectors_estimate,
