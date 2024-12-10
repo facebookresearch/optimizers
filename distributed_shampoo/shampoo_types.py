@@ -8,7 +8,7 @@ LICENSE file in the root directory of this source tree.
 """
 
 import enum
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import torch
 
@@ -101,7 +101,9 @@ class ShampooPreconditionerConfig(PreconditionerConfig):
 
     """
 
-    amortized_computation_config: RootInvConfig = DefaultEigenConfig
+    amortized_computation_config: RootInvConfig = field(
+        default_factory=lambda: DefaultEigenConfig
+    )
 
 
 DefaultShampooConfig = ShampooPreconditionerConfig()
@@ -116,7 +118,9 @@ class EigenvalueCorrectedShampooPreconditionerConfig(PreconditionerConfig):
 
     """
 
-    amortized_computation_config: EigenvectorConfig = DefaultEighConfig
+    amortized_computation_config: EigenvectorConfig = field(
+        default_factory=lambda: DefaultEighConfig
+    )
 
 
 DefaultEigenvalueCorrectedShampooConfig = (
