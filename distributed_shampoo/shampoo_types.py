@@ -105,16 +105,14 @@ class ShampooPreconditionerConfig(PreconditionerConfig):
     """Configuration for Shampoo preconditioner computation.
 
     Args:
-        amortized_computation_config (RootInvConfig): Configuration for the inverse-root computation.
+        amortized_computation_config (RootInvConfig): Configuration for the inverse-root computation. (Default: DefaultEigenConfig)
 
     """
 
-    amortized_computation_config: RootInvConfig
+    amortized_computation_config: RootInvConfig = DefaultEigenConfig
 
 
-DefaultShampooConfig = ShampooPreconditionerConfig(
-    amortized_computation_config=DefaultEigenConfig
-)
+DefaultShampooConfig = ShampooPreconditionerConfig()
 
 
 @dataclass(kw_only=True)
@@ -122,17 +120,15 @@ class EigenvalueCorrectedShampooPreconditionerConfig(PreconditionerConfig):
     """Configuration for eigenvalue-corrected Shampoo/SOAP preconditioner computation.
 
     Args:
-        amortized_computation_config (EigenvectorConfig): Configuration for the eigenvector computation.
+        amortized_computation_config (EigenvectorConfig): Configuration for the eigenvector computation. (Default: DefaultEighConfig)
 
     """
 
-    amortized_computation_config: EigenvectorConfig
+    amortized_computation_config: EigenvectorConfig = DefaultEighConfig
 
 
 DefaultEigenvalueCorrectedShampooConfig = (
-    EigenvalueCorrectedShampooPreconditionerConfig(
-        amortized_computation_config=DefaultEighConfig,
-    )
+    EigenvalueCorrectedShampooPreconditionerConfig()
 )
 DefaultSOAPConfig = EigenvalueCorrectedShampooPreconditionerConfig(
     amortized_computation_config=QRConfig(),
