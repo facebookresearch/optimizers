@@ -20,13 +20,6 @@ from distributed_shampoo.shampoo_types import (
     RMSpropGraftingConfig,
     ShampooPreconditionerConfig,
 )
-from matrix_functions_types import (
-    DefaultEigenConfig,
-    DefaultEighConfig,
-    EigenvectorConfig,
-    MatrixFunctionConfig,
-    RootInvConfig,
-)
 
 
 class AdaGradGraftingConfigTest(unittest.TestCase):
@@ -85,16 +78,13 @@ class AdamGraftingConfigTest(RMSpropGraftingConfigTest):
 PreconditionerConfigType = TypeVar(
     "PreconditionerConfigType", bound=Type[PreconditionerConfig]
 )
-AmortizedComputationConfigType = TypeVar(
-    "AmortizedComputationConfigType", bound=MatrixFunctionConfig
-)
 
 
 class AbstractPreconditionerConfigTest:
     class PreconditionerConfigTest(
         ABC,
         unittest.TestCase,
-        Generic[PreconditionerConfigType, AmortizedComputationConfigType],
+        Generic[PreconditionerConfigType],
     ):
         def test_illegal_num_tolerated_failed_amortized_computations(self) -> None:
             num_tolerated_failed_amortized_computations = -1
@@ -108,7 +98,6 @@ class AbstractPreconditionerConfigTest:
                 ),
             ):
                 self._get_preconditioner_config_type()(
-                    amortized_computation_config=self._get_amortized_computation_config(),
                     num_tolerated_failed_amortized_computations=num_tolerated_failed_amortized_computations,
                 )
 
@@ -117,20 +106,12 @@ class AbstractPreconditionerConfigTest:
             self,
         ) -> PreconditionerConfigType: ...
 
-        @abstractmethod
-        def _get_amortized_computation_config(
-            self,
-        ) -> AmortizedComputationConfigType: ...
-
 
 class ShampooPreconditionerConfigTest(
     AbstractPreconditionerConfigTest.PreconditionerConfigTest[
-        Type[ShampooPreconditionerConfig], RootInvConfig
+        Type[ShampooPreconditionerConfig]
     ]
 ):
-    def _get_amortized_computation_config(self) -> RootInvConfig:
-        return DefaultEigenConfig
-
     def _get_preconditioner_config_type(
         self,
     ) -> Type[ShampooPreconditionerConfig]:
@@ -139,12 +120,9 @@ class ShampooPreconditionerConfigTest(
 
 class EigenvalueCorrectedShampooPreconditionerConfigTest(
     AbstractPreconditionerConfigTest.PreconditionerConfigTest[
-        Type[EigenvalueCorrectedShampooPreconditionerConfig], EigenvectorConfig
+        Type[EigenvalueCorrectedShampooPreconditionerConfig]
     ]
 ):
-    def _get_amortized_computation_config(self) -> EigenvectorConfig:
-        return DefaultEighConfig
-
     def _get_preconditioner_config_type(
         self,
     ) -> Type[EigenvalueCorrectedShampooPreconditionerConfig]:
