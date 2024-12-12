@@ -326,7 +326,7 @@ optimizer = DistributedShampoo(
     ),
 )
 ```
-Please see `ddp_cifar10_example.py` as an example.
+Please see [`ddp_cifar10_example.py`](https://github.com/facebookresearch/optimizers/blob/main/distributed_shampoo/examples/ddp_cifar10_example.py) as an example.
 
 ### FSDP Training Support
 
@@ -380,7 +380,7 @@ optimizer = DistributedShampoo(
     ),
 )
 ```
-Please see `fsdp_cifar10_example.py` as an example.
+Please see [`fsdp_cifar10_example.py`](https://github.com/facebookresearch/optimizers/blob/main/distributed_shampoo/examples/fsdp_cifar10_example.py) as an example.
 
 ## Checkpointing Support
 
@@ -412,7 +412,7 @@ model.load_state_dict(state_dict["model"])
 optimizer.load_distributed_state_dict(state_dict["optim"], key_to_param=model.named_parameters())
 ```
 
-You can also refer to `ddp_cifar10_example.py` as an example.
+You can also refer to [`ddp_cifar10_example.py`](https://github.com/facebookresearch/optimizers/blob/main/distributed_shampoo/examples/ddp_cifar10_example.py) as an example.
 
 ## Hyperparameter Tuning
 
