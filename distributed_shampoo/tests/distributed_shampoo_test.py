@@ -285,7 +285,7 @@ class DistributedShampooInitTest(unittest.TestCase):
         with self.assertRaisesRegex(
             ValueError,
             re.escape(
-                "track_root_inv_residuals=True has to be set to False when amortized_computation_config=EighConfig(retry_double_precision=True) is not an instance of RootInvConfig."
+                "track_root_inv_residuals=True has to be set to False when amortized_computation_config=EighEigenvectorConfig(retry_double_precision=True) is not an instance of RootInvConfig."
             ),
         ):
             DistributedShampoo(

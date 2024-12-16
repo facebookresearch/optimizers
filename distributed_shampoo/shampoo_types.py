@@ -16,7 +16,7 @@ from commons import AbstractDataclass
 
 from matrix_functions_types import (
     DefaultEigenConfig,
-    DefaultEighConfig,
+    DefaultEighEigenvectorConfig,
     EigenvectorConfig,
     MatrixFunctionConfig,
     QRConfig,
@@ -114,12 +114,13 @@ class EigenvalueCorrectedShampooPreconditionerConfig(PreconditionerConfig):
     """Configuration for eigenvalue-corrected Shampoo/SOAP preconditioner computation.
 
     Args:
-        amortized_computation_config (EigenvectorConfig): Configuration for the eigenvector computation. (Default: DefaultEighConfig)
+        amortized_computation_config (EigenvectorConfig): Configuration for the eigenvector computation.
+            (Default: DefaultEighEigenvectorConfig)
 
     """
 
     amortized_computation_config: EigenvectorConfig = field(
-        default_factory=lambda: DefaultEighConfig
+        default_factory=lambda: DefaultEighEigenvectorConfig
     )
 
 

@@ -20,10 +20,10 @@ from matrix_functions_types import (
     CoupledHigherOrderConfig,
     CoupledNewtonConfig,
     DefaultEigenConfig,
-    DefaultEighConfig,
+    DefaultEighEigenvectorConfig,
     EigenConfig,
     EigenvectorConfig,
-    EighConfig,
+    EighEigenvectorConfig,
     QRConfig,
     RootInvConfig,
 )
@@ -599,7 +599,7 @@ def compute_matrix_root_inverse_residuals(
 def matrix_eigenvectors(
     A: Tensor,
     eigenvectors_estimate: Tensor | None = None,
-    eigenvector_computation_config: EigenvectorConfig = DefaultEighConfig,
+    eigenvector_computation_config: EigenvectorConfig = DefaultEighEigenvectorConfig,
     is_diagonal: bool = False,
 ) -> Tensor:
     """Compute eigenvectors of matrix using eigendecomposition of symmetric positive (semi-)definite matrix.
@@ -613,7 +613,7 @@ def matrix_eigenvectors(
         eigenvectors_estimate (Tensor | None): The current estimate of the eigenvectors of A.
             (Default: None)
         eigenvector_computation_config (EigenvectorConfig): Determines how eigenvectors are computed.
-            (Default: DefaultEighConfig)
+            (Default: DefaultEighEigenvectorConfig)
         is_diagonal (bool): Whether A is diagonal. (Default: False)
 
     Returns:
@@ -638,11 +638,11 @@ def matrix_eigenvectors(
             device=A.device,
         )
 
-    if type(eigenvector_computation_config) is EighConfig:
-        return _compute_eigenvalue_decomposition(
+    if type(eigenvector_computation_config) is EighEigenvectorConfig:
+        return _compute_eigenvectors_eigh(
             A,
             retry_double_precision=eigenvector_computation_config.retry_double_precision,
-        )[1]
+        )
     elif type(eigenvector_computation_config) is QRConfig:
         assert (
             eigenvectors_estimate is not None
@@ -657,6 +657,26 @@ def matrix_eigenvectors(
         raise NotImplementedError(
             f"Eigenvector computation method is not implemented! Specified eigenvector method is {eigenvector_computation_config=}."
         )
+
+
+def _compute_eigenvectors_eigh(
+    A: Tensor, retry_double_precision: bool = True
+) -> Tensor:
+    """Compute the eigenvectors of a symmetric matrix using torch.linalg.eigh.
+
+    Args:
+        A (Tensor): The symmetric input matrix.
+        retry_double_precision (bool): Whether to retry the computation in double precision if it fails in the current precision.
+            (Default: True)
+
+    Returns:
+        Tensor: The eigenvectors of the input matrix A.
+
+    """
+    return _compute_eigenvalue_decomposition(
+        A,
+        retry_double_precision=retry_double_precision,
+    )[1]
 
 
 def _compute_orthogonal_iterations(

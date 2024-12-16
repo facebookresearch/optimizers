@@ -64,7 +64,7 @@ __all__ = [
     "ShampooPreconditionerConfig",  # Based on `PreconditionerConfig`.
     "DefaultShampooConfig",  # Default `ShampooPreconditionerConfig` using `EigenConfig`.
     "EigenvalueCorrectedShampooPreconditionerConfig",  # Based on `PreconditionerConfig`.
-    "DefaultEigenvalueCorrectedShampooConfig",  # Default `EigenvalueCorrectedShampooPreconditionerConfig` using `EighConfig`.
+    "DefaultEigenvalueCorrectedShampooConfig",  # Default `EigenvalueCorrectedShampooPreconditionerConfig` using `EighEigenvectorConfig`.
     "DefaultSOAPConfig",  # Default `EigenvalueCorrectedShampooPreconditionerConfig` using `QRConfig`.
     # matrix functions configs.
     "MatrixFunctionConfig",  # Abstract base class.
@@ -74,8 +74,8 @@ __all__ = [
     "CoupledNewtonConfig",  # Based on `RootInvConfig`.
     "CoupledHigherOrderConfig",  # Based on `RootInvConfig`.
     "EigenvectorConfig",  # Abstract base class (based on `MatrixFunctionConfig`).
-    "EighConfig",  # Based on `EigenvectorConfig`.
-    "DefaultEighConfig",  # Default `EigenvectorConfig` using `EighConfig`.
+    "EighEigenvectorConfig",  # Based on `EigenvectorConfig`.
+    "DefaultEighEigenvectorConfig",  # Default `EigenvectorConfig` using `EighEigenvectorConfig`.
     "QRConfig",  # Based on `EigenvectorConfig`.
     # Other utilities.
     "compile_fsdp_parameter_metadata",  # For `FSDPShampooConfig` and `HSDPShampooConfig`.

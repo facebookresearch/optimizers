@@ -86,8 +86,8 @@ class EigenvectorConfig(MatrixFunctionConfig):
 
 
 @dataclass(kw_only=True)
-class EighConfig(EigenvectorConfig):
-    """Configuration for eigendecomposition (`_compute_eigenvalue_decomposition`) method.
+class EighEigenvectorConfig(EigenvectorConfig):
+    """Configuration for eigendecomposition (`_compute_eigenvectors_eigh`) method.
 
     Args:
         retry_double_precision (bool): Whether to re-trying eigendecomposition with higher(double) precision if lower precision fails due
@@ -98,7 +98,7 @@ class EighConfig(EigenvectorConfig):
     retry_double_precision: bool = True
 
 
-DefaultEighConfig = EighConfig()
+DefaultEighEigenvectorConfig = EighEigenvectorConfig()
 
 
 @dataclass(kw_only=True)
