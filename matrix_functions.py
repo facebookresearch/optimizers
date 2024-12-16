@@ -639,10 +639,10 @@ def matrix_eigenvectors(
         )
 
     if type(eigenvector_computation_config) is EighEigenvectorConfig:
-        return _compute_eigenvectors_eigh(
+        return matrix_eigenvalue_decomposition(
             A,
             retry_double_precision=eigenvector_computation_config.retry_double_precision,
-        )
+        )[1]
     elif type(eigenvector_computation_config) is QRConfig:
         assert (
             eigenvectors_estimate is not None
@@ -657,26 +657,6 @@ def matrix_eigenvectors(
         raise NotImplementedError(
             f"Eigenvector computation method is not implemented! Specified eigenvector method is {eigenvector_computation_config=}."
         )
-
-
-def _compute_eigenvectors_eigh(
-    A: Tensor, retry_double_precision: bool = True
-) -> Tensor:
-    """Compute the eigenvectors of a symmetric matrix using torch.linalg.eigh.
-
-    Args:
-        A (Tensor): The symmetric input matrix.
-        retry_double_precision (bool): Whether to retry the computation in double precision if it fails in the current precision.
-            (Default: True)
-
-    Returns:
-        Tensor: The eigenvectors of the input matrix A.
-
-    """
-    return matrix_eigenvalue_decomposition(
-        A,
-        retry_double_precision=retry_double_precision,
-    )[1]
 
 
 def _compute_orthogonal_iterations(
@@ -705,7 +685,7 @@ def _compute_orthogonal_iterations(
 
     """
     if not eigenvectors_estimate.any():
-        return _compute_eigenvectors_eigh(A)
+        return matrix_eigenvalue_decomposition(A)[1]
 
     # Perform orthogonal/simultaneous iterations (QR algorithm).
     Q = eigenvectors_estimate
