@@ -166,7 +166,7 @@ def _matrix_inverse_root_diagonal(
     return torch.diag((torch.diagonal(A) + epsilon).pow(torch.as_tensor(-1.0 / root)))
 
 
-def _compute_eigenvalue_decomposition(
+def matrix_eigenvalue_decomposition(
     A: Tensor,
     retry_double_precision: bool = True,
 ) -> tuple[Tensor, Tensor]:
@@ -231,7 +231,7 @@ def _matrix_inverse_root_eigen(
         raise ValueError(f"Root {root} should be positive!")
 
     # compute eigendecomposition and compute minimum eigenvalue
-    L, Q = _compute_eigenvalue_decomposition(
+    L, Q = matrix_eigenvalue_decomposition(
         A, retry_double_precision=retry_double_precision
     )
 
@@ -673,7 +673,7 @@ def _compute_eigenvectors_eigh(
         Tensor: The eigenvectors of the input matrix A.
 
     """
-    return _compute_eigenvalue_decomposition(
+    return matrix_eigenvalue_decomposition(
         A,
         retry_double_precision=retry_double_precision,
     )[1]
@@ -705,7 +705,7 @@ def _compute_orthogonal_iterations(
 
     """
     if not eigenvectors_estimate.any():
-        return _compute_eigenvalue_decomposition(A)[1]
+        return _compute_eigenvectors_eigh(A)
 
     # Perform orthogonal/simultaneous iterations (QR algorithm).
     Q = eigenvectors_estimate
