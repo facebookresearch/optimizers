@@ -19,7 +19,7 @@ class MatrixFunctionConfig(AbstractDataclass):
 
 @dataclass(kw_only=True)
 class EigenvalueDecompositionConfig(MatrixFunctionConfig):
-    """Configuration for eigenvalue decomposition (`matrix_eigenvalue_decomposition`) method.
+    """Configuration for eigenvalue decomposition.
 
     Args:
         retry_double_precision (bool): Whether to re-trying eigendecomposition with higher (double) precision if lower precision fails due
@@ -32,12 +32,12 @@ class EigenvalueDecompositionConfig(MatrixFunctionConfig):
 
 @dataclass(init=False)
 class RootInvConfig(MatrixFunctionConfig):
-    """Base dataclass for matrix root inverse (`matrix_inverse_root`) method configurations."""
+    """Base dataclass for matrix root inverse method configurations."""
 
 
 @dataclass(kw_only=True)
 class EigenConfig(RootInvConfig, EigenvalueDecompositionConfig):
-    """Configuration for eigendecomposition (`_matrix_inverse_root_eigen`) method.
+    """Configuration for matrix root inverse via an eigendecomposition.
 
     Args:
         retry_double_precision (bool): Whether to re-trying eigendecomposition with higher (double) precision if lower precision fails due
@@ -57,7 +57,7 @@ DefaultEigenConfig = EigenConfig()
 
 @dataclass(kw_only=True)
 class CoupledNewtonConfig(RootInvConfig):
-    """Configuration for coupled Newton (`_matrix_inverse_root_newton`) method.
+    """Configuration for matrix root inverse via coupled Newton method.
 
     Args:
         max_iterations (int): Maximum number of iterations for coupled Newton iteration. (Default: 100)
@@ -71,7 +71,7 @@ class CoupledNewtonConfig(RootInvConfig):
 
 @dataclass(kw_only=True)
 class CoupledHigherOrderConfig(RootInvConfig):
-    """Configuration for coupled higher-order (`_matrix_inverse_root_higher_order`) method.
+    """Configuration for matrix root inverse via coupled higher-order method.
 
     Args:
         rel_epsilon (float): Relative epsilon for coupled higher order method. Adds epsilon * lambda_max * I to matrix
@@ -94,12 +94,12 @@ class CoupledHigherOrderConfig(RootInvConfig):
 
 @dataclass(init=False)
 class EigenvectorConfig(MatrixFunctionConfig):
-    """Base dataclass for matrix eigenvector (`matrix_eigenvectors`) method."""
+    """Base dataclass for matrix eigenvector method configurations."""
 
 
 @dataclass(kw_only=True)
 class EighEigenvectorConfig(EigenvectorConfig, EigenvalueDecompositionConfig):
-    """Configuration for eigenvectors via eigendecomposition (`_compute_eigenvectors_eigh`) method.
+    """Configuration for eigenvectors via an eigendecomposition.
 
     Args:
         retry_double_precision (bool): Whether to re-trying eigendecomposition with higher (double) precision if lower precision fails due
@@ -113,7 +113,7 @@ DefaultEighEigenvectorConfig = EighEigenvectorConfig()
 
 @dataclass(kw_only=True)
 class QRConfig(EigenvectorConfig):
-    """Configuration for orthogonal/simultaneous iterations/QR algorithm (`_compute_orthogonal_iterations`).
+    """Configuration for eigenvectors via orthogonal/simultaneous iterations/QR algorithm.
 
     Args:
         max_iterations (int): The maximum number of iterations to perform. (Default: 1)
