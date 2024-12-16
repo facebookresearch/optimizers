@@ -40,6 +40,8 @@ class EigenConfig(RootInvConfig, EigenvalueDecompositionConfig):
     """Configuration for eigendecomposition (`_matrix_inverse_root_eigen`) method.
 
     Args:
+        retry_double_precision (bool): Whether to re-trying eigendecomposition with higher (double) precision if lower precision fails due
+            to CuSOLVER failure. (Default: True)
         make_positive_semidefinite (bool): Perturbs matrix eigenvalues to ensure it is numerically positive semi-definite. (Default: True)
         exponent_multiplier (float): Number to be multiplied to the numerator of the inverse root, i.e., eta where the
             exponent is -eta / (2 * p). (Default: 1.0)
@@ -97,7 +99,13 @@ class EigenvectorConfig(MatrixFunctionConfig):
 
 @dataclass(kw_only=True)
 class EighEigenvectorConfig(EigenvectorConfig, EigenvalueDecompositionConfig):
-    """Configuration for eigenvectors via eigendecomposition (`_compute_eigenvectors_eigh`) method."""
+    """Configuration for eigenvectors via eigendecomposition (`_compute_eigenvectors_eigh`) method.
+
+    Args:
+        retry_double_precision (bool): Whether to re-trying eigendecomposition with higher (double) precision if lower precision fails due
+            to CuSOLVER failure. (Default: True)
+
+    """
 
 
 DefaultEighEigenvectorConfig = EighEigenvectorConfig()
