@@ -89,7 +89,7 @@ if __name__ == "__main__":
     # Instantiate device mesh for HSDP Shampoo.
     # Assuming 8 GPUs, will be initialized as 2 x 4 mesh.
     # ([[0, 1, 2, 3], [4, 5, 6, 7]])
-    device_mesh = init_device_mesh("cuda", (4, 2))
+    device_mesh = init_device_mesh("cuda", (2, 4))
 
     # instantiate model and loss function
     model, loss_function = get_model_and_loss_fn(device)
