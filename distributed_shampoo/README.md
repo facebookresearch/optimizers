@@ -1,6 +1,6 @@
 # PyTorch Distributed Shampoo
 
-Distributed Shampoo is a preconditioned stochastic gradient optimizer in the adaptive gradient (Adagrad) family of methods [1, 2]. It converges faster by leveraging neural network-specific structures to achieve comparable model quality/accuracy in fewer iterations or epochs at the cost of additional FLOPs and memory, or achieve higher model quality in the same number of iterations or epochs. Our implementation offers specialized support for serial, [Distributed Data Parallel (DDP)](https://pytorch.org/tutorials/intermediate/ddp_tutorial.html), [Fully Sharded Data Parallel (FSDP)](https://pytorch.org/tutorials/intermediate/FSDP_tutorial.html), and [Hybrid Sharding Data Parallel (HSDP)](https://pytorch.org/tutorials/recipes/distributed_device_mesh.html#how-to-use-devicemesh-with-hsdp) training.
+Distributed Shampoo is a preconditioned stochastic gradient optimizer in the adaptive gradient (Adagrad) family of methods [1, 2]. It converges faster by leveraging neural network-specific structures to achieve comparable model quality/accuracy in fewer iterations or epochs at the cost of additional FLOPs and memory, or achieve higher model quality in the same number of iterations or epochs. Our implementation offers specialized support for serial, [Distributed Data Parallel (DDP)](https://pytorch.org/tutorials/intermediate/ddp_tutorial.html), [Fully Sharded Data Parallel (FSDP)](https://pytorch.org/tutorials/intermediate/FSDP_tutorial.html), [Per-parameter Fully Sharded Data Parallel (FSDPv2, to release in PyTorch 2.6)](https://github.com/pytorch/pytorch/blob/v2.6.0-rc1/torch/distributed/fsdp/_fully_shard/_fully_shard.py#L51) and [Hybrid Sharding Data Parallel (HSDP)](https://pytorch.org/tutorials/recipes/distributed_device_mesh.html#how-to-use-devicemesh-with-hsdp) training.
 
 Distributed Shampoo currently only supports dense parameters.
 
@@ -262,7 +262,7 @@ optimizer = DistributedShampoo(
 
 ## Distributed Training Support
 
-Our implementation offers specialized compatibility and performance optimizations for different distributed training paradigms, including Distributed Data Parallel (DDP) and Fully Sharded Data Parallel (FSDP) training. Note that Distributed Shampoo will work out of the box for DDP training, but not for FSDP training.
+Our implementation offers specialized compatibility and performance optimizations for different distributed training paradigms, including Distributed Data Parallel (DDP) and Fully Sharded Data Parallel (including FSDP and per-parameter FSDP, a.k.a. FSDPv2) training. Note that Distributed Shampoo will work out of the box for DDP training, but not for FSDP training.
 
 ### DDP Training Support
 
@@ -381,6 +381,57 @@ optimizer = DistributedShampoo(
 )
 ```
 Please see [`fsdp_cifar10_example.py`](https://github.com/facebookresearch/optimizers/blob/main/distributed_shampoo/examples/fsdp_cifar10_example.py) as an example.
+
+### FSDPv2 Training Support
+
+Per-parameter sharding FSDP, also known as FSDPv2, is the new fully sharded data parallelism implementation, which uses ``DTensor``-based dim-0 per-parameter sharding for a simpler sharding representation compared to FSDP1's flat-parameter sharding, while preserving similar throughput performance. In short, FSDPv2 chunks each parameter on dim-0 across the data parallel workers (using ``torch.chunk(dim=0)``). To support Shampoo with FSDPv2, we implement a new distributor that creates Shampoo preconditioner tensor blocks based on the rank local tensors of the dim-0 sharded ``DTensor`` parameters. One simplification brought by FSDPv2 to Shampoo is that tensor blocks are local to each rank, so we don't need the ``tensor block recovery`` algorithm implemented for FSDPv1 (where parameters are flatten and then sharded).
+
+```python
+import os
+
+import torch
+import torch.distributed as dist
+from torch.distributed.fsdp import fully_shard
+
+from distributed_shampoo import (
+    AdamGraftingConfig,
+    DistributedShampoo,
+    FullyShardShampooConfig,
+)
+
+LOCAL_RANK = int(os.environ["LOCAL_RANK"])
+WORLD_RANK = int(os.environ["RANK"])
+WORLD_SIZE = int(os.environ["WORLD_SIZE"])
+
+dist.init_process_group(
+    backend=args.backend,
+    init_method="env://",
+    rank=WORLD_RANK,
+    world_size=WORLD_SIZE,
+)
+device = torch.device("cuda:{}".format(LOCAL_RANK))
+
+model = instantiate_model().to(device)
+model = fully_shard(model)
+
+optimizer = DistributedShampoo(
+    model.parameters(),
+    lr=0.001,
+    betas=(0.9, 0.999),
+    epsilon=1e-12,
+    weight_decay=1e-05,
+    max_preconditioner_dim=8192,
+    precondition_frequency=100,
+    use_decoupled_weight_decay=True,
+    grafting_config=AdamGraftingConfig(
+        beta2=0.999,
+        epsilon=1e-12,
+    ),
+    distributed_config=FullyShardShampooConfig(),
+)
+```
+
+Please see [`fully_shard_cifar10_example.py`](https://github.com/facebookresearch/optimizers/blob/main/distributed_shampoo/examples/fully_shard_cifar10_example.py) as an example.
 
 ### HSDP Training Support
 

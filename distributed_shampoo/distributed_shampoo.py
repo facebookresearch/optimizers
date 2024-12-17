@@ -213,6 +213,12 @@ class DistributedShampoo(torch.optim.Optimizer):
                 - One must enable the option use_orig_params = True in HSDP.
                 - Within data parallelism process groups, only supports homogeneous hardware architectures.
 
+        - FullyShardShampooConfig: Supports per-parameter FSDP training, a.k.a. FSDPv2, or "fully_shard" api in torch.distributed. Please see
+            README for more detailed introduction on Shampoo FSDPv2.
+
+            Requirements:
+                - torch.distributed must be initialized in advance.
+
     4. PyTorch 2.0 Compile Support: Shampoo supports PyTorch 2.0's compilation feature to speed up model training. This is enabled by
         setting up the shampoo_pt2_compile_config arg for Shampoo PyTorch 2.0 compilation.
 
