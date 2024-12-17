@@ -35,8 +35,8 @@ from matrix_functions_types import (
     CoupledHigherOrderConfig,
     CoupledNewtonConfig,
     EigenConfig,
-    EigenvalueCorrectionConfig,
-    QREigenvalueCorrectionConfig,
+    EigenvectorConfig,
+    QRConfig,
     RootInvConfig,
 )
 from torch import Tensor
@@ -859,18 +859,16 @@ class MatrixEigenvectorsTest(unittest.TestCase):
                     rtol=rtol,
                 )
 
-        # Tests for `QREigenvalueCorrectionConfig`.
+        # Tests for `QRConfig`.
         initialization_strategies = {
             "zero": lambda A: torch.zeros_like(A),
             "identity": lambda A: torch.eye(A.shape[0], dtype=A.dtype, device=A.device),
             "exact": lambda A: matrix_eigenvectors(A),  # Eigendecomposition.
         }
         for name, initialization_fn in initialization_strategies.items():
-            with self.subTest(
-                f"Test with QREigenvalueCorrectionConfig with {name} initialization."
-            ):
+            with self.subTest(f"Test with QRConfig with {name} initialization."):
                 # Set `max_iterations` to large int to run until numerical tolerance.
-                qr_config = QREigenvalueCorrectionConfig(max_iterations=10_000)
+                qr_config = QRConfig(max_iterations=10_000)
                 for A, expected_eigenvectors in zip(
                     A_list, expected_eigenvectors_list, strict=True
                 ):
@@ -899,12 +897,12 @@ class MatrixEigenvectorsTest(unittest.TestCase):
             mock.patch.object(
                 matrix_functions,
                 "type",
-                side_effect=lambda object: EigenvalueCorrectionConfig,
+                side_effect=lambda object: EigenvectorConfig,
             ),
             self.assertRaisesRegex(
                 NotImplementedError,
                 re.escape(
-                    "Eigenvector computation method is not implemented! Specified eigenvector method is eigenvector_computation_config=EighEigenvalueCorrectionConfig(retry_double_precision=True)."
+                    "Eigenvector computation method is not implemented! Specified eigenvector method is eigenvector_computation_config=EighEigenvectorConfig(retry_double_precision=True)."
                 ),
             ),
         ):

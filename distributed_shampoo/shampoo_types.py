@@ -8,11 +8,20 @@ LICENSE file in the root directory of this source tree.
 """
 
 import enum
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import torch
 
 from commons import AbstractDataclass
+
+from matrix_functions_types import (
+    DefaultEigenConfig,
+    DefaultEighEigenvectorConfig,
+    EigenvectorConfig,
+    MatrixFunctionConfig,
+    QRConfig,
+    RootInvConfig,
+)
 from torch.distributed.device_mesh import DeviceMesh
 from torch.distributed.fsdp import ShardingStrategy
 from torch.nn.parameter import Parameter
@@ -35,7 +44,7 @@ PARAMS = "params"  # While this is stored in groups by default, we do not checkp
 PRECISION_CONFIG = "precision_config"
 PRECONDITION_FREQUENCY = "precondition_frequency"
 PRECONDITIONER_DTYPE = "preconditioner_dtype"
-PRECONDITIONER_COMPUTATION_CONFIG = "preconditioner_computation_config"
+PRECONDITIONER_CONFIG = "preconditioner_config"
 START_PRECONDITIONING_STEP = "start_preconditioning_step"
 USE_EIGENVALUE_CORRECTION = "use_eigenvalue_correction"
 USE_BIAS_CORRECTION = "use_bias_correction"
@@ -71,6 +80,58 @@ class PreconditionerValueError(ValueError):
 
 
 ###### DATACLASSES ######
+@dataclass(init=False)
+class PreconditionerConfig(AbstractDataclass):
+    """Configuration for preconditioner computation in DistributedShampoo.
+
+    Args:
+        amortized_computation_config (MatrixFunctionConfig): Configuration for the amortized computation, e.g., inverse-root or eigenvector computation.
+
+    """
+
+    amortized_computation_config: MatrixFunctionConfig
+
+
+@dataclass(kw_only=True)
+class ShampooPreconditionerConfig(PreconditionerConfig):
+    """Configuration for Shampoo preconditioner computation.
+
+    Args:
+        amortized_computation_config (RootInvConfig): Configuration for the inverse-root computation. (Default: DefaultEigenConfig)
+
+    """
+
+    amortized_computation_config: RootInvConfig = field(
+        default_factory=lambda: DefaultEigenConfig
+    )
+
+
+DefaultShampooConfig = ShampooPreconditionerConfig()
+
+
+@dataclass(kw_only=True)
+class EigenvalueCorrectedShampooPreconditionerConfig(PreconditionerConfig):
+    """Configuration for eigenvalue-corrected Shampoo/SOAP preconditioner computation.
+
+    Args:
+        amortized_computation_config (EigenvectorConfig): Configuration for the eigenvector computation.
+            (Default: DefaultEighEigenvectorConfig)
+
+    """
+
+    amortized_computation_config: EigenvectorConfig = field(
+        default_factory=lambda: DefaultEighEigenvectorConfig
+    )
+
+
+DefaultEigenvalueCorrectedShampooConfig = (
+    EigenvalueCorrectedShampooPreconditionerConfig()
+)
+DefaultSOAPConfig = EigenvalueCorrectedShampooPreconditionerConfig(
+    amortized_computation_config=QRConfig(),
+)
+
+
 @dataclass
 class FSDPParameterMetadata:
     """FSDP Metadata for a parameter.
