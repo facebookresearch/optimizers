@@ -189,6 +189,30 @@ class DistributedShampoo(torch.optim.Optimizer):
                 - torch.distributed must be initialized in advance.
                 - One must enable the option use_orig_params = True in FSDP.
 
+        - HSDPShampooConfig: Supports hierarchical parallelism approach that combines DDP and FSDP to scale up training on large models.
+            It works by dividing the model into smaller sub-models, each of which is trained in parallel using data parallelism.
+            The gradients from each sub-model are then aggregated and used to update the full model.
+
+            Distributed Training Specific Fields:
+                - device_mesh: A 2D device mesh that specifies the layout of the model parallelism and data parallelism.
+                - param_to_metadata: One must create a dictionary containing the metadata for each parameter in the FSDP model. This
+                    includes the shape of the original parameter as well as the start and end indices of the tensor shard with
+                    respect to the unsharded flattened parameter.
+                - communication_dtype: We can specify the communication dtype used for the AllGather communication in order to
+                    reduce communication overhead per-iteration.
+                - num_trainers_per_group: Specifies the number of GPUs used per distributed group. This enables us to only
+                    distribute computation across a subset of GPUs, and replicate the same computation across different distributed
+                    groups. This is useful for performance by trading off communication costs vs. computational costs.
+                - communicate_params: We offer the option to communicate the parameter updates or the updated parameters. Enabling
+                    this option specifically communicates the updated parameters. Note that using a lower-precision
+                    communication_dtype is more amenable to the case where this option is disabled (i.e., we are communicating the
+                    parameter updates).
+
+            Requirements:
+                - torch.distributed must be initialized in advance.
+                - One must enable the option use_orig_params = True in HSDP.
+                - Within data parallelism process groups, only supports homogeneous hardware architectures.
+
     4. PyTorch 2.0 Compile Support: Shampoo supports PyTorch 2.0's compilation feature to speed up model training. This is enabled by
         setting up the shampoo_pt2_compile_config arg for Shampoo PyTorch 2.0 compilation.
 
