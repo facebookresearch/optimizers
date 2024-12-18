@@ -902,7 +902,7 @@ class MatrixEigenvectorsTest(unittest.TestCase):
             self.assertRaisesRegex(
                 NotImplementedError,
                 re.escape(
-                    "Eigenvector computation method is not implemented! Specified eigenvector method is eigenvector_computation_config=EighConfig(retry_double_precision=True)."
+                    "Eigenvector computation method is not implemented! Specified eigenvector method is eigenvector_computation_config=EighEigenvectorConfig(retry_double_precision=True)."
                 ),
             ),
         ):

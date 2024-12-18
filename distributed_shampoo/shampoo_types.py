@@ -16,7 +16,7 @@ from commons import AbstractDataclass
 
 from matrix_functions_types import (
     DefaultEigenConfig,
-    DefaultEighConfig,
+    DefaultEighEigenvectorConfig,
     EigenvectorConfig,
     MatrixFunctionConfig,
     QRConfig,
@@ -122,12 +122,13 @@ class EigenvalueCorrectedShampooPreconditionerConfig(PreconditionerConfig):
     """Configuration for eigenvalue-corrected Shampoo/SOAP preconditioner computation.
 
     Args:
-        amortized_computation_config (EigenvectorConfig): Configuration for the eigenvector computation. (Default: DefaultEighConfig)
+        amortized_computation_config (EigenvectorConfig): Configuration for the eigenvector computation.
+            (Default: DefaultEighEigenvectorConfig)
 
     """
 
     amortized_computation_config: EigenvectorConfig = field(
-        default_factory=lambda: DefaultEighConfig
+        default_factory=lambda: DefaultEighEigenvectorConfig
     )
 
 
@@ -252,7 +253,8 @@ class HSDPShampooConfig(FSDPShampooConfig, DDPShampooConfig):
     parameters between different HSDP process groups.
 
     Args:
-        device_mesh (torch.distributed.device_mesh.DeviceMesh): Device mesh for HSDP.
+        device_mesh (torch.distributed.device_mesh.DeviceMesh): A 2D device mesh that specifies the layout of the numbers of
+            shard and replicate dimensions.
         param_to_metadata (dict[Parameter, FSDPParameterMetadata]): Dictionary mapping parameter to its metadata from HSDP.
         communication_dtype (CommunicationDType): Data type for communication between ranks. (Default: DEFAULT)
         num_trainers_per_group (int): Number of GPUs per distributed process group for distributed computation/memory.

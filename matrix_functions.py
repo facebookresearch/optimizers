@@ -20,10 +20,10 @@ from matrix_functions_types import (
     CoupledHigherOrderConfig,
     CoupledNewtonConfig,
     DefaultEigenConfig,
-    DefaultEighConfig,
+    DefaultEighEigenvectorConfig,
     EigenConfig,
     EigenvectorConfig,
-    EighConfig,
+    EighEigenvectorConfig,
     QRConfig,
     RootInvConfig,
 )
@@ -166,7 +166,7 @@ def _matrix_inverse_root_diagonal(
     return torch.diag((torch.diagonal(A) + epsilon).pow(torch.as_tensor(-1.0 / root)))
 
 
-def _compute_eigenvalue_decomposition(
+def matrix_eigenvalue_decomposition(
     A: Tensor,
     retry_double_precision: bool = True,
 ) -> tuple[Tensor, Tensor]:
@@ -231,7 +231,7 @@ def _matrix_inverse_root_eigen(
         raise ValueError(f"Root {root} should be positive!")
 
     # compute eigendecomposition and compute minimum eigenvalue
-    L, Q = _compute_eigenvalue_decomposition(
+    L, Q = matrix_eigenvalue_decomposition(
         A, retry_double_precision=retry_double_precision
     )
 
@@ -599,7 +599,7 @@ def compute_matrix_root_inverse_residuals(
 def matrix_eigenvectors(
     A: Tensor,
     eigenvectors_estimate: Tensor | None = None,
-    eigenvector_computation_config: EigenvectorConfig = DefaultEighConfig,
+    eigenvector_computation_config: EigenvectorConfig = DefaultEighEigenvectorConfig,
     is_diagonal: bool = False,
 ) -> Tensor:
     """Compute eigenvectors of matrix using eigendecomposition of symmetric positive (semi-)definite matrix.
@@ -613,7 +613,7 @@ def matrix_eigenvectors(
         eigenvectors_estimate (Tensor | None): The current estimate of the eigenvectors of A.
             (Default: None)
         eigenvector_computation_config (EigenvectorConfig): Determines how eigenvectors are computed.
-            (Default: DefaultEighConfig)
+            (Default: DefaultEighEigenvectorConfig)
         is_diagonal (bool): Whether A is diagonal. (Default: False)
 
     Returns:
@@ -638,8 +638,8 @@ def matrix_eigenvectors(
             device=A.device,
         )
 
-    if type(eigenvector_computation_config) is EighConfig:
-        return _compute_eigenvalue_decomposition(
+    if type(eigenvector_computation_config) is EighEigenvectorConfig:
+        return matrix_eigenvalue_decomposition(
             A,
             retry_double_precision=eigenvector_computation_config.retry_double_precision,
         )[1]
@@ -685,7 +685,7 @@ def _compute_orthogonal_iterations(
 
     """
     if not eigenvectors_estimate.any():
-        return _compute_eigenvalue_decomposition(A)[1]
+        return matrix_eigenvalue_decomposition(A)[1]
 
     # Perform orthogonal/simultaneous iterations (QR algorithm).
     Q = eigenvectors_estimate
