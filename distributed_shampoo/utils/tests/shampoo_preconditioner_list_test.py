@@ -298,7 +298,7 @@ class BaseShampooPreconditionerListTest(unittest.TestCase):
                         composable_block_ids=(0, "block_0"),
                     ),
                 ),
-                distributor_selector=(False,),
+                distributor_selector=(True,),
                 preconditioner_config=DefaultShampooConfig,
                 beta2=1.0,
             )
