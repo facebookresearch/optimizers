@@ -231,27 +231,23 @@ class MatrixInverseRootTest(unittest.TestCase):
             implementation,
             msg,
         ) in root_inv_config_and_implementation_and_msg:
-            with (
-                mock.patch.object(
-                    matrix_functions,
-                    implementation,
-                    return_value=(
-                        None,
-                        None,
-                        NewtonConvergenceFlag.REACHED_MAX_ITERS,
-                        None,
-                        None,
-                    ),
+            with mock.patch.object(
+                matrix_functions,
+                implementation,
+                return_value=(
+                    None,
+                    None,
+                    NewtonConvergenceFlag.REACHED_MAX_ITERS,
+                    None,
+                    None,
                 ),
-                self.subTest(
-                    root_inv_config=root_inv_config,
-                    implementation=implementation,
-                    msg=msg,
-                ),
-                self.assertLogs(
-                    level="WARNING",
-                ) as cm,
-            ):
+            ), self.subTest(
+                root_inv_config=root_inv_config,
+                implementation=implementation,
+                msg=msg,
+            ), self.assertLogs(
+                level="WARNING",
+            ) as cm:
                 matrix_inverse_root(
                     A=A,
                     root=root,

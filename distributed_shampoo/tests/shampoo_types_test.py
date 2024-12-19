@@ -22,12 +22,11 @@ class AdaGradGraftingConfigTest(unittest.TestCase):
     def test_illegal_epsilon(self) -> None:
         epsilon = 0.0
         grafting_config_type = self._get_grafting_config_type()
-        with (
-            self.subTest(grafting_config_type=grafting_config_type),
-            self.assertRaisesRegex(
-                ValueError,
-                re.escape(f"Invalid epsilon value: {epsilon}. Must be > 0.0."),
-            ),
+        with self.subTest(
+            grafting_config_type=grafting_config_type
+        ), self.assertRaisesRegex(
+            ValueError,
+            re.escape(f"Invalid epsilon value: {epsilon}. Must be > 0.0."),
         ):
             grafting_config_type(epsilon=epsilon)
 
@@ -47,13 +46,12 @@ class RMSpropGraftingConfigTest(AdaGradGraftingConfigTest):
     ) -> None:
         grafting_config_type = self._get_grafting_config_type()
         for beta2 in (-1.0, 0.0, 1.3):
-            with (
-                self.subTest(grafting_config_type=grafting_config_type, beta2=beta2),
-                self.assertRaisesRegex(
-                    ValueError,
-                    re.escape(
-                        f"Invalid grafting beta2 parameter: {beta2}. Must be in (0.0, 1.0]."
-                    ),
+            with self.subTest(
+                grafting_config_type=grafting_config_type, beta2=beta2
+            ), self.assertRaisesRegex(
+                ValueError,
+                re.escape(
+                    f"Invalid grafting beta2 parameter: {beta2}. Must be in (0.0, 1.0]."
                 ),
             ):
                 grafting_config_type(beta2=beta2)

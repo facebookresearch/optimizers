@@ -13,7 +13,7 @@ import os
 import torch.distributed as dist
 import torch.distributed.checkpoint as dist_checkpoint
 
-from distributed_shampoo import DDPShampooConfig, DistributedShampoo, PrecisionConfig
+from distributed_shampoo import DDPShampooConfig, DistributedShampoo
 from distributed_shampoo.examples.trainer_utils import (
     get_data_loader_and_sampler,
     get_model_and_loss_fn,
@@ -117,23 +117,12 @@ if __name__ == "__main__":
         grafting_beta2=args.grafting_beta2,
         grafting_epsilon=args.grafting_epsilon,
         use_merge_dims=args.use_merge_dims,
-        use_pytorch_compile=args.use_pytorch_compile,
         distributed_config=DDPShampooConfig(
             communication_dtype=args.communication_dtype,
             num_trainers_per_group=args.num_trainers_per_group,
             communicate_params=args.communicate_params,
         ),
-        precision_config=PrecisionConfig(
-            computation_dtype=args.computation_dtype.value,
-            factor_matrix_dtype=args.factor_matrix_dtype.value,
-            inv_factor_matrix_dtype=args.inv_factor_matrix_dtype.value,
-            corrected_eigenvalues_dtype=args.corrected_eigenvalues_dtype.value,
-            factor_matrix_eigenvectors_dtype=args.factor_matrix_eigenvectors_dtype.value,
-            filtered_grad_dtype=args.filtered_grad_dtype.value,
-            momentum_dtype=args.momentum_dtype.value,
-            grafting_state_dtype=args.grafting_state_dtype.value,
-        ),
-        use_protected_eigh=args.use_protected_eigh,
+        preconditioner_dtype=args.preconditioner_dtype,
         track_root_inv_residuals=args.track_root_inv_residuals,
         preconditioner_computation_type=args.preconditioner_computation_type,
     )

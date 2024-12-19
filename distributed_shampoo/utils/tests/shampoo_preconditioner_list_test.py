@@ -18,7 +18,6 @@ import torch
 from distributed_shampoo.shampoo_types import (
     DefaultEigenvalueCorrectedShampooConfig,
     DefaultShampooConfig,
-    PrecisionConfig,
     PreconditionerValueError,
     ShampooPreconditionerConfig,
 )
@@ -28,14 +27,12 @@ from distributed_shampoo.utils.shampoo_block_info import BlockInfo
 from distributed_shampoo.utils.shampoo_preconditioner_list import (
     AdagradPreconditionerList,
     BaseShampooPreconditionerList,
-    DequantizePreconditionersContext,
     EigenvalueCorrectedShampooPreconditionerList,
     PreconditionerList,
     SGDPreconditionerList,
     ShampooPreconditionerList,
 )
-from distributed_shampoo.utils.shampoo_quantization import QuantizedTensorList
-from matrix_functions import EigenConfig
+from matrix_functions_types import EigenConfig
 from torch import Tensor
 
 
@@ -77,27 +74,26 @@ class PreconditionerListTest(unittest.TestCase):
         masked_grad_lists: list[tuple[Tensor, ...]],
         masked_expected_preconditioned_grad_list: tuple[Tensor, ...] | None,
     ) -> None:
-        with DequantizePreconditionersContext(preconditioner_list=preconditioner_list):
-            for step, masked_grad_list in enumerate(masked_grad_lists, start=1):
-                preconditioner_list.update_preconditioners(
-                    masked_grad_list=masked_grad_list,
-                    step=torch.tensor(step),
-                    # Only update the complete preconditioner during the last call to update_preconditioners().
-                    perform_amortized_computation=isinstance(
-                        preconditioner_list, BaseShampooPreconditionerList
-                    )
-                    and step == len(masked_grad_lists),
+        for step, masked_grad_list in enumerate(masked_grad_lists, start=1):
+            preconditioner_list.update_preconditioners(
+                masked_grad_list=masked_grad_list,
+                step=torch.tensor(step),
+                # Only update the complete preconditioner during the last call to update_preconditioners().
+                perform_amortized_computation=isinstance(
+                    preconditioner_list, BaseShampooPreconditionerList
                 )
-            masked_preconditioned_grad_list = preconditioner_list.precondition(
-                masked_grad_list=masked_grad_lists[-1]
+                and step == len(masked_grad_lists),
             )
-            if masked_expected_preconditioned_grad_list is not None:
-                torch.testing.assert_close(
-                    masked_preconditioned_grad_list,
-                    masked_expected_preconditioned_grad_list,
-                )
-            else:
-                self.assertIsNone(masked_preconditioned_grad_list)
+        masked_preconditioned_grad_list = preconditioner_list.precondition(
+            masked_grad_list=masked_grad_lists[-1]
+        )
+        if masked_expected_preconditioned_grad_list is not None:
+            torch.testing.assert_close(
+                masked_preconditioned_grad_list,
+                masked_expected_preconditioned_grad_list,
+            )
+        else:
+            self.assertIsNone(masked_preconditioned_grad_list)
 
     def test_update_preconditioners_and_precondition(self) -> None:
         masked_grad_list = (
@@ -131,16 +127,10 @@ class PreconditionerListTest(unittest.TestCase):
         self,
         expected_compress_list_call_count: int,
     ) -> None:
-        with (
-            mock.patch.object(
-                shampoo_preconditioner_list,
-                "compress_list",
-            ) as mock_compress_list,
-            mock.patch.object(
-                QuantizedTensorList,
-                "compress",
-            ) as mock_compress_quant_list,
-        ):
+        with mock.patch.object(
+            shampoo_preconditioner_list,
+            "compress_list",
+        ) as mock_compress_list:
             # Count the number of list compressions at the preconditioner list level, including compressions of QuantizedTensorList.
             # Each call to compress() under QuantizedTensorList counts once, though note that it calls compress_list() three times inside.
             self.assertIsNone(
@@ -149,7 +139,7 @@ class PreconditionerListTest(unittest.TestCase):
                 )
             )
             self.assertEqual(
-                mock_compress_list.call_count + mock_compress_quant_list.call_count,
+                mock_compress_list.call_count,
                 expected_compress_list_call_count,
             )
 
@@ -195,7 +185,6 @@ class AdagradPreconditionerListTest(PreconditionerListTest):
             state=self._state,
             block_info_list=self._block_info_list,
             distributor_selector=self._distributor_selector,
-            precision_config=PrecisionConfig(),
             **kwargs,
         )
 
@@ -309,7 +298,6 @@ class BaseShampooPreconditionerListTest(unittest.TestCase):
                     ),
                 ),
                 distributor_selector=(True,),
-                precision_config=PrecisionConfig(),
                 preconditioner_config=DefaultShampooConfig,
                 beta2=1.0,
             )
@@ -338,16 +326,9 @@ class AbstractTest:
         def _test_raise_invalid_value_in_factor_matrix(
             self, invalid_value: float
         ) -> None:
-            with (
-                DequantizePreconditionersContext(
-                    preconditioner_list=self._preconditioner_list
-                ),
-                self.assertRaisesRegex(
-                    PreconditionerValueError,
-                    re.escape(
-                        f"Encountered {str(invalid_value)} values in factor matrix"
-                    ),
-                ),
+            with self.assertRaisesRegex(
+                PreconditionerValueError,
+                re.escape(f"Encountered {str(invalid_value)} values in factor matrix"),
             ):
                 self._preconditioner_list.update_preconditioners(
                     masked_grad_list=(
@@ -371,21 +352,14 @@ class AbstractTest:
             self,
         ) -> None:
             for invalid_value in (torch.nan, torch.inf):
-                with (
-                    DequantizePreconditionersContext(
-                        preconditioner_list=self._preconditioner_list
-                    ),
-                    self.subTest(invalid_value=invalid_value),
-                    self.assertRaisesRegex(
-                        PreconditionerValueError,
-                        re.escape("Encountered nan or inf values in"),
-                    ),
-                    mock.patch.object(
-                        shampoo_preconditioner_list,
-                        self._amortized_computation_function(),
-                        side_effect=(torch.tensor([invalid_value]),),
-                    ) as mock_amortized_computation,
-                ):
+                with self.subTest(invalid_value=invalid_value), self.assertRaisesRegex(
+                    PreconditionerValueError,
+                    re.escape("Encountered nan or inf values in"),
+                ), mock.patch.object(
+                    shampoo_preconditioner_list,
+                    self._amortized_computation_function(),
+                    side_effect=(torch.tensor([invalid_value]),),
+                ) as mock_amortized_computation:
                     self._preconditioner_list.update_preconditioners(
                         masked_grad_list=(
                             torch.tensor([1.0, 0.0]),
@@ -404,13 +378,7 @@ class AbstractTest:
                 # Simulate the situation throws an exception (not nan and inf) to test the warning
                 side_effect=ZeroDivisionError,
             ) as mock_amortized_computation:
-                with (
-                    DequantizePreconditionersContext(
-                        preconditioner_list=self._preconditioner_list
-                    ),
-                    self.assertLogs(level="WARNING") as cm,
-                ):
-                    # Because use_protected_eigh is True, we expect the warning to be logged.
+                with self.assertLogs(level="WARNING") as cm:
                     self._preconditioner_list.update_preconditioners(
                         masked_grad_list=(
                             torch.tensor([1.0, 0.0]),
@@ -434,27 +402,6 @@ class AbstractTest:
                 mock_amortized_computation.assert_called()
                 mock_amortized_computation.reset_mock()
 
-                # Turn off use_protected_eigh and expect ZeroDivisionError to be logged.
-                self._preconditioner_list = self._instantiate_preconditioner_list(
-                    use_protected_eigh=False,
-                )
-                with (
-                    DequantizePreconditionersContext(
-                        preconditioner_list=self._preconditioner_list
-                    ),
-                    self.assertRaises(ZeroDivisionError),
-                ):
-                    self._preconditioner_list.update_preconditioners(
-                        masked_grad_list=(
-                            torch.tensor([1.0, 0.0]),
-                            torch.eye(2) / torch.tensor(2.0).sqrt(),
-                            torch.tensor([[1.0, 0.0]]),
-                        ),
-                        step=torch.tensor(1),
-                        perform_amortized_computation=True,
-                    )
-                mock_amortized_computation.assert_called()
-
         # Note: This is needed for type checking to infer the type of argument into mock.patch.object.
         shampoo_preconditioner_list_module: ModuleType = shampoo_preconditioner_list
 
@@ -469,14 +416,9 @@ class AbstractTest:
             self._preconditioner_list = self._instantiate_preconditioner_list(
                 epsilon=1.0
             )
-            with (
-                DequantizePreconditionersContext(
-                    preconditioner_list=self._preconditioner_list
-                ),
-                self.assertLogs(
-                    level="DEBUG",
-                ) as cm,
-            ):
+            with self.assertLogs(
+                level="DEBUG",
+            ) as cm:
                 self._preconditioner_list.update_preconditioners(
                     masked_grad_list=(
                         torch.tensor([1.0, 0.0]),
@@ -532,7 +474,6 @@ class ShampooPreconditionerListTest(AbstractTest.BaseShampooPreconditionerListTe
             "epsilon": 0.0,
             "inv_root_override": 0,
             "use_bias_correction": True,
-            "use_protected_eigh": True,
             "preconditioner_config": DefaultShampooConfig,
         } | kwargs
         return ShampooPreconditionerList(
@@ -540,7 +481,7 @@ class ShampooPreconditionerListTest(AbstractTest.BaseShampooPreconditionerListTe
             state=self._state,
             block_info_list=self._block_info_list,
             distributor_selector=self._distributor_selector,
-            precision_config=PrecisionConfig(factor_matrix_dtype=torch.float64),
+            factor_matrix_dtype=torch.float64,
             **kwargs,  # type: ignore[arg-type]
         )
 
@@ -775,30 +716,28 @@ class ShampooPreconditionerListTest(AbstractTest.BaseShampooPreconditionerListTe
             state=self._state,
             block_info_list=(self._block_info_list[0],),
             distributor_selector=(self._distributor_selector[0],),
-            precision_config=PrecisionConfig(),
             preconditioner_config=DefaultShampooConfig,
             epsilon=0.0,
         )
 
         masked_grad_list1 = (torch.tensor([1.0, 0.0]),)
         masked_grad_list2 = (torch.tensor([0.0, 1.0]),)
-        with DequantizePreconditionersContext(preconditioner_list=preconditioner_list):
-            preconditioner_list.update_preconditioners(
-                masked_grad_list=masked_grad_list1,
-                step=torch.tensor(1),
-                perform_amortized_computation=False,
-            )
-            preconditioner_list.update_preconditioners(
-                masked_grad_list=masked_grad_list2,
-                step=torch.tensor(2),
-                perform_amortized_computation=True,
-            )
+        preconditioner_list.update_preconditioners(
+            masked_grad_list=masked_grad_list1,
+            step=torch.tensor(1),
+            perform_amortized_computation=False,
+        )
+        preconditioner_list.update_preconditioners(
+            masked_grad_list=masked_grad_list2,
+            step=torch.tensor(2),
+            perform_amortized_computation=True,
+        )
 
-            # Expect no relative errors and residuals because L is a diagonal matrix.
-            (
-                relative_errors,
-                relative_residuals,
-            ) = preconditioner_list.compute_root_inverse_residuals()
+        # Expect no relative errors and residuals because L is a diagonal matrix.
+        (
+            relative_errors,
+            relative_residuals,
+        ) = preconditioner_list.compute_root_inverse_residuals()
 
         expected_relative_errors = (torch.tensor(0.0),)
         expected_relative_residuals = (torch.tensor(0.0),)
@@ -821,7 +760,6 @@ class EigenvalueCorrectedShampooPreconditionerListTest(
             "epsilon": 1e-12,
             "inv_root_override": 0,
             "use_bias_correction": True,
-            "use_protected_eigh": True,
             "preconditioner_config": DefaultEigenvalueCorrectedShampooConfig,
         } | kwargs
         return EigenvalueCorrectedShampooPreconditionerList(
@@ -829,7 +767,7 @@ class EigenvalueCorrectedShampooPreconditionerListTest(
             state=self._state,
             block_info_list=self._block_info_list,
             distributor_selector=self._distributor_selector,
-            precision_config=PrecisionConfig(factor_matrix_dtype=torch.float64),
+            factor_matrix_dtype=torch.float64,
             **kwargs,  # type: ignore[arg-type]
         )
 
