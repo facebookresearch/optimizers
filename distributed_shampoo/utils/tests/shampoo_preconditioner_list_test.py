@@ -499,7 +499,7 @@ class AbstractTest:
                     step += 1
 
                 # Case 3: amortized computation succeeds after tolerance hit (test reset) -> no error.
-                with self.assertNoLogs(level="WARNING") as cm:
+                with self.assertNoLogs(level="WARNING"):
                     self._preconditioner_list.update_preconditioners(
                         masked_grad_list=masked_grad_list,
                         step=torch.tensor(step),
