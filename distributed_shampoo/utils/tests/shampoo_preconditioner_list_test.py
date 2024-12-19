@@ -132,7 +132,7 @@ class PreconditionerListTest(unittest.TestCase):
             "compress_list",
         ) as mock_compress_list:
             # Count the number of list compressions at the preconditioner list level, including compressions of QuantizedTensorList.
-            # Each call to compress() under QuantizedTensorList counts once, though note that it calls compress_list() three times inside.
+            # Each call to compress() under QuantizedTensorList counts once, though note that it calls compress_list() four times inside.
             self.assertIsNone(
                 self._preconditioner_list.compress_preconditioner_list(
                     local_grad_selector=(True,) * len(self._block_list)
@@ -315,6 +315,9 @@ class BaseShampooPreconditionerListTest(unittest.TestCase):
 # Use outer class as wrapper to avoid running the abstract test.
 class AbstractTest:
     class BaseShampooPreconditionerListTest(abc.ABC, AdagradPreconditionerListTest):
+        # Number of calls to the amortized computation function per update.
+        NUM_AMORTIZED_COMPUTATION_CALLS = 5
+
         @abc.abstractmethod
         def _amortized_computation_function(self) -> str: ...
 
@@ -352,14 +355,18 @@ class AbstractTest:
             self,
         ) -> None:
             for invalid_value in (torch.nan, torch.inf):
-                with self.subTest(invalid_value=invalid_value), self.assertRaisesRegex(
-                    PreconditionerValueError,
-                    re.escape("Encountered nan or inf values in"),
-                ), mock.patch.object(
-                    shampoo_preconditioner_list,
-                    self._amortized_computation_function(),
-                    side_effect=(torch.tensor([invalid_value]),),
-                ) as mock_amortized_computation:
+                with (
+                    self.subTest(invalid_value=invalid_value),
+                    self.assertRaisesRegex(
+                        PreconditionerValueError,
+                        re.escape("Encountered nan or inf values in"),
+                    ),
+                    mock.patch.object(
+                        shampoo_preconditioner_list,
+                        self._amortized_computation_function(),
+                        side_effect=(torch.tensor([invalid_value]),),
+                    ) as mock_amortized_computation,
+                ):
                     self._preconditioner_list.update_preconditioners(
                         masked_grad_list=(
                             torch.tensor([1.0, 0.0]),
@@ -401,6 +408,157 @@ class AbstractTest:
                 )
                 mock_amortized_computation.assert_called()
                 mock_amortized_computation.reset_mock()
+
+        def test_amortized_computation_failure_tolerance(self) -> None:
+            self._preconditioner_list = self._instantiate_preconditioner_list()
+            masked_grad_list0 = (
+                torch.tensor([1.0, 0.0]),
+                torch.eye(2) / torch.tensor(2.0).sqrt(),
+                torch.tensor([[1.0, 0.0]]),
+            )
+            masked_grad_list = (
+                torch.tensor([0.0, 1.0]),
+                torch.eye(2) / torch.tensor(2.0).sqrt(),
+                torch.tensor([[0.0, 1.0]]),
+            )
+
+            with mock.patch.object(
+                shampoo_preconditioner_list,
+                self._amortized_computation_function(),
+                side_effect=[
+                    *(ValueError,) * (self.NUM_AMORTIZED_COMPUTATION_CALLS - 1),
+                    torch.tensor([1.0]),
+                    *(ValueError,) * self.NUM_AMORTIZED_COMPUTATION_CALLS,
+                    *(ValueError,) * self.NUM_AMORTIZED_COMPUTATION_CALLS,
+                    *(torch.tensor([1.0]),) * self.NUM_AMORTIZED_COMPUTATION_CALLS,
+                    *(ValueError,) * self.NUM_AMORTIZED_COMPUTATION_CALLS,
+                    *(ValueError,) * self.NUM_AMORTIZED_COMPUTATION_CALLS,
+                    *(ValueError,) * self.NUM_AMORTIZED_COMPUTATION_CALLS,
+                    ValueError,
+                ],
+            ) as mock_amortized_computation:
+                step = 1
+                # Accumulate factor matrices for valid amortized computation.
+                self._preconditioner_list.update_preconditioners(
+                    masked_grad_list=masked_grad_list0,
+                    step=torch.tensor(step),
+                    perform_amortized_computation=False,
+                )
+                self.assertEqual(mock_amortized_computation.call_count, 0)
+                step += 1
+
+                # Case 1: amortized computation fails less often than tolerance -> no error.
+                with self.assertLogs(level="WARNING") as cm:
+                    self._preconditioner_list.update_preconditioners(
+                        masked_grad_list=masked_grad_list,
+                        step=torch.tensor(step),
+                        perform_amortized_computation=True,
+                    )
+                # Check that warnings are logged for four failed amortized computations.
+                # The fifth one doesn't raise an exception, so no warning is logged.
+                self.assertCountEqual(
+                    # Only extracts the first sentence in the warning message for simple comparison.
+                    [r.msg.split(". ", maxsplit=1)[0] for r in cm.records],
+                    [
+                        "Matrix computation failed for factor matrix 0.block_0.0 with exception=ValueError()",
+                        "Matrix computation failed for factor matrix 1.block_0.0 with exception=ValueError()",
+                        "Matrix computation failed for factor matrix 1.block_0.1 with exception=ValueError()",
+                        "Matrix computation failed for factor matrix 1.block_1.0 with exception=ValueError()",
+                    ],
+                )
+                self.assertEqual(
+                    mock_amortized_computation.call_count,
+                    self.NUM_AMORTIZED_COMPUTATION_CALLS * (step - 1),
+                )
+                step += 1
+
+                # Case 2: amortized computation fails exactly as often as tolerance (3) -> no error.
+                for _ in range(2):
+                    with self.assertLogs(level="WARNING") as cm:
+                        self._preconditioner_list.update_preconditioners(
+                            masked_grad_list=masked_grad_list,
+                            step=torch.tensor(step),
+                            perform_amortized_computation=True,
+                        )
+                    # Check that warnings are logged for all failed amortized computations.
+                    self.assertCountEqual(
+                        # Only extracts the first sentence in the warning message for simple comparison.
+                        [r.msg.split(". ", maxsplit=1)[0] for r in cm.records],
+                        [
+                            "Matrix computation failed for factor matrix 0.block_0.0 with exception=ValueError()",
+                            "Matrix computation failed for factor matrix 1.block_0.0 with exception=ValueError()",
+                            "Matrix computation failed for factor matrix 1.block_0.1 with exception=ValueError()",
+                            "Matrix computation failed for factor matrix 1.block_1.0 with exception=ValueError()",
+                            "Matrix computation failed for factor matrix 1.block_1.1 with exception=ValueError()",
+                        ],
+                    )
+                    self.assertEqual(
+                        mock_amortized_computation.call_count,
+                        self.NUM_AMORTIZED_COMPUTATION_CALLS * (step - 1),
+                    )
+                    step += 1
+
+                # Case 3: amortized computation succeeds after tolerance hit (test reset) -> no error.
+                with self.assertNoLogs(level="WARNING"):
+                    self._preconditioner_list.update_preconditioners(
+                        masked_grad_list=masked_grad_list,
+                        step=torch.tensor(step),
+                        perform_amortized_computation=True,
+                    )
+                self.assertEqual(
+                    mock_amortized_computation.call_count,
+                    self.NUM_AMORTIZED_COMPUTATION_CALLS * (step - 1),
+                )
+                step += 1
+
+                # Case 4: amortized computation fails more often than tolerance -> error.
+                for _ in range(3):
+                    with self.assertLogs(level="WARNING") as cm:
+                        self._preconditioner_list.update_preconditioners(
+                            masked_grad_list=masked_grad_list,
+                            step=torch.tensor(step),
+                            perform_amortized_computation=True,
+                        )
+                    # Check that warnings are logged for four failed amortized computations.
+                    self.assertCountEqual(
+                        # Only extracts the first sentence in the warning message for simple comparison.
+                        [r.msg.split(". ", maxsplit=1)[0] for r in cm.records],
+                        [
+                            "Matrix computation failed for factor matrix 0.block_0.0 with exception=ValueError()",
+                            "Matrix computation failed for factor matrix 1.block_0.0 with exception=ValueError()",
+                            "Matrix computation failed for factor matrix 1.block_0.1 with exception=ValueError()",
+                            "Matrix computation failed for factor matrix 1.block_1.0 with exception=ValueError()",
+                            "Matrix computation failed for factor matrix 1.block_1.1 with exception=ValueError()",
+                        ],
+                    )
+                    self.assertEqual(
+                        mock_amortized_computation.call_count,
+                        self.NUM_AMORTIZED_COMPUTATION_CALLS * (step - 1),
+                    )
+                    step += 1
+                # At tolerance now.
+                with self.assertLogs(level="WARNING") as cm:
+                    expected_error_message = "Exceeded tolerance.*('0.block_0.0',)."
+                    with self.assertRaisesRegex(ValueError, expected_error_message):
+                        self._preconditioner_list.update_preconditioners(
+                            masked_grad_list=masked_grad_list,
+                            step=torch.tensor(step),
+                            perform_amortized_computation=True,
+                        )
+                    # Check that the warning is logged for the failed amortized computation of the first matrix.
+                    self.assertCountEqual(
+                        # Only extracts the first sentence in the warning message for simple comparison.
+                        [r.msg.split(". ", maxsplit=1)[0] for r in cm.records],
+                        [
+                            "Matrix computation failed for factor matrix 0.block_0.0 with exception=ValueError()",
+                        ],
+                    )
+                # The error will be raised for the first Kronecker factor, so the
+                # call expected count should only be increased by 1.
+                self.assertEqual(
+                    mock_amortized_computation.call_count,
+                    self.NUM_AMORTIZED_COMPUTATION_CALLS * (step - 2) + 1,
+                )
 
         # Note: This is needed for type checking to infer the type of argument into mock.patch.object.
         shampoo_preconditioner_list_module: ModuleType = shampoo_preconditioner_list
@@ -459,7 +617,7 @@ class AbstractTest:
             self.assertEqual(self._preconditioner_list.num_bytes(), 204)
 
         def test_compress_preconditioner_list(self) -> None:
-            self._test_compress_preconditioner_list(expected_compress_list_call_count=3)
+            self._test_compress_preconditioner_list(expected_compress_list_call_count=4)
 
 
 class ShampooPreconditionerListTest(AbstractTest.BaseShampooPreconditionerListTest):
