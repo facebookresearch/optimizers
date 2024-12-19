@@ -130,7 +130,6 @@ if __name__ == "__main__":
             num_trainers_per_group=args.num_trainers_per_group,
         ),
         preconditioner_dtype=args.preconditioner_dtype,
-        track_root_inv_residuals=args.track_root_inv_residuals,
         preconditioner_computation_type=args.preconditioner_computation_type,
     )
 

@@ -195,11 +195,6 @@ class Parser:
             help="Use merge dims for Shampoo.",
         )
         parser.add_argument(
-            "--track-root-inv-residuals",
-            action="store_true",
-            help="Use debug mode for examining root inverse residuals.",
-        )
-        parser.add_argument(
             "--preconditioner-computation-type",
             type=lambda t: enum_type_parse(t, PreconditionerComputationType),
             default=PreconditionerComputationType.EIGEN_ROOT_INV,
@@ -387,7 +382,6 @@ def instantiate_optimizer(
     use_merge_dims: bool,
     distributed_config: DistributedConfig | None,
     preconditioner_dtype: DType,
-    track_root_inv_residuals: bool,
     preconditioner_computation_type: PreconditionerComputationType,
 ) -> torch.optim.Optimizer:
     if optimizer_type == OptimizerType.SGD:
@@ -440,7 +434,6 @@ def instantiate_optimizer(
             use_merge_dims=use_merge_dims,
             distributed_config=distributed_config,
             preconditioner_dtype=preconditioner_dtype.value,
-            track_root_inv_residuals=track_root_inv_residuals,
             preconditioner_config=instantiate_preconditioner_config(
                 preconditioner_computation_type
             ),

@@ -135,7 +135,6 @@ def create_model_and_optimizer_and_loss_fn(args, device):
         use_merge_dims=args.use_merge_dims,
         distributed_config=FullyShardShampooConfig(),
         preconditioner_dtype=args.preconditioner_dtype,
-        track_root_inv_residuals=args.track_root_inv_residuals,
         preconditioner_computation_type=args.preconditioner_computation_type,
     )
     return model, optimizer, loss_function
