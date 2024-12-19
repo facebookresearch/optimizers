@@ -108,17 +108,14 @@ class QuantizedTensorTest(unittest.TestCase):
 
 class QuantizedTensorListInitTest(unittest.TestCase):
     def test_invalid_quantized_data_type(self) -> None:
-        with (
-            mock.patch.object(
-                shampoo_quantization,
-                "isinstance",
-                side_effect=lambda object, classinfo: False,
-            ),
-            self.assertRaisesRegex(
-                TypeError,
-                re.escape(
-                    "quantized_data must be collections.abc.Sequence[tuple[torch.Tensor, torch.Tensor | None, torch.Tensor | None]] | collections.abc.Sequence[distributed_shampoo.utils.shampoo_quantization.QuantizedTensor] but get <class 'list'>"
-                ),
+        with mock.patch.object(
+            shampoo_quantization,
+            "isinstance",
+            side_effect=lambda object, classinfo: False,
+        ), self.assertRaisesRegex(
+            TypeError,
+            re.escape(
+                "quantized_data must be collections.abc.Sequence[tuple[torch.Tensor, torch.Tensor | None, torch.Tensor | None]] | collections.abc.Sequence[distributed_shampoo.utils.shampoo_quantization.QuantizedTensor] but get <class 'list'>"
             ),
         ):
             QuantizedTensorList(

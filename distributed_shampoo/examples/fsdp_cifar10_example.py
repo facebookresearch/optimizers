@@ -12,11 +12,7 @@ import os
 
 import torch.distributed as dist
 
-from distributed_shampoo import (
-    compile_fsdp_parameter_metadata,
-    FSDPShampooConfig,
-    PrecisionConfig,
-)
+from distributed_shampoo import compile_fsdp_parameter_metadata, FSDPShampooConfig
 from distributed_shampoo.examples.trainer_utils import (
     get_data_loader_and_sampler,
     get_model_and_loss_fn,
@@ -115,21 +111,10 @@ if __name__ == "__main__":
         grafting_epsilon=args.grafting_epsilon,
         grafting_beta2=args.grafting_beta2,
         use_merge_dims=args.use_merge_dims,
-        use_pytorch_compile=args.use_pytorch_compile,
         distributed_config=FSDPShampooConfig(
             param_to_metadata=compile_fsdp_parameter_metadata(model),
         ),
-        precision_config=PrecisionConfig(
-            computation_dtype=args.computation_dtype.value,
-            factor_matrix_dtype=args.factor_matrix_dtype.value,
-            inv_factor_matrix_dtype=args.inv_factor_matrix_dtype.value,
-            corrected_eigenvalues_dtype=args.corrected_eigenvalues_dtype.value,
-            factor_matrix_eigenvectors_dtype=args.factor_matrix_eigenvectors_dtype.value,
-            filtered_grad_dtype=args.filtered_grad_dtype.value,
-            momentum_dtype=args.momentum_dtype.value,
-            grafting_state_dtype=args.grafting_state_dtype.value,
-        ),
-        use_protected_eigh=args.use_protected_eigh,
+        preconditioner_dtype=args.preconditioner_dtype,
         track_root_inv_residuals=args.track_root_inv_residuals,
         preconditioner_computation_type=args.preconditioner_computation_type,
     )
