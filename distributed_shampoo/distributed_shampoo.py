@@ -7,7 +7,6 @@ LICENSE file in the root directory of this source tree.
 
 """
 
-import contextlib
 import dataclasses
 import logging
 from collections.abc import Callable, Iterator, Sequence
@@ -37,6 +36,7 @@ from distributed_shampoo.shampoo_types import (
     GRAFTING_PRECONDITIONER_LIST,
     GraftingConfig,
     HSDPShampooConfig,
+    HybridShardShampooConfig,
     INV_ROOT_OVERRIDE,
     LR,
     MASKED_BLOCKED_GRADS,
@@ -47,10 +47,9 @@ from distributed_shampoo.shampoo_types import (
     MOMENTUM,
     MOMENTUM_LIST,
     PARAMS,
-    PRECISION_CONFIG,
-    PrecisionConfig,
     PRECONDITION_FREQUENCY,
     PRECONDITIONER_CONFIG,
+    PRECONDITIONER_DTYPE,
     PreconditionerConfig,
     PREVIOUS_GRAD_SELECTOR,
     RMSpropGraftingConfig,
@@ -80,18 +79,15 @@ from distributed_shampoo.utils.shampoo_fully_shard_distributor import (
     FullyShardDistributor,
 )
 from distributed_shampoo.utils.shampoo_hsdp_distributor import HSDPDistributor
+from distributed_shampoo.utils.shampoo_hybrid_shard_distributor import (
+    HybridShardDistributor,
+)
 
 from distributed_shampoo.utils.shampoo_preconditioner_list import (
     AdagradPreconditionerList,
-    DequantizePreconditionersContext,
     EigenvalueCorrectedShampooPreconditionerList,
     SGDPreconditionerList,
     ShampooPreconditionerList,
-)
-from distributed_shampoo.utils.shampoo_quantization import (
-    DequantizeQuantizedTensorListContext,
-    QuantizedTensor,
-    QuantizedTensorList,
 )
 from distributed_shampoo.utils.shampoo_utils import compress_list
 
@@ -283,20 +279,12 @@ class DistributedShampoo(torch.optim.Optimizer):
         grafting_config (GraftingConfig | None): Configuration for grafting method. If None, ignores grafting.
             (Default: None)
         use_merge_dims (bool): Merge dimensions if possible while respecting max_preconditioner_dim. (Default: True)
-        use_pytorch_compile (bool | None): Use PyTorch 2.0 compiler feature to speed up training. Deprecating, please use
-            shampoo_pt2_compile_config instead; when this field is None, the use of PyTorch 2.0 compiler is decided by
-            shampoo_pt2_compile_config. (Default: None)
         shampoo_pt2_compile_config (ShampooPT2CompileConfig | None): Configuration for Shampoo PT2 compilation. If None,
             ignores compilation, and Shampoo will run in eager mode. (Default: None)
         distributed_config (DistributedConfig | None): Configuration for applying Shampoo
             to different distributed training frameworks, such as distributed-data parallel (DDP) training.
             Based on the configuration, determines which version of Shampoo to use. (Default: None)
-        preconditioner_dtype (torch.dtype | None): **DEPRECATING** Data type for preconditioner. (Default: None)
-        precision_config (PrecisionConfig): Data types for optimizer states. (Default: all fields torch.float)
-        use_protected_eigh (bool): **DEPRECATED** Flag for using two guards to prevent failures of torch.linalg.eigh. (Default: True)
-            1. Attempts to compute root inverse in preconditioner_dtype precision.
-            2. Attempts to recompute the eigendecomposition in higher precision if using lower-precision fails.
-            3. Otherwise, re-uses previous inverse factor matrix when both root inverse computations fail.
+        preconditioner_dtype (torch.dtype): Data type for preconditioner. (Default: None)
         track_root_inv_residuals (bool): Track errors and residuals of root inverse. For debugging purposes.
             (Default: False)
         preconditioner_config (PreconditionerConfig): Configuration for preconditioner computation.
@@ -326,12 +314,9 @@ class DistributedShampoo(torch.optim.Optimizer):
         use_decoupled_weight_decay: bool = True,
         grafting_config: GraftingConfig | None = None,
         use_merge_dims: bool = True,
-        use_pytorch_compile: bool | None = None,
         shampoo_pt2_compile_config: ShampooPT2CompileConfig | None = None,
         distributed_config: DistributedConfig | None = None,
-        preconditioner_dtype: torch.dtype | None = None,
-        precision_config: PrecisionConfig | None = None,
-        use_protected_eigh: bool = True,
+        preconditioner_dtype: torch.dtype = torch.float,
         track_root_inv_residuals: bool = False,
         preconditioner_config: PreconditionerConfig = DefaultShampooConfig,
     ) -> None:
@@ -410,42 +395,11 @@ class DistributedShampoo(torch.optim.Optimizer):
                 "Continuing without using momentum or Nesterov acceleration..."
             )
 
-        # Deprecation warning for use_pytorch_compile
-        if use_pytorch_compile is not None:
-            if use_pytorch_compile and shampoo_pt2_compile_config is None:
-                shampoo_pt2_compile_config = ShampooPT2CompileConfig()
-                logger.warning(
-                    "use_pytorch_compile is deprecating. Please use shampoo_pt2_compile_config instead."
-                )
-            elif use_pytorch_compile and shampoo_pt2_compile_config is not None:
-                raise ValueError(
-                    "Both use_pytorch_compile and shampoo_pt2_compile_config are provided. Please use only shampoo_pt2_compile_config as use_pytorch_compile is deprecating."
-                )
-            elif not use_pytorch_compile and shampoo_pt2_compile_config is not None:
-                raise ValueError(
-                    "use_pytorch_compile=False conflicts with non-None shampoo_pt2_compile_config arg. Please use only shampoo_pt2_compile_config as use_pytorch_compile is deprecating."
-                )
-
         # Provide error for system Pytorch compile availability
         if shampoo_pt2_compile_config is not None and not torch.cuda.is_available():
             raise ValueError(
-                "Backend does NOT support Pytorch 2.0 compile. Switch to use_pytorch_compile in (False, None) and shampoo_pt2_compile_config=None."
+                "Backend does NOT support Pytorch 2.0 compile. Switch to shampoo_pt2_compile_config=None."
             )
-
-        # Deprecation warning for preconditioner_dtype
-        if preconditioner_dtype is not None:
-            if precision_config is None:
-                precision_config = PrecisionConfig(
-                    factor_matrix_dtype=preconditioner_dtype,
-                    factor_matrix_computation_dtype=preconditioner_dtype,
-                )
-                logger.warning(
-                    "preconditioner_dtype is deprecated. Please use precision_config instead."
-                )
-            else:
-                raise ValueError(
-                    "Both preconditioner_dtype and precision_config are provided. Please use only precision_config as preconditioner_dtype is deprecated."
-                )
 
         amortized_computation_config = (
             preconditioner_config.amortized_computation_config
@@ -456,10 +410,6 @@ class DistributedShampoo(torch.optim.Optimizer):
             raise ValueError(
                 f"{track_root_inv_residuals=} has to be set to False when {amortized_computation_config=} is not an instance of RootInvConfig."
             )
-
-        # Create default precision config if it is not provided.
-        if precision_config is None:
-            precision_config = PrecisionConfig()
 
         # Set exponent multiplier if this is not provided.
         if (
@@ -493,7 +443,7 @@ class DistributedShampoo(torch.optim.Optimizer):
                 USE_DECOUPLED_WEIGHT_DECAY: use_decoupled_weight_decay,
                 GRAFTING_CONFIG: grafting_config,
                 USE_MERGE_DIMS: use_merge_dims,
-                PRECISION_CONFIG: precision_config,
+                PRECONDITIONER_DTYPE: preconditioner_dtype,
                 PRECONDITIONER_CONFIG: preconditioner_config,
             },
         )
@@ -508,7 +458,7 @@ class DistributedShampoo(torch.optim.Optimizer):
 
         # Block parameters and instantiate optimizer states.
         self._instantiate_distributor(distributed_config)
-        self._instantiate_shampoo_preconditioner_list(use_protected_eigh)
+        self._instantiate_shampoo_preconditioner_list()
         self._instantiate_grafting()
         self._instantiate_steps()
         self._instantiate_momentum()
@@ -535,6 +485,11 @@ class DistributedShampoo(torch.optim.Optimizer):
                 HSDPDistributor,
                 distributed_config=distributed_config,
             )  # type: ignore[assignment]
+        elif type(distributed_config) is HybridShardShampooConfig:
+            distributor = partial(
+                HybridShardDistributor,
+                distributed_config=distributed_config,
+            )  # type: ignore[assignment]
         else:
             raise NotImplementedError(f"{distributed_config=} not supported!")
 
@@ -559,9 +514,7 @@ class DistributedShampoo(torch.optim.Optimizer):
             state_lists[PREVIOUS_GRAD_SELECTOR] = None
 
     @torch.no_grad()
-    def _instantiate_shampoo_preconditioner_list(
-        self, use_protected_eigh: bool
-    ) -> None:
+    def _instantiate_shampoo_preconditioner_list(self) -> None:
         for state_lists, group in zip(
             self._per_group_state_lists, self.param_groups, strict=True
         ):
@@ -583,12 +536,11 @@ class DistributedShampoo(torch.optim.Optimizer):
                 block_info_list=state_lists[DISTRIBUTOR].global_block_info_list,
                 distributor_selector=state_lists[DISTRIBUTOR].distributor_selector,
                 preconditioner_config=group[PRECONDITIONER_CONFIG],
-                precision_config=group[PRECISION_CONFIG],
                 beta2=group[BETAS][1],
                 epsilon=group[EPSILON],
                 inv_root_override=group[INV_ROOT_OVERRIDE],
                 use_bias_correction=group[USE_BIAS_CORRECTION],
-                use_protected_eigh=use_protected_eigh,
+                factor_matrix_dtype=group[PRECONDITIONER_DTYPE],
             )
 
     @torch.no_grad()
@@ -612,7 +564,6 @@ class DistributedShampoo(torch.optim.Optimizer):
                     state=self.state,
                     block_info_list=state_lists[DISTRIBUTOR].global_block_info_list,
                     distributor_selector=state_lists[DISTRIBUTOR].distributor_selector,
-                    precision_config=group[PRECISION_CONFIG],
                     beta2=(
                         1.0
                         if type(group[GRAFTING_CONFIG]) is AdaGradGraftingConfig
@@ -667,24 +618,19 @@ class DistributedShampoo(torch.optim.Optimizer):
                 "for the correctness of block_index."
                 block_state = self.state[block_info.param][block_index]
 
-                block_state[MOMENTUM] = QuantizedTensor(
-                    block_info.allocate_zeros_tensor(
-                        shape=block.size(),
-                        dtype=group[PRECISION_CONFIG].momentum_dtype,
-                        device=block.device,
-                    ),
-                    block_info,
+                block_state[MOMENTUM] = block_info.allocate_zeros_tensor(
+                    shape=block.size(),
+                    dtype=block.dtype,
+                    device=block.device,
                 )
-                global_momentum_list.append(block_state[MOMENTUM])
+                global_momentum_list.append(
+                    block_info.get_tensor(block_state[MOMENTUM])
+                )
 
             # We compress the momentum list to only the locally-owned parameter states.
-            state_lists[MOMENTUM_LIST] = QuantizedTensorList(
-                compress_list(
-                    global_momentum_list,
-                    state_lists[DISTRIBUTOR].distributor_selector,
-                ),
-                group[PRECISION_CONFIG].momentum_dtype,
-                group[PRECISION_CONFIG].computation_dtype,
+            state_lists[MOMENTUM_LIST] = compress_list(
+                global_momentum_list,
+                state_lists[DISTRIBUTOR].distributor_selector,
             )
             # Here, we set masked momentum list to momentum list because we assume
             # all parameters are active.
@@ -715,24 +661,19 @@ class DistributedShampoo(torch.optim.Optimizer):
                 "Distributor for the correctness of block_index."
                 block_state = self.state[block_info.param][block_index]
 
-                block_state[FILTERED_GRAD] = QuantizedTensor(
-                    block_info.allocate_zeros_tensor(
-                        shape=block.size(),
-                        dtype=group[PRECISION_CONFIG].filtered_grad_dtype,
-                        device=block.device,
-                    ),
-                    block_info,
+                block_state[FILTERED_GRAD] = block_info.allocate_zeros_tensor(
+                    shape=block.size(),
+                    dtype=block.dtype,
+                    device=block.device,
                 )
-                global_filtered_grad_list.append(block_state[FILTERED_GRAD])
+                global_filtered_grad_list.append(
+                    block_info.get_tensor(block_state[FILTERED_GRAD])
+                )
 
             # We compress the momentum list to only the locally-owned parameter states.
-            state_lists[FILTERED_GRAD_LIST] = QuantizedTensorList(
-                compress_list(
-                    global_filtered_grad_list,
-                    state_lists[DISTRIBUTOR].distributor_selector,
-                ),
-                group[PRECISION_CONFIG].filtered_grad_dtype,
-                group[PRECISION_CONFIG].computation_dtype,
+            state_lists[FILTERED_GRAD_LIST] = compress_list(
+                global_filtered_grad_list,
+                state_lists[DISTRIBUTOR].distributor_selector,
             )
             # Here, we set masked filtered grad list to filtered grad list because we assume
             # all parameters are active.
@@ -789,10 +730,29 @@ class DistributedShampoo(torch.optim.Optimizer):
         ):
             return
 
-        if state_lists[STEP].item() >= 1:
+        # Warning for potential PT2 recompile due to gradient selector change.
+        # This warning is expected in either training from scratch or reloading from a checkpoint, as state_lists[PREVIOUS_GRAD_SELECTOR] is initialized to `None`, triggering this warning.
+        if state_lists[PREVIOUS_GRAD_SELECTOR] is not None:
+            grad_selector_different = [
+                a ^ b
+                for a, b in zip(
+                    state_lists[DISTRIBUTOR].local_grad_selector,
+                    state_lists[PREVIOUS_GRAD_SELECTOR],
+                    strict=True,
+                )
+            ]
+            mismatch_grad_selector_indices = [
+                i
+                for i, is_grad_selector_different in enumerate(grad_selector_different)
+                if is_grad_selector_different
+            ]
             logger.warning(
-                "PT2 will recompile because the gradient selction of model parameters have changed from the previous step. Possible reasons include some gradients are None. If this is not intended, please check the data and/or model."
+                f"""PT2 will recompile because the gradient selction of model parameters have changed from the previous step. Possible reasons include some gradients are None. If this is not intended, please check the data and/or model.
+                Details:
+                - Current step: {state_lists[STEP].item()}
+                - Changed gradient selector indices: {mismatch_grad_selector_indices}"""
             )
+
         # Updates masked state lists if previous block selector disagrees with current selector.
         # State list compression is necessary in order to avoid handling gradients with None.
         state_lists[PREVIOUS_GRAD_SELECTOR] = state_lists[
@@ -809,13 +769,13 @@ class DistributedShampoo(torch.optim.Optimizer):
                 local_grad_selector=state_lists[DISTRIBUTOR].local_grad_selector,
             )
         if group[BETAS][0] != 0.0:
-            state_lists[MASKED_FILTERED_GRAD_LIST] = state_lists[
-                FILTERED_GRAD_LIST
-            ].compress(
+            state_lists[MASKED_FILTERED_GRAD_LIST] = compress_list(
+                state_lists[FILTERED_GRAD_LIST],
                 state_lists[DISTRIBUTOR].local_grad_selector,
             )
         if group[MOMENTUM] != 0.0:
-            state_lists[MASKED_MOMENTUM_LIST] = state_lists[MOMENTUM_LIST].compress(
+            state_lists[MASKED_MOMENTUM_LIST] = compress_list(
+                state_lists[MOMENTUM_LIST],
                 state_lists[DISTRIBUTOR].local_grad_selector,
             )
 
@@ -833,11 +793,9 @@ class DistributedShampoo(torch.optim.Optimizer):
         for (group_index, group), state_lists in zip(
             enumerate(self.param_groups), self._per_group_state_lists, strict=True
         ):
-            # TODO: update values depending on both factor_matrix_dtype and inv_factor_matrix_dtype
-            # Get expected relative errors/residuals for debugging purposes
-            if group[PRECISION_CONFIG].inv_factor_matrix_dtype == torch.float64:
+            if group[PRECONDITIONER_DTYPE] == torch.float64:
                 expected_relative_error = 1e-7
-            elif group[PRECISION_CONFIG].inv_factor_matrix_dtype == torch.float32:
+            elif group[PRECONDITIONER_DTYPE] == torch.float32:
                 expected_relative_error = 1e-3
             else:
                 logger.warning(
@@ -960,34 +918,31 @@ class DistributedShampoo(torch.optim.Optimizer):
         use_bias_correction: bool,
     ) -> tuple[torch.Tensor, ...]:
         if beta1 != 0.0:
-            with DequantizeQuantizedTensorListContext(
-                quantized_tensor_list=state_lists[MASKED_FILTERED_GRAD_LIST]
-            ):
-                # Computes filtered gradient or EMA of the gradients with respect to beta3 if beta3 != beta1.
-                masked_filtered_grad_list = (
-                    torch._foreach_lerp(
-                        state_lists[MASKED_FILTERED_GRAD_LIST].dequantized_value,
-                        state_lists[MASKED_BLOCKED_GRADS],
-                        weight=1 - beta3,
-                    )
-                    if beta3 != beta1
-                    else state_lists[MASKED_FILTERED_GRAD_LIST].dequantized_value
-                )
-
-                # Update EMA of the gradients (with respect to beta1).
-                torch._foreach_lerp_(
-                    state_lists[MASKED_FILTERED_GRAD_LIST].dequantized_value,
+            # Computes filtered gradient or EMA of the gradients with respect to beta3 if beta3 != beta1.
+            masked_filtered_grad_list = (
+                torch._foreach_lerp(
+                    state_lists[MASKED_FILTERED_GRAD_LIST],
                     state_lists[MASKED_BLOCKED_GRADS],
-                    weight=1 - beta1,
+                    weight=1 - beta3,
                 )
+                if beta3 != beta1
+                else state_lists[MASKED_FILTERED_GRAD_LIST]
+            )
 
-                # Apply bias correction if necessary.
-                if use_bias_correction:
-                    bias_correction1 = 1.0 - beta3 * beta1 ** (step - 1)
-                    masked_filtered_grad_list = torch._foreach_div(
-                        masked_filtered_grad_list,
-                        bias_correction1,
-                    )
+            # Update EMA of the gradients (with respect to beta1).
+            torch._foreach_lerp_(
+                state_lists[MASKED_FILTERED_GRAD_LIST],
+                state_lists[MASKED_BLOCKED_GRADS],
+                weight=1 - beta1,
+            )
+
+            # Apply bias correction if necessary.
+            if use_bias_correction:
+                bias_correction1 = 1.0 - beta3 * beta1 ** (step - 1)
+                masked_filtered_grad_list = torch._foreach_div(
+                    masked_filtered_grad_list,
+                    bias_correction1,
+                )
         else:
             masked_filtered_grad_list = state_lists[MASKED_BLOCKED_GRADS]
 
@@ -1020,34 +975,29 @@ class DistributedShampoo(torch.optim.Optimizer):
     ) -> None:
         # Update momentum optimizer state and use momentum / Nesterov if enabled.
         if momentum_param != 0.0:
-            with DequantizeQuantizedTensorListContext(
-                quantized_tensor_list=state_lists[MASKED_MOMENTUM_LIST]
-            ):
+            torch._foreach_mul_(state_lists[MASKED_MOMENTUM_LIST], momentum_param)
+            torch._foreach_add_(
+                state_lists[MASKED_MOMENTUM_LIST],
+                masked_blocked_search_directions,
+                alpha=1 - dampening,
+            )
+
+            # Incorporates Nesterov momentum.
+            if use_nesterov:
                 torch._foreach_mul_(
-                    state_lists[MASKED_MOMENTUM_LIST].dequantized_value, momentum_param
+                    masked_blocked_search_directions,
+                    1 - dampening,
                 )
                 torch._foreach_add_(
-                    state_lists[MASKED_MOMENTUM_LIST].dequantized_value,
                     masked_blocked_search_directions,
-                    alpha=1 - dampening,
+                    state_lists[MASKED_MOMENTUM_LIST],
+                    alpha=momentum_param,
                 )
-
-                # Incorporates Nesterov momentum.
-                if use_nesterov:
-                    torch._foreach_mul_(
-                        masked_blocked_search_directions,
-                        1 - dampening,
-                    )
-                    torch._foreach_add_(
-                        masked_blocked_search_directions,
-                        state_lists[MASKED_MOMENTUM_LIST].dequantized_value,
-                        alpha=momentum_param,
-                    )
-                else:
-                    torch._foreach_copy_(
-                        masked_blocked_search_directions,
-                        state_lists[MASKED_MOMENTUM_LIST].dequantized_value,
-                    )
+            else:
+                torch._foreach_copy_(
+                    masked_blocked_search_directions,
+                    state_lists[MASKED_MOMENTUM_LIST],
+                )
 
     @torch.no_grad()
     def _per_group_step_impl(
@@ -1075,62 +1025,50 @@ class DistributedShampoo(torch.optim.Optimizer):
             use_decoupled_weight_decay,
         )
 
-        with (
-            DequantizePreconditionersContext(
-                preconditioner_list=state_lists[SHAMPOO_PRECONDITIONER_LIST]
-            ),
-            (
-                DequantizePreconditionersContext(
-                    preconditioner_list=state_lists[GRAFTING_PRECONDITIONER_LIST]
-                )
-                if grafting_config_not_none
-                else contextlib.nullcontext()
-            ),
-        ):
-            # Update Shampoo and grafting preconditioners.
-            # Example for AdaGrad accumulation:
-            # 1. Update factor matrices/grafting preconditioners.
-            #   L <- L + G * G^T
-            #   R <- R + G^T * G
-            #   V <- V + G^2    (element-wise)
-            #   (and similar)
-            # 2. Compute root inverse if necessary.
-            #   L_inv <- L ** (-1/4)
-            #   R_inv <- R ** (-1/4)
-            #   (and similar);
-            self._update_preconditioners(
-                state_lists=state_lists,
-                step=step,
-                perform_amortized_computation=perform_amortized_computation,
-                grafting_config_not_none=grafting_config_not_none,
-            )
+        # Update Shampoo and grafting preconditioners.
+        # Example for AdaGrad accumulation:
+        # 1. Update factor matrices/grafting preconditioners.
+        #   L <- L + G * G^T
+        #   R <- R + G^T * G
+        #   V <- V + G^2    (element-wise)
+        #   (and similar)
+        # 2. Compute root inverse if necessary.
+        #   L_inv <- L ** (-1/4)
+        #   R_inv <- R ** (-1/4)
+        #   (and similar);
+        self._update_preconditioners(
+            state_lists=state_lists,
+            step=step,
+            perform_amortized_computation=perform_amortized_computation,
+            grafting_config_not_none=grafting_config_not_none,
+        )
 
-            # Compute filtered gradient or EMA of the gradients if beta1 > 0 and beta3 > 0.
-            # Note that we use two beta factors here akin to Lion.
-            #   G_bar <- beta3 * G_tilde + (1 - beta3) * G
-            #   G_tilde <- beta1 * G_tilde + (1 - beta1) * G
-            masked_filtered_grad_list = self._compute_filtered_grad_list(
-                state_lists,
-                step,
-                beta1,
-                beta3,
-                use_bias_correction,
-            )
+        # Compute filtered gradient or EMA of the gradients if beta1 > 0 and beta3 > 0.
+        # Note that we use two beta factors here akin to Lion.
+        #   G_bar <- beta3 * G_tilde + (1 - beta3) * G
+        #   G_tilde <- beta1 * G_tilde + (1 - beta1) * G
+        masked_filtered_grad_list = self._compute_filtered_grad_list(
+            state_lists,
+            step,
+            beta1,
+            beta3,
+            use_bias_correction,
+        )
 
-            # Precondition and graft filtered gradients.
-            # PT2 compile is currently disabled for preconditioning and grafting.
-            # NOTE: Preconditioning and grafting is not compatible with PT2 compile.
-            #
-            #   P_shampoo <- L_inv * G_bar * R_inv (and similar)
-            #   P_grafting <- G_bar / (sqrt(V) + epsilon)
-            #   P <- P_grafting                                     if step < start_preconditioning_step
-            #   P <- ||P_grafting|| / ||P_shampoo|| * P_shampoo     otherwise
-            masked_blocked_search_directions = self._precondition_and_grafting(
-                state_lists,
-                masked_filtered_grad_list,
-                use_grafting_method,
-                grafting_config_not_none,
-            )
+        # Precondition and graft filtered gradients.
+        # PT2 compile is currently disabled for preconditioning and grafting.
+        # NOTE: Preconditioning and grafting is not compatible with PT2 compile.
+        #
+        #   P_shampoo <- L_inv * G_bar * R_inv (and similar)
+        #   P_grafting <- G_bar / (sqrt(V) + epsilon)
+        #   P <- P_grafting                                     if step < start_preconditioning_step
+        #   P <- ||P_grafting|| / ||P_shampoo|| * P_shampoo     otherwise
+        masked_blocked_search_directions = self._precondition_and_grafting(
+            state_lists,
+            masked_filtered_grad_list,
+            use_grafting_method,
+            grafting_config_not_none,
+        )
 
         # Incorporate decoupled weight decay into search direction if enabled.
         #   P <- P + weight_decay * W
@@ -1188,19 +1126,6 @@ class DistributedShampoo(torch.optim.Optimizer):
             # Check if gradient list is empty. If so, continue.
             if not state_lists[MASKED_BLOCKED_GRADS]:
                 continue
-
-            # Convert the gradient dtype to the computation dtype set in the precision_config if
-            # necessary.
-            #
-            # This conversion is needed because the blocked gradient list has float32 dtype, and we
-            # need to convert it to the desired precision before precondition computation.
-            if (
-                computation_dtype := group[PRECISION_CONFIG].computation_dtype
-            ) != state_lists[MASKED_BLOCKED_GRADS][0].dtype:
-                state_lists[MASKED_BLOCKED_GRADS] = tuple(
-                    tensor.to(dtype=computation_dtype)
-                    for tensor in state_lists[MASKED_BLOCKED_GRADS]
-                )
 
             # Iterate group step counter and define Python scalar step.
             step = state_lists[STEP].add_(1)
