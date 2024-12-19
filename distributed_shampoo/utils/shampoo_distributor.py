@@ -97,6 +97,26 @@ class DistributorInterface(ABC):
     def global_block_info_list(self) -> tuple[BlockInfo, ...]:
         return self._global_block_info_list
 
+    def _construct_composable_block_ids(
+        self,
+        param_index: int,
+        block_index: int,
+        rank: int | None = None,
+    ) -> tuple[int, str]:
+        """Construct composable block ids.
+
+        Args:
+            param_index (int): Index of the parameter in self._param_group[PARAMS].
+            block_index (int): Index of the tensor block within a given parameter.
+            rank (int | None): Rank of this process group; used in FSDP/HSDP. (Default: None)
+
+        Returns:
+            tuple[int, str]: Composable block id tuple containing global block index and local block name.
+                The latter will be used to identify blocks in the masked tensor.
+
+        """
+        return (param_index, f"block_{block_index}")
+
     def _get_params_or_grads(self, get_grad: bool = False) -> Iterable[Tensor | None]:
         """Helper function that gets params or grads from the parameter group.
 
@@ -275,7 +295,9 @@ class Distributor(DistributorInterface):
         self._global_block_info_list = tuple(
             BlockInfo(
                 param=param,
-                composable_block_ids=(param_index, f"block_{block_index}"),
+                composable_block_ids=self._construct_composable_block_ids(
+                    param_index=param_index, block_index=block_index
+                ),
             )
             # Block index that is accumulated across all parameters within a parameter group.
             for ((param_index, param), num_blocks_within_param) in zip(

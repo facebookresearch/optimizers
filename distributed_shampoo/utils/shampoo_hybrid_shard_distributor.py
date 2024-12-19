@@ -12,17 +12,13 @@ import logging
 import operator
 from functools import partial
 from itertools import islice
-from math import prod
-from typing import Any
+from typing import Any, Iterable
 
 import torch
 from distributed_shampoo.shampoo_types import (
     CommunicationDType,
-    FSDPParameterMetadata,
-    HSDPShampooConfig,
-    MAX_PRECONDITIONER_DIM,
+    HybridShardShampooConfig,
     PARAMS,
-    USE_MERGE_DIMS,
 )
 from distributed_shampoo.utils.shampoo_block_info import DDPBlockInfo
 from distributed_shampoo.utils.shampoo_dist_utils import get_device_mesh
@@ -31,31 +27,25 @@ from distributed_shampoo.utils.shampoo_utils import (
     compress_list,
     generate_pairwise_indices,
     get_dtype_size,
-    merge_small_dims,
-    multi_dim_split,
 )
 from torch import distributed as dist, Tensor
 from torch.distributed import tensor as dtensor
 from torch.distributed.device_mesh import _mesh_resources
-from torch.distributed.tensor import zeros as dtensor_zeros
-from torch.nn import Parameter
+from torch.distributed.tensor import DTensor, zeros as dtensor_zeros
 
 logger: logging.Logger = logging.getLogger(__name__)
 
 
-class HSDPDistributor(DistributorInterface):
-    """HSDP Distributor class.
-
-    Handles split tensor block recovery of different parameters, then merging and blocking of
-    the tensor blocks, as well as distributing of the parameters at instantiation.
+class HybridShardDistributor(DistributorInterface):
+    """HybridShard Distributor class.
 
     The constructor internally sets up `DeviceMesh` objects as necessary for distributing memory
     and computation, so torch.distributed must be initialized in advance.
 
-    Unlike FSDPDistributor, HSDPDistributor requires the user to pass in a device mesh used for
-    HSDP. For example, suppose we have 48 GPUs and the HSDP group size is 8. Then:
+    Unlike FullyShardDistributor, HybridShardDistributor requires the user to pass in a device mesh used for
+    Hybrid Shard. For example, suppose we have 48 GPUs and the Hybrid Shard group size is 8. Then:
 
-    HSDP Device Mesh with (Replicate, Shard) = (6, 8):
+    Hybrid Shard Device Mesh with (Replicate, Shard) = (6, 8):
 
         device_mesh = [[ 0,  1,  2,  3,  4,  5,  6,  7]
                        [ 8,  9, 10, 11, 12, 13, 14, 15]
@@ -69,14 +59,14 @@ class HSDPDistributor(DistributorInterface):
         device_mesh["shard"] = [8, 9, 10, 11, 12, 13, 14, 15]
 
     Since the parameters are sharded along the "shard" dimension, we would normally replicate the
-    computation along the "replicate" dimension. With HSDP Shampoo, we instead want to distribute
-    the computation and memory requirements across the "replicate" dimension of the original HSDP
-    device mesh.
+    computation along the "replicate" dimension. With Hybrid Shard Shampoo, we instead want to
+    distribute the computation and memory requirements across the "replicate" dimension of the original
+    Hybrid Shard device mesh.
 
     For example, suppose that the num_trainers_per_group = 3. We want to form a (2, 3)-submesh on
     the ranks [3, 11, 19, 27, 35, 43] (and similar).
 
-    HSDPDistributor 2D Sub-Mesh Example with (Replicate, Shard) = (2, 3):
+    HybridShardDistributor 2D Sub-Mesh Example with (Replicate, Shard) = (2, 3):
 
         submesh = [[ 3, 11, 19]
                    [27, 35, 43]]
@@ -87,28 +77,24 @@ class HSDPDistributor(DistributorInterface):
 
     Args:
         param_group (dict[str, Any]): Parameter group containing parameters.
-        distributed_config (HSDPShampooConfig): Configuration for HSDP Shampoo.
+        distributed_config (HybridShardShampooConfig): Configuration for HybridShard Shampoo.
 
     """
 
     def __init__(
         self,
         param_group: dict[str, Any],
-        distributed_config: HSDPShampooConfig,
+        distributed_config: HybridShardShampooConfig,
     ) -> None:
-        self._param_to_metadata: dict[Parameter, FSDPParameterMetadata] = (
-            distributed_config.param_to_metadata
-        )
-        self._hsdp_device_mesh: torch.distributed.device_mesh.DeviceMesh = (
+        self._hybrid_shard_device_mesh: torch.distributed.device_mesh.DeviceMesh = (
             distributed_config.device_mesh
         )
-        self._global_num_splits_per_param: tuple[int, ...] = ()
-        self._global_num_blocks_per_split_param: tuple[int, ...] = ()
+        self._global_num_blocks_per_param: tuple[int, ...] = ()
 
         super().__init__(param_group)
         if not dist.is_initialized():
             raise RuntimeError(
-                "HSDPDistributor needs torch.distributed to be initialized!"
+                "HybridShardDistributor needs torch.distributed to be initialized!"
             )
 
         # Construct global masked blocked parameters (which is DDP-specific).
@@ -118,7 +104,7 @@ class HSDPDistributor(DistributorInterface):
 
         # Check num_trainers_per_group and replicated group size.
         # NOTE: If num_trainers_per_group = -1, then we use the replicated group size.
-        self._replicated_group_size: int = self._hsdp_device_mesh.size(0)
+        self._replicated_group_size: int = self._hybrid_shard_device_mesh.size(0)
 
         if not (
             1
@@ -168,10 +154,10 @@ class HSDPDistributor(DistributorInterface):
         # Note that this requires initializing all process groups.
         # Splits replicated ranks group into smaller groups of size self._dist_group_size.
         # Instantiates this by using DeviceMesh.
-        ranks_in_all_replicated_groups = self._hsdp_device_mesh.mesh.T
+        ranks_in_all_replicated_groups = self._hybrid_shard_device_mesh.mesh.T
         for ranks_in_replicated_group in ranks_in_all_replicated_groups:
             device_mesh = get_device_mesh(
-                device_type=self._hsdp_device_mesh.device_type,
+                device_type=self._hybrid_shard_device_mesh.device_type,
                 mesh=tuple(
                     tuple(ranks_in_replicated_subgroup)
                     for ranks_in_replicated_subgroup in ranks_in_replicated_group.view(
@@ -221,6 +207,23 @@ class HSDPDistributor(DistributorInterface):
             buffer_size_ranks=buffer_size_ranks,
             communication_dtype=communication_dtype,
             comms_group_rank=comms_group_rank,
+        )
+
+    @torch.no_grad()
+    def _get_params_or_grads(self, get_grad: bool = False) -> Iterable[Tensor | None]:
+        """Helper function to get the local params (or grad) from the param_group, where params are represented as DTensors.
+
+        Args:
+            get_grad (bool): Whether to return the param or the grad of the param.
+        Returns:
+            local (Iterable[Tensor | None]): Local params (or grad) from the param_group.
+        """
+        # If a parameter is in a "dead layer", it won't have any gradient. In this case, we
+        # should return `None` for the gradient.
+        return (
+            (None if p.grad is None else p.grad.to_local()) if get_grad else local_p
+            for p in self._param_group[PARAMS]
+            if (local_p := p.to_local()).numel() > 0
         )
 
     # NOTE: Remove this function once PT2 supports all_gather with functional collective
@@ -361,7 +364,7 @@ class HSDPDistributor(DistributorInterface):
         Args:
             param_index (int): Index of the current parameter within self._param_group[PARAMS].
             block_index (int): Block index that is accumulated across all parameters within a parameter group.
-            rank (int | None): Rank of this process group; should be non None in FSDP/HSDP setting. (Default: None)
+            rank (int | None): Rank of this process group; should be non None in FullyShard/HybridShard setting. (Default: None)
 
         Returns:
             tuple[int, str]: Composable block id tuple containing global block index and local block name.
@@ -369,13 +372,21 @@ class HSDPDistributor(DistributorInterface):
         """
         return (param_index, f"rank_{rank}-block_{block_index}")
 
+    @torch.no_grad()
     def _construct_global_block_info_list(
         self, buffer_size_ranks: tuple[tuple[int, int], ...]
     ) -> None:
         """Construct global block info list from param_group and num_blocks_within_param."""
-        # Note that for HSDP, we want to get the rank within each sharded group for the block id.
+        # Call `super()` instead of `self` as a performance optimization.
+        # This leads to O(1) instead of O(N) complexity to retrieve the parameters.
+        non_empty_params: Iterable[DTensor] = filter(
+            lambda p: p.to_local().numel() > 0,  # type: ignore[arg-type]
+            super()._get_params_or_grads(),
+        )
+
+        # Note that for HybridShard, we want to get the rank within each sharded group for the block id.
         # When using a device mesh, 0 corresponds to the replicated group and 1 corresponds to the sharded group.
-        sharded_group_rank = self._hsdp_device_mesh.get_local_rank(1)
+        sharded_group_rank = self._hybrid_shard_device_mesh.get_local_rank(1)
         self._global_block_info_list: tuple[DDPBlockInfo, ...] = tuple(
             DDPBlockInfo(
                 param=param,
@@ -399,7 +410,7 @@ class HSDPDistributor(DistributorInterface):
                 (param_index, param),
                 (buffer_size_ranks_start, buffer_size_ranks_end),
             ) in zip(
-                enumerate(self._param_group[PARAMS]),
+                enumerate(non_empty_params),
                 generate_pairwise_indices(self._global_num_blocks_per_param),
                 strict=True,
             )
@@ -409,80 +420,6 @@ class HSDPDistributor(DistributorInterface):
                 )
             )
         )
-
-    def _merge_and_block_parameters(
-        self,
-    ) -> None:
-        """Split, merge, and block parameters."""
-        global_blocked_params: list[Tensor] = []
-        # self._global_num_splits_per_param refers to the total number of splits within each
-        # flattened parameter (obtained by split tensor block recovery).
-        # This has the same length as the number of flattened parameters contained in
-        # self._param_group[PARAMS].
-        global_num_splits_per_param = []
-        # self._global_num_blocks_per_split refers to the total number of blocks within each
-        # split parameter.
-        # This has the same length as the number of split parameters.
-        global_num_blocks_per_split_param = []
-        # self._global_merged_dims_list has the same length as the total number of split tensor
-        # blocks within all flattened parameters obtained from split tensor block recovery.
-        global_merged_dims_list = []
-
-        for flattened_param in self._param_group[PARAMS]:
-            # Split flattened parameters into valid tensor blocks of the parameter.
-            split_params = HSDPDistributor._split_tensor_block_recovery(
-                flattened_param,
-                self._param_to_metadata[flattened_param].shape,
-                self._param_to_metadata[flattened_param].start_idx,
-                self._param_to_metadata[flattened_param].end_idx,
-            )
-            global_num_splits_per_param.append(len(split_params))
-
-            for split_param in split_params:
-                # Obtain blocks for each parameter after merging.
-                merged_dims = (
-                    merge_small_dims(
-                        split_param.size(), self._param_group[MAX_PRECONDITIONER_DIM]
-                    )
-                    if self._param_group[USE_MERGE_DIMS]
-                    else split_param.size()
-                )
-                blocks_within_split_param = multi_dim_split(
-                    split_param.view(merged_dims),
-                    self._param_group[MAX_PRECONDITIONER_DIM],
-                )
-
-                # Generate and extend block info list and extend blocked parameters list.
-                # Note that the block info list should have the same length as the blocked parameters list.
-                global_blocked_params.extend(
-                    # Note: We are using tensor.detach() here to explicitly set block_param (a view of the original
-                    # parameter) to requires_grad = False in order to prevent errors with print and PT2 compile.
-                    # Remove this tensor.detach() once https://github.com/pytorch/pytorch/issues/113793 is fixed.
-                    block_param.detach()
-                    for block_param in blocks_within_split_param
-                )
-
-                # Stores the merged dimensions for each parameter and the number of blocks for each param so
-                # we could use this later for constructing the mask on filtering blocks when grad is None.
-                global_merged_dims_list.append(merged_dims)
-                global_num_blocks_per_split_param.append(len(blocks_within_split_param))
-
-        # Check that the number of blocks for each parameter equals to the summation of the number of blocks
-        # from each split parameter.
-        self._global_num_blocks_per_param = tuple(
-            sum(global_num_blocks_per_split_param[block_index:next_block_index])
-            for (block_index, next_block_index) in generate_pairwise_indices(
-                global_num_splits_per_param
-            )
-        )
-
-        # Set lists as tuples.
-        self._global_blocked_params = tuple(global_blocked_params)
-        self._global_num_splits_per_param = tuple(global_num_splits_per_param)
-        self._global_num_blocks_per_split_param = tuple(
-            global_num_blocks_per_split_param
-        )
-        self._global_merged_dims_list = tuple(global_merged_dims_list)
 
     @staticmethod
     def _split_local_dist_buffers(
@@ -578,7 +515,7 @@ class HSDPDistributor(DistributorInterface):
             device=self._global_block_info_list[0].param.device,
         )
         local_dist_buffers = torch.split(self._global_dist_buffer, max_buffer_size_sum)
-        splitted_local_dist_buffers = HSDPDistributor._split_local_dist_buffers(
+        splitted_local_dist_buffers = HybridShardDistributor._split_local_dist_buffers(
             buffer_size_ranks, local_dist_buffers
         )
 
@@ -601,87 +538,6 @@ class HSDPDistributor(DistributorInterface):
         )
         self._global_masked_dist_blocked_buffers = self._global_dist_blocked_buffers
         self._local_masked_dist_blocked_buffers = self._local_dist_blocked_buffers
-
-    def _merge_and_block_gradients(
-        self,
-    ) -> tuple[Tensor, ...]:
-        """Split, merge, and block gradients.
-
-        Returns:
-            local_masked_blocked_grads (tuple[Tensor, ...]): Local gradients with grad not None.
-
-        """
-        local_masked_blocked_grads: list[Tensor] = []
-        global_grad_selector = []
-
-        for (
-            flattened_param,
-            num_blocks,
-            (block_index, next_block_index),
-            (split_index, next_split_index),
-        ) in zip(
-            self._param_group[PARAMS],
-            self._global_num_blocks_per_param,
-            generate_pairwise_indices(self._global_num_blocks_per_param),
-            generate_pairwise_indices(self._global_num_splits_per_param),
-            strict=True,
-        ):
-            flattened_grad = flattened_param.grad
-            param_distributor_selector = self._distributor_selector[
-                block_index:next_block_index
-            ]
-
-            # Update the selector.
-            global_grad_selector.extend([flattened_grad is not None] * num_blocks)
-
-            if flattened_grad is None or not any(param_distributor_selector):
-                # Skip split_tensor_block_recovery and multi_dim_split if this blocked grad will not be used locally.
-                continue
-
-            # Split flattened gradients into valid tensor blocks of the gradient.
-            split_grads = HSDPDistributor._split_tensor_block_recovery(
-                flattened_grad,
-                self._param_to_metadata[flattened_param].shape,
-                self._param_to_metadata[flattened_param].start_idx,
-                self._param_to_metadata[flattened_param].end_idx,
-            )
-
-            # Get the merged dimensions and the number of blocks for each split gradient.
-            merged_dims_within_flattened_param = self._global_merged_dims_list[
-                split_index:next_split_index
-            ]
-            num_blocks_within_split_grads = self._global_num_blocks_per_split_param[
-                split_index:next_split_index
-            ]
-
-            for (
-                grad,
-                merged_dims,
-                (blocks_within_split_index, next_blocks_within_split_index),
-            ) in zip(
-                split_grads,
-                merged_dims_within_flattened_param,
-                generate_pairwise_indices(num_blocks_within_split_grads),
-                strict=True,
-            ):
-                # Obtain blocks for each split gradient after merging.
-                blocks_within_grad = multi_dim_split(
-                    grad.view(merged_dims), self._param_group[MAX_PRECONDITIONER_DIM]
-                )
-                # Generate block-to-parameter metadata and extend blocked parameters list.
-                local_masked_blocked_grads.extend(
-                    compress_list(
-                        blocks_within_grad,
-                        param_distributor_selector[
-                            blocks_within_split_index:next_blocks_within_split_index
-                        ],
-                    )
-                )
-
-        # Set global grad selector as tuple.
-        self._global_grad_selector = tuple(global_grad_selector)
-
-        return tuple(local_masked_blocked_grads)
 
     def merge_and_block_gradients(
         self,
@@ -722,195 +578,6 @@ class HSDPDistributor(DistributorInterface):
 
         return local_masked_blocked_grads
 
-    @staticmethod
-    def _split_tensor_block_recovery(
-        tensor_shard: Tensor,
-        original_shape: torch.Size,
-        start_idx: int,
-        end_idx: int,
-    ) -> list[Tensor]:
-        """Chunks flattened tensor in order to re-construct valid blocks with respect to the original
-        multi-dimensional tensor shape and parameter boundaries.
-
-        Starting from the first dimension, the largest possible slices in each dimension
-        (with the remaining dimensions on the right retaining the original shape) are split off.
-
-        The following is an example of how the function works for a 2-D tensor shard:
-
-        Given an original tensor with shape (7, 14) in Fig. 1, we receive a flattened tensor shard from FSDP
-        corresponding to Fig. 4. Note that this flattened tensor shard corresponds to the shard of the tensor
-        in Fig. 2. In order to respect the tensor shape, we need to split the tensor into up to three blocks
-        (as in Fig. 5). This requires splitting the tensor in Fig. 2 (see flattened tensor shard in Fig. 4)
-        then reshaping each flattened split tensor into its original shape (see reshaped split tensors in Fig.
-        3 and 6).
-
-          ______________
-         |       _______|                        _______                         _______
-         |______|       |                 ______|       |                 ______|_______|
-         |              |       ->       |              |       ->       |              |
-         |           ___|                |           ___|                |______________|
-         |__________|   |                |__________|                    |__________|
-         |______________|
-
-          original tensor                  tensor_shard                    split tensors
-
-              Fig. 1                           Fig. 2                          Fig. 3
-
-        Flattened original tensor in Fig. 1:
-         ________________________________________________________________
-        |____________________|_________________________|_________________|
-                             ^       tensor_shard      ^
-                          start_idx                 end_idx
-
-                                    Fig. 4
-
-         ________________________________________________________________
-        |____________________|______|_______________|__|_________________|
-                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
-                    ^^^ denoted the flattened split tensors in Fig. 3.
-
-                                    Fig. 5
-
-        Reshaped split tensors (i.e., the tensors in Fig. 3):
-                                     _______
-                                    |_______|  <- left split
-                             ______________
-                            |              |  <- center split
-                            |______________|
-                             __________
-                            |__________|      <- right split
-
-                                    Fig. 6
-
-        Args:
-            tensor_shard (Tensor): A shard of the flattened version of original tensor to split.
-            original_shape (torch.Size): Shape of original tensor that tensor_shard is a slice of.
-            start_idx (int): Flattened index in the original tensor where tensor starts (inclusive).
-            end_idx (int): Flattened index in the original tensor where tensor ends (exclusive).
-
-        Returns:
-            split_tensors (list[Tensor]): List of tensors.
-
-        """
-        if len(tensor_shard.size()) != 1:
-            raise ValueError(
-                f"Input tensor is not flat, has shape {tensor_shard.size()=}."
-            )
-
-        def block_within_tensor_shard_recovery(
-            block_within_tensor_shard: Tensor,
-            dimension: int,
-            block_start_idx: int,
-            block_end_idx: int,
-        ) -> list[Tensor]:
-            assert (
-                block_end_idx - block_start_idx == block_within_tensor_shard.numel()
-            ), f"Start/end indices do not match tensor size: {block_start_idx=}, "
-            f"{block_end_idx=}, {block_within_tensor_shard.numel()=}!"
-
-            if block_end_idx == block_start_idx:
-                return []
-
-            # Handle case where shape is one-dimensional.
-            # Because it reached the last dimension, we can simply return the flattened tensor.
-            if dimension == len(original_shape) - 1:
-                return [block_within_tensor_shard]
-
-            # Instantiate list of tensor blocks.
-            center_split_tensor_blocks = []
-
-            # Instantiates flattened indices for recursion.
-            remaining_size = prod(original_shape[dimension + 1 :])
-
-            """
-             ________________________________________________________________
-            |____________________|______|_______________|__|_________________|
-                                 ^      ^               ^  ^
-                       block_start_idx  |               | block_end_idx
-                                        |               |
-                            center_split_start_idx      |
-                                                center_split_end_idx
-
-            This came from Fig. 4 above.
-
-            """
-            # Get starting index of the center split of the tensor shard. (See figure above.)
-            # This is equal to ceil(block_start_idx / remaining_size) * remaining_size.
-            center_split_start_idx = (
-                (block_start_idx + remaining_size - 1) // remaining_size
-            ) * remaining_size
-            # Similarly, get end index of the center split of the tensor shard.
-            # This is equal to floor(block_end_idx / remaining_size) * remaining_size.
-            center_split_end_idx = block_end_idx // remaining_size * remaining_size
-
-            # Handles largest convex partition in the center.
-            if center_split_start_idx < center_split_end_idx:
-                center_split_start_idx_in_block = (
-                    center_split_start_idx - block_start_idx
-                )
-                length_of_center_split = center_split_end_idx - center_split_start_idx
-                new_shape = [-1] + list(original_shape[dimension + 1 :])
-                # NOTE: We use Tensor.narrow() instead of slicing in order to guarantee
-                # there is no copy of the tensor.
-                center_split_tensor_blocks.append(
-                    block_within_tensor_shard.narrow(
-                        0,
-                        center_split_start_idx_in_block,
-                        length_of_center_split,
-                    ).view(new_shape)
-                )
-            elif center_split_start_idx > center_split_end_idx:
-                # Recursively call split tensor block recovery on the full
-                # flattened tensor ignoring the first dimension of the original
-                # tensor shape.
-                return block_within_tensor_shard_recovery(
-                    block_within_tensor_shard=block_within_tensor_shard,
-                    dimension=dimension + 1,
-                    block_start_idx=block_start_idx,
-                    block_end_idx=block_end_idx,
-                )
-
-            # Recursively call split tensor block recovery on the left and right
-            # splits of the flattened tensor.
-            left_split_start_idx_in_block = 0
-            left_split_tensor_size = center_split_start_idx - block_start_idx
-            left_split_tensor_blocks = block_within_tensor_shard_recovery(
-                block_within_tensor_shard=block_within_tensor_shard.narrow(
-                    0,
-                    start=left_split_start_idx_in_block,
-                    length=left_split_tensor_size,
-                ),
-                dimension=dimension + 1,
-                block_start_idx=block_start_idx,
-                block_end_idx=center_split_start_idx,
-            )
-
-            center_split_end_idx_in_block = center_split_end_idx - block_start_idx
-            right_split_tensor_size = block_end_idx - center_split_end_idx
-            right_split_tensor_blocks = block_within_tensor_shard_recovery(
-                block_within_tensor_shard=block_within_tensor_shard.narrow(
-                    0,
-                    start=center_split_end_idx_in_block,
-                    length=right_split_tensor_size,
-                ),
-                dimension=dimension + 1,
-                block_start_idx=center_split_end_idx,
-                block_end_idx=block_end_idx,
-            )
-
-            return (
-                left_split_tensor_blocks
-                + center_split_tensor_blocks
-                + right_split_tensor_blocks
-            )
-
-        return block_within_tensor_shard_recovery(
-            block_within_tensor_shard=tensor_shard,
-            dimension=0,
-            block_start_idx=start_idx,
-            block_end_idx=end_idx,
-        )
-
     def _allocate_zeros_distributed_tensor(
         self,
         shape: tuple[int, ...],
@@ -935,7 +602,7 @@ class HSDPDistributor(DistributorInterface):
 
         """
         ranks_in_replicated_group = torch.tensor(
-            dist.get_process_group_ranks(self._hsdp_device_mesh.get_group(0))
+            dist.get_process_group_ranks(self._hybrid_shard_device_mesh.get_group(0))
         )
         device_mesh_2d = get_device_mesh(
             device_type=device.type,

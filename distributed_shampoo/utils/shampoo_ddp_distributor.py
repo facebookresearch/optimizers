@@ -9,7 +9,9 @@ LICENSE file in the root directory of this source tree.
 
 import heapq
 import logging
+import operator
 from functools import partial
+from itertools import islice
 from typing import Any
 
 import torch
@@ -87,7 +89,6 @@ class DDPDistributor(DistributorInterface):
                 CommunicationDType.DEFAULT,
             ]
             communication_dtype = torch.float32
-        self._communication_dtype: torch.dtype = communication_dtype
 
         # Initialize _dist_group and _group_rank.
         self._dist_group: dist.ProcessGroup | None = (
@@ -95,12 +96,12 @@ class DDPDistributor(DistributorInterface):
             if self._group_size == self._global_size
             else dist.new_subgroups(group_size=self._group_size)[0]
         )
-        self._group_rank: int = dist.get_rank(group=self._dist_group)
+        group_rank: int = dist.get_rank(group=self._dist_group)
 
         # Assign ranks to blocks with their respective buffer size.
         buffer_size_ranks = self._distribute_buffer_sizes(
             buffer_sizes=tuple(
-                blocked_param.numel() * get_dtype_size(self._communication_dtype)
+                blocked_param.numel() * get_dtype_size(communication_dtype)
                 for blocked_param in self._global_blocked_params
             )
         )
@@ -109,7 +110,7 @@ class DDPDistributor(DistributorInterface):
 
         # Initialize selectors and local blocked (masked) parameters.
         self._distributor_selector: tuple[bool, ...] = tuple(
-            block_info.group_source_rank == self._group_rank
+            block_info.group_source_rank == group_rank
             for block_info in self._global_block_info_list
         )
         self._local_blocked_params: tuple[Tensor, ...] = compress_list(
@@ -122,7 +123,11 @@ class DDPDistributor(DistributorInterface):
             self._local_blocked_params
         )
 
-        self._construct_distributed_buffers(buffer_size_ranks)
+        self._construct_distributed_buffers(
+            buffer_size_ranks=buffer_size_ranks,
+            communication_dtype=communication_dtype,
+            group_rank=group_rank,
+        )
 
     # NOTE: Remove this function once PT2 supports all_gather with functional collective
     @torch.no_grad()
@@ -228,7 +233,7 @@ class DDPDistributor(DistributorInterface):
 
         for index, aligned_buffer_size in sorted(
             enumerate(aligned_buffer_sizes),
-            key=lambda t: t[1],
+            key=operator.itemgetter(1),
             reverse=True,
         ):
             # Greedily find the group with the least allocated buffer size and its group index
@@ -266,7 +271,9 @@ class DDPDistributor(DistributorInterface):
         self._global_block_info_list: tuple[DDPBlockInfo, ...] = tuple(
             DDPBlockInfo(
                 param=param,
-                composable_block_ids=(param_index, f"block_{block_index}"),
+                composable_block_ids=self._construct_composable_block_ids(
+                    param_index=param_index, block_index=block_index
+                ),
                 # Curry a function to capture a local variable "group_source_rank".
                 allocate_zeros_tensor=partial(
                     self._allocate_zeros_distributed_tensor,
@@ -281,18 +288,16 @@ class DDPDistributor(DistributorInterface):
             )
             for (
                 (param_index, param),
-                num_blocks_within_param,
                 (buffer_size_ranks_start, buffer_size_ranks_end),
             ) in zip(
                 enumerate(self._param_group[PARAMS]),
-                self._global_num_blocks_per_param,
                 generate_pairwise_indices(self._global_num_blocks_per_param),
                 strict=True,
             )
-            for block_index, (_, group_source_rank) in zip(
-                range(num_blocks_within_param),
-                buffer_size_ranks[buffer_size_ranks_start:buffer_size_ranks_end],
-                strict=True,
+            for block_index, (_, group_source_rank) in enumerate(
+                islice(
+                    buffer_size_ranks, buffer_size_ranks_start, buffer_size_ranks_end
+                )
             )
         )
 
@@ -356,7 +361,10 @@ class DDPDistributor(DistributorInterface):
         return tuple(splitted_local_dist_buffers)
 
     def _construct_distributed_buffers(
-        self, buffer_size_ranks: tuple[tuple[int, int], ...]
+        self,
+        buffer_size_ranks: tuple[tuple[int, int], ...],
+        communication_dtype: torch.dtype,
+        group_rank: int,
     ) -> None:
         """Construct the distributed buffers for AllGather communications.
 
@@ -367,6 +375,8 @@ class DDPDistributor(DistributorInterface):
         Args:
             buffer_size_ranks (tuple[tuple[int, int], ...]): A list of tuples containing the
                 buffer size and an assigned rank for each block.
+            communication_dtype (torch.dtype): Data type used for communication.
+            group_rank (int): Rank of the current process group.
 
         """
 
@@ -390,16 +400,14 @@ class DDPDistributor(DistributorInterface):
         )
 
         # Get local buffer for specific group rank.
-        self._local_dist_buffer = local_dist_buffers[self._group_rank]
+        self._local_dist_buffer = local_dist_buffers[group_rank]
 
         # Obtain the list of buffers corresponding to each block (ignoring padding).
         # Note that each buffer is reshaped into the block's shape and viewed in terms
         # of the communication data type.
         self._global_dist_blocked_buffers = tuple(
-            buffer.split(
-                blocked_param.numel() * get_dtype_size(self._communication_dtype)
-            )[0]
-            .view(self._communication_dtype)
+            buffer.split(blocked_param.numel() * get_dtype_size(communication_dtype))[0]
+            .view(communication_dtype)
             .view(blocked_param.shape)
             for buffer, blocked_param in zip(
                 splitted_local_dist_buffers, self._global_blocked_params, strict=True

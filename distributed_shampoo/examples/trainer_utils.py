@@ -30,7 +30,6 @@ from distributed_shampoo import (
     DistributedConfig,
     DistributedShampoo,
     GraftingConfig,
-    PrecisionConfig,
     PreconditionerConfig,
     RMSpropGraftingConfig,
     SGDGraftingConfig,
@@ -196,16 +195,6 @@ class Parser:
             help="Use merge dims for Shampoo.",
         )
         parser.add_argument(
-            "--use-pytorch-compile",
-            action="store_true",
-            help="Use PyTorch compile for Shampoo.",
-        )
-        parser.add_argument(
-            "--use-protected-eigh",
-            action="store_true",
-            help="Uses protected eigendecomposition.",
-        )
-        parser.add_argument(
             "--track-root-inv-residuals",
             action="store_true",
             help="Use debug mode for examining root inverse residuals.",
@@ -239,52 +228,10 @@ class Parser:
 
         # Arguments for mixed-precision.
         parser.add_argument(
-            "--computation-dtype",
+            "--preconditioner-dtype",
             type=lambda t: enum_type_parse(t, DType),
             default=DType.FP32,
-            help="Data type for all computation in Shampoo.",
-        )
-        parser.add_argument(
-            "--factor-matrix-dtype",
-            type=lambda t: enum_type_parse(t, DType),
-            default=DType.FP32,
-            help="Data type for storing Shampoo factor matrices.",
-        )
-        parser.add_argument(
-            "--inv-factor-matrix-dtype",
-            type=lambda t: enum_type_parse(t, DType),
-            default=DType.FP32,
-            help="Data type for storing Shampoo inverse factor matrices.",
-        )
-        parser.add_argument(
-            "--corrected-eigenvalues-dtype",
-            type=lambda t: enum_type_parse(t, DType),
-            default=DType.FP32,
-            help="Data type for storing corrected eigenvalues of Shampoo preconditioner.",
-        )
-        parser.add_argument(
-            "--factor-matrix-eigenvectors-dtype",
-            type=lambda t: enum_type_parse(t, DType),
-            default=DType.FP32,
-            help="Data type for storing Shampoo factor matrices eigenvectors.",
-        )
-        parser.add_argument(
-            "--filtered-grad-dtype",
-            type=lambda t: enum_type_parse(t, DType),
-            default=DType.FP32,
-            help="Data type for storing filtered gradients.",
-        )
-        parser.add_argument(
-            "--momentum-dtype",
-            type=lambda t: enum_type_parse(t, DType),
-            default=DType.FP32,
-            help="Data type for storing momentum states.",
-        )
-        parser.add_argument(
-            "--grafting-state-dtype",
-            type=lambda t: enum_type_parse(t, DType),
-            default=DType.FP32,
-            help="Data type for storing grafting preconditioners.",
+            help="Preconditioner dtype for Shampoo.",
         )
 
         # Arguments for DDP Shampoo.
@@ -438,10 +385,8 @@ def instantiate_optimizer(
     grafting_beta2: float,
     grafting_epsilon: float,
     use_merge_dims: bool,
-    use_pytorch_compile: bool,
     distributed_config: DistributedConfig | None,
-    precision_config: PrecisionConfig | None,
-    use_protected_eigh: bool,
+    preconditioner_dtype: DType,
     track_root_inv_residuals: bool,
     preconditioner_computation_type: PreconditionerComputationType,
 ) -> torch.optim.Optimizer:
@@ -493,10 +438,8 @@ def instantiate_optimizer(
                 grafting_type, grafting_beta2, grafting_epsilon
             ),
             use_merge_dims=use_merge_dims,
-            use_pytorch_compile=use_pytorch_compile,
             distributed_config=distributed_config,
-            precision_config=precision_config,
-            use_protected_eigh=use_protected_eigh,
+            preconditioner_dtype=preconditioner_dtype.value,
             track_root_inv_residuals=track_root_inv_residuals,
             preconditioner_config=instantiate_preconditioner_config(
                 preconditioner_computation_type
