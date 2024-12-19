@@ -1063,9 +1063,9 @@ class ShampooPreconditionerList(
 
                 # Only reuse previous inverse roots if tolerance is not exceeded.
                 self._raise_exception_if_failure_tolerance_exceeded(
-                    success_tracker,
-                    idx,
-                    ValueError(
+                    success_tracker=success_tracker,
+                    preconditioner_index=idx,
+                    exception=ValueError(
                         f"Exceeded tolerance for number of failed inverse root computations for {kronecker_factors.factor_matrix_indices}."
                     ),
                 )
@@ -1393,9 +1393,9 @@ class EigenvalueCorrectedShampooPreconditionerList(
 
                 # Only reuse previous eigenvectors if tolerance is not exceeded.
                 self._raise_exception_if_failure_tolerance_exceeded(
-                    success_tracker,
-                    idx,
-                    ValueError(
+                    success_tracker=success_tracker,
+                    preconditioner_index=idx,
+                    exception=ValueError(
                         f"Exceeded tolerance for number of failed eigenvector computations for {kronecker_factors.factor_matrix_indices}."
                     ),
                 )
