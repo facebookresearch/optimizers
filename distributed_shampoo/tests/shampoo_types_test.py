@@ -9,12 +9,16 @@ LICENSE file in the root directory of this source tree.
 
 import re
 import unittest
-from typing import Type
+from abc import ABC, abstractmethod
+from typing import Generic, Type, TypeVar
 
 from distributed_shampoo.shampoo_types import (
     AdaGradGraftingConfig,
     AdamGraftingConfig,
+    EigenvalueCorrectedShampooPreconditionerConfig,
+    PreconditionerConfig,
     RMSpropGraftingConfig,
+    ShampooPreconditionerConfig,
 )
 
 
@@ -69,3 +73,57 @@ class AdamGraftingConfigTest(RMSpropGraftingConfigTest):
         self,
     ) -> Type[RMSpropGraftingConfig] | Type[AdamGraftingConfig]:
         return AdamGraftingConfig
+
+
+PreconditionerConfigType = TypeVar(
+    "PreconditionerConfigType", bound=Type[PreconditionerConfig]
+)
+
+
+class AbstractPreconditionerConfigTest:
+    class PreconditionerConfigTest(
+        ABC,
+        unittest.TestCase,
+        Generic[PreconditionerConfigType],
+    ):
+        def test_illegal_num_tolerated_failed_amortized_computations(self) -> None:
+            num_tolerated_failed_amortized_computations = -1
+            with (
+                self.assertRaisesRegex(
+                    ValueError,
+                    re.escape(
+                        f"Invalid num_tolerated_failed_amortized_computations value: "
+                        f"{num_tolerated_failed_amortized_computations}. Must be >= 0."
+                    ),
+                ),
+            ):
+                self._get_preconditioner_config_type()(
+                    num_tolerated_failed_amortized_computations=num_tolerated_failed_amortized_computations,
+                )
+
+        @abstractmethod
+        def _get_preconditioner_config_type(
+            self,
+        ) -> PreconditionerConfigType: ...
+
+
+class ShampooPreconditionerConfigTest(
+    AbstractPreconditionerConfigTest.PreconditionerConfigTest[
+        Type[ShampooPreconditionerConfig]
+    ]
+):
+    def _get_preconditioner_config_type(
+        self,
+    ) -> Type[ShampooPreconditionerConfig]:
+        return ShampooPreconditionerConfig
+
+
+class EigenvalueCorrectedShampooPreconditionerConfigTest(
+    AbstractPreconditionerConfigTest.PreconditionerConfigTest[
+        Type[EigenvalueCorrectedShampooPreconditionerConfig]
+    ]
+):
+    def _get_preconditioner_config_type(
+        self,
+    ) -> Type[EigenvalueCorrectedShampooPreconditionerConfig]:
+        return EigenvalueCorrectedShampooPreconditionerConfig
