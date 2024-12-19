@@ -10,7 +10,6 @@ LICENSE file in the root directory of this source tree.
 import abc
 import re
 import unittest
-import warnings
 from types import ModuleType
 from typing import Any
 from unittest import mock
@@ -500,18 +499,12 @@ class AbstractTest:
                     step += 1
 
                 # Case 3: amortized computation succeeds after tolerance hit (test reset) -> no error.
-                with warnings.catch_warnings(record=True) as warning_list:
-                    warnings.simplefilter("always")
+                with self.assertNoLogs(level="WARNING") as cm:
                     self._preconditioner_list.update_preconditioners(
                         masked_grad_list=masked_grad_list,
                         step=torch.tensor(step),
                         perform_amortized_computation=True,
                     )
-                self.assertEqual(
-                    len(warning_list),
-                    0,
-                    f"Expected no warnings but got: {warning_list}",
-                )
                 self.assertEqual(
                     mock_amortized_computation.call_count,
                     self.NUM_AMORTIZED_COMPUTATION_CALLS * (step - 1),
