@@ -83,6 +83,25 @@ class FSDPDistributor(DistributorInterface):
             masked_blocked_search_directions,
         )
 
+    def _construct_composable_block_ids(
+        self,
+        param_index: int,
+        block_index: int,
+        rank: int | None = None,
+    ) -> tuple[int, str]:
+        """Construct composable block ids for each parameter.
+
+        Args:
+            param_index (int): Index of the current parameter within self._param_group[PARAMS].
+            block_index (int): Block index that is accumulated across all parameters within a parameter group.
+            rank (int | None): Rank of this process group; should be non None in FSDP/HSDP setting. (Default: None)
+
+        Returns:
+            tuple[int, str]: Composable block id tuple containing global block index and local block name.
+                The latter will be used to identify blocks in the masked tensor.
+        """
+        return (param_index, f"rank_{rank}-block_{block_index}")
+
     def _construct_global_block_info_list(
         self,
     ) -> None:
@@ -91,7 +110,9 @@ class FSDPDistributor(DistributorInterface):
         self._global_block_info_list = tuple(
             BlockInfo(
                 param=param,
-                composable_block_ids=(param_index, f"rank_{rank}-block_{block_index}"),
+                composable_block_ids=self._construct_composable_block_ids(
+                    param_index=param_index, block_index=block_index, rank=rank
+                ),
             )
             # Block index that is accumulated across all parameters within a parameter group.
             for ((param_index, param), num_blocks_within_param) in zip(

@@ -41,7 +41,6 @@ INV_ROOT_OVERRIDE = "inv_root_override"
 LR = "lr"
 MAX_PRECONDITIONER_DIM = "max_preconditioner_dim"
 PARAMS = "params"  # While this is stored in groups by default, we do not checkpoint this quantity.
-PRECISION_CONFIG = "precision_config"
 PRECONDITION_FREQUENCY = "precondition_frequency"
 PRECONDITIONER_DTYPE = "preconditioner_dtype"
 PRECONDITIONER_CONFIG = "preconditioner_config"
@@ -90,7 +89,7 @@ class PreconditionerConfig(AbstractDataclass):
 
     """
 
-    amortized_computation_config: MatrixFunctionConfig
+    amortized_computation_config: MatrixFunctionConfig  # type: ignore
     num_tolerated_failed_amortized_computations: int = 3
 
     def __post_init__(self) -> None:
@@ -162,42 +161,6 @@ class FSDPParameterMetadata:
     sharding_strategy: ShardingStrategy
 
 
-@dataclass
-class PrecisionConfig:
-    """Configuration for precision of each optimizer state.
-
-    TODO: allow more specific computation dtypes that only apply to some computations
-
-    Args:
-        computation_dtype (torch.dtype): Data type that all computation is performed in, except factor matrices (see factor_matrix_computation_dtype). (Default: torch.float32)
-        factor_matrix_dtype (torch.dtype): Data type for storing Shampoo factor matrices. (Default: torch.float32)
-        inv_factor_matrix_dtype (torch.dtype): Data type for storing Shampoo inverse factor matrices. (Default: torch.float32)
-        factor_matrix_computation_dtype (torch.dtype): Data type for accumulating factor matrices and computing their inverses. (Default: torch.float32)
-        corrected_eigenvalues_dtype (torch.dtype): Data type for storing the corrected eigenvalues of Shampoo preconditioner (EMA). (Default: torch.float32)
-        factor_matrix_eigenvectors_dtype (torch.dtype): Data type for storing the eigenvectors of Shampoo factor matrices. (Default: torch.float32)
-        filtered_grad_dtype (torch.dtype): Data type for storing filtered gradients (EMA). (Default: torch.float32)
-        momentum_dtype (torch.dtype): Data type for storing momentum states. (Default: torch.float32)
-        grafting_state_dtype (torch.dtype): Data type for storing grafting preconditioners, if applicable. (Default: torch.float32)
-            Current applicable grafting configs:
-            - AdaGradGraftingConfig
-            - RMSpropGraftingConfig
-            - AdamGraftingConfig
-            NOT applicable configs:
-            - SGDGraftingConfig
-            - None (i.e. no grafting)
-    """
-
-    computation_dtype: torch.dtype = torch.float32
-    factor_matrix_dtype: torch.dtype = torch.float32
-    inv_factor_matrix_dtype: torch.dtype = torch.float32
-    corrected_eigenvalues_dtype: torch.dtype = torch.float32
-    factor_matrix_eigenvectors_dtype: torch.dtype = torch.float32
-    factor_matrix_computation_dtype: torch.dtype = torch.float32
-    filtered_grad_dtype: torch.dtype = torch.float32
-    momentum_dtype: torch.dtype = torch.float32
-    grafting_state_dtype: torch.dtype = torch.float32
-
-
 @dataclass(init=False)
 class DistributedConfig(AbstractDataclass):
     """Abstract dataclass for distributed configs in Shampoo."""
@@ -237,14 +200,6 @@ class FSDPShampooConfig(DistributedConfig):
     param_to_metadata: dict[Parameter, FSDPParameterMetadata]
 
 
-@dataclass(kw_only=True)
-class FullyShardShampooConfig(DistributedConfig):
-    """Configuration for FullyShard (per-parameter FSDP) Shampoo.
-
-    Currently only a placeholder used for Shampoo optimizer to select FullyShardDistributor.
-    """
-
-
 @dataclass
 class HSDPShampooConfig(FSDPShampooConfig, DDPShampooConfig):
     """Configuration for HSDP Shampoo.
@@ -256,6 +211,35 @@ class HSDPShampooConfig(FSDPShampooConfig, DDPShampooConfig):
         device_mesh (torch.distributed.device_mesh.DeviceMesh): A 2D device mesh that specifies the layout of the numbers of
             shard and replicate dimensions.
         param_to_metadata (dict[Parameter, FSDPParameterMetadata]): Dictionary mapping parameter to its metadata from HSDP.
+        communication_dtype (CommunicationDType): Data type for communication between ranks. (Default: DEFAULT)
+        num_trainers_per_group (int): Number of GPUs per distributed process group for distributed computation/memory.
+            If num_trainers_per_group = -1 is used, then defaults to using the number of workers in each replicated HSDP
+            group. (Default: -1)
+        communicate_params (bool): Flag for all-gathering updated params across multiple workers.
+            If False, all-gathers parameter updates across multiple workers. (Default: False)
+
+    """
+
+    device_mesh: DeviceMesh
+
+
+@dataclass(kw_only=True)
+class FullyShardShampooConfig(DistributedConfig):
+    """Configuration for FullyShard (per-parameter FSDP) Shampoo.
+
+    Currently only a placeholder used for Shampoo optimizer to select FullyShardDistributor.
+    """
+
+
+@dataclass
+class HybridShardShampooConfig(FullyShardShampooConfig, DDPShampooConfig):
+    """Configuration for HybridShard (per-parameter FSDP) Shampoo.
+
+    Enables distributed computation and optimizer states (like ZeRO-1) via DTensor for Shampoo across ranks with shared
+    parameters between different Hybrid Shard process groups.
+
+    Args:
+        device_mesh (torch.distributed.device_mesh.DeviceMesh): Device mesh for Hybrid Shard.
         communication_dtype (CommunicationDType): Data type for communication between ranks. (Default: DEFAULT)
         num_trainers_per_group (int): Number of GPUs per distributed process group for distributed computation/memory.
             If num_trainers_per_group = -1 is used, then defaults to using the number of workers in each replicated HSDP
