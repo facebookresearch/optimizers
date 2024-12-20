@@ -63,8 +63,8 @@ class DistributorInterface(ABC):
         self._local_blocked_params: tuple[Tensor, ...]
         # Local masked blocked params are the parameters masked by the distributor selector AND the local grad selector.
         self._local_masked_blocked_params: tuple[Tensor, ...]
-        # Global block info list contains information about each global block.
-        self._global_block_info_list: tuple[BlockInfo, ...] | tuple[DDPBlockInfo, ...]
+        # Local block info list contains information about each block masked by the distributor selector.
+        self._local_block_info_list: tuple[BlockInfo, ...] | tuple[DDPBlockInfo, ...]
 
     @abstractmethod
     @torch.no_grad()
@@ -72,14 +72,6 @@ class DistributorInterface(ABC):
         self,
         masked_blocked_search_directions: tuple[Tensor, ...],
     ) -> None: ...
-
-    @property
-    def global_blocked_params(self) -> tuple[Tensor, ...]:
-        return self._global_blocked_params
-
-    @property
-    def distributor_selector(self) -> tuple[bool, ...]:
-        return self._distributor_selector
 
     @property
     def local_grad_selector(self) -> tuple[bool, ...]:
@@ -94,8 +86,8 @@ class DistributorInterface(ABC):
         return self._local_masked_blocked_params
 
     @property
-    def global_block_info_list(self) -> tuple[BlockInfo, ...]:
-        return self._global_block_info_list
+    def local_block_info_list(self) -> tuple[BlockInfo, ...]:
+        return self._local_block_info_list
 
     def _construct_composable_block_ids(
         self,
@@ -258,18 +250,18 @@ class Distributor(DistributorInterface):
         param_group: dict[str, Any],
     ) -> None:
         super().__init__(param_group)
-        self._construct_global_block_info_list()
 
         # Initialize selectors and local blocked (masked) parameters.
         self._local_grad_selector: tuple[bool, ...] = (True,) * len(
             self._global_blocked_params
         )
         self._distributor_selector: tuple[bool, ...] = self._local_grad_selector
+        self._local_blocked_params: tuple[Tensor, ...] = self._global_blocked_params
         self._local_masked_blocked_params: tuple[Tensor, ...] = (
-            self._global_blocked_params
+            self._local_blocked_params
         )
-        self._local_blocked_params: tuple[Tensor, ...] = (
-            self._local_masked_blocked_params
+        self._local_block_info_list: tuple[BlockInfo, ...] = (
+            self._construct_local_block_info_list()
         )
 
     @torch.no_grad()
@@ -288,11 +280,12 @@ class Distributor(DistributorInterface):
             masked_blocked_search_directions,
         )
 
-    def _construct_global_block_info_list(
+    @torch.no_grad()
+    def _construct_local_block_info_list(
         self,
-    ) -> None:
-        """Construct global block info list from param_group and num_blocks_within_param."""
-        self._global_block_info_list = tuple(
+    ) -> tuple[BlockInfo, ...]:
+        """Construct local block info list from param_group and num_blocks_within_param."""
+        return tuple(
             BlockInfo(
                 param=param,
                 composable_block_ids=self._construct_composable_block_ids(
