@@ -9,6 +9,7 @@ LICENSE file in the root directory of this source tree.
 
 import re
 import unittest
+from operator import methodcaller
 
 import torch
 
@@ -18,6 +19,7 @@ from distributed_shampoo.utils.shampoo_utils import (
     get_dtype_size,
     merge_small_dims,
     multi_dim_split,
+    ParameterizeEnterExitContext,
 )
 
 
@@ -133,3 +135,48 @@ class GeneratePairwiseIndicesTest(unittest.TestCase):
         self.assertListEqual(
             list(generate_pairwise_indices(input_tuple)), expected_pairwise_indices
         )
+
+
+class ParameterizeEnterExitContextTest(unittest.TestCase):
+    """Test suite for the ParameterizeEnterExitContext class.
+
+    This test case verifies the functionality of the ParameterizeEnterExitContext
+    class, ensuring that the enter and exit methods are called correctly on the
+    input object, and that the object's state is modified as expected.
+    """
+
+    def test_parameterize_enter_exit_context(self) -> None:
+        """Test the enter and exit context management.
+
+        This test creates an instance of a TestClass, which has enter and exit
+        methods that modify an internal variable. It then uses the
+        ParameterizeEnterExitContext to ensure that the enter method is called
+        upon entering the context and the exit method is called upon exiting,
+        verifying the changes in the internal state of the TestClass instance.
+        """
+
+        class TestClass:
+            def __init__(self) -> None:
+                self._test_var = 0
+
+            def enter(self) -> None:
+                self._test_var = 1
+
+            def exit(self) -> None:
+                self._test_var = -1
+
+            @property
+            def test_var(self) -> int:
+                return self._test_var
+
+        test_class = TestClass()
+        with ParameterizeEnterExitContext(
+            input_with_enter_exit_context=test_class,
+            enter_method_caller=methodcaller("enter"),
+            exit_method_caller=methodcaller("exit"),
+        ):
+            # Due to the invocation of test_class.enter(), the state of test_class.test_var should be 1.
+            self.assertEqual(test_class.test_var, 1)
+
+        # Due to the invocation of test_class.exit(), the state of test_class.test_var should be -1.
+        self.assertEqual(test_class.test_var, -1)
