@@ -422,6 +422,8 @@ class AbstractTest:
                 torch.tensor([[0.0, 1.0]]),
             )
 
+            # Initialize step counter.
+            step = 1
             with mock.patch.object(
                 shampoo_preconditioner_list,
                 self._amortized_computation_function(),
@@ -437,7 +439,6 @@ class AbstractTest:
                     ValueError,
                 ],
             ) as mock_amortized_computation:
-                step = 1
                 # Accumulate factor matrices for valid amortized computation.
                 self._preconditioner_list.update_preconditioners(
                     masked_grad_list=masked_grad_list0,
@@ -536,7 +537,9 @@ class AbstractTest:
                         self.NUM_AMORTIZED_COMPUTATION_CALLS * (step - 1),
                     )
                     step += 1
-                # At tolerance now.
+                # Cache current call count.
+                previous_call_count = mock_amortized_computation.call_count
+                # Exactly at failure tolerance now.
                 with self.assertLogs(level="WARNING") as cm:
                     expected_error_message = "Exceeded tolerance.*('0.block_0.0',)."
                     with self.assertRaisesRegex(ValueError, expected_error_message):
@@ -554,10 +557,10 @@ class AbstractTest:
                         ],
                     )
                 # The error will be raised for the first Kronecker factor, so the
-                # call expected count should only be increased by 1.
+                # expected call count should only be increased by 1.
                 self.assertEqual(
                     mock_amortized_computation.call_count,
-                    self.NUM_AMORTIZED_COMPUTATION_CALLS * (step - 2) + 1,
+                    previous_call_count + 1,
                 )
 
         # Note: This is needed for type checking to infer the type of argument into mock.patch.object.
