@@ -22,7 +22,6 @@ from distributed_shampoo.distributed_shampoo import DistributedShampoo
 from distributed_shampoo.shampoo_types import (
     AdaGradGraftingConfig,
     DDPShampooConfig,
-    DefaultEigenvalueCorrectedShampooConfig,
     DefaultShampooConfig,
     DistributedConfig,
     GraftingConfig,
@@ -223,21 +222,6 @@ class DistributedShampooInitTest(unittest.TestCase):
                 [
                     "exponent_multiplier=2.0 is deprecating. Please consider using EigenConfig.exponent_multiplier directly and setting exponent_multipler=None instead in the future."
                 ],
-            )
-
-    def test_conflict_eigenvalue_correction_and_track_root_inv_residuals(self) -> None:
-        with self.assertRaisesRegex(
-            ValueError,
-            re.escape(
-                "track_root_inv_residuals=True has to be set to False when amortized_computation_config=EighEigenvectorConfig(retry_double_precision=True) is not an instance of RootInvConfig."
-            ),
-        ):
-            DistributedShampoo(
-                self._model.parameters(),
-                lr=0.01,
-                start_preconditioning_step=1,
-                track_root_inv_residuals=True,
-                preconditioner_config=DefaultEigenvalueCorrectedShampooConfig,
             )
 
 
@@ -627,53 +611,6 @@ class DistributedShampooStateDictTest(unittest.TestCase):
                 [r.msg for r in cm.records],
                 ["Parameter 1 not found in state!"],
             )
-
-
-class DistributedShampooTrackRootInvResidualsTest(unittest.TestCase):
-    def _get_track_root_inverse_residuals_output(self, dtype: torch.dtype) -> list[str]:
-        # Create a model and a DistributedShampoo optimizer with enabled track_root_inv_residuals and corresponding dtype.
-        # The dtype of the model and the optimizer are the same.
-        model = nn.Sequential(nn.Linear(2, 1, bias=False))
-        model[0].weight.data = torch.tensor([1.0, 2.0], dtype=dtype)
-        optimizer = DistributedShampoo(
-            params=model.parameters(),
-            precondition_frequency=2,
-            start_preconditioning_step=2,
-            preconditioner_dtype=dtype,
-            track_root_inv_residuals=True,
-        )
-
-        # Run two steps of the optimizer to compute the root inverse residuals.
-        # Because precondition_frequency and start_preconditioning_step are both 2, there should be one call of
-        # _compute_and_log_root_inverse_residuals().
-        with self.assertLogs(level="DEBUG") as cm:
-            model[0].weight.grad = torch.tensor([1.0, 0.0], dtype=dtype)
-            optimizer.step()
-            model[0].weight.grad = torch.tensor([0.0, 1.0], dtype=dtype)
-            optimizer.step()
-            return [r.msg for r in cm.records]
-
-    def test_compute_and_log_root_inverse_residuals(self) -> None:
-        # Test the cases that tracking root inverse residuals support both float32 and float64.
-        for dtype, expected_relative_error in [
-            (torch.float32, 1e-3),
-            (torch.float64, 1e-7),
-        ]:
-            with self.subTest(dtype=dtype):
-                msgs = self._get_track_root_inverse_residuals_output(dtype=dtype)
-                self.assertIn("Group Index: 0", msgs)
-                self.assertIn(
-                    f"Expect Relative Error <= {expected_relative_error}", msgs
-                )
-
-        # Test the case that tracking root inverse residuals does not support float16.
-        msgs = self._get_track_root_inverse_residuals_output(dtype=torch.float16)
-        self.assertEqual(
-            msgs,
-            [
-                "Expected relative error/residual not supported for precision lower than float32."
-            ],
-        )
 
 
 class DistributedShampooNoneGradTest(unittest.TestCase):

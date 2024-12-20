@@ -24,12 +24,7 @@ from distributed_shampoo.shampoo_types import (
 )
 from distributed_shampoo.utils.shampoo_block_info import BlockInfo
 from distributed_shampoo.utils.shampoo_utils import compress_list, get_dtype_size
-from matrix_functions import (
-    check_diagonal,
-    compute_matrix_root_inverse_residuals,
-    matrix_eigenvectors,
-    matrix_inverse_root,
-)
+from matrix_functions import check_diagonal, matrix_eigenvectors, matrix_inverse_root
 
 from matrix_functions_types import EigenvectorConfig, RootInvConfig
 from optimizer_modules import OptimizerModule
@@ -991,53 +986,6 @@ class ShampooPreconditionerList(
                         f"Exceeded tolerance for number of failed inverse root computations for {kronecker_factors.factor_matrix_indices}."
                     ),
                 )
-
-    @torch.compiler.disable
-    def compute_root_inverse_residuals(
-        self,
-    ) -> tuple[tuple[Tensor, ...], tuple[Tensor, ...]]:
-        root_inv_config = cast(
-            RootInvConfig,
-            self._preconditioner_config.amortized_computation_config,
-        )
-        relative_errors = []
-        relative_residuals = []
-
-        for kronecker_factors, root in zip(
-            self._masked_kronecker_factors_list,
-            self._masked_root_list,
-            strict=True,
-        ):
-            for factor_matrix, inv_factor_matrix in zip(
-                kronecker_factors.factor_matrices,
-                kronecker_factors.inv_factor_matrices,
-                strict=True,
-            ):
-                bias_corrected_factor_matrix = factor_matrix / self._bias_correction2
-                (
-                    relative_error,
-                    relative_residual,
-                ) = compute_matrix_root_inverse_residuals(
-                    A=bias_corrected_factor_matrix,
-                    X_hat=inv_factor_matrix,
-                    root=Fraction(
-                        root
-                        / getattr(
-                            root_inv_config,
-                            "exponent_multiplier",
-                            1,
-                        )
-                    ),
-                    epsilon=self._epsilon,
-                    root_inv_config=root_inv_config,
-                )
-                relative_errors.append(relative_error)
-                relative_residuals.append(relative_residual)
-
-        return (
-            tuple(relative_errors),
-            tuple(relative_residuals),
-        )
 
 
 class EigenvalueCorrectedShampooPreconditionerList(

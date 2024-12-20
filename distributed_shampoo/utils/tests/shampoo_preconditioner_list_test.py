@@ -864,48 +864,6 @@ class ShampooPreconditionerListTest(AbstractTest.BaseShampooPreconditionerListTe
         test_inverse_roots_from_override(inv_root_override=2)
         test_inverse_roots_from_override(inv_root_override=[2, 2, 2])
 
-    def test_compute_root_inverse_residuals(self) -> None:
-        """
-        Create a factor matrix of size 2x2 by updating preconditioners in two steps:
-            Step 1. G1 = [1, 0]^T
-            Step 2. G2 = [0, 1]^T
-
-            L = G1 * G1^T + G2 * G2^T = [[1, 0], [0, 1]]
-        """
-        preconditioner_list = ShampooPreconditionerList(
-            block_list=(self._params[0],),
-            state=self._state,
-            block_info_list=(self._block_info_list[0],),
-            distributor_selector=(self._distributor_selector[0],),
-            preconditioner_config=DefaultShampooConfig,
-            epsilon=0.0,
-        )
-
-        masked_grad_list1 = (torch.tensor([1.0, 0.0]),)
-        masked_grad_list2 = (torch.tensor([0.0, 1.0]),)
-        preconditioner_list.update_preconditioners(
-            masked_grad_list=masked_grad_list1,
-            step=torch.tensor(1),
-            perform_amortized_computation=False,
-        )
-        preconditioner_list.update_preconditioners(
-            masked_grad_list=masked_grad_list2,
-            step=torch.tensor(2),
-            perform_amortized_computation=True,
-        )
-
-        # Expect no relative errors and residuals because L is a diagonal matrix.
-        (
-            relative_errors,
-            relative_residuals,
-        ) = preconditioner_list.compute_root_inverse_residuals()
-
-        expected_relative_errors = (torch.tensor(0.0),)
-        expected_relative_residuals = (torch.tensor(0.0),)
-
-        self.assertTupleEqual(relative_errors, expected_relative_errors)
-        self.assertTupleEqual(relative_residuals, expected_relative_residuals)
-
 
 class EigenvalueCorrectedShampooPreconditionerListTest(
     AbstractTest.BaseShampooPreconditionerListTest

@@ -91,7 +91,7 @@ from distributed_shampoo.utils.shampoo_preconditioner_list import (
 )
 from distributed_shampoo.utils.shampoo_utils import compress_list
 
-from matrix_functions_types import EigenConfig, RootInvConfig
+from matrix_functions_types import EigenConfig
 from torch.optim.optimizer import ParamsT, StateDict
 
 logger: logging.Logger = logging.getLogger(__name__)
@@ -285,8 +285,6 @@ class DistributedShampoo(torch.optim.Optimizer):
             to different distributed training frameworks, such as distributed-data parallel (DDP) training.
             Based on the configuration, determines which version of Shampoo to use. (Default: None)
         preconditioner_dtype (torch.dtype): Data type for preconditioner. (Default: None)
-        track_root_inv_residuals (bool): Track errors and residuals of root inverse. For debugging purposes.
-            (Default: False)
         preconditioner_config (PreconditionerConfig): Configuration for preconditioner computation.
             If this field is an instance ShampooPreconditionerConfig, Shampoo uses the root inverse of the preconditioner.
             If this field is an instance EigenvalueCorrectedShampooPreconditionerConfig Shampoo uses corrected the eigenvalues/running Adam in the eigenbasis of preconditioner.
@@ -317,7 +315,6 @@ class DistributedShampoo(torch.optim.Optimizer):
         shampoo_pt2_compile_config: ShampooPT2CompileConfig | None = None,
         distributed_config: DistributedConfig | None = None,
         preconditioner_dtype: torch.dtype = torch.float,
-        track_root_inv_residuals: bool = False,
         preconditioner_config: PreconditionerConfig = DefaultShampooConfig,
     ) -> None:
         # Hyperparameter checks.
@@ -373,8 +370,6 @@ class DistributedShampoo(torch.optim.Optimizer):
                 raise ValueError(
                     f"Invalid exponent override: {inv_root_override}. Must be >= 0."
                 )
-        if track_root_inv_residuals:
-            logger.setLevel(logging.DEBUG)
 
         # Provide warning/error for start_preconditioning_step.
         if start_preconditioning_step == -1:
@@ -404,13 +399,6 @@ class DistributedShampoo(torch.optim.Optimizer):
         amortized_computation_config = (
             preconditioner_config.amortized_computation_config
         )
-        if (
-            not isinstance(amortized_computation_config, RootInvConfig)
-        ) and track_root_inv_residuals:
-            raise ValueError(
-                f"{track_root_inv_residuals=} has to be set to False when {amortized_computation_config=} is not an instance of RootInvConfig."
-            )
-
         # Set exponent multiplier if this is not provided.
         if (
             isinstance(amortized_computation_config, EigenConfig)
@@ -447,9 +435,6 @@ class DistributedShampoo(torch.optim.Optimizer):
                 PRECONDITIONER_CONFIG: preconditioner_config,
             },
         )
-
-        # Initialize non-group-related fields.
-        self._track_root_inv_residuals = track_root_inv_residuals
 
         # Initialize list containing group state dictionaries.
         self._per_group_state_lists: list[dict[str, Any]] = [
@@ -781,53 +766,6 @@ class DistributedShampoo(torch.optim.Optimizer):
 
     @torch.no_grad()
     @torch.compiler.disable
-    def _compute_and_log_root_inverse_residuals(
-        self,
-    ) -> None:
-        """Compute root inverse residuals over all preconditioners.
-
-        Uses infinity norm to evaluate residuals and errors.
-        """
-
-        # Compute relative errors/residuals for each group.
-        for (group_index, group), state_lists in zip(
-            enumerate(self.param_groups), self._per_group_state_lists, strict=True
-        ):
-            if group[PRECONDITIONER_DTYPE] == torch.float64:
-                expected_relative_error = 1e-7
-            elif group[PRECONDITIONER_DTYPE] == torch.float32:
-                expected_relative_error = 1e-3
-            else:
-                logger.warning(
-                    "Expected relative error/residual not supported for precision lower than float32."
-                )
-                continue
-
-            relative_errors, relative_residuals = map(
-                torch.stack,
-                state_lists[
-                    SHAMPOO_PRECONDITIONER_LIST
-                ].compute_root_inverse_residuals(),
-            )
-            quantiles = torch.as_tensor(
-                [0, 0.25, 0.5, 0.75, 1],
-                device=relative_errors.device,
-                dtype=relative_errors.dtype,
-            )
-            logger.debug(f"Group Index: {group_index}")
-            logger.debug(f"Expect Relative Error <= {expected_relative_error}")
-            logger.debug(
-                f"Relative Error (||X - X_hat||_inf / ||X||_inf)       Average: {torch.mean(relative_errors)}, "
-                f"Quantiles [0, 25, 50, 75, 100]: {torch.quantile(relative_errors, quantiles, interpolation='nearest')}"
-            )
-            logger.debug(
-                f"Relative Residual (||X_hat^-r - A||_inf / ||A||_inf) Average: {torch.mean(relative_residuals)}, "
-                "Quantiles [0, 25, 50, 75, 100]: "
-                f"{torch.quantile(relative_residuals, quantiles, interpolation='nearest')}"
-            )
-
-    @torch.no_grad()
-    @torch.compiler.disable
     def _precondition_and_grafting(
         self,
         state_lists: dict[str, Any],
@@ -900,8 +838,6 @@ class DistributedShampoo(torch.optim.Optimizer):
             step=step,
             perform_amortized_computation=perform_amortized_computation,
         )
-        if perform_amortized_computation and self._track_root_inv_residuals:
-            self._compute_and_log_root_inverse_residuals()
         if grafting_config_not_none:
             state_lists[GRAFTING_PRECONDITIONER_LIST].update_preconditioners(
                 masked_grad_list=state_lists[MASKED_BLOCKED_GRADS],
