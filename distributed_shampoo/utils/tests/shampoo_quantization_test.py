@@ -18,6 +18,7 @@ from distributed_shampoo.utils import shampoo_quantization
 from distributed_shampoo.utils.shampoo_block_info import BlockInfo
 from distributed_shampoo.utils.shampoo_quantization import (
     _FLOAT_DTYPES,
+    DequantizeQuantizedTensorListContext,
     QuantizedTensor,
     QuantizedTensorList,
 )
@@ -169,12 +170,31 @@ class QuantizedTensorListTest(unittest.TestCase):
         for i, tensor in enumerate(quantized_tensor_list.quantized_value):
             self.assertFalse(torch.any(torch.nonzero(tensor - i)))
 
+    def test_len(self) -> None:
+        self.assertEqual(len(self._quantized_tensors), 5)
+
     def test_compress(self) -> None:
         selector = (True, False, True, False, True)
         compressed_quantized_tensors = self._quantized_tensors.compress(selector)
         self.assertEqual(
             len(compressed_quantized_tensors.quantized_value), selector.count(True)
         )
+
+    def test_dequantize_with_same_quantize_dtype_and_computation_dtype(self) -> None:
+        quantized_tensors = QuantizedTensorList(
+            tuple((torch.clone(tensor), None, None) for tensor in self._base_tensors),
+            # Explicitly set quantized_dtype and computation_dtype to be the same.
+            quantized_dtype=torch.float16,
+            computation_dtype=torch.float16,
+        )
+
+        # Value should be the same as the original tensor.
+        torch.testing.assert_close(
+            quantized_tensors.dequantize(), quantized_tensors.quantized_value
+        )
+
+        # Because the quantized_dtype and computation_dtype are the same, it never creates dequantized_value_list.
+        self.assertFalse(quantized_tensors.is_dequantized_stored())
 
     def test_dequantize_quantize(self) -> None:
         deq_tensors = self._quantized_tensors.dequantize()
@@ -197,15 +217,18 @@ class QuantizedTensorListTest(unittest.TestCase):
                 torch.testing.assert_close(quantized_tensor, tensor + delta)
 
         # Calling quantize() while dequantize_value_list exists should trigger warning message.
-        self._quantized_tensors.dequantize_()
-        with self.assertLogs(
-            level="WARNING",
-        ) as cm:
-            self._quantized_tensors.quantize(deq_tensors)
-            self.assertIn(
-                "Existing stored dequantized values.\nWriting quantized values with input tensor_list without using these stored dequantized values...",
-                [r.msg for r in cm.records],
-            )
+        # Leverage DequantizeQuantizedTensorListContext to call dequantize_() and quantize_() automatically.
+        with DequantizeQuantizedTensorListContext(
+            quantized_tensor_list=self._quantized_tensors
+        ):
+            with self.assertLogs(
+                level="WARNING",
+            ) as cm:
+                self._quantized_tensors.quantize(deq_tensors)
+                self.assertIn(
+                    "Existing stored dequantized values.\nWriting quantized values with input tensor_list without using these stored dequantized values...",
+                    [r.msg for r in cm.records],
+                )
 
     def test_inplace_dequantize_quantize(self) -> None:
         # Calling quantize_() before dequantize_() should trigger warning message.
