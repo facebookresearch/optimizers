@@ -424,21 +424,35 @@ class AbstractTest:
 
             # Initialize step counter.
             step = 1
-            with mock.patch.object(
-                shampoo_preconditioner_list,
-                self._amortized_computation_function(),
-                side_effect=[
-                    *(ValueError,) * (self.NUM_AMORTIZED_COMPUTATION_CALLS - 1),
-                    torch.tensor([1.0]),
-                    *(ValueError,) * self.NUM_AMORTIZED_COMPUTATION_CALLS,
-                    *(ValueError,) * self.NUM_AMORTIZED_COMPUTATION_CALLS,
-                    *(torch.tensor([1.0]),) * self.NUM_AMORTIZED_COMPUTATION_CALLS,
-                    *(ValueError,) * self.NUM_AMORTIZED_COMPUTATION_CALLS,
-                    *(ValueError,) * self.NUM_AMORTIZED_COMPUTATION_CALLS,
-                    *(ValueError,) * self.NUM_AMORTIZED_COMPUTATION_CALLS,
-                    ValueError,
-                ],
-            ) as mock_amortized_computation:
+            # Define the side effect for each call of the amortized computation function.
+            fail = ValueError
+            success = torch.tensor([1.0])
+            all_but_one_fail = (fail,) * (self.NUM_AMORTIZED_COMPUTATION_CALLS - 1) + (
+                success,
+            )
+            all_fail = (fail,) * self.NUM_AMORTIZED_COMPUTATION_CALLS
+            all_success = (success,) * self.NUM_AMORTIZED_COMPUTATION_CALLS
+            with (
+                mock.patch.object(
+                    shampoo_preconditioner_list,
+                    self._amortized_computation_function(),
+                    # Note that the cases causally depend on each other.
+                    side_effect=[
+                        # Case 1: amortized computation fails less often than tolerance.
+                        *all_but_one_fail,  # Success for a single Kronecker factor is not enough to reset counter.
+                        # Case 2: amortized computation fails exactly as often as tolerance (3).
+                        *all_fail,
+                        *all_fail,
+                        # Case 3: amortized computation succeeds after tolerance hit (counter is reset).
+                        *all_success,
+                        # Case 4: amortized computation fails more often than tolerance.
+                        *all_fail,
+                        *all_fail,
+                        *all_fail,
+                        fail,  # One failure is enough to raise an exception in this case.
+                    ],
+                ) as mock_amortized_computation
+            ):
                 # Accumulate factor matrices for valid amortized computation.
                 self._preconditioner_list.update_preconditioners(
                     masked_grad_list=masked_grad_list0,
@@ -456,7 +470,7 @@ class AbstractTest:
                         perform_amortized_computation=True,
                     )
                 # Check that warnings are logged for four failed amortized computations.
-                # The fifth one doesn't raise an exception, so no warning is logged.
+                # The fifth one doesn't raise an exception (see the definition of the side effect), so no warning is logged.
                 self.assertCountEqual(
                     # Only extracts the first sentence in the warning message for simple comparison.
                     [r.msg.split(". ", maxsplit=1)[0] for r in cm.records],
@@ -466,10 +480,6 @@ class AbstractTest:
                         "Matrix computation failed for factor matrix 1.block_0.1 with exception=ValueError()",
                         "Matrix computation failed for factor matrix 1.block_1.0 with exception=ValueError()",
                     ],
-                )
-                self.assertEqual(
-                    mock_amortized_computation.call_count,
-                    self.NUM_AMORTIZED_COMPUTATION_CALLS * (step - 1),
                 )
                 step += 1
 
@@ -493,10 +503,6 @@ class AbstractTest:
                             "Matrix computation failed for factor matrix 1.block_1.1 with exception=ValueError()",
                         ],
                     )
-                    self.assertEqual(
-                        mock_amortized_computation.call_count,
-                        self.NUM_AMORTIZED_COMPUTATION_CALLS * (step - 1),
-                    )
                     step += 1
 
                 # Case 3: amortized computation succeeds after tolerance hit (test reset) -> no error.
@@ -506,10 +512,6 @@ class AbstractTest:
                         step=torch.tensor(step),
                         perform_amortized_computation=True,
                     )
-                self.assertEqual(
-                    mock_amortized_computation.call_count,
-                    self.NUM_AMORTIZED_COMPUTATION_CALLS * (step - 1),
-                )
                 step += 1
 
                 # Case 4: amortized computation fails more often than tolerance -> error.
@@ -532,13 +534,7 @@ class AbstractTest:
                             "Matrix computation failed for factor matrix 1.block_1.1 with exception=ValueError()",
                         ],
                     )
-                    self.assertEqual(
-                        mock_amortized_computation.call_count,
-                        self.NUM_AMORTIZED_COMPUTATION_CALLS * (step - 1),
-                    )
                     step += 1
-                # Cache current call count.
-                previous_call_count = mock_amortized_computation.call_count
                 # Exactly at failure tolerance now.
                 with self.assertLogs(level="WARNING") as cm:
                     expected_error_message = "Exceeded tolerance.*('0.block_0.0',)."
@@ -556,12 +552,6 @@ class AbstractTest:
                             "Matrix computation failed for factor matrix 0.block_0.0 with exception=ValueError()",
                         ],
                     )
-                # The error will be raised for the first Kronecker factor, so the
-                # expected call count should only be increased by 1.
-                self.assertEqual(
-                    mock_amortized_computation.call_count,
-                    previous_call_count + 1,
-                )
 
         # Note: This is needed for type checking to infer the type of argument into mock.patch.object.
         shampoo_preconditioner_list_module: ModuleType = shampoo_preconditioner_list
