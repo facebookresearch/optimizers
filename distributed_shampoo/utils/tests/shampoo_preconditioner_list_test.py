@@ -131,8 +131,6 @@ class PreconditionerListTest(unittest.TestCase):
             shampoo_preconditioner_list,
             "compress_list",
         ) as mock_compress_list:
-            # Count the number of list compressions at the preconditioner list level, including compressions of QuantizedTensorList.
-            # Each call to compress() under QuantizedTensorList counts once, though note that it calls compress_list() three times inside.
             self.assertIsNone(
                 self._preconditioner_list.compress_preconditioner_list(
                     local_grad_selector=(True,) * len(self._block_list)
