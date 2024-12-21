@@ -186,7 +186,7 @@ class AdagradPreconditionerList(PreconditionerList):
             # Instantiate AdaGrad optimizer state for this block.
             preconditioner_index = str(param_index) + "." + str(block_index)
             block_state[ADAGRAD] = block_info.allocate_zeros_tensor(
-                shape=block.size(),
+                size=block.size(),
                 dtype=block.dtype,
                 device=block.device,
             )
@@ -436,7 +436,7 @@ class BaseShampooPreconditionerList(
         """
         factor_matrices = tuple(
             block_info.allocate_zeros_tensor(
-                shape=(dim, dim),
+                size=(dim, dim),
                 dtype=self._factor_matrix_dtype,
                 device=block_info.param.device,
             )
@@ -773,7 +773,7 @@ class ShampooPreconditionerList(
     ) -> ShampooKroneckerFactorsState:
         inv_factor_matrices = tuple(
             block_info.allocate_zeros_tensor(
-                shape=(dim, dim),
+                size=(dim, dim),
                 dtype=block.dtype,
                 device=block_info.param.device,
             )
@@ -930,14 +930,14 @@ class EigenvalueCorrectedShampooPreconditionerList(
     ) -> EigenvalueCorrectedShampooKroneckerFactorsState:
         factor_matrices_eigenvectors = tuple(
             block_info.allocate_zeros_tensor(
-                shape=(dim, dim),
+                size=(dim, dim),
                 dtype=block.dtype,
                 device=block_info.param.device,
             )
             for dim in dims
         )
         corrected_eigenvalues = block_info.allocate_zeros_tensor(
-            shape=tuple(dims),
+            size=tuple(dims),
             dtype=block.dtype,
             device=block_info.param.device,
         )

@@ -62,7 +62,7 @@ class QuantizedTensor(OptimizerModule):
         block_info: BlockInfo,
     ) -> "QuantizedTensor":
         quantized_values = block_info.allocate_zeros_tensor(
-            shape=dequantized_values.shape,
+            size=dequantized_values.shape,
             dtype=quantized_dtype,
             device=dequantized_values.device,
         )
