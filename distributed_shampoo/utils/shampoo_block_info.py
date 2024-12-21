@@ -9,6 +9,7 @@ LICENSE file in the root directory of this source tree.
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from functools import partial
 
 import torch
 from torch import Tensor
@@ -33,21 +34,19 @@ class BlockInfo:
                 parameter p1 on rank 0 will have the composable_block_ids being (0, "rank_0-block_0"), while block 0 of parameter p1
                 on rank 1 will have composable_block_ids being (0, "rank_1-block_0").
 
-        allocate_zeros_tensor (Callable): A function that returns a zero-initialized tensor.
+        allocate_zeros_tensor (Callable[..., Tensor]): A function that returns a zero-initialized tensor.
             This tensor must be saved in the state dictionary for checkpointing.
-            This tensor might be DTensor.  get_tensor() must be used to access the value.
-            Its function signature is (shape, dtype, device) -> Tensor.
-            (Default: lambda shape, dtype, device: torch.zeros(shape, dtype=dtype, device=device))
-        get_tensor (Callable): A function that takes a tensor allocated by allocator and returns its local tensor.
+            This tensor might be DTensor. get_tensor() must be used to access the value.
+            Its function signature is (size, dtype, device) -> Tensor.
+            (Default: lambda size, dtype, device: torch.zeros(size, dtype=dtype, device=device))
+        get_tensor (Callable[..., Tensor]): A function that takes a tensor allocated by allocator and returns its local tensor.
             Its function signature is (tensor: Tensor) -> Tensor.
             (Default: lambda tensor: tensor)
     """
 
     param: Tensor
     composable_block_ids: tuple[int, str]
-    allocate_zeros_tensor: Callable[..., Tensor] = (
-        lambda shape, dtype, device: torch.zeros(size=shape, dtype=dtype, device=device)
-    )
+    allocate_zeros_tensor: Callable[..., Tensor] = partial(torch.zeros)
     get_tensor: Callable[..., Tensor] = lambda tensor_obj: tensor_obj
 
 

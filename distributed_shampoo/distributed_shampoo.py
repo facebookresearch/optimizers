@@ -604,7 +604,7 @@ class DistributedShampoo(torch.optim.Optimizer):
                 block_state = self.state[block_info.param][block_index]
 
                 block_state[MOMENTUM] = block_info.allocate_zeros_tensor(
-                    shape=block.size(),
+                    size=block.size(),
                     dtype=block.dtype,
                     device=block.device,
                 )
@@ -647,7 +647,7 @@ class DistributedShampoo(torch.optim.Optimizer):
                 block_state = self.state[block_info.param][block_index]
 
                 block_state[FILTERED_GRAD] = block_info.allocate_zeros_tensor(
-                    shape=block.size(),
+                    size=block.size(),
                     dtype=block.dtype,
                     device=block.device,
                 )
