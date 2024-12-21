@@ -90,14 +90,6 @@ class DistributorTest(DistributorInterfaceTest):
             actual_masked_blocked_params, expected_masked_blocked_params
         )
 
-    def test_distributor_selector(self) -> None:
-        # Two blocks from the linear layer, and one block from the bias layer.
-        expected_distributor_selector = (True, True, True)
-        self.assertEqual(
-            self._distributor.distributor_selector,
-            expected_distributor_selector,
-        )
-
     def test_local_grad_selector(self) -> None:
         # Explicitly disable the gradient of the bias layer and call merge_and_block_gradients()
         # to update the local gradient selector for the bias layer (i.e., 3rd block).
@@ -109,17 +101,6 @@ class DistributorTest(DistributorInterfaceTest):
         self.assertEqual(
             self._distributor.local_grad_selector,
             expected_local_grad_selector,
-        )
-
-    def test_global_blocked_params(self) -> None:
-        expected_global_params = (
-            torch.zeros(5, 5, dtype=torch.float),
-            torch.zeros(5, 5, dtype=torch.float),
-            torch.zeros(5, dtype=torch.float),
-        )
-        torch.testing.assert_close(
-            self._distributor.global_blocked_params,
-            expected_global_params,
         )
 
     def test_local_blocked_params(self) -> None:
@@ -135,8 +116,8 @@ class DistributorTest(DistributorInterfaceTest):
             expected_local_params,
         )
 
-    def test_global_block_info_list(self) -> None:
-        expected_global_block_info_list = (
+    def test_local_block_info_list(self) -> None:
+        expected_local_block_info_list = (
             BlockInfo(
                 param=self._model.linear_layers[0].weight,
                 composable_block_ids=(0, "block_0"),
@@ -151,8 +132,8 @@ class DistributorTest(DistributorInterfaceTest):
             ),
         )
         self.assertEqual(
-            self._distributor.global_block_info_list,
-            expected_global_block_info_list,
+            self._distributor.local_block_info_list,
+            expected_local_block_info_list,
         )
 
     def test_merge_and_block_gradients(self) -> None:

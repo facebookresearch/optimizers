@@ -65,10 +65,10 @@ class FullyShardDistributor(Distributor):
         return (param_index, f"rank_{rank}-block_{block_index}")
 
     @torch.no_grad()
-    def _construct_global_block_info_list(
+    def _construct_local_block_info_list(
         self,
-    ) -> None:
-        """Construct global block info list from param_group and num_blocks_within_param."""
+    ) -> tuple[BlockInfo, ...]:
+        """Construct local block info list from param_group and num_blocks_within_param."""
         rank = dist.get_rank()
 
         # Call `super()` instead of `self` as a performance optimization.
@@ -77,7 +77,7 @@ class FullyShardDistributor(Distributor):
             lambda p: p.to_local().numel() > 0,  # type: ignore[arg-type]
             super()._get_params_or_grads(),
         )
-        self._global_block_info_list = tuple(
+        return tuple(
             BlockInfo(
                 param=param,
                 composable_block_ids=self._construct_composable_block_ids(
