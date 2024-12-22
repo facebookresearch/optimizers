@@ -580,7 +580,7 @@ class HybridShardDistributor(DistributorInterface):
 
     def _allocate_zeros_distributed_tensor(
         self,
-        shape: tuple[int, ...],
+        size: tuple[int, ...],
         dtype: torch.dtype,
         device: torch.device,
         group_source_rank: int,
@@ -588,12 +588,9 @@ class HybridShardDistributor(DistributorInterface):
         """Instantiates distributed tensor using DTensor.
 
         Args:
-            shape (shape type accepted by torch.zeros() including tuple[int, ...]):
-                Shape of desired tensor.
-            dtype (dtype type accepted by torch.zeros() including torch.dtype):
-                DType of desired tensor.
-            device (device type accepted by torch.zeros() including torch.device):
-                Device of desired tensor.
+            size (tuple[int, ...]): Shape of desired tensor.
+            dtype (torch.dtype): DType of desired tensor.
+            device (torch.device): Device of desired tensor.
             group_source_rank (int): Group rank (with respect to the sharded group of
                 the 2D submesh) that determines which ranks the DTensor is allocated on.
 
@@ -625,7 +622,7 @@ class HybridShardDistributor(DistributorInterface):
         )[group_source_rank]
 
         return dtensor_zeros(
-            shape,
+            size,
             dtype=dtype,
             device_mesh=replicate_submesh,
             placements=[dtensor.Replicate()],
