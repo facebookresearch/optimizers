@@ -627,6 +627,45 @@ class BaseShampooPreconditionerList(
                 f"{factor_matrix.isinf().any()=}, {factor_matrix.isnan().any()=}."
             )
 
+    def _raise_exception_if_failure_tolerance_exceeded(
+        self,
+        success_tracker: list[bool],
+        preconditioner_index: int,
+        exception: Exception,
+    ) -> None:
+        """Raises an exception if the number of failed amortized computations exceeds the tolerance.
+
+        Resets the counter at the given index when all amortized computations are successful.
+
+        Args:
+            success_tracker (list[bool]): A list of booleans indicating whether the amortized computation was successful.
+            preconditioner_index (int): The index of the preconditioner.
+            exception (Exception): The exception to raise.
+
+        Raises:
+            exception (Exception): The exception to raise.
+
+        """
+        if all(success_tracker):
+            # Reset counter for failed amortized computations.
+            self._masked_failed_amortized_computation_counter_list[
+                preconditioner_index
+            ] = 0
+        else:
+            # Increment counter for failed amortized computations.
+            self._masked_failed_amortized_computation_counter_list[
+                preconditioner_index
+            ] += 1
+            # Raise the exception if the tolerance at the given index is exceeded.
+            failure_counter = self._masked_failed_amortized_computation_counter_list[
+                preconditioner_index
+            ]
+            tolerance = (
+                self._preconditioner_config.num_tolerated_failed_amortized_computations
+            )
+            if failure_counter > tolerance:
+                raise exception
+
     def update_preconditioners(
         self,
         masked_grad_list: tuple[Tensor, ...],
@@ -678,10 +717,16 @@ class BaseShampooPreconditionerList(
             self._inv_root_override,
             self._local_order_list,
         )
+        self._local_failed_amortized_computation_counter_list: list[int] = [0] * len(
+            self._local_kronecker_factors_list
+        )
 
         # Masked lists are the list of active preconditioners or values after filtering out gradients with None.
         self._masked_order_list: tuple[int, ...] = self._local_order_list
         self._masked_root_list: tuple[int, ...] = self._local_root_list
+        self._masked_failed_amortized_computation_counter_list: list[int] = (
+            self._local_failed_amortized_computation_counter_list
+        )
         self._masked_kronecker_factors_list: tuple[
             ShampooKroneckerFactorsListType,
             ...,
@@ -713,6 +758,14 @@ class BaseShampooPreconditionerList(
             )
             self._masked_root_list: tuple[int, ...] = compress_list(  # type: ignore[no-redef]
                 self._local_root_list, local_grad_selector
+            )
+            self._masked_failed_amortized_computation_counter_list: list[int] = (  # type: ignore[no-redef]
+                list(
+                    compress_list(
+                        self._local_failed_amortized_computation_counter_list,
+                        local_grad_selector,
+                    )
+                )
             )
             self._masked_kronecker_factors_list: tuple[  # type: ignore[no-redef]
                 ShampooKroneckerFactorsListType,
@@ -850,11 +903,14 @@ class ShampooPreconditionerList(
         with profiler.record_function(
             f"## {self.__class__.__name__}:{self._amortized_computation.__name__} ##"
         ):
-            for kronecker_factors, root in zip(
-                self._masked_kronecker_factors_list,
-                self._masked_root_list,
-                strict=True,
+            for idx, (kronecker_factors, root) in enumerate(
+                zip(
+                    self._masked_kronecker_factors_list,
+                    self._masked_root_list,
+                    strict=True,
+                )
             ):
+                success_tracker: list[bool] = []
                 for (
                     factor_matrix,
                     inv_factor_matrix,
@@ -898,8 +954,11 @@ class ShampooPreconditionerList(
                             epsilon=self._epsilon,
                             is_diagonal=bool(is_factor_matrix_diagonal),
                         ).to(dtype=inv_factor_matrix.dtype)
+                        # Add success to success tracker.
+                        success_tracker.append(True)
                     except Exception as exception:
-                        # Reuse previous matrix if matrix inverse root computation fails.
+                        # Add failure to success tracker.
+                        success_tracker.append(False)
                         logger.warning(
                             f"Matrix computation failed for factor matrix {factor_matrix_index} "
                             f"with {exception=}. Using previous inverted factor matrix and continuing..."
@@ -918,6 +977,15 @@ class ShampooPreconditionerList(
                             f"To mitigate, check factor matrix before the matrix computation: {bias_corrected_factor_matrix=}"
                         )
                     inv_factor_matrix.copy_(computed_inv_factor_matrix)
+
+                # Only reuse previous inverse roots if tolerance is not exceeded.
+                self._raise_exception_if_failure_tolerance_exceeded(
+                    success_tracker=success_tracker,
+                    preconditioner_index=idx,
+                    exception=ValueError(
+                        f"The number of failed inverse root computations for factors {kronecker_factors.factor_matrix_indices} exceeded the allowed tolerance."
+                    ),
+                )
 
 
 class EigenvalueCorrectedShampooPreconditionerList(
@@ -1098,7 +1166,10 @@ class EigenvalueCorrectedShampooPreconditionerList(
         with profiler.record_function(
             f"## {self.__class__.__name__}:{self._amortized_computation.__name__} ##"
         ):
-            for kronecker_factors in self._masked_kronecker_factors_list:
+            for idx, kronecker_factors in enumerate(
+                self._masked_kronecker_factors_list
+            ):
+                success_tracker: list[bool] = []
                 for (
                     factor_matrix,
                     factor_matrix_eigenvectors,
@@ -1129,8 +1200,11 @@ class EigenvalueCorrectedShampooPreconditionerList(
                             eigenvector_computation_config=eigenvector_computation_config,
                             is_diagonal=bool(is_factor_matrix_diagonal),
                         )
+                        # Add success to success tracker.
+                        success_tracker.append(True)
                     except Exception as exception:
-                        # Reuse previous matrix if matrix eigenvector computation fails.
+                        # Add failure to success tracker.
+                        success_tracker.append(False)
                         logger.warning(
                             f"Matrix computation failed for factor matrix {factor_matrix_index} "
                             f"with {exception=}. Using previous factor matrix eigenvectors and continuing..."
@@ -1149,3 +1223,12 @@ class EigenvalueCorrectedShampooPreconditionerList(
                             f"To mitigate, check factor matrix before the matrix computation: {factor_matrix=}"
                         )
                     factor_matrix_eigenvectors.copy_(computed_eigenvectors)
+
+                # Only reuse previous eigenvectors if tolerance is not exceeded.
+                self._raise_exception_if_failure_tolerance_exceeded(
+                    success_tracker=success_tracker,
+                    preconditioner_index=idx,
+                    exception=ValueError(
+                        f"The number of failed eigenvector computations for factors {kronecker_factors.factor_matrix_indices} exceeded the allowed tolerance."
+                    ),
+                )
