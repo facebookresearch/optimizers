@@ -55,7 +55,6 @@ class FSDPDistributor(DistributorInterface):
         self._global_num_blocks_per_split_param: tuple[int, ...] = ()
 
         super().__init__(param_group)
-        self._construct_global_block_info_list()
 
         # Initialize selectors and local blocked (masked) parameters.
         self._local_grad_selector: tuple[bool, ...] = (True,) * len(
@@ -66,6 +65,9 @@ class FSDPDistributor(DistributorInterface):
             self._global_blocked_params
         )
         self._local_blocked_params: tuple[Tensor, ...] = self._global_blocked_params
+        self._local_block_info_list: tuple[BlockInfo, ...] = (
+            self._construct_local_block_info_list()
+        )
 
     @torch.no_grad()
     def update_params(
@@ -102,12 +104,13 @@ class FSDPDistributor(DistributorInterface):
         """
         return (param_index, f"rank_{rank}-block_{block_index}")
 
-    def _construct_global_block_info_list(
+    @torch.no_grad()
+    def _construct_local_block_info_list(
         self,
-    ) -> None:
-        """Construct global block info list from param_group and num_blocks_within_param."""
+    ) -> tuple[BlockInfo, ...]:
+        """Construct local block info list from param_group and num_blocks_within_param."""
         rank = dist.get_rank()
-        self._global_block_info_list = tuple(
+        return tuple(
             BlockInfo(
                 param=param,
                 composable_block_ids=self._construct_composable_block_ids(
