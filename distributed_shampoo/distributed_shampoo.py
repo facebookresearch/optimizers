@@ -516,10 +516,9 @@ class DistributedShampoo(torch.optim.Optimizer):
                 )
 
             state_lists[SHAMPOO_PRECONDITIONER_LIST] = preconditioner_list_cls(
-                block_list=state_lists[DISTRIBUTOR].global_blocked_params,
+                block_list=state_lists[DISTRIBUTOR].local_blocked_params,
                 state=self.state,
-                block_info_list=state_lists[DISTRIBUTOR].global_block_info_list,
-                distributor_selector=state_lists[DISTRIBUTOR].distributor_selector,
+                block_info_list=state_lists[DISTRIBUTOR].local_block_info_list,
                 preconditioner_config=group[PRECONDITIONER_CONFIG],
                 beta2=group[BETAS][1],
                 epsilon=group[EPSILON],
@@ -537,7 +536,7 @@ class DistributedShampoo(torch.optim.Optimizer):
                 state_lists[GRAFTING_PRECONDITIONER_LIST] = None
             elif type(group[GRAFTING_CONFIG]) is SGDGraftingConfig:
                 state_lists[GRAFTING_PRECONDITIONER_LIST] = SGDPreconditionerList(
-                    block_list=state_lists[DISTRIBUTOR].global_blocked_params,
+                    block_list=state_lists[DISTRIBUTOR].local_blocked_params,
                 )
             elif type(group[GRAFTING_CONFIG]) in (
                 AdaGradGraftingConfig,
@@ -545,10 +544,9 @@ class DistributedShampoo(torch.optim.Optimizer):
                 AdamGraftingConfig,
             ):
                 state_lists[GRAFTING_PRECONDITIONER_LIST] = AdagradPreconditionerList(
-                    block_list=state_lists[DISTRIBUTOR].global_blocked_params,
+                    block_list=state_lists[DISTRIBUTOR].local_blocked_params,
                     state=self.state,
-                    block_info_list=state_lists[DISTRIBUTOR].global_block_info_list,
-                    distributor_selector=state_lists[DISTRIBUTOR].distributor_selector,
+                    block_info_list=state_lists[DISTRIBUTOR].local_block_info_list,
                     beta2=(
                         1.0
                         if type(group[GRAFTING_CONFIG]) is AdaGradGraftingConfig
@@ -565,7 +563,7 @@ class DistributedShampoo(torch.optim.Optimizer):
     def _instantiate_steps(self) -> None:
         for state_lists in self._per_group_state_lists:
             assert (
-                len(state_lists[DISTRIBUTOR].global_block_info_list) > 0
+                len(state_lists[DISTRIBUTOR].local_block_info_list) > 0
             ), "There is no params in your param_group. Please check the instantiation of DistributedShampoo "
             'with param_group containing no params. For example, DistributedShampoo(params=[{"params": []}])'
             # NOTE: We instantiate a single step tensor on CPU for each group in order
@@ -575,7 +573,7 @@ class DistributedShampoo(torch.optim.Optimizer):
 
             # In order to ensure that the step counter is checkpointed correctly, we store it
             # as a tensor (which is replicated across all devices) under the first parameter's state.
-            block_info = state_lists[DISTRIBUTOR].global_block_info_list[0]
+            block_info = state_lists[DISTRIBUTOR].local_block_info_list[0]
             self.state[block_info.param][STEP] = state_lists[STEP]
 
     @torch.no_grad()
@@ -586,11 +584,11 @@ class DistributedShampoo(torch.optim.Optimizer):
             if group[MOMENTUM] == 0.0:
                 continue
 
-            # Construct global momentum list.
-            global_momentum_list = []
+            # Construct local momentum list.
+            local_momentum_list = []
             for block, block_info in zip(
-                state_lists[DISTRIBUTOR].global_blocked_params,
-                state_lists[DISTRIBUTOR].global_block_info_list,
+                state_lists[DISTRIBUTOR].local_blocked_params,
+                state_lists[DISTRIBUTOR].local_block_info_list,
                 strict=True,
             ):
                 assert (
@@ -608,15 +606,9 @@ class DistributedShampoo(torch.optim.Optimizer):
                     dtype=block.dtype,
                     device=block.device,
                 )
-                global_momentum_list.append(
-                    block_info.get_tensor(block_state[MOMENTUM])
-                )
+                local_momentum_list.append(block_state[MOMENTUM])
 
-            # We compress the momentum list to only the locally-owned parameter states.
-            state_lists[MOMENTUM_LIST] = compress_list(
-                global_momentum_list,
-                state_lists[DISTRIBUTOR].distributor_selector,
-            )
+            state_lists[MOMENTUM_LIST] = local_momentum_list
             # Here, we set masked momentum list to momentum list because we assume
             # all parameters are active.
             state_lists[MASKED_MOMENTUM_LIST] = state_lists[MOMENTUM_LIST]
@@ -629,11 +621,11 @@ class DistributedShampoo(torch.optim.Optimizer):
             if group[BETAS][0] == 0.0:
                 continue
 
-            # Construct global filtered gradient list.
-            global_filtered_grad_list = []
+            # Construct local filtered gradient list.
+            local_filtered_grad_list = []
             for block, block_info in zip(
-                state_lists[DISTRIBUTOR].global_blocked_params,
-                state_lists[DISTRIBUTOR].global_block_info_list,
+                state_lists[DISTRIBUTOR].local_blocked_params,
+                state_lists[DISTRIBUTOR].local_block_info_list,
                 strict=True,
             ):
                 assert (
@@ -651,15 +643,11 @@ class DistributedShampoo(torch.optim.Optimizer):
                     dtype=block.dtype,
                     device=block.device,
                 )
-                global_filtered_grad_list.append(
+                local_filtered_grad_list.append(
                     block_info.get_tensor(block_state[FILTERED_GRAD])
                 )
 
-            # We compress the momentum list to only the locally-owned parameter states.
-            state_lists[FILTERED_GRAD_LIST] = compress_list(
-                global_filtered_grad_list,
-                state_lists[DISTRIBUTOR].distributor_selector,
-            )
+            state_lists[FILTERED_GRAD_LIST] = local_filtered_grad_list
             # Here, we set masked filtered grad list to filtered grad list because we assume
             # all parameters are active.
             state_lists[MASKED_FILTERED_GRAD_LIST] = state_lists[FILTERED_GRAD_LIST]

@@ -143,8 +143,6 @@ class AdagradPreconditionerList(PreconditionerList):
         state (Mapping[Tensor, Any]): Mapping containing optimizer state.
         block_info_list (tuple[BlockInfo, ...]): List containing corresponding BlockInfo for each block/parameter in block_list.
             Note that this should have the same length as block_list.
-        distributor_selector (tuple[bool, ...]): Distributor selector is a boolean list indicating whether a blocked parameter
-            is selected by the current Distributor.
         beta2 (float): Exponential moving average factor for Adam/RMSprop second moment state. If beta2 = 1., will use
             unweighted sum. (Default: 1.0)
         epsilon (float): Epsilon term for regularizing preconditioner to ensure positive definiteness. (Default: 1e-10)
@@ -158,7 +156,6 @@ class AdagradPreconditionerList(PreconditionerList):
         # type: ignore
         state: Mapping[Tensor, Any],
         block_info_list: tuple[BlockInfo, ...],
-        distributor_selector: tuple[bool, ...],
         beta2: float = 1.0,
         epsilon: float = 1e-10,
         use_bias_correction: bool = True,
@@ -176,7 +173,7 @@ class AdagradPreconditionerList(PreconditionerList):
         # and do not explicitly store them as AdagradPreconditionerList attributes here.
         # This is because the optimizer state is defined per-parameter, but AdagradPreconditionerList is defined
         # across each parameter group (which includes multiple parameters).
-        preconditioner_list = []
+        preconditioner_list: list[Tensor] = []
         for block, block_info in zip(block_list, block_info_list, strict=True):
             param_index, block_index = block_info.composable_block_ids
             if block_index not in state[block_info.param]:
@@ -198,17 +195,12 @@ class AdagradPreconditionerList(PreconditionerList):
             )
 
         # Masked lists are the list of active preconditioners or values after filtering out gradients with None.
-        self._local_preconditioner_list: tuple[Tensor, ...] = compress_list(
-            preconditioner_list, distributor_selector
-        )
+        self._local_preconditioner_list: tuple[Tensor, ...] = tuple(preconditioner_list)
         self._masked_preconditioner_list: tuple[Tensor, ...] = (
             self._local_preconditioner_list
         )
 
-        # Construct lists of dims, bytes, and numels for logging purposes.
-        self._dims_list: tuple[torch.Size, ...] = compress_list(
-            self._dims_list, distributor_selector
-        )
+        # Construct lists of numels and bytes for logging purposes.
         self._numel_list: tuple[int, ...] = tuple(
             preconditioner.numel() for preconditioner in self._local_preconditioner_list
         )
@@ -363,8 +355,6 @@ class BaseShampooPreconditionerList(
         state (Mapping[Tensor, Any]): Mapping containing optimizer state.
         block_info_list (tuple[BlockInfo, ...]): List containing corresponding BlockInfo for each block/parameter in block_list.
             Note that this should have the same length as block_list.
-        distributor_selector (tuple[bool, ...]): Distributor selector is a boolean list indicating whether a blocked parameter
-            is selected by the current Distributor.
         preconditioner_config (PreconditionerConfig): Configuration for preconditioner computation. (Default: DefaultShampooConfig)
         beta2 (float): Exponential moving average factor for Shampoo factor matrices. If beta2 = 1., will use unweighted sum.
             (Default: 1.0)
@@ -384,7 +374,6 @@ class BaseShampooPreconditionerList(
         # type: ignore
         state: Mapping[Tensor, Any],
         block_info_list: tuple[BlockInfo, ...],
-        distributor_selector: tuple[bool, ...],
         preconditioner_config: PreconditionerConfig,
         beta2: float = 1.0,
         epsilon: float = 1e-12,
@@ -416,7 +405,6 @@ class BaseShampooPreconditionerList(
         self._initialize_state_lists(
             block_list=block_list,
             kronecker_factors_list=kronecker_factors_list,
-            distributor_selector=distributor_selector,
         )
 
     def _create_base_kronecker_factors(
@@ -702,16 +690,14 @@ class BaseShampooPreconditionerList(
         self,
         block_list: tuple[Tensor, ...],
         kronecker_factors_list: list[ShampooKroneckerFactorsListType],
-        distributor_selector: tuple[bool, ...],
     ) -> None:
         # Initialize local lists.
-        local_block_list = compress_list(block_list, distributor_selector)
         self._local_kronecker_factors_list: tuple[
             ShampooKroneckerFactorsListType,
             ...,
-        ] = compress_list(kronecker_factors_list, distributor_selector)
+        ] = tuple(kronecker_factors_list)
         self._local_order_list: tuple[int, ...] = tuple(
-            block.dim() for block in local_block_list
+            block.dim() for block in block_list
         )
         self._local_root_list: tuple[int, ...] = self._get_inverse_roots_from_override(
             self._inv_root_override,
@@ -734,9 +720,6 @@ class BaseShampooPreconditionerList(
 
         # Construct lists of bytes and numels for logging purposes.
         # NOTE: These lists are constructed across all blocked parameters.
-        self._dims_list: tuple[torch.Size, ...] = compress_list(
-            self._dims_list, distributor_selector
-        )
         self._numel_list: tuple[int, ...] = tuple(
             sum(2 * dim**2 for dim in dims) for dims in self._dims_list
         )
@@ -744,7 +727,7 @@ class BaseShampooPreconditionerList(
             numel
             * (get_dtype_size(self._factor_matrix_dtype) + get_dtype_size(block.dtype))
             // 2
-            for numel, block in zip(self._numel_list, local_block_list, strict=True)
+            for numel, block in zip(self._numel_list, block_list, strict=True)
         )
 
     def compress_preconditioner_list(
