@@ -187,7 +187,9 @@ class HybridShardDistributor(DistributorInterface):
         )
 
         global_block_info_list = self._construct_global_block_info_list(
-            buffer_size_ranks
+            group_source_ranks=tuple(
+                group_source_rank for _, group_source_rank in buffer_size_ranks
+            )
         )
 
         # Initialize selectors and local blocked (masked) parameters.
@@ -379,9 +381,20 @@ class HybridShardDistributor(DistributorInterface):
 
     @torch.no_grad()
     def _construct_global_block_info_list(
-        self, buffer_size_ranks: tuple[tuple[int, int], ...]
+        self, group_source_ranks: tuple[int, ...]
     ) -> tuple[DDPBlockInfo, ...]:
-        """Construct global block info list from param_group and num_blocks_within_param."""
+        """Construct the global block info list.
+
+        This method creates a list of DDPBlockInfo objects, which contain information
+        about each parameter block, including its composable block IDs, a function to
+        allocate zero tensors, a method to retrieve tensors, and the group source rank.
+
+        Args:
+            group_source_ranks (tuple[int, ...]): A list of assigned ranks for each block.
+
+        Returns:
+            tuple[DDPBlockInfo, ...]: A tuple of DDPBlockInfo objects for each parameter block.
+        """
         # Call `super()` instead of `self` as a performance optimization.
         # This leads to O(1) instead of O(N) complexity to retrieve the parameters.
         non_empty_params: Iterable[DTensor] = filter(
@@ -419,9 +432,9 @@ class HybridShardDistributor(DistributorInterface):
                 generate_pairwise_indices(self._global_num_blocks_per_param),
                 strict=True,
             )
-            for block_index, (_, group_source_rank) in enumerate(
+            for block_index, group_source_rank in enumerate(
                 islice(
-                    buffer_size_ranks, buffer_size_ranks_start, buffer_size_ranks_end
+                    group_source_ranks, buffer_size_ranks_start, buffer_size_ranks_end
                 )
             )
         )

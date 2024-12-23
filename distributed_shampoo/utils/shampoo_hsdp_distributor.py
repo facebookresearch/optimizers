@@ -201,7 +201,9 @@ class HSDPDistributor(DistributorInterface):
         )
 
         global_block_info_list = self._construct_global_block_info_list(
-            buffer_size_ranks
+            group_source_ranks=tuple(
+                group_source_rank for _, group_source_rank in buffer_size_ranks
+            )
         )
         # Initialize selectors and local blocked (masked) parameters.
         self._distributor_selector: tuple[bool, ...] = tuple(
@@ -375,9 +377,20 @@ class HSDPDistributor(DistributorInterface):
 
     @torch.no_grad()
     def _construct_global_block_info_list(
-        self, buffer_size_ranks: tuple[tuple[int, int], ...]
+        self, group_source_ranks: tuple[int, ...]
     ) -> tuple[DDPBlockInfo, ...]:
-        """Construct global block info list from param_group and num_blocks_within_param."""
+        """Construct the global block info list.
+
+        This method creates a list of DDPBlockInfo objects, which contain information
+        about each parameter block, including its composable block IDs, a function to
+        allocate zero tensors, a method to retrieve tensors, and the group source rank.
+
+        Args:
+            group_source_ranks (tuple[int, ...]): A list of assigned ranks for each block.
+
+        Returns:
+            tuple[DDPBlockInfo, ...]: A tuple of DDPBlockInfo objects for each parameter block.
+        """
         # Note that for HSDP, we want to get the rank within each sharded group for the block id.
         # When using a device mesh, 0 corresponds to the replicated group and 1 corresponds to the sharded group.
         sharded_group_rank = self._hsdp_device_mesh.get_local_rank(1)
@@ -408,9 +421,9 @@ class HSDPDistributor(DistributorInterface):
                 generate_pairwise_indices(self._global_num_blocks_per_param),
                 strict=True,
             )
-            for block_index, (_, group_source_rank) in enumerate(
+            for block_index, group_source_rank in enumerate(
                 islice(
-                    buffer_size_ranks, buffer_size_ranks_start, buffer_size_ranks_end
+                    group_source_ranks, buffer_size_ranks_start, buffer_size_ranks_end
                 )
             )
         )
