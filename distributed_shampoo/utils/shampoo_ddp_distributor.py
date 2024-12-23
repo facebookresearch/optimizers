@@ -106,12 +106,13 @@ class DDPDistributor(DistributorInterface):
             )
         )
 
-        self._construct_global_block_info_list(buffer_size_ranks)
-
+        global_block_info_list = self._construct_global_block_info_list(
+            buffer_size_ranks
+        )
         # Initialize selectors and local blocked (masked) parameters.
         self._distributor_selector: tuple[bool, ...] = tuple(
             block_info.group_source_rank == group_rank
-            for block_info in self._global_block_info_list
+            for block_info in global_block_info_list
         )
         self._local_blocked_params: tuple[Tensor, ...] = compress_list(
             self._global_blocked_params, self._distributor_selector
@@ -121,6 +122,9 @@ class DDPDistributor(DistributorInterface):
         )
         self._local_grad_selector: tuple[bool, ...] = (True,) * len(
             self._local_blocked_params
+        )
+        self._local_block_info_list: tuple[DDPBlockInfo, ...] = compress_list(
+            global_block_info_list, self._distributor_selector
         )
 
         self._construct_distributed_buffers(
@@ -257,9 +261,10 @@ class DDPDistributor(DistributorInterface):
 
         return tuple(buffer_size_ranks)
 
+    @torch.no_grad()
     def _construct_global_block_info_list(
         self, buffer_size_ranks: tuple[tuple[int, int], ...]
-    ) -> None:
+    ) -> tuple[DDPBlockInfo, ...]:
         """Construct the global block info list.
 
         Args:
@@ -267,8 +272,7 @@ class DDPDistributor(DistributorInterface):
                 and an assigned rank for each block.
 
         """
-        # Construct global block info list.
-        self._global_block_info_list: tuple[DDPBlockInfo, ...] = tuple(
+        return tuple(
             DDPBlockInfo(
                 param=param,
                 composable_block_ids=self._construct_composable_block_ids(
@@ -392,7 +396,7 @@ class DDPDistributor(DistributorInterface):
         self._global_dist_buffer = torch.zeros(
             total_buffer_size,
             dtype=torch.int8,
-            device=self._global_block_info_list[0].param.device,
+            device=self._global_blocked_params[0].device,
         )
         local_dist_buffers = torch.split(self._global_dist_buffer, max_buffer_size_sum)
         splitted_local_dist_buffers = DDPDistributor._split_local_dist_buffers(

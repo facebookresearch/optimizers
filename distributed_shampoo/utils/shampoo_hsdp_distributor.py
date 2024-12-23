@@ -200,12 +200,13 @@ class HSDPDistributor(DistributorInterface):
             )
         )
 
-        self._construct_global_block_info_list(buffer_size_ranks)
-
+        global_block_info_list = self._construct_global_block_info_list(
+            buffer_size_ranks
+        )
         # Initialize selectors and local blocked (masked) parameters.
         self._distributor_selector: tuple[bool, ...] = tuple(
             block_info.group_source_rank == comms_group_rank
-            for block_info in self._global_block_info_list
+            for block_info in global_block_info_list
         )
         self._local_blocked_params: tuple[Tensor, ...] = compress_list(
             self._global_blocked_params, self._distributor_selector
@@ -215,6 +216,9 @@ class HSDPDistributor(DistributorInterface):
         )
         self._local_grad_selector: tuple[bool, ...] = (True,) * len(
             self._local_blocked_params
+        )
+        self._local_block_info_list: tuple[DDPBlockInfo, ...] = compress_list(
+            global_block_info_list, self._distributor_selector
         )
 
         self._construct_distributed_buffers(
@@ -369,14 +373,15 @@ class HSDPDistributor(DistributorInterface):
         """
         return (param_index, f"rank_{rank}-block_{block_index}")
 
+    @torch.no_grad()
     def _construct_global_block_info_list(
         self, buffer_size_ranks: tuple[tuple[int, int], ...]
-    ) -> None:
+    ) -> tuple[DDPBlockInfo, ...]:
         """Construct global block info list from param_group and num_blocks_within_param."""
         # Note that for HSDP, we want to get the rank within each sharded group for the block id.
         # When using a device mesh, 0 corresponds to the replicated group and 1 corresponds to the sharded group.
         sharded_group_rank = self._hsdp_device_mesh.get_local_rank(1)
-        self._global_block_info_list: tuple[DDPBlockInfo, ...] = tuple(
+        return tuple(
             DDPBlockInfo(
                 param=param,
                 composable_block_ids=self._construct_composable_block_ids(
@@ -575,7 +580,7 @@ class HSDPDistributor(DistributorInterface):
         self._global_dist_buffer = torch.zeros(
             total_buffer_size,
             dtype=torch.int8,
-            device=self._global_block_info_list[0].param.device,
+            device=self._global_blocked_params[0].device,
         )
         local_dist_buffers = torch.split(self._global_dist_buffer, max_buffer_size_sum)
         splitted_local_dist_buffers = HSDPDistributor._split_local_dist_buffers(
