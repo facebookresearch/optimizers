@@ -76,7 +76,7 @@ class AdamGraftingConfigTest(RMSpropGraftingConfigTest):
 
 
 PreconditionerConfigType = TypeVar(
-    "PreconditionerConfigType", bound=Type[PreconditionerConfig]
+    "PreconditionerConfigType", bound=PreconditionerConfig
 )
 
 
@@ -104,12 +104,12 @@ class AbstractPreconditionerConfigTest:
         @abstractmethod
         def _get_preconditioner_config_type(
             self,
-        ) -> PreconditionerConfigType: ...
+        ) -> Type[PreconditionerConfigType]: ...
 
 
 class ShampooPreconditionerConfigTest(
     AbstractPreconditionerConfigTest.PreconditionerConfigTest[
-        Type[ShampooPreconditionerConfig]
+        ShampooPreconditionerConfig
     ]
 ):
     def _get_preconditioner_config_type(
@@ -120,7 +120,7 @@ class ShampooPreconditionerConfigTest(
 
 class EigenvalueCorrectedShampooPreconditionerConfigTest(
     AbstractPreconditionerConfigTest.PreconditionerConfigTest[
-        Type[EigenvalueCorrectedShampooPreconditionerConfig]
+        EigenvalueCorrectedShampooPreconditionerConfig
     ]
 ):
     def _get_preconditioner_config_type(
