@@ -291,19 +291,18 @@ class ShampooHSDPDistributorTest(FSDPTest):
             num_trainers_per_group=3,
         )
 
-        with self.assertRaisesRegex(
+        self.assertRaisesRegex(
             ValueError,
             re.escape(
                 "Invalid number of trainers per group: 3. Must be between [1, 2] or set to -1."
             ),
-        ):
-            ShampooHSDPDistributorTest._train_model(
-                optim_factory=ShampooHSDPDistributorTest._shampoo_optim_factory(
-                    distributed_config=hsdp_config,
-                ),
-                model_factory=ShampooHSDPDistributorTest._model_factory(hsdp_config),
-                device=torch.device("cuda"),
-            )
+            ShampooHSDPDistributorTest._train_model,
+            optim_factory=ShampooHSDPDistributorTest._shampoo_optim_factory(
+                distributed_config=hsdp_config,
+            ),
+            model_factory=ShampooHSDPDistributorTest._model_factory(hsdp_config),
+            device=torch.device("cuda"),
+        )
 
     @skip_if_lt_x_gpu(4)
     def test_dist_is_initialized(self) -> None:
@@ -313,13 +312,11 @@ class ShampooHSDPDistributorTest(FSDPTest):
             device_mesh=mesh_2d,
         )
 
-        with mock.patch.object(
-            torch.distributed, "is_initialized", return_value=False
-        ), self.assertRaisesRegex(
-            RuntimeError,
-            re.escape("HSDPDistributor needs torch.distributed to be initialized!"),
-        ):
-            ShampooHSDPDistributorTest._train_model(
+        with mock.patch.object(torch.distributed, "is_initialized", return_value=False):
+            self.assertRaisesRegex(
+                RuntimeError,
+                re.escape("HSDPDistributor needs torch.distributed to be initialized!"),
+                ShampooHSDPDistributorTest._train_model,
                 optim_factory=ShampooHSDPDistributorTest._shampoo_optim_factory(
                     distributed_config=hsdp_config,
                 ),
@@ -341,13 +338,13 @@ class ShampooHSDPDistributorTest(FSDPTest):
         # Hijack the DeviceMesh.size() method to return 4 instead of 2 to bypass the check of num_trainers_per_group.
         with mock.patch.object(
             torch.distributed.device_mesh.DeviceMesh, "size", return_value=4
-        ), self.assertRaisesRegex(
-            ValueError,
-            re.escape(
-                "distributed_config.num_trainers_per_group=3 must divide self._replicated_group_size=4!"
-            ),
         ):
-            ShampooHSDPDistributorTest._train_model(
+            self.assertRaisesRegex(
+                ValueError,
+                re.escape(
+                    "distributed_config.num_trainers_per_group=3 must divide self._replicated_group_size=4!"
+                ),
+                ShampooHSDPDistributorTest._train_model,
                 optim_factory=ShampooHSDPDistributorTest._shampoo_optim_factory(
                     distributed_config=hsdp_config,
                 ),

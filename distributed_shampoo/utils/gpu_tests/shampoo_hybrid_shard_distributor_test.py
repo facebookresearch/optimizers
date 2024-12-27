@@ -330,21 +330,20 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
             num_trainers_per_group=3,
         )
 
-        with self.assertRaisesRegex(
+        self.assertRaisesRegex(
             ValueError,
             re.escape(
                 "Invalid number of trainers per group: 3. Must be between [1, 2] or set to -1."
             ),
-        ):
-            ShampooHybridShardDistributorTest._train_model(
-                optim_factory=ShampooHybridShardDistributorTest._shampoo_optim_factory(
-                    distributed_config=hybrid_shard_config,
-                ),
-                model_factory=ShampooHybridShardDistributorTest._model_factory(
-                    hybrid_shard_config
-                ),
-                device=torch.device("cuda"),
-            )
+            ShampooHybridShardDistributorTest._train_model,
+            optim_factory=ShampooHybridShardDistributorTest._shampoo_optim_factory(
+                distributed_config=hybrid_shard_config,
+            ),
+            model_factory=ShampooHybridShardDistributorTest._model_factory(
+                hybrid_shard_config
+            ),
+            device=torch.device("cuda"),
+        )
 
     @with_comms
     @skip_if_lt_x_gpu(4)
@@ -356,15 +355,13 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
             device_mesh=mesh_2d,
         )
 
-        with mock.patch.object(
-            torch.distributed, "is_initialized", return_value=False
-        ), self.assertRaisesRegex(
-            RuntimeError,
-            re.escape(
-                "HybridShardDistributor needs torch.distributed to be initialized!"
-            ),
-        ):
-            ShampooHybridShardDistributorTest._train_model(
+        with mock.patch.object(torch.distributed, "is_initialized", return_value=False):
+            self.assertRaisesRegex(
+                RuntimeError,
+                re.escape(
+                    "HybridShardDistributor needs torch.distributed to be initialized!"
+                ),
+                ShampooHybridShardDistributorTest._train_model,
                 optim_factory=ShampooHybridShardDistributorTest._shampoo_optim_factory(
                     distributed_config=hybrid_shard_config,
                 ),
@@ -390,13 +387,13 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
         # Hijack the DeviceMesh.size() method to return 4 instead of 2 to bypass the check of num_trainers_per_group.
         with mock.patch.object(
             torch.distributed.device_mesh.DeviceMesh, "size", return_value=4
-        ), self.assertRaisesRegex(
-            ValueError,
-            re.escape(
-                "distributed_config.num_trainers_per_group=3 must divide self._replicated_group_size=4!"
-            ),
         ):
-            ShampooHybridShardDistributorTest._train_model(
+            self.assertRaisesRegex(
+                ValueError,
+                re.escape(
+                    "distributed_config.num_trainers_per_group=3 must divide self._replicated_group_size=4!"
+                ),
+                ShampooHybridShardDistributorTest._train_model,
                 optim_factory=ShampooHybridShardDistributorTest._shampoo_optim_factory(
                     distributed_config=hybrid_shard_config,
                 ),

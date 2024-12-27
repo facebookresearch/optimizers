@@ -40,39 +40,33 @@ class DistributedShampooInitTest(unittest.TestCase):
         )
 
     def test_invalid_preconditioner_config(self) -> None:
-        with (
-            mock.patch.object(
-                distributed_shampoo,
-                "type",
-                side_effect=lambda object: {
-                    ShampooPreconditionerConfig: PreconditionerConfig
-                }.get(type(object), type(object)),
-            ),
+        with mock.patch.object(
+            distributed_shampoo,
+            "type",
+            side_effect=lambda object: {
+                ShampooPreconditionerConfig: PreconditionerConfig
+            }.get(type(object), type(object)),
+        ):
             self.assertRaisesRegex(
                 NotImplementedError,
                 re.escape("group[PRECONDITIONER_CONFIG]=ShampooPreconditionerConfig"),
-            ),
-        ):
-            DistributedShampoo(
+                DistributedShampoo,
                 self._model.parameters(),
                 preconditioner_config=DefaultShampooConfig,
             )
 
     def test_invalid_grafting_config(self) -> None:
-        with (
-            mock.patch.object(
-                distributed_shampoo,
-                "type",
-                side_effect=lambda object: {SGDGraftingConfig: GraftingConfig}.get(
-                    type(object), type(object)
-                ),
+        with mock.patch.object(
+            distributed_shampoo,
+            "type",
+            side_effect=lambda object: {SGDGraftingConfig: GraftingConfig}.get(
+                type(object), type(object)
             ),
+        ):
             self.assertRaisesRegex(
                 NotImplementedError,
                 re.escape("group[GRAFTING_CONFIG]=SGDGraftingConfig"),
-            ),
-        ):
-            DistributedShampoo(
+                DistributedShampoo,
                 self._model.parameters(),
                 grafting_config=SGDGraftingConfig(),  # type: ignore[abstract]
             )
@@ -143,29 +137,26 @@ class DistributedShampooInitTest(unittest.TestCase):
             incorrect_hyperparameter_setting,
             expected_error_msg,
         ) in incorrect_hyperparameter_setting_and_expected_error_msg:
-            with (
-                self.subTest(
-                    incorrect_hyperparameter_setting=incorrect_hyperparameter_setting,
-                    expected_error_msg=expected_error_msg,
-                ),
-                self.assertRaisesRegex(ValueError, re.escape(expected_error_msg)),
+            with self.subTest(
+                incorrect_hyperparameter_setting=incorrect_hyperparameter_setting,
+                expected_error_msg=expected_error_msg,
             ):
-                DistributedShampoo(
+                self.assertRaisesRegex(
+                    ValueError,
+                    re.escape(expected_error_msg),
+                    DistributedShampoo,
                     self._model.parameters(),
                     **incorrect_hyperparameter_setting,
                 )
 
     def test_invalid_cuda_pytorch_compile_setting(self) -> None:
-        with (
-            mock.patch.object(torch.cuda, "is_available", return_value=False),
+        with mock.patch.object(torch.cuda, "is_available", return_value=False):
             self.assertRaisesRegex(
                 ValueError,
                 re.escape(
                     "Backend does NOT support Pytorch 2.0 compile. Switch to shampoo_pt2_compile_config=None."
                 ),
-            ),
-        ):
-            DistributedShampoo(
+                DistributedShampoo,
                 self._model.parameters(),
                 shampoo_pt2_compile_config=ShampooPT2CompileConfig(),
             )
@@ -187,21 +178,18 @@ class DistributedShampooInitTest(unittest.TestCase):
             )
 
     def test_invalid_distributed_config(self) -> None:
-        with (
+        with mock.patch.object(
+            distributed_shampoo,
+            "type",
+            side_effect=lambda object: DistributedConfig,
+        ):
             self.assertRaisesRegex(
                 NotImplementedError,
                 re.escape(
                     "distributed_config=DDPShampooConfig(communication_dtype=<CommunicationDType.DEFAULT: 0>, "
                     "num_trainers_per_group=-1, communicate_params=False) not supported!"
                 ),
-            ),
-            mock.patch.object(
-                distributed_shampoo,
-                "type",
-                side_effect=lambda object: DistributedConfig,
-            ),
-        ):
-            DistributedShampoo(
+                DistributedShampoo,
                 params=self._model.parameters(),
                 distributed_config=DDPShampooConfig(),
             )
@@ -450,22 +438,23 @@ class DistributedShampooStateDictTest(unittest.TestCase):
         }
 
     def test_state_dict(self) -> None:
-        with self.assertRaisesRegex(
+        self.assertRaisesRegex(
             NotImplementedError,
             re.escape(
                 "Distributed Shampoo does not support the standard state_dict() method for checkpointing!"
             ),
-        ):
-            self._optimizer.state_dict()
+            self._optimizer.state_dict,
+        )
 
     def test_load_state_dict(self) -> None:
-        with self.assertRaisesRegex(
+        self.assertRaisesRegex(
             NotImplementedError,
             re.escape(
                 "Distributed Shampoo does not support the standard load_state_dict() method for checkpointing!"
             ),
-        ):
-            self._optimizer.load_state_dict(state_dict={})
+            self._optimizer.load_state_dict,
+            state_dict={},
+        )
 
     def test_distributed_state_dict(self) -> None:
         state_dict_with_param_groups = self._optimizer.distributed_state_dict(
@@ -523,41 +512,39 @@ class DistributedShampooStateDictTest(unittest.TestCase):
         # but param_groups only needs one (i.e., "0.weight").
         self._distributed_state_dict["param_groups"]["1.weight"] = {}
 
-        with self.assertRaisesRegex(
-            ValueError, re.escape("Different param_groups count: 1 vs 2")
-        ):
-            self._optimizer.load_distributed_state_dict(
-                state_dict=self._distributed_state_dict,
-                key_to_param=self._model.named_parameters(),
-                save_param_groups=True,
-            )
+        self.assertRaisesRegex(
+            ValueError,
+            re.escape("Different param_groups count: 1 vs 2"),
+            self._optimizer.load_distributed_state_dict,
+            state_dict=self._distributed_state_dict,
+            key_to_param=self._model.named_parameters(),
+            save_param_groups=True,
+        )
 
         # Remove "0.weight" so param_groups_to_load has "1.weight" only but param_groups needs "0.weight".
         del self._distributed_state_dict["param_groups"]["0.weight"]
 
-        with self.assertRaisesRegex(
+        self.assertRaisesRegex(
             ValueError,
             re.escape("Param group 0.weight not found in param_groups_to_load!"),
-        ):
-            self._optimizer.load_distributed_state_dict(
-                state_dict=self._distributed_state_dict,
-                key_to_param=self._model.named_parameters(),
-                save_param_groups=True,
-            )
+            self._optimizer.load_distributed_state_dict,
+            state_dict=self._distributed_state_dict,
+            key_to_param=self._model.named_parameters(),
+            save_param_groups=True,
+        )
 
     def test_load_distributed_state_dict_with_missing_param_key(self) -> None:
-        with self.assertRaisesRegex(
+        self.assertRaisesRegex(
             KeyError,
             re.escape("Parameter key 0.weight not found in key_to_param mapping!"),
-        ):
-            self._optimizer.load_distributed_state_dict(
-                state_dict=self._distributed_state_dict,
-                # Instead of providing self._model.named_parameters(), we provide an empty list
-                # to trigger the missing key check error.
-                key_to_param=iter([]),
-                save_param_groups=False,
-                enable_missing_key_check=True,
-            )
+            self._optimizer.load_distributed_state_dict,
+            state_dict=self._distributed_state_dict,
+            # Instead of providing self._model.named_parameters(), we provide an empty list
+            # to trigger the missing key check error.
+            key_to_param=iter([]),
+            save_param_groups=False,
+            enable_missing_key_check=True,
+        )
 
         with self.assertLogs(
             level="WARNING",
@@ -584,15 +571,15 @@ class DistributedShampooStateDictTest(unittest.TestCase):
         key_to_param_copy = chain(
             self._model.named_parameters(), iter([("1.weight", torch.tensor(1))])
         )
-        with self.assertRaisesRegex(
-            KeyError, re.escape("Parameter 1 not found in state!")
-        ):
-            self._optimizer.load_distributed_state_dict(
-                state_dict=state_dict_to_load_copy,
-                key_to_param=key_to_param_copy,
-                save_param_groups=False,
-                enable_missing_key_check=True,
-            )
+        self.assertRaisesRegex(
+            KeyError,
+            re.escape("Parameter 1 not found in state!"),
+            self._optimizer.load_distributed_state_dict,
+            state_dict=state_dict_to_load_copy,
+            key_to_param=key_to_param_copy,
+            save_param_groups=False,
+            enable_missing_key_check=True,
+        )
 
         # Re-populate key_to_param_copy because it is an iterator that was consumed by the previous call.
         key_to_param_copy = chain(

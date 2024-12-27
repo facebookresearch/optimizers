@@ -84,27 +84,25 @@ class QuantizedTensorTest(unittest.TestCase):
             self._quantized_tensor = quantized_tensor_copy
 
     def test_invalid_quantized_data_type(self) -> None:
-        with self.assertRaisesRegex(
+        self.assertRaisesRegex(
             NotImplementedError,
             re.escape("Quantization for torch.int64 is not yet supported!"),
-        ):
-            _ = QuantizedTensor.init_from_dequantized_tensor(
-                dequantized_values=torch.rand(10),
-                quantized_dtype=torch.int64,
-                block_info=BlockInfo(torch.zeros(10), (0, "dummy")),
-            )
+            QuantizedTensor.init_from_dequantized_tensor,
+            dequantized_values=torch.rand(10),
+            quantized_dtype=torch.int64,
+            block_info=BlockInfo(torch.zeros(10), (0, "dummy")),
+        )
 
         quantized_tensor = QuantizedTensor(
             quantized_values=torch.zeros(10, dtype=torch.int64),
             block_info=BlockInfo(torch.zeros(10), (0, "dummy")),
         )
-        with self.assertRaisesRegex(
+        self.assertRaisesRegex(
             NotImplementedError,
             re.escape("Quantization for torch.int64 is not yet supported!"),
-        ):
-            quantized_tensor.dequantize(
-                dequantized_dtype=torch.float16,
-            )
+            quantized_tensor.dequantize,
+            dequantized_dtype=torch.float16,
+        )
 
 
 class QuantizedTensorListInitTest(unittest.TestCase):
@@ -113,13 +111,13 @@ class QuantizedTensorListInitTest(unittest.TestCase):
             shampoo_quantization,
             "isinstance",
             side_effect=lambda object, classinfo: False,
-        ), self.assertRaisesRegex(
-            TypeError,
-            re.escape(
-                "quantized_data must be collections.abc.Sequence[tuple[torch.Tensor, torch.Tensor | None, torch.Tensor | None]] | collections.abc.Sequence[distributed_shampoo.utils.shampoo_quantization.QuantizedTensor] but get <class 'list'>"
-            ),
         ):
-            QuantizedTensorList(
+            self.assertRaisesRegex(
+                TypeError,
+                re.escape(
+                    "quantized_data must be collections.abc.Sequence[tuple[torch.Tensor, torch.Tensor | None, torch.Tensor | None]] | collections.abc.Sequence[distributed_shampoo.utils.shampoo_quantization.QuantizedTensor] but get <class 'list'>"
+                ),
+                QuantizedTensorList,
                 quantized_data=[
                     (torch.randn(2, 2, dtype=torch.float16), None, None)
                     for _ in range(5)
@@ -129,20 +127,18 @@ class QuantizedTensorListInitTest(unittest.TestCase):
             )
 
     def test_invalid_computation_dtype(self) -> None:
-        with self.assertRaisesRegex(
+        self.assertRaisesRegex(
             AssertionError,
             re.escape(
                 "computation_dtype=torch.int64 is not supported! It must be one of (torch.float16, torch.bfloat16, torch.float32, torch.float64)!"
             ),
-        ):
-            QuantizedTensorList(
-                quantized_data=[
-                    (torch.randn(2, 2, dtype=torch.float16), None, None)
-                    for _ in range(5)
-                ],
-                quantized_dtype=torch.float16,
-                computation_dtype=torch.int64,
-            )
+            QuantizedTensorList,
+            quantized_data=[
+                (torch.randn(2, 2, dtype=torch.float16), None, None) for _ in range(5)
+            ],
+            quantized_dtype=torch.float16,
+            computation_dtype=torch.int64,
+        )
 
 
 class QuantizedTensorListTest(unittest.TestCase):
@@ -288,16 +284,15 @@ class QuantizedTensorListTest(unittest.TestCase):
             quantized_dtype=torch.int64,
             computation_dtype=torch.float64,
         )
-        with self.assertRaisesRegex(
+        self.assertRaisesRegex(
             NotImplementedError,
             re.escape("Quantization for torch.int64 is not yet supported!"),
-        ):
-            quantized_tensors.dequantize()
+            quantized_tensors.dequantize,
+        )
 
-        with self.assertRaisesRegex(
+        self.assertRaisesRegex(
             NotImplementedError,
             re.escape("Quantization for torch.int64 is not yet supported!"),
-        ):
-            quantized_tensors.quantize(
-                tensor_list=tuple(torch.rand(5) for _ in range(5))
-            )
+            quantized_tensors.quantize,
+            tensor_list=tuple(torch.rand(5) for _ in range(5)),
+        )

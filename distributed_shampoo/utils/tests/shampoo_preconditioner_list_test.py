@@ -315,19 +315,18 @@ class AbstractTest:
         def _test_raise_invalid_value_in_factor_matrix(
             self, invalid_value: float
         ) -> None:
-            with self.assertRaisesRegex(
+            self.assertRaisesRegex(
                 PreconditionerValueError,
                 re.escape(f"Encountered {str(invalid_value)} values in factor matrix"),
-            ):
-                self._preconditioner_list.update_preconditioners(
-                    masked_grad_list=(
-                        torch.tensor([invalid_value, invalid_value]),
-                        torch.eye(2) / torch.tensor(2.0).sqrt(),
-                        torch.tensor([[invalid_value, invalid_value]]),
-                    ),
-                    step=torch.tensor(1),
-                    perform_amortized_computation=True,
-                )
+                self._preconditioner_list.update_preconditioners,
+                masked_grad_list=(
+                    torch.tensor([invalid_value, invalid_value]),
+                    torch.eye(2) / torch.tensor(2.0).sqrt(),
+                    torch.tensor([[invalid_value, invalid_value]]),
+                ),
+                step=torch.tensor(1),
+                perform_amortized_computation=True,
+            )
 
         # Because nan as the input of self._preconditioner_list.update_preconditioners() would change the internal state to nan (and stayed as nan even after other updates),
         # we need to test the cases of nan and inf separately.
@@ -343,17 +342,16 @@ class AbstractTest:
             for invalid_value in (torch.nan, torch.inf):
                 with (
                     self.subTest(invalid_value=invalid_value),
-                    self.assertRaisesRegex(
-                        PreconditionerValueError,
-                        re.escape("Encountered nan or inf values in"),
-                    ),
                     mock.patch.object(
                         shampoo_preconditioner_list,
                         self._amortized_computation_function(),
                         side_effect=(torch.tensor([invalid_value]),),
                     ) as mock_amortized_computation,
                 ):
-                    self._preconditioner_list.update_preconditioners(
+                    self.assertRaisesRegex(
+                        PreconditionerValueError,
+                        re.escape("Encountered nan or inf values in"),
+                        self._preconditioner_list.update_preconditioners,
                         masked_grad_list=(
                             torch.tensor([1.0, 0.0]),
                             torch.eye(2) / torch.tensor(2.0).sqrt(),
@@ -522,12 +520,14 @@ class AbstractTest:
                 # Exactly at failure tolerance now.
                 with self.assertLogs(level="WARNING") as cm:
                     expected_error_message = r"The number of failed .* computations for factors \('0.block_0.0',\) exceeded the allowed tolerance\."
-                    with self.assertRaisesRegex(ValueError, expected_error_message):
-                        self._preconditioner_list.update_preconditioners(
-                            masked_grad_list=masked_grad_list,
-                            step=torch.tensor(step),
-                            perform_amortized_computation=True,
-                        )
+                    self.assertRaisesRegex(
+                        ValueError,
+                        expected_error_message,
+                        self._preconditioner_list.update_preconditioners,
+                        masked_grad_list=masked_grad_list,
+                        step=torch.tensor(step),
+                        perform_amortized_computation=True,
+                    )
                     # Check that the warning is logged for the failed amortized computation of the first matrix.
                     self.assertCountEqual(
                         # Only extracts the first sentence in the warning message for simple comparison.
