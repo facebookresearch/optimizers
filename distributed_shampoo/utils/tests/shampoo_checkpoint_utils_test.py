@@ -186,13 +186,13 @@ class UpdateParamStateDictObjectTest(unittest.TestCase):
     def test_update_param_state_dict_object_with_missing_key(self) -> None:
         # Explicitly delete 'bar' from self._extracted_state_dict to simulate a missing key.
         self._extracted_state_dict.pop("bar")
-        with self.assertRaisesRegex(
-            KeyError, re.escape("Key bar not found in state dict to load.")
-        ):
-            update_param_state_dict_object(
-                current_param_state_dict=self._current_state_dict,
-                param_state_dict_to_load=self._extracted_state_dict,
-            )
+        self.assertRaisesRegex(
+            KeyError,
+            re.escape("Key bar not found in state dict to load."),
+            update_param_state_dict_object,
+            current_param_state_dict=self._current_state_dict,
+            param_state_dict_to_load=self._extracted_state_dict,
+        )
 
         # Disable enable_missing_key_check so the exception will be suppressed, and the value of 'bar' key will not be updated.
         update_param_state_dict_object(

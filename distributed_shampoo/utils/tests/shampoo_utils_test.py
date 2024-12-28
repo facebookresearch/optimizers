@@ -109,8 +109,13 @@ class CompressListTest(unittest.TestCase):
         self.assertTupleEqual(compress_list([1, 2, 3], (True, False, True)), (1, 3))
 
     def test_compress_list_with_different_size(self) -> None:
-        with self.assertRaisesRegex(AssertionError, re.escape("Inconsistent lengths")):
-            compress_list(complete_list=[1, 2, 3], selector=(True, False))
+        self.assertRaisesRegex(
+            AssertionError,
+            re.escape("Inconsistent lengths"),
+            compress_list,
+            complete_list=[1, 2, 3],
+            selector=(True, False),
+        )
 
 
 class GetDTypeSizeTest(unittest.TestCase):

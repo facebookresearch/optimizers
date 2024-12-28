@@ -38,13 +38,15 @@ class SplitTensorBlockRecoveryTest(unittest.TestCase):
         torch.testing.assert_close(actual_split_tensors, expected_split_tensors)
 
     def test_illegal_tensor_shard_size(self) -> None:
-        with self.assertRaisesRegex(ValueError, re.escape("Input tensor is not flat")):
-            FSDPDistributor._split_tensor_block_recovery(
-                tensor_shard=torch.randn((3, 4)),
-                original_shape=torch.Size((3, 4)),
-                start_idx=0,
-                end_idx=16,
-            )
+        self.assertRaisesRegex(
+            ValueError,
+            re.escape("Input tensor is not flat"),
+            FSDPDistributor._split_tensor_block_recovery,
+            tensor_shard=torch.randn((3, 4)),
+            original_shape=torch.Size((3, 4)),
+            start_idx=0,
+            end_idx=16,
+        )
 
     def test_split_tensor_block_recovery_for_one_dim(self) -> None:
         original_tensor = torch.arange(5)
