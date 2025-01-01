@@ -326,7 +326,7 @@ class RMSpropGraftingConfig(AdaGradGraftingConfig):
 
 
 @dataclass(kw_only=True)
-class AdamGraftingConfig(AdaGradGraftingConfig):
+class AdamGraftingConfig(RMSpropGraftingConfig):
     """Configuration for grafting from Adam.
 
     Args:
@@ -337,10 +337,3 @@ class AdamGraftingConfig(AdaGradGraftingConfig):
     """
 
     beta2: float = 0.999
-
-    def __post_init__(self) -> None:
-        super().__post_init__()
-        if not 0.0 < self.beta2 <= 1.0:
-            raise ValueError(
-                f"Invalid grafting beta2 parameter: {self.beta2}. Must be in (0.0, 1.0]."
-            )
