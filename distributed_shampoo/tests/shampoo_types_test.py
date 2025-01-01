@@ -10,6 +10,9 @@ LICENSE file in the root directory of this source tree.
 import itertools
 import re
 import unittest
+from functools import reduce
+from operator import or_
+from typing import TypeVar
 
 from distributed_shampoo.shampoo_types import (
     AdaGradGraftingConfig,
@@ -18,10 +21,24 @@ from distributed_shampoo.shampoo_types import (
 )
 
 
+SubclassesType = TypeVar("SubclassesType")
+
+
+def get_all_subclasses(cls: SubclassesType) -> list[SubclassesType]:
+    def get_all_unique_subclasses(cls: SubclassesType) -> set[SubclassesType]:
+        """Gets all unique subclasses of a given class recursively."""
+        assert (
+            subclasses := getattr(cls, "__subclasses__", lambda: None)()
+        ) is not None, f"{cls} does not have __subclasses__."
+        return reduce(or_, map(get_all_unique_subclasses, subclasses), set())
+
+    return list(get_all_unique_subclasses(cls))
+
+
 class AdaGradGraftingConfigSubclassesTest(unittest.TestCase):
     def test_illegal_epsilon(self) -> None:
         epsilon = 0.0
-        for cls in AdaGradGraftingConfig.__subclasses__():
+        for cls in [AdaGradGraftingConfig] + get_all_subclasses(AdaGradGraftingConfig):
             with self.subTest(cls=cls):
                 self.assertRaisesRegex(
                     ValueError,
@@ -36,7 +53,8 @@ class RMSpropGraftingConfigSubclassesTest(AdaGradGraftingConfigSubclassesTest):
         self,
     ) -> None:
         for cls, beta2 in itertools.product(
-            RMSpropGraftingConfig.__subclasses__(), (-1.0, 0.0, 1.3)
+            [RMSpropGraftingConfig] + get_all_subclasses(RMSpropGraftingConfig),
+            (-1.0, 0.0, 1.3),
         ):
             with self.subTest(cls=cls, beta2=beta2):
                 self.assertRaisesRegex(
@@ -52,7 +70,7 @@ class RMSpropGraftingConfigSubclassesTest(AdaGradGraftingConfigSubclassesTest):
 class PreconditionerConfigSubclassesTest(unittest.TestCase):
     def test_illegal_num_tolerated_failed_amortized_computations(self) -> None:
         num_tolerated_failed_amortized_computations = -1
-        for cls in PreconditionerConfig.__subclasses__():
+        for cls in get_all_subclasses(PreconditionerConfig):
             with self.subTest(cls=cls):
                 self.assertRaisesRegex(
                     ValueError,
