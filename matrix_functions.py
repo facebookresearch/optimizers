@@ -601,9 +601,9 @@ def matrix_eigenvectors(
     eigenvectors_estimate: Tensor | None = None,
     eigenvector_computation_config: EigenvectorConfig = DefaultEighEigenvectorConfig,
     is_diagonal: bool = False,
+    topk_compression: int | None = None,
 ) -> Tensor:
     """Compute eigenvectors of matrix using eigendecomposition of symmetric positive (semi-)definite matrix.
-
             A = Q L Q^T => Q
 
     Assumes matrix A is symmetric.
@@ -615,10 +615,12 @@ def matrix_eigenvectors(
         eigenvector_computation_config (EigenvectorConfig): Determines how eigenvectors are computed.
             (Default: DefaultEighEigenvectorConfig)
         is_diagonal (bool): Whether A is diagonal. (Default: False)
+        topk_compression (int | None): Number of top eigenvectors to keep, others will be zeroed out. 
+            If None, keeps all. (Default: None)
 
     Returns:
-        Q (Tensor): Orthogonal matrix containing eigenvectors of A.
-
+        Q (Tensor): Orthogonal matrix containing eigenvectors of A, with only top-k eigenvectors
+            if topk_compression is specified.
     """
     # check if matrix is scalar
     if torch.numel(A) == 1:
@@ -638,25 +640,63 @@ def matrix_eigenvectors(
             device=A.device,
         )
 
-    if type(eigenvector_computation_config) is EighEigenvectorConfig:
-        return matrix_eigenvalue_decomposition(
+    # Validate topk_compression if provided
+    if topk_compression is not None:
+        if topk_compression <= 0:
+            raise ValueError("topk_compression must be positive!")
+        if topk_compression > A.shape[0]:
+            raise ValueError("topk_compression cannot be larger than matrix dimension!")
+        
+    if isinstance(eigenvector_computation_config, EighEigenvectorConfig):
+        eigenvalues, eigenvectors = matrix_eigenvalue_decomposition(
             A,
             retry_double_precision=eigenvector_computation_config.retry_double_precision,
-        )[1]
-    elif type(eigenvector_computation_config) is QRConfig:
+        )
+        
+        if topk_compression is not None:
+            # Sort eigenvalues and eigenvectors in descending order
+            eigenvalues, indices = torch.sort(eigenvalues, descending=True) # note here only need topk so full sort is not efficient
+            eigenvectors = eigenvectors[:, indices]
+            
+            # Zero out all but top k eigenvectors
+            mask = torch.zeros_like(eigenvectors)
+            mask[:, :topk_compression] = 1.0
+            eigenvectors = eigenvectors * mask
+                
+        return eigenvectors
+        
+    elif isinstance(eigenvector_computation_config, QRConfig):
         assert (
             eigenvectors_estimate is not None
         ), "Estimate of eigenvectors is required when using QRConfig."
-        return _compute_orthogonal_iterations(
+        
+        eigenvectors = _compute_orthogonal_iterations(
             A,
             eigenvectors_estimate=eigenvectors_estimate,
             max_iterations=eigenvector_computation_config.max_iterations,
             tolerance=eigenvector_computation_config.tolerance,
         )
+        
+        if topk_compression is not None:
+            # For QR method, we need to compute eigenvalues to sort them
+            eigenvalues = torch.diagonal(eigenvectors.T @ A @ eigenvectors)
+            _, indices = torch.sort(eigenvalues, descending=True) # note here only need topk so full sort is not efficient
+            eigenvectors = eigenvectors[:, indices]
+            
+            # Zero out all but top k eigenvectors
+            mask = torch.zeros_like(eigenvectors)
+            mask[:, :topk_compression] = 1.0
+            eigenvectors = eigenvectors * mask
+            
+        return eigenvectors
+            
+
+            
     else:
         raise NotImplementedError(
             f"Eigenvector computation method is not implemented! Specified eigenvector method is {eigenvector_computation_config=}."
         )
+
 
 
 def _compute_orthogonal_iterations(

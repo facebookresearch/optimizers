@@ -124,3 +124,20 @@ class QRConfig(EigenvectorConfig):
 
     max_iterations: int = 1
     tolerance: float = 1e-5
+
+
+
+@dataclass(kw_only=True)
+class TopKCompressionEigenvectorConfig(EighEigenvectorConfig):
+    """Configuration for compression of eigenvectors by only keeping the top k eigenvectors.
+    
+    NOTE: For now the compression is fake and we just zero out all but the top k eigenvectors. Only use it to test convergence rather
+    than actual performance.
+
+    Args:
+        topk_compression (int): The number of eigenvectors to keep. (Default: 1)
+
+    """
+
+    topk_compression: int
+    

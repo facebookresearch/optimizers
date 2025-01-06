@@ -26,7 +26,7 @@ from distributed_shampoo.utils.shampoo_block_info import BlockInfo
 from distributed_shampoo.utils.shampoo_utils import compress_list, get_dtype_size
 from matrix_functions import check_diagonal, matrix_eigenvectors, matrix_inverse_root
 
-from matrix_functions_types import EigenvectorConfig, RootInvConfig
+from matrix_functions_types import EigenvectorConfig, RootInvConfig, TopKCompressionEigenvectorConfig
 from optimizer_modules import OptimizerModule
 from torch import Tensor
 from torch.autograd import profiler
@@ -1177,11 +1177,13 @@ class EigenvalueCorrectedShampooPreconditionerList(
                         self._preconditioner_config.amortized_computation_config,
                     )
                     try:
+                        logger.info(f"TYPEEEE: {type(eigenvector_computation_config)}...")
                         computed_eigenvectors = matrix_eigenvectors(
                             A=factor_matrix,
                             eigenvectors_estimate=factor_matrix_eigenvectors,
                             eigenvector_computation_config=eigenvector_computation_config,
                             is_diagonal=bool(is_factor_matrix_diagonal),
+                            topk_compression=eigenvector_computation_config.topk_compression if isinstance(eigenvector_computation_config, TopKCompressionEigenvectorConfig) else None,
                         )
                         # Add success to success tracker.
                         success_tracker.append(True)
