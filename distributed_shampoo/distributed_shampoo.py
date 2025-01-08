@@ -12,7 +12,7 @@ import logging
 from collections.abc import Callable, Iterator, Sequence
 from copy import deepcopy
 from functools import partial
-from typing import Any, NoReturn
+from typing import Any
 
 import torch
 
@@ -1098,12 +1098,12 @@ class DistributedShampoo(torch.optim.Optimizer):
 
         return loss
 
-    def state_dict(self) -> NoReturn:
+    def state_dict(self) -> StateDict:
         raise NotImplementedError(
             "Distributed Shampoo does not support the standard state_dict() method for checkpointing!"
         )
 
-    def load_state_dict(self, state_dict: StateDict) -> NoReturn:
+    def load_state_dict(self, state_dict: StateDict) -> None:
         raise NotImplementedError(
             "Distributed Shampoo does not support the standard load_state_dict() method for checkpointing!"
         )
