@@ -33,9 +33,13 @@ from matrix_functions_types import (
     CoupledHigherOrderConfig,
     CoupledNewtonConfig,
     DefaultEigenConfig,
+    DefaultEighEigenvectorConfig,
     EigenConfig,
+    EigenvalueDecompositionConfig,
     EigenvectorConfig,
+    EighEigenvectorConfig,
     MatrixFunctionConfig,
+    QRConfig,
     RootInvConfig,
 )
 
@@ -66,13 +70,14 @@ __all__ = [
     "DefaultSOAPConfig",  # Default `EigenvalueCorrectedShampooPreconditionerConfig` using `QRConfig`.
     # matrix functions configs.
     "MatrixFunctionConfig",  # Abstract base class.
+    "EigenvalueDecompositionConfig",  # Abstract base class (based on `MatrixFunctionConfig`).
     "RootInvConfig",  # Abstract base class (based on `MatrixFunctionConfig`).
-    "EigenConfig",  # Based on `RootInvConfig`.
+    "EigenConfig",  # Based on `RootInvConfig` and `EigenvalueDecompositionConfig`.
     "DefaultEigenConfig",  # Default `RootInvConfig` using `EigenConfig`.
     "CoupledNewtonConfig",  # Based on `RootInvConfig`.
     "CoupledHigherOrderConfig",  # Based on `RootInvConfig`.
     "EigenvectorConfig",  # Abstract base class (based on `MatrixFunctionConfig`).
-    "EighEigenvectorConfig",  # Based on `EigenvectorConfig`.
+    "EighEigenvectorConfig",  # Based on `EigenvectorConfig` and `EigenvalueDecompositionConfig`.
     "DefaultEighEigenvectorConfig",  # Default `EigenvectorConfig` using `EighEigenvectorConfig`.
     "QRConfig",  # Based on `EigenvectorConfig`.
     # Other utilities.
