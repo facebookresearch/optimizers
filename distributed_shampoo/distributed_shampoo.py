@@ -606,7 +606,7 @@ class DistributedShampoo(torch.optim.Optimizer):
                     dtype=block.dtype,
                     device=block.device,
                 )
-                local_momentum_list.append(block_state[MOMENTUM])
+                local_momentum_list.append(block_info.get_tensor(block_state[MOMENTUM]))
 
             state_lists[MOMENTUM_LIST] = local_momentum_list
             # Here, we set masked momentum list to momentum list because we assume
