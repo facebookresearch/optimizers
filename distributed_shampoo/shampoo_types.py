@@ -116,6 +116,31 @@ class ShampooPreconditionerConfig(PreconditionerConfig):
 DefaultShampooConfig = ShampooPreconditionerConfig()
 
 
+@dataclass(init=False)
+class AdaptiveAmortizedComputationFrequencyConfig(AbstractDataclass):
+    """Configuration for adaptively determining amortized computation frequency."""
+
+
+@dataclass(kw_only=True)
+class ApproximateEigenvaluesCriterionConfig(
+    AdaptiveAmortizedComputationFrequencyConfig
+):
+    """Configuration for determining amortized computation frequency via approximate eigenvalues criterion.
+
+    Determines whether the eigenbasis for a factor matrix should be updated based on computing
+    the approximate eigenvalues Q^T A Q, where Q is the eigenbasis transformation matrix and
+    A is the Kronecker factor. The approximate eigenvalues update criterion is then defined as
+    ||(Q^T A Q) - diag(Q^T A Q)||_F < tolerance * (1 + ||A||_F).
+    # TODO: Potentially improve the criterion (and its name).
+
+    Args:
+        tolerance (float): Tolerance for criterion.
+
+    """
+
+    tolerance: float
+
+
 @dataclass(kw_only=True)
 class EigenvalueCorrectedShampooPreconditionerConfig(PreconditionerConfig):
     """Configuration for eigenvalue-corrected Shampoo/SOAP preconditioner computation.
@@ -123,12 +148,17 @@ class EigenvalueCorrectedShampooPreconditionerConfig(PreconditionerConfig):
     Args:
         amortized_computation_config (EigenvectorConfig): Configuration for the eigenvector computation.
             (Default: DefaultEighEigenvectorConfig)
+        adaptive_amortized_computation_frequency_config: Configuration for adaptively determining the
+            amortized computation frequency. (Default: None)
 
     """
 
     amortized_computation_config: EigenvectorConfig = field(
         default_factory=lambda: DefaultEighEigenvectorConfig
     )
+    adaptive_amortized_computation_frequency_config: (
+        AdaptiveAmortizedComputationFrequencyConfig | None
+    ) = None
 
 
 DefaultEigenvalueCorrectedShampooConfig = (
