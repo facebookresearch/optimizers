@@ -260,8 +260,9 @@ class DistributedShampoo(torch.optim.Optimizer):
         weight_decay (float): Weight decay (L2 penalty). (Default: 0.)
         max_preconditioner_dim (int): Maximum preconditioner dimension. (Default: 1024)
         precondition_frequency (int): Frequency of updating all components of the preconditioner.
-            If this field is an instance ShampooPreconditionerConfig, this is the update frequency of the root inverse of the preconditioner.
-            If this field is an instance EigenvalueCorrectedShampooPreconditionerConfig, this is the update frequency of the eigenbasis of preconditioner.
+            If preconditioner_config is an instance ShampooPreconditionerConfig, this is the update frequency of the root inverse of the preconditioner.
+            If preconditioner_config is an instance EigenvalueCorrectedShampooPreconditionerConfig, this is the update frequency of the eigenbasis of preconditioner.
+            If an adaptive method is used to determine the frequency of the amortized computation, this will be the lowest possible update frequency.
             (Default: 1)
         start_preconditioning_step (int): Iteration to start computing inverse preconditioner. If -1, uses
             the same value as precondition_frequency. (Default: -1)
