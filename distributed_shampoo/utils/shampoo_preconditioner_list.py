@@ -19,6 +19,8 @@ from typing import Any, cast, Generic, TypeVar
 
 import torch
 from distributed_shampoo.shampoo_types import (
+    ApproximateEigenvaluesCriterionConfig,
+    EigenvalueCorrectedShampooPreconditionerConfig,
     PreconditionerConfig,
     PreconditionerValueError,
 )
@@ -26,7 +28,7 @@ from distributed_shampoo.utils.shampoo_block_info import BlockInfo
 from distributed_shampoo.utils.shampoo_utils import compress_list, get_dtype_size
 from matrix_functions import check_diagonal, matrix_eigenvectors, matrix_inverse_root
 
-from matrix_functions_types import EigenvectorConfig, RootInvConfig
+from matrix_functions_types import RootInvConfig
 from optimizer_modules import OptimizerModule
 from torch import Tensor
 from torch.autograd import profiler
@@ -1149,6 +1151,10 @@ class EigenvalueCorrectedShampooPreconditionerList(
         with profiler.record_function(
             f"## {self.__class__.__name__}:{self._amortized_computation.__name__} ##"
         ):
+            preconditioner_config = cast(
+                EigenvalueCorrectedShampooPreconditionerConfig,
+                self._preconditioner_config,
+            )
             for idx, kronecker_factors in enumerate(
                 self._masked_kronecker_factors_list
             ):
@@ -1171,16 +1177,35 @@ class EigenvalueCorrectedShampooPreconditionerList(
                         factor_matrix_index=factor_matrix_index,
                     )
 
+                    if (
+                        type(
+                            preconditioner_config.adaptive_amortized_computation_frequency_config
+                        )
+                        is ApproximateEigenvaluesCriterionConfig
+                        and factor_matrix_eigenvectors.any()
+                    ):
+                        # TODO: Potentially improve the criterion.
+                        update_criterion = torch.linalg.matrix_norm(
+                            (
+                                factor_matrix_eigenvectors.T
+                                @ factor_matrix
+                                @ factor_matrix_eigenvectors
+                            ).fill_diagonal_(0.0)  # Off-diagonal elements only.
+                        ) / (1 + torch.linalg.matrix_norm(factor_matrix))
+                        if (
+                            update_criterion
+                            < preconditioner_config.adaptive_amortized_computation_frequency_config.tolerance
+                        ):
+                            # TODO: Add optional counter of skipped updates for debugging/research purposes.
+                            # Skip update of eigenbasis.
+                            continue
+
                     # Compute eigenvectors of factor matrix.
-                    eigenvector_computation_config = cast(
-                        EigenvectorConfig,
-                        self._preconditioner_config.amortized_computation_config,
-                    )
                     try:
                         computed_eigenvectors = matrix_eigenvectors(
                             A=factor_matrix,
                             eigenvectors_estimate=factor_matrix_eigenvectors,
-                            eigenvector_computation_config=eigenvector_computation_config,
+                            eigenvector_computation_config=preconditioner_config.amortized_computation_config,
                             is_diagonal=bool(is_factor_matrix_diagonal),
                         )
                         # Add success to success tracker.
