@@ -16,8 +16,10 @@ from unittest import mock
 
 import torch
 from distributed_shampoo.shampoo_types import (
+    AdaptiveAmortizedComputationFrequencyConfig,
     DefaultEigenvalueCorrectedShampooConfig,
     DefaultShampooConfig,
+    EigenvalueCorrectedShampooPreconditionerConfig,
     PreconditionerValueError,
     ShampooPreconditionerConfig,
 )
@@ -416,25 +418,27 @@ class AbstractTest:
             )
             all_fail = (fail,) * self.NUM_AMORTIZED_COMPUTATION_CALLS
             all_success = (success,) * self.NUM_AMORTIZED_COMPUTATION_CALLS
-            with mock.patch.object(
-                shampoo_preconditioner_list,
-                self._amortized_computation_function(),
-                # Note that the cases causally depend on each other.
-                side_effect=[
-                    # Case 1: amortized computation fails less often than tolerance.
-                    *all_but_one_fail,  # Success for a single Kronecker factor is not enough to reset counter.
-                    # Case 2: amortized computation fails exactly as often as tolerance (3).
-                    *all_fail,
-                    *all_fail,
-                    # Case 3: amortized computation succeeds after tolerance hit (counter is reset).
-                    *all_success,
-                    # Case 4: amortized computation fails more often than tolerance.
-                    *all_fail,
-                    *all_fail,
-                    *all_fail,
-                    fail,  # One failure is enough to raise an exception in this case.
-                ],
-            ) as mock_amortized_computation:
+            with (
+                mock.patch.object(
+                    shampoo_preconditioner_list,
+                    self._amortized_computation_function(),
+                    # Note that the cases causally depend on each other.
+                    side_effect=[
+                        # Case 1: amortized computation fails less often than tolerance.
+                        *all_but_one_fail,  # Success for a single Kronecker factor is not enough to reset counter.
+                        # Case 2: amortized computation fails exactly as often as tolerance (3).
+                        *all_fail,
+                        *all_fail,
+                        # Case 3: amortized computation succeeds after tolerance hit (counter is reset).
+                        *all_success,
+                        # Case 4: amortized computation fails more often than tolerance.
+                        *all_fail,
+                        *all_fail,
+                        *all_fail,
+                        fail,  # One failure is enough to raise an exception in this case.
+                    ],
+                ) as mock_amortized_computation
+            ):
                 # Accumulate factor matrices for valid amortized computation.
                 self._preconditioner_list.update_preconditioners(
                     masked_grad_list=masked_grad_list0,
@@ -1092,3 +1096,115 @@ class EigenvalueCorrectedShampooPreconditionerListTest(
 
         test_inverse_roots_from_override(inv_root_override=1)
         test_inverse_roots_from_override(inv_root_override=[1, 1, 1])
+
+    def test_adaptive_amortized_computation_frequency_criterion_below_tolerance(
+        self,
+    ) -> None:
+        """Test adaptive amortized computation frequency criterion."""
+        test_factor_matrix = torch.tensor(
+            [
+                [0.1728, 0.7989, -1.3391, -0.2319, -0.6411],
+                [1.5930, 0.1929, -0.3534, 0.9371, -1.7551],
+                [1.4669, -0.2361, 0.5761, 0.6107, 0.6555],
+                [0.2715, -1.1916, 0.8504, -0.2460, 1.0288],
+                [-0.1769, 1.0129, 0.1652, -0.7164, -1.2969],
+            ],
+        )
+        test_factor_matrix_eigenvectors = torch.linalg.eigh(
+            test_factor_matrix
+        ).eigenvectors
+        criterion = torch.linalg.matrix_norm(
+            (
+                test_factor_matrix_eigenvectors.T
+                @ test_factor_matrix
+                @ test_factor_matrix_eigenvectors
+            ).fill_diagonal_(0.0)  # Off-diagonal elements only.
+        ) / (1 + torch.linalg.matrix_norm(test_factor_matrix))
+
+        # Above tolerance.
+        test_tolerance1 = 1e-1
+        test_criterion1 = EigenvalueCorrectedShampooPreconditionerList.adaptive_amortized_computation_frequency_criterion_below_tolerance(
+            test_factor_matrix, test_factor_matrix_eigenvectors, test_tolerance1
+        )
+        assert (criterion <= test_tolerance1) == test_criterion1  # criterion=False.
+
+        # Below tolerance.
+        test_tolerance2 = 1
+        test_criterion2 = EigenvalueCorrectedShampooPreconditionerList.adaptive_amortized_computation_frequency_criterion_below_tolerance(
+            test_factor_matrix, test_factor_matrix_eigenvectors, test_tolerance2
+        )
+        assert (criterion <= test_tolerance2) == test_criterion2  # criterion=True.
+
+    def test_adaptive_amortized_computation_frequency(self):
+        # Setup the preconditioner list with the adaptive amortized computation frequency.
+        self._preconditioner_list = self._instantiate_preconditioner_list(
+            preconditioner_config=EigenvalueCorrectedShampooPreconditionerConfig(
+                amortized_computation_frequency_config=AdaptiveAmortizedComputationFrequencyConfig(
+                    tolerance=1e-4,  # The value does not matter here.
+                ),
+            ),
+        )
+        # Create the masked gradients for the test.
+        masked_grad_list0 = (
+            torch.tensor([1.0, 0.0]),
+            torch.eye(2) / torch.tensor(2.0).sqrt(),
+            torch.tensor([[1.0, 0.0]]),
+        )
+        masked_grad_list = (
+            torch.tensor([0.0, 1.0]),
+            torch.eye(2) / torch.tensor(2.0).sqrt(),
+            torch.tensor([[0.0, 1.0]]),
+        )
+
+        # Setup the constants for the mock functions.
+        NUM_FACTOR_MATRICES = sum(grad.dim() for grad in masked_grad_list0)
+        # If criterion is False, amortized computation is performed.
+        # If criterion is True, amortized computation is not performed.
+        CRITERION_RESULTS = [False, True, False, False, True]
+        assert len(CRITERION_RESULTS) == NUM_FACTOR_MATRICES
+        NUM_AMORTIZED_COMPUTATION_CALLS = 2 * NUM_FACTOR_MATRICES - sum(
+            CRITERION_RESULTS
+        )
+
+        # Mock the amortized computation function and the criterion function.
+        with (
+            mock.patch.object(
+                shampoo_preconditioner_list,
+                self._amortized_computation_function(),
+                side_effect=[*(torch.tensor([1.0]),) * NUM_AMORTIZED_COMPUTATION_CALLS],
+            ) as mock_amortized_computation,
+            mock.patch.object(
+                EigenvalueCorrectedShampooPreconditionerList,
+                "adaptive_amortized_computation_frequency_criterion_below_tolerance",
+                side_effect=CRITERION_RESULTS,
+            ) as mock_criterion,
+        ):
+            # First update step.
+            self._preconditioner_list.update_preconditioners(
+                masked_grad_list=masked_grad_list0,
+                step=torch.tensor(1),
+                perform_amortized_computation=True,
+            )
+            # Amortized computation is performed for all factor matrices in the first step.
+            self.assertEqual(mock_criterion.call_count, 0)
+            self.assertEqual(
+                mock_amortized_computation.call_count,
+                NUM_FACTOR_MATRICES,
+            )
+
+            # Second update step.
+            self._preconditioner_list.update_preconditioners(
+                masked_grad_list=masked_grad_list,
+                step=torch.tensor(2),
+                perform_amortized_computation=True,
+            )
+            # The criterion is evaluated for all factor matrices in the second step.
+            self.assertEqual(
+                mock_criterion.call_count,
+                NUM_FACTOR_MATRICES,
+            )
+            # Amortized computation is performed for the first, third, and fourth factor matrices in the second step.
+            self.assertEqual(
+                mock_amortized_computation.call_count,
+                NUM_AMORTIZED_COMPUTATION_CALLS,
+            )

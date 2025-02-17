@@ -19,7 +19,7 @@ from typing import Any, cast, Generic, TypeVar
 
 import torch
 from distributed_shampoo.shampoo_types import (
-    ApproximateEigenvaluesCriterionConfig,
+    AdaptiveAmortizedComputationFrequencyConfig,
     EigenvalueCorrectedShampooPreconditionerConfig,
     PreconditionerConfig,
     PreconditionerValueError,
@@ -145,7 +145,7 @@ class AdagradPreconditionerList(PreconditionerList):
         state (Mapping[Tensor, Any]): Mapping containing optimizer state.
         block_info_list (tuple[BlockInfo, ...]): List containing corresponding BlockInfo for each block/parameter in block_list.
             Note that this should have the same length as block_list.
-        beta2 (float): Exponential moving average factor for Adam/RMSprop second moment state. If beta2 = 1., will use
+        beta2 (float): Exponential moving average factor for Adam/RMSProp second moment state. If beta2 = 1., will use
             unweighted sum. (Default: 1.0)
         epsilon (float): Epsilon term for regularizing preconditioner to ensure positive definiteness. (Default: 1e-10)
         use_bias_correction (bool): Flag for using bias correction. (Default: False)
@@ -1141,6 +1141,32 @@ class EigenvalueCorrectedShampooPreconditionerList(
                 preconditioned_grad_list.append(grad)
             return tuple(preconditioned_grad_list)
 
+    @staticmethod
+    def adaptive_amortized_computation_frequency_criterion_below_tolerance(
+        factor_matrix: Tensor,
+        factor_matrix_eigenvectors: Tensor,
+        tolerance: float,
+    ) -> bool:
+        """Evaluates whether the criterion for adaptive amortized computation frequency is below the tolerance.
+
+        Args:
+            factor_matrix (Tensor): The factor matrix.
+            factor_matrix_eigenvectors (Tensor): The eigenvectors of the factor matrix.
+            tolerance (float): The tolerance for the criterion.
+
+        Returns:
+            bool: Whether the criterion is below or equal to the tolerance
+        """
+        # TODO: Potentially improve the criterion.
+        criterion = torch.linalg.matrix_norm(
+            (
+                factor_matrix_eigenvectors.T
+                @ factor_matrix
+                @ factor_matrix_eigenvectors
+            ).fill_diagonal_(0.0)  # Off-diagonal elements only.
+        ) / (1 + torch.linalg.matrix_norm(factor_matrix))
+        return criterion <= tolerance
+
     @torch.compiler.disable
     def _amortized_computation(self) -> None:
         # NOTE: This function currently only computes the preconditioner eigenvectors based on
@@ -1179,26 +1205,19 @@ class EigenvalueCorrectedShampooPreconditionerList(
 
                     if (
                         type(
-                            preconditioner_config.adaptive_amortized_computation_frequency_config
+                            preconditioner_config.amortized_computation_frequency_config
                         )
-                        is ApproximateEigenvaluesCriterionConfig
-                        and factor_matrix_eigenvectors.any()
+                        is AdaptiveAmortizedComputationFrequencyConfig
+                        and factor_matrix_eigenvectors.any()  # Always update at first iteration.
+                        and EigenvalueCorrectedShampooPreconditionerList.adaptive_amortized_computation_frequency_criterion_below_tolerance(
+                            factor_matrix,
+                            factor_matrix_eigenvectors,
+                            preconditioner_config.amortized_computation_frequency_config.tolerance,
+                        )
                     ):
-                        # TODO: Potentially improve the criterion.
-                        update_criterion = torch.linalg.matrix_norm(
-                            (
-                                factor_matrix_eigenvectors.T
-                                @ factor_matrix
-                                @ factor_matrix_eigenvectors
-                            ).fill_diagonal_(0.0)  # Off-diagonal elements only.
-                        ) / (1 + torch.linalg.matrix_norm(factor_matrix))
-                        if (
-                            update_criterion
-                            < preconditioner_config.adaptive_amortized_computation_frequency_config.tolerance
-                        ):
-                            # TODO: Add optional counter of skipped updates for debugging/research purposes.
-                            # Skip update of eigenbasis.
-                            continue
+                        # TODO: Add optional counter of skipped updates for debugging/research purposes.
+                        # Skip computation of eigenvectors.
+                        continue
 
                     # Compute eigenvectors of factor matrix.
                     try:

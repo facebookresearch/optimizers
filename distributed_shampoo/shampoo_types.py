@@ -134,7 +134,7 @@ class PreconditionerConfig(AbstractDataclass):
     amortized_computation_config: MatrixFunctionConfig  # type: ignore
     num_tolerated_failed_amortized_computations: int = 3
     amortized_computation_frequency_config: AmortizedComputationFrequencyConfig = field(
-        default_factory=lambda: ConstantAmortizedComputationFrequencyConfig()
+        default_factory=lambda: ConstantAmortizedComputationFrequencyConfig()  # type: ignore[abstract]
     )
 
     def __post_init__(self) -> None:
