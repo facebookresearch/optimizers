@@ -80,17 +80,62 @@ class PreconditionerValueError(ValueError):
 
 ###### DATACLASSES ######
 @dataclass(init=False)
+class AmortizedComputationFrequencyConfig(AbstractDataclass):
+    """Configuration for determining amortized computation frequency."""
+
+
+@dataclass(kw_only=True)
+class ConstantAmortizedComputationFrequencyConfig(AmortizedComputationFrequencyConfig):
+    """Configuration for constant amortized computation frequency.
+
+    Will use precondition_frequency as the amortized computation frequency.
+
+    """
+
+
+@dataclass(kw_only=True)
+class AdaptiveAmortizedComputationFrequencyConfig(AmortizedComputationFrequencyConfig):
+    """Configuration for adaptively determining amortized computation frequency.
+
+    Determines whether the eigenbasis for a factor matrix should be updated based on computing
+    the approximate eigenvalues Q^T A Q, where Q is the eigenbasis transformation matrix and
+    A is the Kronecker factor. The approximate eigenvalues update criterion is then defined as
+    ||(Q^T A Q) - diag(Q^T A Q)||_F <= tolerance * (1 + ||A||_F).
+    # TODO: Potentially improve the criterion.
+    The precondition_frequency hyperparameter will be used as the minimum number of steps
+    between each amortized computation.
+
+    Args:
+        tolerance (float): Tolerance for criterion (should be >= 0.0).
+
+    """
+
+    tolerance: float
+
+    def __post_init__(self):
+        if self.tolerance < 0.0:
+            raise ValueError(
+                f"Invalid tolerance value: {self.tolerance}. Must be >= 0.0."
+            )
+
+
+@dataclass(init=False)
 class PreconditionerConfig(AbstractDataclass):
     """Configuration for preconditioner computation in DistributedShampoo.
 
     Args:
         amortized_computation_config (MatrixFunctionConfig): Configuration for the amortized computation, e.g., inverse-root or eigenvector computation.
         num_tolerated_failed_amortized_computations (int): Number of failed amortized computations to tolerate before raising an error. (Default: 3)
+        amortized_computation_frequency_config (AmortizedComputationFrequencyConfig): Configuration for determining the amortized computation frequency.
+            (Default: ConstantAmortizedComputationFrequencyConfig())
 
     """
 
     amortized_computation_config: MatrixFunctionConfig  # type: ignore
     num_tolerated_failed_amortized_computations: int = 3
+    amortized_computation_frequency_config: AmortizedComputationFrequencyConfig = field(
+        default_factory=lambda: ConstantAmortizedComputationFrequencyConfig()
+    )
 
     def __post_init__(self) -> None:
         if self.num_tolerated_failed_amortized_computations < 0:
@@ -105,6 +150,9 @@ class ShampooPreconditionerConfig(PreconditionerConfig):
 
     Args:
         amortized_computation_config (RootInvConfig): Configuration for the inverse-root computation. (Default: DefaultEigenConfig)
+        num_tolerated_failed_amortized_computations (int): Number of failed amortized computations to tolerate before raising an error. (Default: 3)
+        amortized_computation_frequency_config (AmortizedComputationFrequencyConfig): Configuration for determining the amortized computation frequency.
+            (Default: ConstantAmortizedComputationFrequencyConfig())
 
     """
 
@@ -112,33 +160,19 @@ class ShampooPreconditionerConfig(PreconditionerConfig):
         default_factory=lambda: DefaultEigenConfig
     )
 
+    def __post_init__(self):
+        super().__post_init__()
+        if (
+            type(self.amortized_computation_frequency_config)
+            is not ConstantAmortizedComputationFrequencyConfig
+        ):
+            raise ValueError(
+                f"Invalid amortized_computation_frequency_config: {self.amortized_computation_frequency_config}."
+                " Must be ConstantAmortizedComputationFrequencyConfig."
+            )
+
 
 DefaultShampooConfig = ShampooPreconditionerConfig()
-
-
-@dataclass(init=False)
-class AdaptiveAmortizedComputationFrequencyConfig(AbstractDataclass):
-    """Configuration for adaptively determining amortized computation frequency."""
-
-
-@dataclass(kw_only=True)
-class ApproximateEigenvaluesCriterionConfig(
-    AdaptiveAmortizedComputationFrequencyConfig
-):
-    """Configuration for determining amortized computation frequency via approximate eigenvalues criterion.
-
-    Determines whether the eigenbasis for a factor matrix should be updated based on computing
-    the approximate eigenvalues Q^T A Q, where Q is the eigenbasis transformation matrix and
-    A is the Kronecker factor. The approximate eigenvalues update criterion is then defined as
-    ||(Q^T A Q) - diag(Q^T A Q)||_F < tolerance * (1 + ||A||_F).
-    # TODO: Potentially improve the criterion (and its name).
-
-    Args:
-        tolerance (float): Tolerance for criterion.
-
-    """
-
-    tolerance: float
 
 
 @dataclass(kw_only=True)
@@ -148,17 +182,15 @@ class EigenvalueCorrectedShampooPreconditionerConfig(PreconditionerConfig):
     Args:
         amortized_computation_config (EigenvectorConfig): Configuration for the eigenvector computation.
             (Default: DefaultEighEigenvectorConfig)
-        adaptive_amortized_computation_frequency_config: Configuration for adaptively determining the
-            amortized computation frequency. (Default: None)
+        num_tolerated_failed_amortized_computations (int): Number of failed amortized computations to tolerate before raising an error. (Default: 3)
+        amortized_computation_frequency_config (AmortizedComputationFrequencyConfig): Configuration for determining the amortized computation frequency.
+            (Default: ConstantAmortizedComputationFrequencyConfig())
 
     """
 
     amortized_computation_config: EigenvectorConfig = field(
         default_factory=lambda: DefaultEighEigenvectorConfig
     )
-    adaptive_amortized_computation_frequency_config: (
-        AdaptiveAmortizedComputationFrequencyConfig | None
-    ) = None
 
 
 DefaultEigenvalueCorrectedShampooConfig = (

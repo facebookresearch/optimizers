@@ -16,8 +16,10 @@ from typing import TypeVar
 
 from distributed_shampoo.shampoo_types import (
     AdaGradGraftingConfig,
+    AdaptiveAmortizedComputationFrequencyConfig,
     PreconditionerConfig,
     RMSpropGraftingConfig,
+    ShampooPreconditionerConfig,
 )
 
 
@@ -97,4 +99,34 @@ class PreconditionerConfigSubclassesTest(unittest.TestCase):
                     ),
                     cls,
                     num_tolerated_failed_amortized_computations=num_tolerated_failed_amortized_computations,
+                )
+
+
+class AdaptiveAmortizedComputationFrequencyConfigSubclassesTest(unittest.TestCase):
+    def test_illegal_tolerance(self) -> None:
+        tolerance = -1.0  # Negative tolerance is illegal.
+        for cls in get_all_subclasses(AdaptiveAmortizedComputationFrequencyConfig):
+            with self.subTest(cls=cls):
+                self.assertRaisesRegex(
+                    ValueError,
+                    re.escape(f"Invalid tolerance value: {tolerance}. Must be >= 0.0."),
+                    cls,
+                    tolerance=tolerance,
+                )
+
+
+class ShampooPreconditionerConfigSubclassesTest(unittest.TestCase):
+    def test_illegal_amortized_computation_frequency_config(self) -> None:
+        for cls in get_all_subclasses(ShampooPreconditionerConfig):
+            with self.subTest(cls=cls):
+                self.assertRaisesRegex(
+                    ValueError,
+                    re.escape(
+                        "Invalid amortized_computation_frequency_config: AdaptiveAmortizedComputationFrequencyConfig(tolerance=0.0001). "
+                        "Must be ConstantAmortizedComputationFrequencyConfig."
+                    ),
+                    cls,
+                    amortized_computation_frequency_config=AdaptiveAmortizedComputationFrequencyConfig(
+                        tolerance=1e-4
+                    ),
                 )
