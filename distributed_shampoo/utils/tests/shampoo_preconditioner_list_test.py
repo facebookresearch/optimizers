@@ -1162,6 +1162,11 @@ class EigenvalueCorrectedShampooPreconditionerListTest(
         # If criterion is True, amortized computation is not performed.
         CRITERION_RESULTS = [False, True, False, False, True]
         assert len(CRITERION_RESULTS) == NUM_FACTOR_MATRICES
+        # We will perform two update steps. If we performed the amortized computation
+        # for all factor matrices in both steps, we would have 2 * NUM_FACTOR_MATRICES
+        # calls. However, we will skip the update when the criterion result is mocked
+        # to be True, i.e. sum(CRITERION_RESULTS) times. Hence, the number of calls of
+        # the amortized computation function should be:
         NUM_AMORTIZED_COMPUTATION_CALLS = 2 * NUM_FACTOR_MATRICES - sum(
             CRITERION_RESULTS
         )
