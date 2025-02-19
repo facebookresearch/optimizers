@@ -93,6 +93,11 @@ class ConstantAmortizedComputationFrequencyConfig(AmortizedComputationFrequencyC
     """
 
 
+DefaultAmortizedComputationFrequencyConfig = (
+    ConstantAmortizedComputationFrequencyConfig()  # type: ignore[abstract]
+)
+
+
 @dataclass(kw_only=True)
 class AdaptiveAmortizedComputationFrequencyConfig(AmortizedComputationFrequencyConfig):
     """Configuration for adaptively determining amortized computation frequency.
@@ -127,14 +132,14 @@ class PreconditionerConfig(AbstractDataclass):
         amortized_computation_config (MatrixFunctionConfig): Configuration for the amortized computation, e.g., inverse-root or eigenvector computation.
         num_tolerated_failed_amortized_computations (int): Number of failed amortized computations to tolerate before raising an error. (Default: 3)
         amortized_computation_frequency_config (AmortizedComputationFrequencyConfig): Configuration for determining the amortized computation frequency.
-            (Default: ConstantAmortizedComputationFrequencyConfig())
+            (Default: DefaultAmortizedComputationFrequencyConfig)
 
     """
 
     amortized_computation_config: MatrixFunctionConfig  # type: ignore
     num_tolerated_failed_amortized_computations: int = 3
     amortized_computation_frequency_config: AmortizedComputationFrequencyConfig = field(
-        default_factory=lambda: ConstantAmortizedComputationFrequencyConfig()  # type: ignore[abstract]
+        default_factory=lambda: DefaultAmortizedComputationFrequencyConfig
     )
 
     def __post_init__(self) -> None:
@@ -152,7 +157,7 @@ class ShampooPreconditionerConfig(PreconditionerConfig):
         amortized_computation_config (RootInvConfig): Configuration for the inverse-root computation. (Default: DefaultEigenConfig)
         num_tolerated_failed_amortized_computations (int): Number of failed amortized computations to tolerate before raising an error. (Default: 3)
         amortized_computation_frequency_config (AmortizedComputationFrequencyConfig): Configuration for determining the amortized computation frequency.
-            (Default: ConstantAmortizedComputationFrequencyConfig())
+            (Default: DefaultAmortizedComputationFrequencyConfig)
 
     """
 
@@ -184,7 +189,7 @@ class EigenvalueCorrectedShampooPreconditionerConfig(PreconditionerConfig):
             (Default: DefaultEighEigenvectorConfig)
         num_tolerated_failed_amortized_computations (int): Number of failed amortized computations to tolerate before raising an error. (Default: 3)
         amortized_computation_frequency_config (AmortizedComputationFrequencyConfig): Configuration for determining the amortized computation frequency.
-            (Default: ConstantAmortizedComputationFrequencyConfig())
+            (Default: DefaultAmortizedComputationFrequencyConfig)
 
     """
 
