@@ -11,8 +11,12 @@ from distributed_shampoo.distributed_shampoo import DistributedShampoo
 from distributed_shampoo.shampoo_types import (
     AdaGradGraftingConfig,
     AdamGraftingConfig,
+    AdaptiveAmortizedComputationFrequencyConfig,
+    AmortizedComputationFrequencyConfig,
     CommunicationDType,
+    ConstantAmortizedComputationFrequencyConfig,
     DDPShampooConfig,
+    DefaultAmortizedComputationFrequencyConfig,
     DefaultEigenvalueCorrectedShampooConfig,
     DefaultShampooConfig,
     DefaultSOAPConfig,
@@ -68,6 +72,11 @@ __all__ = [
     "EigenvalueCorrectedShampooPreconditionerConfig",  # Based on `PreconditionerConfig`.
     "DefaultEigenvalueCorrectedShampooConfig",  # Default `EigenvalueCorrectedShampooPreconditionerConfig` using `EighEigenvectorConfig`.
     "DefaultSOAPConfig",  # Default `EigenvalueCorrectedShampooPreconditionerConfig` using `QRConfig`.
+    # `amortized_computation_frequency_config` options.
+    "AmortizedComputationFrequencyConfig",  # Abstract base class.
+    "ConstantAmortizedComputationFrequencyConfig",  # Based on `AmortizedComputationFrequencyConfig`.
+    "DefaultAmortizedComputationFrequencyConfig",  # Default config using `ConstantAmortizedComputationFrequencyConfig`.
+    "AdaptiveAmortizedComputationFrequencyConfig",  # Based on `AmortizedComputationFrequencyConfig`.
     # matrix functions configs.
     "MatrixFunctionConfig",  # Abstract base class.
     "EigenvalueDecompositionConfig",  # Abstract base class (based on `MatrixFunctionConfig`).
