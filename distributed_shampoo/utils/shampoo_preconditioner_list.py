@@ -1165,7 +1165,7 @@ class EigenvalueCorrectedShampooPreconditionerList(
         off_diagonal_summed = squared_approximate_eigenvalues.fill_diagonal_(0.0).sum()
         norm = torch.sqrt(diagonal_summed + off_diagonal_summed)
         off_diagonal_norm = torch.sqrt(off_diagonal_summed)
-        return off_diagonal_norm <= tolerance * norm
+        return bool(off_diagonal_norm <= tolerance * norm)
 
     @torch.compiler.disable
     def _amortized_computation(self) -> None:

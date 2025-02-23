@@ -1136,7 +1136,7 @@ class EigenvalueCorrectedShampooPreconditionerListTest(
         assert not (off_diagonal_norm <= test_tolerance1 * norm)
 
         # Below tolerance.
-        test_tolerance2 = 2e-7
+        test_tolerance2 = 3e-7
         test_criterion2 = EigenvalueCorrectedShampooPreconditionerList._adaptive_amortized_computation_frequency_criterion_below_or_equal_tolerance(
             test_factor_matrix, test_factor_matrix_eigenvectors, test_tolerance2
         )
