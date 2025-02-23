@@ -103,24 +103,25 @@ class AdaptiveAmortizedComputationFrequencyConfig(AmortizedComputationFrequencyC
     """Configuration for adaptively determining amortized computation frequency.
 
     Determines whether the eigenbasis for a factor matrix should be updated based on computing
-    the approximate eigenvalues Q^T A Q, where Q is the eigenbasis transformation matrix and
-    A is the Kronecker factor. The approximate eigenvalues update criterion is then defined as
-    ||(Q^T A Q) - diag(Q^T A Q)||_F <= tolerance * (1 + ||A||_F).
+    the approximate eigenvalues Q^T A Q =: B, where Q is the latest eigenbasis transformation matrix
+    and A is the current Kronecker factor. The approximate eigenvalues update criterion is then defined as
+    ||B - diag(B)||_F <= tolerance * ||B||_F. The tolerance hyperparameter should therefore
+    be in the interval [0.0, 1.0].
     # TODO: Potentially improve the criterion.
     The precondition_frequency hyperparameter will be used as the minimum number of steps
     between each amortized computation.
 
     Args:
-        tolerance (float): Tolerance for criterion (should be >= 0.0).
+        tolerance (float): Tolerance for criterion (must be in the interval [0.0, 1.0]).
 
     """
 
     tolerance: float
 
     def __post_init__(self):
-        if self.tolerance < 0.0:
+        if not (0.0 <= self.tolerance <= 1.0):
             raise ValueError(
-                f"Invalid tolerance value: {self.tolerance}. Must be >= 0.0."
+                f"Invalid tolerance value: {self.tolerance}. Must be in the interval [0.0, 1.0]."
             )
 
 

@@ -104,15 +104,18 @@ class PreconditionerConfigSubclassesTest(unittest.TestCase):
 
 class AdaptiveAmortizedComputationFrequencyConfigSubclassesTest(unittest.TestCase):
     def test_illegal_tolerance(self) -> None:
-        tolerance = -1.0  # Negative tolerance is illegal.
         for cls in get_all_subclasses(AdaptiveAmortizedComputationFrequencyConfig):
-            with self.subTest(cls=cls):
-                self.assertRaisesRegex(
-                    ValueError,
-                    re.escape(f"Invalid tolerance value: {tolerance}. Must be >= 0.0."),
-                    cls,
-                    tolerance=tolerance,
-                )
+            # tolerance has to be in the interval [0.0, 1.0].
+            for tolerance in [-1.0, 1.1]:
+                with self.subTest(cls=cls):
+                    self.assertRaisesRegex(
+                        ValueError,
+                        re.escape(
+                            f"Invalid tolerance value: {tolerance}. Must be in the interval [0.0, 1.0]."
+                        ),
+                        cls,
+                        tolerance=tolerance,
+                    )
 
 
 class ShampooPreconditionerConfigSubclassesTest(unittest.TestCase):

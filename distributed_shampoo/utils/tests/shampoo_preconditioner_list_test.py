@@ -1123,14 +1123,14 @@ class EigenvalueCorrectedShampooPreconditionerListTest(
 
         # Above tolerance.
         test_tolerance1 = 1e-1
-        test_criterion1 = EigenvalueCorrectedShampooPreconditionerList.adaptive_amortized_computation_frequency_criterion_below_tolerance(
+        test_criterion1 = EigenvalueCorrectedShampooPreconditionerList._adaptive_amortized_computation_frequency_criterion_below_or_equal_tolerance(
             test_factor_matrix, test_factor_matrix_eigenvectors, test_tolerance1
         )
         assert (criterion <= test_tolerance1) == test_criterion1  # criterion=False.
 
         # Below tolerance.
         test_tolerance2 = 1
-        test_criterion2 = EigenvalueCorrectedShampooPreconditionerList.adaptive_amortized_computation_frequency_criterion_below_tolerance(
+        test_criterion2 = EigenvalueCorrectedShampooPreconditionerList._adaptive_amortized_computation_frequency_criterion_below_or_equal_tolerance(
             test_factor_matrix, test_factor_matrix_eigenvectors, test_tolerance2
         )
         assert (criterion <= test_tolerance2) == test_criterion2  # criterion=True.
@@ -1180,7 +1180,7 @@ class EigenvalueCorrectedShampooPreconditionerListTest(
             ) as mock_amortized_computation,
             mock.patch.object(
                 EigenvalueCorrectedShampooPreconditionerList,
-                "adaptive_amortized_computation_frequency_criterion_below_tolerance",
+                "_adaptive_amortized_computation_frequency_criterion_below_or_equal_tolerance",
                 side_effect=CRITERION_RESULTS,
             ) as mock_criterion,
         ):

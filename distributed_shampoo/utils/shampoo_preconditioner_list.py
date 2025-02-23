@@ -1142,12 +1142,12 @@ class EigenvalueCorrectedShampooPreconditionerList(
             return tuple(preconditioned_grad_list)
 
     @staticmethod
-    def adaptive_amortized_computation_frequency_criterion_below_tolerance(
+    def _adaptive_amortized_computation_frequency_criterion_below_or_equal_tolerance(
         factor_matrix: Tensor,
         factor_matrix_eigenvectors: Tensor,
         tolerance: float,
     ) -> bool:
-        """Evaluates whether the criterion for adaptive amortized computation frequency is below the tolerance.
+        """Evaluates whether the criterion for adaptive amortized computation frequency is below or equal to the tolerance.
 
         Args:
             factor_matrix (Tensor): The factor matrix.
@@ -1158,14 +1158,14 @@ class EigenvalueCorrectedShampooPreconditionerList(
             bool: Whether the criterion is below or equal to the tolerance
         """
         # TODO: Potentially improve the criterion.
-        criterion = torch.linalg.matrix_norm(
-            (
-                factor_matrix_eigenvectors.T
-                @ factor_matrix
-                @ factor_matrix_eigenvectors
-            ).fill_diagonal_(0.0)  # Off-diagonal elements only.
-        ) / (1 + torch.linalg.matrix_norm(factor_matrix))
-        return criterion <= tolerance
+        squared_approximate_eigenvalues = (
+            factor_matrix_eigenvectors.T @ factor_matrix @ factor_matrix_eigenvectors
+        ).square_()
+        diagonal_summed = squared_approximate_eigenvalues.diag().sum()
+        off_diagonal_summed = squared_approximate_eigenvalues.fill_diagonal_(0.0).sum()
+        norm = torch.sqrt(diagonal_summed + off_diagonal_summed)
+        off_diagonal_norm = torch.sqrt(off_diagonal_summed)
+        return off_diagonal_norm <= tolerance * norm
 
     @torch.compiler.disable
     def _amortized_computation(self) -> None:
@@ -1209,7 +1209,7 @@ class EigenvalueCorrectedShampooPreconditionerList(
                         )
                         is AdaptiveAmortizedComputationFrequencyConfig
                         and factor_matrix_eigenvectors.any()  # Always update at first iteration.
-                        and EigenvalueCorrectedShampooPreconditionerList.adaptive_amortized_computation_frequency_criterion_below_tolerance(
+                        and EigenvalueCorrectedShampooPreconditionerList._adaptive_amortized_computation_frequency_criterion_below_or_equal_tolerance(
                             factor_matrix,
                             factor_matrix_eigenvectors,
                             preconditioner_config.amortized_computation_frequency_config.tolerance,
