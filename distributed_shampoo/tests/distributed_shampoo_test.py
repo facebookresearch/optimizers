@@ -28,7 +28,6 @@ from distributed_shampoo.shampoo_types import (
     PreconditionerConfig,
     SGDGraftingConfig,
     ShampooPreconditionerConfig,
-    ShampooPT2CompileConfig,
 )
 from torch import nn
 
@@ -149,18 +148,6 @@ class DistributedShampooInitTest(unittest.TestCase):
                     **incorrect_hyperparameter_setting,
                 )
 
-    def test_invalid_cuda_pytorch_compile_setting(self) -> None:
-        with mock.patch.object(torch.cuda, "is_available", return_value=False):
-            self.assertRaisesRegex(
-                ValueError,
-                re.escape(
-                    "Backend does NOT support Pytorch 2.0 compile. Switch to shampoo_pt2_compile_config=None."
-                ),
-                DistributedShampoo,
-                self._model.parameters(),
-                shampoo_pt2_compile_config=ShampooPT2CompileConfig(),
-            )
-
     def test_nesterov_and_zero_momentum(self) -> None:
         with self.assertLogs(
             level="WARNING",
@@ -192,24 +179,6 @@ class DistributedShampooInitTest(unittest.TestCase):
                 DistributedShampoo,
                 params=self._model.parameters(),
                 distributed_config=DDPShampooConfig(),
-            )
-
-    def test_setting_exponent_multiplier_with_eigen_config(self) -> None:
-        with self.assertLogs(
-            level="WARNING",
-        ) as cm:
-            DistributedShampoo(
-                self._model.parameters(),
-                lr=0.01,
-                start_preconditioning_step=1,
-                exponent_multiplier=2.0,
-                preconditioner_config=DefaultShampooConfig,
-            )
-            self.assertCountEqual(
-                [r.msg for r in cm.records],
-                [
-                    "exponent_multiplier=2.0 is deprecating. Please consider using EigenConfig.exponent_multiplier directly and setting exponent_multipler=None instead in the future."
-                ],
             )
 
 

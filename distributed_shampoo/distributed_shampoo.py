@@ -7,7 +7,6 @@ LICENSE file in the root directory of this source tree.
 
 """
 
-import dataclasses
 import logging
 from collections.abc import Callable, Iterator, Sequence
 from copy import deepcopy
@@ -91,7 +90,6 @@ from distributed_shampoo.utils.shampoo_preconditioner_list import (
 )
 from distributed_shampoo.utils.shampoo_utils import compress_list
 
-from matrix_functions_types import EigenConfig
 from torch.optim.optimizer import ParamsT, StateDict
 
 logger: logging.Logger = logging.getLogger(__name__)
@@ -271,8 +269,6 @@ class DistributedShampoo(torch.optim.Optimizer):
             root -1 / (2 * o), where o is the order of the tensor. If preconditioner_config is an instance of
             EigenvalueCorrectedShampooPreconditionerConfig, the default is -1 / 2.
             (Default: 0)
-        exponent_multiplier (float | None): **DEPRECATING** Number to be multiplied to the numerator of the inverse root, i.e., eta where the
-            exponent is -eta / (2 * p). (Default: None)
         use_nesterov (bool): Flag for using Nesterov momentum. (default: False)
         use_bias_correction (bool): Flag for using bias correction. (Default: True)
         use_decoupled_weight_decay (bool): Flag for using AdamW-style decoupled weight decay. (Default: True)
@@ -306,7 +302,6 @@ class DistributedShampoo(torch.optim.Optimizer):
         precondition_frequency: int = 1,
         start_preconditioning_step: int = -1,
         inv_root_override: int | Sequence[int] = 0,
-        exponent_multiplier: float | None = None,
         use_nesterov: bool = False,
         use_bias_correction: bool = True,
         use_decoupled_weight_decay: bool = True,
@@ -388,28 +383,6 @@ class DistributedShampoo(torch.optim.Optimizer):
             logger.warning(
                 "Nesterov flag is enabled but momentum parameter is zero! "
                 "Continuing without using momentum or Nesterov acceleration..."
-            )
-
-        # Provide error for system Pytorch compile availability
-        if shampoo_pt2_compile_config is not None and not torch.cuda.is_available():
-            raise ValueError(
-                "Backend does NOT support Pytorch 2.0 compile. Switch to shampoo_pt2_compile_config=None."
-            )
-
-        amortized_computation_config = (
-            preconditioner_config.amortized_computation_config
-        )
-        # Set exponent multiplier if this is not provided.
-        if (
-            isinstance(amortized_computation_config, EigenConfig)
-            and exponent_multiplier is not None
-        ):
-            logger.warning(
-                f"{exponent_multiplier=} is deprecating. Please consider using EigenConfig.exponent_multiplier directly and setting exponent_multipler=None instead in the future."
-            )
-            amortized_computation_config = dataclasses.replace(
-                amortized_computation_config,
-                exponent_multiplier=exponent_multiplier,
             )
 
         super().__init__(
@@ -561,7 +534,9 @@ class DistributedShampoo(torch.optim.Optimizer):
 
     @torch.no_grad()
     def _instantiate_steps(self) -> None:
-        for state_lists in self._per_group_state_lists:
+        for state_lists, group in zip(
+            self._per_group_state_lists, self.param_groups, strict=True
+        ):
             assert (
                 len(state_lists[DISTRIBUTOR].local_block_info_list) > 0
             ), "There is no params in your param_group. Please check the instantiation of DistributedShampoo "
@@ -573,8 +548,7 @@ class DistributedShampoo(torch.optim.Optimizer):
 
             # In order to ensure that the step counter is checkpointed correctly, we store it
             # as a tensor (which is replicated across all devices) under the first parameter's state.
-            block_info = state_lists[DISTRIBUTOR].local_block_info_list[0]
-            self.state[block_info.param][STEP] = state_lists[STEP]
+            self.state[group[PARAMS][0]][STEP] = state_lists[STEP]
 
     @torch.no_grad()
     def _instantiate_momentum(self) -> None:

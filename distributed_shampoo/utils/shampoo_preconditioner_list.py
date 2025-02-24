@@ -276,7 +276,13 @@ class AdagradPreconditionerList(PreconditionerList):
 
 @dataclass
 class BaseShampooKroneckerFactors(OptimizerModule):
-    """Base class for Shampoo Kronecker factors."""
+    """Base class for Shampoo Kronecker factors.
+
+    Attributes:
+        factor_matrices (tuple[Tensor, ...]): A tuple of tensors representing the factor matrices.
+        factor_matrix_indices (tuple[str, ...]): A tuple of strings representing the indices of the factor matrices.
+        is_factor_matrices_diagonal (tuple[Tensor, ...]): A tuple of tensors indicating if the factor matrices are diagonal.
+    """
 
     factor_matrices: tuple[Tensor, ...]
     factor_matrix_indices: tuple[str, ...]
@@ -292,7 +298,14 @@ class BaseShampooKroneckerFactors(OptimizerModule):
 
 @dataclass
 class ShampooKroneckerFactorsState(BaseShampooKroneckerFactors):
-    """Shampoo Kronecker factors (wrapped) for storing in the optimizer state."""
+    """Shampoo Kronecker factors (wrapped) for storing in the optimizer state.
+
+    Attributes:
+        inv_factor_matrices (tuple[Tensor, ...]): A tuple of tensors representing the inverse of the factor matrices.
+        factor_matrices (tuple[Tensor, ...]): A tuple of tensors representing the factor matrices.
+        factor_matrix_indices (tuple[str, ...]): A tuple of strings representing the indices of the factor matrices.
+        is_factor_matrices_diagonal (tuple[Tensor, ...]): A tuple of tensors indicating if the factor matrices are diagonal.
+    """
 
     inv_factor_matrices: tuple[Tensor, ...]
 
@@ -303,7 +316,14 @@ class ShampooKroneckerFactorsState(BaseShampooKroneckerFactors):
 
 @dataclass
 class ShampooKroneckerFactorsList(BaseShampooKroneckerFactors):
-    """Shampoo Kronecker factors (unwrapped) for operations during optimizer computation."""
+    """Shampoo Kronecker factors (unwrapped) for operations during optimizer computation.
+
+    Attributes:
+        inv_factor_matrices (tuple[Tensor, ...]): A tuple of tensors representing the inverse of the factor matrices.
+        factor_matrices (tuple[Tensor, ...]): A tuple of tensors representing the factor matrices.
+        factor_matrix_indices (tuple[str, ...]): A tuple of strings representing the indices of the factor matrices.
+        is_factor_matrices_diagonal (tuple[Tensor, ...]): A tuple of tensors indicating if the factor matrices are diagonal.
+    """
 
     inv_factor_matrices: tuple[Tensor, ...]
 
@@ -314,7 +334,15 @@ class ShampooKroneckerFactorsList(BaseShampooKroneckerFactors):
 
 @dataclass
 class EigenvalueCorrectedShampooKroneckerFactorsState(BaseShampooKroneckerFactors):
-    """Eigenvalue-corrected Shampoo Kronecker factors (wrapped) for storing in the optimizer state."""
+    """Eigenvalue-corrected Shampoo Kronecker factors (wrapped) for storing in the optimizer state.
+
+    Attributes:
+        factor_matrices_eigenvectors (tuple[Tensor, ...]): A tuple of tensors representing the eigenvectors of the factor matrices.
+        corrected_eigenvalues (Tensor): A tensor representing the corrected eigenvalues.
+        factor_matrices (tuple[Tensor, ...]): A tuple of tensors representing the factor matrices.
+        factor_matrix_indices (tuple[str, ...]): A tuple of strings representing the indices of the factor matrices.
+        is_factor_matrices_diagonal (tuple[Tensor, ...]): A tuple of tensors indicating if the factor matrices are diagonal.
+    """
 
     factor_matrices_eigenvectors: tuple[Tensor, ...]
     corrected_eigenvalues: Tensor
@@ -326,7 +354,15 @@ class EigenvalueCorrectedShampooKroneckerFactorsState(BaseShampooKroneckerFactor
 
 @dataclass
 class EigenvalueCorrectedShampooKroneckerFactorsList(BaseShampooKroneckerFactors):
-    """Eigenvalue-corrected Shampoo Kronecker factors (unwrapped) for operations during optimizer computation."""
+    """Eigenvalue-corrected Shampoo Kronecker factors (unwrapped) for operations during optimizer computation.
+
+    Attributes:
+        factor_matrices_eigenvectors (tuple[Tensor, ...]): A tuple of tensors representing the eigenvectors of the factor matrices.
+        corrected_eigenvalues (Tensor): A tensor representing the corrected eigenvalues.
+        factor_matrices (tuple[Tensor, ...]): A tuple of tensors representing the factor matrices.
+        factor_matrix_indices (tuple[str, ...]): A tuple of strings representing the indices of the factor matrices.
+        is_factor_matrices_diagonal (tuple[Tensor, ...]): A tuple of tensors indicating if the factor matrices are diagonal.
+    """
 
     factor_matrices_eigenvectors: tuple[Tensor, ...]
     corrected_eigenvalues: Tensor
