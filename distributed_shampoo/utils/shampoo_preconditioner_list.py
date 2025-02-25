@@ -12,7 +12,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from fractions import Fraction
-from functools import partial, reduce
+from functools import reduce
 
 from itertools import chain
 from typing import Any, cast, Generic, TypeVar
@@ -391,7 +391,7 @@ class BaseShampooPreconditionerList(
         state (Mapping[Tensor, Any]): Mapping containing optimizer state.
         block_info_list (tuple[BlockInfo, ...]): List containing corresponding BlockInfo for each block/parameter in block_list.
             Note that this should have the same length as block_list.
-        preconditioner_config (PreconditionerConfig): Configuration for preconditioner computation. (Default: DefaultShampooConfig)
+        preconditioner_config (PreconditionerConfig): Configuration for preconditioner computation.
         beta2 (float): Exponential moving average factor for Shampoo factor matrices. If beta2 = 1., will use unweighted sum.
             (Default: 1.0)
         epsilon (float): Epsilon term for regularizing preconditioner to ensure positive definiteness. (Default: 1e-12)
@@ -428,12 +428,24 @@ class BaseShampooPreconditionerList(
         self._use_bias_correction = use_bias_correction
         self._bias_correction2: Tensor = torch.tensor(1.0)
 
+        preconditioned_dims_selector_list: tuple[tuple[bool, ...], ...] = tuple(
+            tuple(d not in preconditioner_config.ignored_dims for d in range(len(dims)))
+            for dims in self._dims_list
+        )
+        preconditioned_dims_list: tuple[tuple[int, ...], ...] = tuple(
+            compress_list(dims, preconditioned_dims_selector)
+            for dims, preconditioned_dims_selector in zip(
+                self._dims_list, preconditioned_dims_selector_list, strict=True
+            )
+        )
+
         # Create the Kronecker factors.
         kronecker_factors_list: list[ShampooKroneckerFactorsListType] = (
             self._create_kronecker_factors_state(
                 block_list=block_list,
                 state=state,
                 block_info_list=block_info_list,
+                preconditioned_dims_list=preconditioned_dims_list,
             )
         )
 
@@ -441,19 +453,21 @@ class BaseShampooPreconditionerList(
         self._initialize_state_lists(
             block_list=block_list,
             kronecker_factors_list=kronecker_factors_list,
+            preconditioned_dims_list=preconditioned_dims_list,
+            preconditioned_dims_selector_list=preconditioned_dims_selector_list,
         )
 
     def _create_base_kronecker_factors(
         self,
         block_info: BlockInfo,
-        dims: torch.Size,
+        preconditioned_dims: tuple[int, ...],
     ) -> BaseShampooKroneckerFactors:
         """
         Creates a BaseShampooKroneckerFactor object for a given block.
 
         Args:
             block_info (BlockInfo): The BlockInfo object containing information about the block.
-            dims (torch.Size): The dimensions of the block.
+            preconditioned_dims (tuple[int, ...]): The preconditioned dimensions of the block.
 
         Returns:
             kronecker_factors_state (BaseShampooKroneckerFactors): An object containing the Kronecker factors for the block.
@@ -464,13 +478,13 @@ class BaseShampooPreconditionerList(
                 dtype=self._factor_matrix_dtype,
                 device=block_info.param.device,
             )
-            for dim in dims
+            for dim in preconditioned_dims
         )
 
         param_index, block_index = block_info.composable_block_ids
         factor_matrix_indices = tuple(
             ".".join((str(param_index), str(block_index), str(k)))
-            for k in range(len(dims))
+            for k in range(len(preconditioned_dims))
         )
         return BaseShampooKroneckerFactors(
             factor_matrices=factor_matrices,
@@ -483,6 +497,7 @@ class BaseShampooPreconditionerList(
         block: Tensor,
         block_info: BlockInfo,
         dims: torch.Size,
+        preconditioned_dims: tuple[int, ...],
     ) -> ShampooKroneckerFactorsState | EigenvalueCorrectedShampooKroneckerFactorsState:
         """
         Creates a Kronecker factors state object for a given block.
@@ -491,6 +506,7 @@ class BaseShampooPreconditionerList(
             block (Tensor): The block of the parameter.
             block_info (BlockInfo): The BlockInfo object containing information about the block.
             dims (torch.Size): The dimensions of the block.
+            preconditioned_dims (tuple[int, ...]): The preconditioned dimensions of the block.
 
         Returns:
             kronecker_factors_state (ShampooKroneckerFactorsState | EigenvalueCorrectedShampooKroneckerFactorsState): An object containing the Kronecker factors for the block.
@@ -522,6 +538,7 @@ class BaseShampooPreconditionerList(
         # type: ignore
         state: Mapping[Tensor, Any],
         block_info_list: tuple[BlockInfo, ...],
+        preconditioned_dims_list: tuple[tuple[int, ...], ...],
     ) -> list[ShampooKroneckerFactorsListType]:
         # Instantiate (blocked) Kronecker factors and construct list of Kronecker factors.
         # NOTE: We need to instantiate the Kronecker factor states within the optimizer's state dictionary,
@@ -529,8 +546,12 @@ class BaseShampooPreconditionerList(
         # This is because the optimizer state is defined per-parameter, but ShampooPreconditionerList is defined
         # across each parameter group (which includes multiple parameters).
         kronecker_factors_list = []
-        for block, block_info, dims in zip(
-            block_list, block_info_list, self._dims_list, strict=True
+        for block, block_info, dims, preconditioned_dims in zip(
+            block_list,
+            block_info_list,
+            self._dims_list,
+            preconditioned_dims_list,
+            strict=True,
         ):
             param_index, block_index = block_info.composable_block_ids
             if block_index not in state[block_info.param]:
@@ -538,7 +559,10 @@ class BaseShampooPreconditionerList(
             block_state = state[block_info.param][block_index]
 
             block_state[SHAMPOO] = self._create_kronecker_factors_state_for_block(
-                block=block, block_info=block_info, dims=dims
+                block=block,
+                block_info=block_info,
+                dims=dims,
+                preconditioned_dims=preconditioned_dims,
             )
 
             kronecker_factors_list.append(
@@ -591,7 +615,7 @@ class BaseShampooPreconditionerList(
             higher_order_default (Callable[[int], int]): Function for computing the inverse root for orders greater than the length of the inverse root override list.
 
         Returns:
-            root_list (int): Inverse roots to use in Shampoo for a list of tensors.
+            root_list (tuple[int, ...]): Inverse roots to use in Shampoo for a list of tensors.
 
         """
         if isinstance(inv_root_override, Sequence):
@@ -726,6 +750,8 @@ class BaseShampooPreconditionerList(
         self,
         block_list: tuple[Tensor, ...],
         kronecker_factors_list: list[ShampooKroneckerFactorsListType],
+        preconditioned_dims_list: tuple[tuple[int, ...], ...],
+        preconditioned_dims_selector_list: tuple[tuple[bool, ...], ...],
     ) -> None:
         # Initialize local lists.
         self._local_kronecker_factors_list: tuple[
@@ -742,6 +768,9 @@ class BaseShampooPreconditionerList(
         self._local_failed_amortized_computation_counter_list: list[int] = [0] * len(
             self._local_kronecker_factors_list
         )
+        self._local_preconditioned_dims_selector_list: tuple[tuple[bool, ...], ...] = (
+            preconditioned_dims_selector_list
+        )
 
         # Masked lists are the list of active preconditioners or values after filtering out gradients with None.
         self._masked_order_list: tuple[int, ...] = self._local_order_list
@@ -753,11 +782,15 @@ class BaseShampooPreconditionerList(
             ShampooKroneckerFactorsListType,
             ...,
         ] = self._local_kronecker_factors_list
+        self._masked_preconditioned_dims_selector_list: tuple[tuple[bool, ...], ...] = (
+            self._local_preconditioned_dims_selector_list
+        )
 
         # Construct lists of bytes and numels for logging purposes.
         # NOTE: These lists are constructed across all blocked parameters.
         self._numel_list: tuple[int, ...] = tuple(
-            sum(2 * dim**2 for dim in dims) for dims in self._dims_list
+            sum(2 * dim**2 for dim in preconditioned_dims)
+            for preconditioned_dims in preconditioned_dims_list
         )
         self._num_bytes_list: tuple[int, ...] = tuple(
             numel
@@ -790,6 +823,9 @@ class BaseShampooPreconditionerList(
                 ShampooKroneckerFactorsListType,
                 ...,
             ] = compress_list(self._local_kronecker_factors_list, local_grad_selector)
+            self._masked_preconditioned_dims_selector_list = compress_list(  # type: ignore[no-redef]
+                self._local_preconditioned_dims_selector_list, local_grad_selector
+            )
 
     def _update_factor_matrices(self, masked_grad_list: tuple[Tensor, ...]) -> None:
         with profiler.record_function(
@@ -798,14 +834,15 @@ class BaseShampooPreconditionerList(
             # NOTE: Unlike AdagradPreconditionerList, we will loop through each gradient individually.
             # We apply foreach operators onto the list of Kronecker factor matrices (as opposed to the
             # full list of gradients/optimizer states).
-            for grad, order, kronecker_factors in zip(
+            for grad, order, preconditioned_dims_selector, kronecker_factors in zip(
                 masked_grad_list,
                 self._masked_order_list,
+                self._masked_preconditioned_dims_selector_list,
                 self._masked_kronecker_factors_list,
                 strict=True,
             ):
                 # Scale Kronecker factors as a list.
-                if self._beta2 != 1.0:
+                if self._beta2 != 1.0 and kronecker_factors.factor_matrices:
                     torch._foreach_mul_(kronecker_factors.factor_matrices, self._beta2)
 
                 # Construct outer product list for updating Kronecker factors.
@@ -816,23 +853,38 @@ class BaseShampooPreconditionerList(
                         # Contracts across all dimensions except for k.
                         dims=[[*chain(range(k), range(k + 1, order))]] * 2,  # type: ignore[has-type]
                     )
-                    for k in range(order)
+                    for k in compress_list(range(order), preconditioned_dims_selector)
                 )
 
-                # Update Kronecker factors.
-                torch._foreach_add_(
-                    kronecker_factors.factor_matrices,
-                    outer_product_list,
-                    alpha=1 - self._beta2 if self._beta2 != 1.0 else 1.0,
-                )
+                # Because of preconditioned_dims_selector, we may have no factor matrices to update.
+                if kronecker_factors.factor_matrices:
+                    # Update Kronecker factors.
+                    torch._foreach_add_(
+                        kronecker_factors.factor_matrices,
+                        outer_product_list,
+                        alpha=1 - self._beta2 if self._beta2 != 1.0 else 1.0,
+                    )
 
     @staticmethod
     def _precondition_grad(
         grad: Tensor,
+        preconditioned_dims_selector: tuple[bool, ...],
         preconditioner_list: tuple[Tensor, ...],
         dims: tuple[list[int], list[int]] = ([0], [0]),
     ) -> Tensor:
-        return reduce(partial(torch.tensordot, dims=dims), preconditioner_list, grad)
+        # TODO: Need to refactor this function to be more efficient. Ideally eliminate those branches.
+        # Might consider einsum?
+        preconditioner_list_iter = iter(preconditioner_list)
+        return reduce(
+            lambda grad, should_precondition: torch.tensordot(
+                grad, next(preconditioner_list_iter), dims=dims
+            )
+            if should_precondition
+            # Perform a left rotation on grad if not preconditioned.
+            else grad.permute(*range(1, grad.ndim), 0),
+            preconditioned_dims_selector,
+            grad,
+        )
 
 
 class ShampooPreconditionerList(
@@ -841,7 +893,11 @@ class ShampooPreconditionerList(
     """Shampoo preconditioners for list of parameters."""
 
     def _create_kronecker_factors_state_for_block(
-        self, block: Tensor, block_info: BlockInfo, dims: torch.Size
+        self,
+        block: Tensor,
+        block_info: BlockInfo,
+        dims: torch.Size,
+        preconditioned_dims: tuple[int, ...],
     ) -> ShampooKroneckerFactorsState:
         inv_factor_matrices = tuple(
             block_info.allocate_zeros_tensor(
@@ -849,11 +905,11 @@ class ShampooPreconditionerList(
                 dtype=block.dtype,
                 device=block_info.param.device,
             )
-            for dim in dims
+            for dim in preconditioned_dims
         )
 
         base_kronecker_factors = self._create_base_kronecker_factors(
-            block_info=block_info, dims=dims
+            block_info=block_info, preconditioned_dims=preconditioned_dims
         )
         return ShampooKroneckerFactorsState(
             factor_matrices=base_kronecker_factors.factor_matrices,
@@ -905,10 +961,14 @@ class ShampooPreconditionerList(
             return tuple(
                 self._precondition_grad(
                     grad=masked_grad,
+                    preconditioned_dims_selector=preconditioned_dims_selector,
                     preconditioner_list=kronecker_factors.inv_factor_matrices,
                 )
-                for masked_grad, kronecker_factors in zip(
-                    masked_grad_list, self._masked_kronecker_factors_list, strict=True
+                for masked_grad, preconditioned_dims_selector, kronecker_factors in zip(
+                    masked_grad_list,
+                    self._masked_preconditioned_dims_selector_list,
+                    self._masked_kronecker_factors_list,
+                    strict=True,
                 )
             )
 
@@ -1013,7 +1073,11 @@ class EigenvalueCorrectedShampooPreconditionerList(
     """Eigenvalue-corrected Shampoo preconditioners for list of parameters."""
 
     def _create_kronecker_factors_state_for_block(
-        self, block: Tensor, block_info: BlockInfo, dims: torch.Size
+        self,
+        block: Tensor,
+        block_info: BlockInfo,
+        dims: torch.Size,
+        preconditioned_dims: tuple[int, ...],
     ) -> EigenvalueCorrectedShampooKroneckerFactorsState:
         factor_matrices_eigenvectors = tuple(
             block_info.allocate_zeros_tensor(
@@ -1021,16 +1085,17 @@ class EigenvalueCorrectedShampooPreconditionerList(
                 dtype=block.dtype,
                 device=block_info.param.device,
             )
-            for dim in dims
+            for dim in preconditioned_dims
         )
         corrected_eigenvalues = block_info.allocate_zeros_tensor(
+            # Note that the corrected eigenvalues are not affected by the preconditioned_dims.
             size=tuple(dims),
             dtype=block.dtype,
             device=block_info.param.device,
         )
 
         base_kronecker_factors = self._create_base_kronecker_factors(
-            block_info=block_info, dims=dims
+            block_info=block_info, preconditioned_dims=preconditioned_dims
         )
         return EigenvalueCorrectedShampooKroneckerFactorsState(
             factor_matrices=base_kronecker_factors.factor_matrices,
@@ -1107,15 +1172,17 @@ class EigenvalueCorrectedShampooPreconditionerList(
             f"## {self.__class__.__name__}:{self._update_eigenvalue_corrections.__name__} ##"
         ):
             # NOTE: Unlike AdagradPreconditionerList, we will loop through each gradient individually.
-            for grad, kronecker_factors in zip(
+            for grad, preconditioned_dims_selector, kronecker_factors in zip(
                 masked_grad_list,
+                self._masked_preconditioned_dims_selector_list,
                 self._masked_kronecker_factors_list,
                 strict=True,
             ):
                 factor_eigenvectors = kronecker_factors.factor_matrices_eigenvectors
-                if factor_eigenvectors[0].any():
+                if factor_eigenvectors and factor_eigenvectors[0].any():
                     grad = self._precondition_grad(
                         grad=grad,
+                        preconditioned_dims_selector=preconditioned_dims_selector,
                         preconditioner_list=factor_eigenvectors,
                     )
                 # Scale corrected eigenvalues.
@@ -1142,20 +1209,27 @@ class EigenvalueCorrectedShampooPreconditionerList(
             f"## {self.__class__.__name__}:{self.precondition.__name__} ##"
         ):
             preconditioned_grad_list = []
-            for masked_grad, kronecker_factors, root in zip(
+            for (
+                masked_grad,
+                preconditioned_dims_selector,
+                kronecker_factors,
+                root,
+            ) in zip(
                 masked_grad_list,
+                self._masked_preconditioned_dims_selector_list,
                 self._masked_kronecker_factors_list,
                 self._masked_root_list,
                 strict=True,
             ):
                 factor_eigenvectors = kronecker_factors.factor_matrices_eigenvectors
                 corrected_eigenvalues = kronecker_factors.corrected_eigenvalues
-                use_eigenbasis = factor_eigenvectors[0].any()
+                use_eigenbasis = factor_eigenvectors and factor_eigenvectors[0].any()
                 grad = masked_grad.clone()
                 if use_eigenbasis:
                     # Convert to eigenbasis of Shampoo factor matrices.
                     grad = self._precondition_grad(
                         grad=grad,
+                        preconditioned_dims_selector=preconditioned_dims_selector,
                         preconditioner_list=factor_eigenvectors,
                     )
 
@@ -1169,6 +1243,7 @@ class EigenvalueCorrectedShampooPreconditionerList(
                     # Convert back to basis of the parameters.
                     grad = self._precondition_grad(
                         grad=grad,
+                        preconditioned_dims_selector=preconditioned_dims_selector,
                         preconditioner_list=factor_eigenvectors,
                         dims=([0], [1]),
                     )

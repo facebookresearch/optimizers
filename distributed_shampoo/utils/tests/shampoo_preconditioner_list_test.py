@@ -8,6 +8,7 @@ LICENSE file in the root directory of this source tree.
 """
 
 import abc
+import math
 import re
 import unittest
 from types import ModuleType
@@ -21,7 +22,6 @@ from distributed_shampoo.shampoo_types import (
     PreconditionerValueError,
     ShampooPreconditionerConfig,
 )
-
 from distributed_shampoo.utils import shampoo_preconditioner_list
 from distributed_shampoo.utils.shampoo_block_info import BlockInfo
 from distributed_shampoo.utils.shampoo_preconditioner_list import (
@@ -32,6 +32,8 @@ from distributed_shampoo.utils.shampoo_preconditioner_list import (
     SGDPreconditionerList,
     ShampooPreconditionerList,
 )
+
+from distributed_shampoo.utils.shampoo_utils import compress_list
 from matrix_functions_types import EigenConfig
 from torch import Tensor
 
@@ -575,6 +577,63 @@ class AbstractTest:
             )
             mock_check_diagonal.assert_called()
 
+        def test_precondition_grad(self) -> None:
+            # Generate a random gradient tensor with shape (2, 3, 4, 5, 6, 7).
+            grad = torch.randn((2, 3, 4, 5, 6, 7))
+
+            # Define selectors for which dimensions to precondition in the experimental setup.
+            # Note that in the control setup, we will precondtion all dimensions normally except for the `False` ones with identity matrices.
+            experimental_preconditioned_dims_selector = (
+                True,
+                False,
+                False,
+                True,
+                True,
+                False,
+            )
+            # Define selectors for which dimensions to precondition in the control setup.
+            control_preconditioned_dims_selector = (True,) * grad.ndim
+
+            # Create a list of random preconditioner matrices for each dimension of the gradient.
+            preconditioner_list = [torch.randn((d, d)) for d in grad.shape]
+
+            # Compress the preconditioner list based on experimental_preconditioned_dims_selector.
+            experimental_preconditioner_list = compress_list(
+                preconditioner_list,
+                experimental_preconditioned_dims_selector,
+            )
+
+            # Create a control preconditioner list, using identity matrices where not preconditioning.
+            control_preconditioner_list = [
+                preconditioner
+                if should_precondition
+                else torch.eye(preconditioner.shape[0])
+                for preconditioner, should_precondition in zip(
+                    preconditioner_list,
+                    experimental_preconditioned_dims_selector,
+                    strict=True,
+                )
+            ]
+
+            # Compare the results of preconditioning the gradient with both setups for different contract dimensions.
+            for dims in (([0], [0]), ([0], [1])):
+                torch.testing.assert_close(
+                    self._preconditioner_list._precondition_grad(
+                        grad=grad,
+                        preconditioned_dims_selector=experimental_preconditioned_dims_selector,
+                        preconditioner_list=experimental_preconditioner_list,
+                        dims=dims,
+                    ),
+                    self._preconditioner_list._precondition_grad(
+                        grad=grad,
+                        preconditioned_dims_selector=control_preconditioned_dims_selector,
+                        preconditioner_list=control_preconditioner_list,
+                        dims=dims,
+                    ),
+                    rtol=0.0,
+                    atol=0.0,
+                )
+
         def test_numel_list(self) -> None:
             self.assertEqual(self._preconditioner_list.numel_list, (8, 16, 10))
 
@@ -594,7 +653,7 @@ class AbstractTest:
             self.assertEqual(self._preconditioner_list.num_bytes(), 204)
 
         def test_compress_preconditioner_list(self) -> None:
-            self._test_compress_preconditioner_list(expected_compress_list_call_count=4)
+            self._test_compress_preconditioner_list(expected_compress_list_call_count=5)
 
 
 class ShampooPreconditionerListTest(AbstractTest.BaseShampooPreconditionerListTest):
@@ -762,6 +821,73 @@ class ShampooPreconditionerListTest(AbstractTest.BaseShampooPreconditionerListTe
             masked_expected_preconditioned_grad_list=tuple(
                 masked_expected_preconditioned_grad_list
             ),
+        )
+
+    def test_update_preconditioners_and_precondition_with_ignored_dims(self) -> None:
+        """
+
+        (1) Tensor of Size 2
+            G1 = [4, 0]^T
+            G2 = [0, 4]^T
+
+            L = G1 * G1^T + G2 * G2^T = [[4*4, 0], [0, 4*4]]
+            P = L^{-1/2} G2 = [[1/4, 0], [0, 1/4]] G2 = [0, 1]^T
+
+        (2) Tensor of Size 2 x 2
+            G1 = [[3, 0], [0, 3]]
+            G2 = [[4, 0], [0, 4]]
+
+            L = G1 * G1^T + G2 * G2^T = [[3*3+4*4, 0], [0, 3*3+4*4]]
+            R = G1^T * G1 + G2^T * G2 = [[3*3+4*4, 0], [0, 3*3+4*4]]
+            P = L^{-1/4} G2 R^{-1/4} = [[1/sqrt(5), 0], [0, 1/sqrt(5)]] G2 [[1/sqrt(5), 0], [0, 1/sqrt(5)]] = G2 / 5
+
+        (3) Tensor of Size 1 x 2
+            G1 = [[2, 0]]
+            G2 = [[0, 2]]
+
+            L = G1 * G1^T + G2 * G2^T = 2*2+2*2 = 8
+            R = G1^T * G1 + G2^T * G2 = [[4, 0], [0, 4]]
+            P = L^{-1/4} G2 R^{-1/4} = 8^{-1/4} G2 [[1/sqrt(2), 0], [0, 1/sqrt(2)]] = G2 / (sqrt(2 * sqrt(8)))
+
+        """
+        masked_grad_list1 = (
+            torch.tensor([4.0, 0.0]),
+            torch.eye(2) * 3,
+            torch.tensor([[2.0, 0.0]]),
+        )
+        masked_grad_list2 = (
+            torch.tensor([0.0, 4.0]),
+            torch.eye(2) * 4,
+            torch.tensor([[0.0, 2.0]]),
+        )
+
+        masked_expected_preconditioned_grad_list = [
+            torch.tensor([0.0, 1.0]),
+            masked_grad_list2[1] / 5,
+            masked_grad_list2[2] / math.sqrt(2 * math.sqrt(8)),
+        ]
+
+        # The default case where we do not ignore any dimensions.
+        self._test_update_preconditioners_and_precondition(
+            preconditioner_list=self._instantiate_preconditioner_list(
+                beta2=1.0,
+            ),
+            masked_grad_lists=[masked_grad_list1, masked_grad_list2],
+            masked_expected_preconditioned_grad_list=tuple(
+                masked_expected_preconditioned_grad_list
+            ),
+        )
+
+        # When ignoring all the dimensions, the preconditioner should be the identity matrix, and the expected preconditioned gradient should be the same as the input gradient.
+        self._test_update_preconditioners_and_precondition(
+            preconditioner_list=self._instantiate_preconditioner_list(
+                beta2=1.0,
+                preconditioner_config=ShampooPreconditionerConfig(
+                    ignored_dims=[0, 1],
+                ),
+            ),
+            masked_grad_lists=[masked_grad_list1, masked_grad_list2],
+            masked_expected_preconditioned_grad_list=masked_grad_list2,
         )
 
     def test_inv_root_override_and_exponent_multiplier(self) -> None:

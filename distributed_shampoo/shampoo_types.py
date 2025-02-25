@@ -86,16 +86,22 @@ class PreconditionerConfig(AbstractDataclass):
     Attributes:
         amortized_computation_config (MatrixFunctionConfig): Configuration for the amortized computation, e.g., inverse-root or eigenvector computation.
         num_tolerated_failed_amortized_computations (int): Number of failed amortized computations to tolerate before raising an error. (Default: 3)
+        ignored_dims (list[int]): List of dimensions to ignore when computing the preconditioner. This is equivalent to setting the preconditioner for these dimensions to the identity matrix. (Default: [])
 
     """
 
     amortized_computation_config: MatrixFunctionConfig  # type: ignore
     num_tolerated_failed_amortized_computations: int = 3
+    ignored_dims: list[int] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if self.num_tolerated_failed_amortized_computations < 0:
             raise ValueError(
                 f"Invalid num_tolerated_failed_amortized_computations value: {self.num_tolerated_failed_amortized_computations}. Must be >= 0."
+            )
+        if len(self.ignored_dims) != len(set(self.ignored_dims)):
+            raise ValueError(
+                f"Invalid ignored_dims value: {self.ignored_dims}. Must be a list of unique dimensions."
             )
 
 
@@ -106,6 +112,7 @@ class ShampooPreconditionerConfig(PreconditionerConfig):
     Attributes:
         amortized_computation_config (RootInvConfig): Configuration for the inverse-root computation. (Default: DefaultEigenConfig)
         num_tolerated_failed_amortized_computations (int): Number of failed amortized computations to tolerate before raising an error. (Default: 3)
+        ignored_dims (list[int]): List of dimensions to ignore when computing the preconditioner. This is equivalent to setting the preconditioner for these dimensions to the identity matrix. (Default: [])
 
     """
 
@@ -125,6 +132,7 @@ class EigenvalueCorrectedShampooPreconditionerConfig(PreconditionerConfig):
         amortized_computation_config (EigenvectorConfig): Configuration for the eigenvector computation.
             (Default: DefaultEighEigenvectorConfig)
         num_tolerated_failed_amortized_computations (int): Number of failed amortized computations to tolerate before raising an error. (Default: 3)
+        ignored_dims (list[int]): List of dimensions to ignore when computing the preconditioner. This is equivalent to setting the preconditioner for these dimensions to the identity matrix. (Default: [])
 
     """
 

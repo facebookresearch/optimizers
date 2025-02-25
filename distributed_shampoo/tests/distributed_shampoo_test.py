@@ -181,6 +181,22 @@ class DistributedShampooInitTest(unittest.TestCase):
                 distributed_config=DDPShampooConfig(),
             )
 
+    def test_ignored_dims_conflicts_with_inv_root_override(self) -> None:
+        inv_root_override = 2
+        preconditioner_config = ShampooPreconditionerConfig(
+            ignored_dims=[1, 3],
+        )
+        self.assertRaisesRegex(
+            ValueError,
+            re.escape(
+                f"{preconditioner_config.ignored_dims=} is not supported when {inv_root_override=} is not set to 0. Please set {inv_root_override=} to 0 if you set {preconditioner_config.ignored_dims=}."
+            ),
+            DistributedShampoo,
+            params=self._model.parameters(),
+            inv_root_override=inv_root_override,
+            preconditioner_config=preconditioner_config,
+        )
+
 
 class DistributedShampooTest(unittest.TestCase):
     def setUp(self) -> None:

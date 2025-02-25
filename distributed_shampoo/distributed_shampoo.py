@@ -385,6 +385,12 @@ class DistributedShampoo(torch.optim.Optimizer):
                 "Continuing without using momentum or Nesterov acceleration..."
             )
 
+        # Check potential conflict between preconditioner_config.ignored_dims and inv_root_override.
+        if preconditioner_config.ignored_dims != [] and inv_root_override != 0:
+            raise ValueError(
+                f"{preconditioner_config.ignored_dims=} is not supported when {inv_root_override=} is not set to 0. Please set {inv_root_override=} to 0 if you set {preconditioner_config.ignored_dims=}."
+            )
+
         super().__init__(
             params,
             {

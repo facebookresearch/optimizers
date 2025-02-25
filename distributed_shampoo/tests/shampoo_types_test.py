@@ -98,3 +98,17 @@ class PreconditionerConfigSubclassesTest(unittest.TestCase):
                     cls,
                     num_tolerated_failed_amortized_computations=num_tolerated_failed_amortized_computations,
                 )
+
+    def test_illegal_ignored_dims(self) -> None:
+        ignored_dims = [1, 2, 3, 1]
+        # Not testing for the base class PreconditionerConfig because it is an abstract class.
+        for cls in get_all_subclasses(PreconditionerConfig, include_cls_self=False):
+            with self.subTest(cls=cls):
+                self.assertRaisesRegex(
+                    ValueError,
+                    re.escape(
+                        f"Invalid ignored_dims value: {ignored_dims}. Must be a list of unique dimensions."
+                    ),
+                    cls,
+                    ignored_dims=ignored_dims,
+                )
