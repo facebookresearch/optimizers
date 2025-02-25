@@ -32,6 +32,7 @@ from distributed_shampoo.tests.shampoo_test_utils import (
 
 from torch import distributed as dist
 from torch.optim.optimizer import ParamsT
+from torch.testing._comparison import default_tolerances
 from torch.testing._internal.common_distributed import (
     DynamoDistributedMultiProcTestCase,
 )
@@ -96,7 +97,7 @@ class AbstractTest:
                     lr=0.001,
                     betas=(0.9, 1.0),
                     epsilon=1e-8,
-                    momentum=0.0,
+                    momentum=0.9,
                     weight_decay=0.0,
                     max_preconditioner_dim=20,
                     precondition_frequency=1,
@@ -116,14 +117,25 @@ class AbstractTest:
             for num_trainers_per_group, (
                 communication_dtype,
                 communicate_params,
+                (rtol, atol),
             ) in product(
                 (-1, 1, 2),
                 (
-                    (CommunicationDType.DEFAULT, False),
-                    (CommunicationDType.DEFAULT, True),
-                    (CommunicationDType.FP16, False),
-                    (CommunicationDType.BF16, False),
+                    # Expecting CommunicationDType.DEFAULT would have bitwise identical results (by setting rtol=atol=0.0).
+                    (CommunicationDType.DEFAULT, False, (0.0, 0.0)),
+                    (CommunicationDType.DEFAULT, True, (0.0, 0.0)),
                     # Using FP16 for distributed parameters prohibitively lowers precision.
+                    (
+                        CommunicationDType.FP16,
+                        False,
+                        default_tolerances(torch.float16),
+                    ),
+                    (
+                        CommunicationDType.BF16,
+                        False,
+                        # BF16 requires 2x tolerances than the original bfloat16 tolerances.
+                        [2 * tol for tol in default_tolerances(torch.bfloat16)],
+                    ),
                 ),
             ):
                 with self.subTest(
@@ -146,6 +158,8 @@ class AbstractTest:
                         model_dead_layer_dims=(20, 20),
                         device=self._device,
                         fill=0.01,
+                        rtol=rtol,
+                        atol=atol,
                     )
 
         # This mock is used to catch the number of calls to Shampoo's step(), which happened after __init__().

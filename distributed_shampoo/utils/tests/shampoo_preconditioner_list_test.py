@@ -301,9 +301,6 @@ class BaseShampooPreconditionerListTest(unittest.TestCase):
 # Use outer class as wrapper to avoid running the abstract test.
 class AbstractTest:
     class BaseShampooPreconditionerListTest(abc.ABC, AdagradPreconditionerListTest):
-        # Number of calls to the amortized computation function per update.
-        NUM_AMORTIZED_COMPUTATION_CALLS = 5
-
         @abc.abstractmethod
         def _amortized_computation_function(self) -> str: ...
 
@@ -406,16 +403,19 @@ class AbstractTest:
                 torch.tensor([[0.0, 1.0]]),
             )
 
+            # Number of calls to the amortized computation function per update.
+            NUM_AMORTIZED_COMPUTATION_CALLS = 5
+
             # Initialize step counter.
             step = 1
             # Define the side effect for each call of the amortized computation function.
             fail = ValueError
             success = torch.tensor([1.0])
-            all_but_one_fail = (fail,) * (self.NUM_AMORTIZED_COMPUTATION_CALLS - 1) + (
+            all_but_one_fail = (fail,) * (NUM_AMORTIZED_COMPUTATION_CALLS - 1) + (
                 success,
             )
-            all_fail = (fail,) * self.NUM_AMORTIZED_COMPUTATION_CALLS
-            all_success = (success,) * self.NUM_AMORTIZED_COMPUTATION_CALLS
+            all_fail = (fail,) * NUM_AMORTIZED_COMPUTATION_CALLS
+            all_success = (success,) * NUM_AMORTIZED_COMPUTATION_CALLS
             with mock.patch.object(
                 shampoo_preconditioner_list,
                 self._amortized_computation_function(),
@@ -633,7 +633,7 @@ class ShampooPreconditionerListTest(AbstractTest.BaseShampooPreconditionerListTe
             G2 = [0, 1]^T
 
             L = G1 * G1^T + G2 * G2^T = [[1, 0], [0, 1]]
-            P = L^{-1/4} G2 = [0, 1]^T = G2
+            P = L^{-1/2} G2 = [0, 1]^T = G2
 
         (2) Tensor of Size 2 x 2
             G1 = [[1, 0], [0, 1]] / sqrt(2)

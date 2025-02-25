@@ -34,8 +34,10 @@ from matrix_functions import (
 from matrix_functions_types import (
     CoupledHigherOrderConfig,
     CoupledNewtonConfig,
+    DefaultEighEigenvectorConfig,
     EigenConfig,
     EigenvectorConfig,
+    EighEigenvectorConfig,
     QRConfig,
     RootInvConfig,
 )
@@ -145,7 +147,11 @@ class MatrixInverseRootTest(unittest.TestCase):
             )
 
         for A, expected_root in zip(A_list, expected_root_list, strict=True):
-            for root_inv_config in (EigenConfig(), CoupledNewtonConfig()):
+            for root_inv_config in (
+                EigenConfig(),
+                CoupledNewtonConfig(),
+                EigenConfig(eigen_decomp_offload_device="cpu"),
+            ):
                 with self.subTest(f"Test with {A=}, {root_inv_config=}"):
                     torch.testing.assert_close(
                         expected_root,
@@ -842,13 +848,21 @@ class MatrixEigenvectorsTest(unittest.TestCase):
                 rtol=rtol,
             )
         with self.subTest("Test with EIGEN."):
-            for A, expected_eigenvectors in zip(
-                A_list, expected_eigenvectors_list, strict=True
+            for (
+                A,
+                expected_eigenvectors,
+            ), eigenvector_computation_config in itertools.product(
+                zip(A_list, expected_eigenvectors_list, strict=True),
+                (
+                    DefaultEighEigenvectorConfig,
+                    EighEigenvectorConfig(eigen_decomp_offload_device="cpu"),
+                ),
             ):
                 torch.testing.assert_close(
                     expected_eigenvectors,
                     matrix_eigenvectors(
                         A,
+                        eigenvector_computation_config=eigenvector_computation_config,
                         is_diagonal=False,
                     ),
                     atol=atol,
@@ -898,7 +912,7 @@ class MatrixEigenvectorsTest(unittest.TestCase):
             self.assertRaisesRegex(
                 NotImplementedError,
                 re.escape(
-                    "Eigenvector computation method is not implemented! Specified eigenvector method is eigenvector_computation_config=EighEigenvectorConfig(retry_double_precision=True)."
+                    "Eigenvector computation method is not implemented! Specified eigenvector method is eigenvector_computation_config=EighEigenvectorConfig(retry_double_precision=True, eigen_decomp_offload_device='')."
                 ),
             ),
         ):

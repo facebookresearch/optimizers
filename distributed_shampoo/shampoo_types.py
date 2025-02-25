@@ -83,7 +83,7 @@ class PreconditionerValueError(ValueError):
 class PreconditionerConfig(AbstractDataclass):
     """Configuration for preconditioner computation in DistributedShampoo.
 
-    Args:
+    Attributes:
         amortized_computation_config (MatrixFunctionConfig): Configuration for the amortized computation, e.g., inverse-root or eigenvector computation.
         num_tolerated_failed_amortized_computations (int): Number of failed amortized computations to tolerate before raising an error. (Default: 3)
 
@@ -103,8 +103,9 @@ class PreconditionerConfig(AbstractDataclass):
 class ShampooPreconditionerConfig(PreconditionerConfig):
     """Configuration for Shampoo preconditioner computation.
 
-    Args:
+    Attributes:
         amortized_computation_config (RootInvConfig): Configuration for the inverse-root computation. (Default: DefaultEigenConfig)
+        num_tolerated_failed_amortized_computations (int): Number of failed amortized computations to tolerate before raising an error. (Default: 3)
 
     """
 
@@ -120,9 +121,10 @@ DefaultShampooConfig = ShampooPreconditionerConfig()
 class EigenvalueCorrectedShampooPreconditionerConfig(PreconditionerConfig):
     """Configuration for eigenvalue-corrected Shampoo/SOAP preconditioner computation.
 
-    Args:
+    Attributes:
         amortized_computation_config (EigenvectorConfig): Configuration for the eigenvector computation.
             (Default: DefaultEighEigenvectorConfig)
+        num_tolerated_failed_amortized_computations (int): Number of failed amortized computations to tolerate before raising an error. (Default: 3)
 
     """
 
@@ -143,7 +145,7 @@ DefaultSOAPConfig = EigenvalueCorrectedShampooPreconditionerConfig(
 class FSDPParameterMetadata:
     """FSDP Metadata for a parameter.
 
-    Args:
+    Attributes:
         fqn (str): Fully qualified name of the parameter.
         shape (torch.Size): Shape of the parameter.
         numel (int): Number of elements in the parameter.
@@ -172,7 +174,7 @@ class DDPShampooConfig(DistributedConfig):
 
     Enables distributed computation and optimizer states (like ZeRO-1) via DTensor for Shampoo.
 
-    Args:
+    Attributes:
         communication_dtype (CommunicationDType): Data type for communication between ranks. (Default: DEFAULT)
         num_trainers_per_group (int): Number of GPUs per distributed process group for distributed computation/memory.
             If num_trainers_per_group = -1 is used, then defaults to using the LOCAL_WORLD_SIZE. (Default: -1)
@@ -192,7 +194,7 @@ class FSDPShampooConfig(DistributedConfig):
 
     Passes in additional metadata necessary to run FSDP Shampoo.
 
-    Args:
+    Attributes:
         param_to_metadata (dict[Parameter, FSDPParameterMetadata]): Dictionary mapping parameter to its metadata from FSDP.
 
     """
@@ -207,7 +209,7 @@ class HSDPShampooConfig(FSDPShampooConfig, DDPShampooConfig):
     Enables distributed computation and optimizer states (like ZeRO-1) via DTensor for Shampoo across ranks with shared
     parameters between different HSDP process groups.
 
-    Args:
+    Attributes:
         device_mesh (torch.distributed.device_mesh.DeviceMesh): A 2D device mesh that specifies the layout of the numbers of
             shard and replicate dimensions.
         param_to_metadata (dict[Parameter, FSDPParameterMetadata]): Dictionary mapping parameter to its metadata from HSDP.
@@ -238,7 +240,7 @@ class HybridShardShampooConfig(FullyShardShampooConfig, DDPShampooConfig):
     Enables distributed computation and optimizer states (like ZeRO-1) via DTensor for Shampoo across ranks with shared
     parameters between different Hybrid Shard process groups.
 
-    Args:
+    Attributes:
         device_mesh (torch.distributed.device_mesh.DeviceMesh): Device mesh for Hybrid Shard.
         communication_dtype (CommunicationDType): Data type for communication between ranks. (Default: DEFAULT)
         num_trainers_per_group (int): Number of GPUs per distributed process group for distributed computation/memory.
@@ -259,7 +261,7 @@ class ShampooPT2CompileConfig:
     Enables Shampoo pytorch compilation with configure to speed up model training.
     For more details: https://pytorch.org/get-started/pytorch-2.0/
 
-    Args:
+    Attributes:
         pytorch_compile_backend (str): The backend for PT2 compilation. More info about PT2 backends:
             https://pytorch.org/docs/stable/torch.compiler.html (Default: inductor)
         enable_shampoo_pt2_dynamic_shape (bool | None): Compile Shampoo in static, dynamic or auto-dynamic shape mode (Default: False).
@@ -291,7 +293,7 @@ class SGDGraftingConfig(GraftingConfig):
 class AdaGradGraftingConfig(GraftingConfig):
     """Configuration for grafting from AdaGrad.
 
-    Args:
+    Attributes:
         epsilon (float): Epsilon term for regularizing square-root of the aggregated second moment to ensure positive definiteness.
             (Default: 1e-10)
 
@@ -308,7 +310,7 @@ class AdaGradGraftingConfig(GraftingConfig):
 class RMSpropGraftingConfig(AdaGradGraftingConfig):
     """Configuration for grafting from RMSprop.
 
-    Args:
+    Attributes:
         beta2 (float): Exponential moving average factor for second moment. (Default: 0.99)
         epsilon (float): Epsilon term for regularizing square-root of the second moment to ensure positive definiteness.
             (Default: 1e-10)
@@ -329,7 +331,7 @@ class RMSpropGraftingConfig(AdaGradGraftingConfig):
 class AdamGraftingConfig(RMSpropGraftingConfig):
     """Configuration for grafting from Adam.
 
-    Args:
+    Attributes:
         beta2 (float): Exponential moving average factor for second moment. (Default: 0.999)
         epsilon (float): Epsilon term for regularizing square-root of the second moment to ensure positive definiteness.
             (Default: 1e-10)

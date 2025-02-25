@@ -106,6 +106,7 @@ def matrix_inverse_root(
             epsilon=epsilon,
             make_positive_semidefinite=root_inv_config.make_positive_semidefinite,
             retry_double_precision=root_inv_config.retry_double_precision,
+            eigen_decomp_offload_device=root_inv_config.eigen_decomp_offload_device,
         )
     elif type(root_inv_config) is CoupledNewtonConfig:
         # NOTE: Use Fraction.is_integer() instead when Python 3.12+ is available
@@ -169,6 +170,7 @@ def _matrix_inverse_root_diagonal(
 def matrix_eigenvalue_decomposition(
     A: Tensor,
     retry_double_precision: bool = True,
+    eigen_decomp_offload_device: torch.device | str = "",
 ) -> tuple[Tensor, Tensor]:
     """
     Compute the eigendecomposition of a symmetric matrix.
@@ -176,10 +178,16 @@ def matrix_eigenvalue_decomposition(
     Args:
         A (Tensor): The input symmetric matrix.
         retry_double_precision (bool, optional): Whether to retry the computation in double precision if it fails in the current precision. Defaults to True.
+        eigen_decomp_offload_device (torch.device | str): Device to offload eigen decomposition computation. If value is empty string, do not perform offloading. (Default: "")
 
     Returns:
         tuple[Tensor, Tensor]: A tuple containing the eigenvalues and eigenvectors of the input matrix.
     """
+
+    current_device = A.device
+    if eigen_decomp_offload_device != "":
+        A = A.to(device=eigen_decomp_offload_device)
+
     try:
         # Attempt to compute the eigendecomposition in the current precision
         L, Q = torch.linalg.eigh(A)
@@ -195,7 +203,7 @@ def matrix_eigenvalue_decomposition(
             # If retry_double_precision is False or the computation fails in double precision, raise the exception
             raise exception
 
-    return L, Q
+    return L.to(device=current_device), Q.to(device=current_device)
 
 
 def _matrix_inverse_root_eigen(
@@ -204,6 +212,7 @@ def _matrix_inverse_root_eigen(
     epsilon: float = 0.0,
     make_positive_semidefinite: bool = True,
     retry_double_precision: bool = True,
+    eigen_decomp_offload_device: torch.device | str = "",
 ) -> tuple[Tensor, Tensor, Tensor]:
     """Compute matrix inverse root using eigendecomposition of symmetric positive (semi-)definite matrix.
 
@@ -218,6 +227,7 @@ def _matrix_inverse_root_eigen(
         make_positive_semidefinite (bool): Perturbs matrix eigenvalues to ensure it is numerically positive semi-definite. (Default: True)
         retry_double_precision (bool): Flag for re-trying eigendecomposition with higher precision if lower precision fails due
             to CuSOLVER failure. (Default: True)
+        eigen_decomp_offload_device (torch.device | str): Device to offload eigen decomposition computation. If value is empty string, do not perform offloading. (Default: "")
 
     Returns:
         X (Tensor): (Inverse) root of matrix. Same dimensions as A.
@@ -231,8 +241,11 @@ def _matrix_inverse_root_eigen(
         raise ValueError(f"Root {root} should be positive!")
 
     # compute eigendecomposition and compute minimum eigenvalue
+
     L, Q = matrix_eigenvalue_decomposition(
-        A, retry_double_precision=retry_double_precision
+        A,
+        retry_double_precision=retry_double_precision,
+        eigen_decomp_offload_device=eigen_decomp_offload_device,
     )
 
     lambda_min = torch.min(L)
@@ -584,6 +597,7 @@ def compute_matrix_root_inverse_residuals(
         root=root,
         epsilon=0.0,
         make_positive_semidefinite=True,
+        eigen_decomp_offload_device=root_inv_config.eigen_decomp_offload_device,
     )
 
     A_reg = A.double() + epsilon * torch.eye(
@@ -642,6 +656,7 @@ def matrix_eigenvectors(
         return matrix_eigenvalue_decomposition(
             A,
             retry_double_precision=eigenvector_computation_config.retry_double_precision,
+            eigen_decomp_offload_device=eigenvector_computation_config.eigen_decomp_offload_device,
         )[1]
     elif type(eigenvector_computation_config) is QRConfig:
         assert (

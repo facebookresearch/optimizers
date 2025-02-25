@@ -13,6 +13,8 @@ import torch
 from distributed_shampoo.shampoo_types import FSDPParameterMetadata
 
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP, ShardingStrategy
+
+from torch.distributed.fsdp._init_utils import HYBRID_SHARDING_STRATEGIES
 from torch.distributed.tensor import DTensor
 from torch.nn import Parameter
 
@@ -148,8 +150,7 @@ def parse_fsdp_params(
         and param_metadata[param].sharding_strategy
         in [ShardingStrategy.FULL_SHARD, ShardingStrategy.SHARD_GRAD_OP],
         hsdp_criteria=lambda param: param in param_metadata
-        and param_metadata[param].sharding_strategy
-        in [ShardingStrategy.HYBRID_SHARD, ShardingStrategy._HYBRID_SHARD_ZERO2],
+        and param_metadata[param].sharding_strategy in HYBRID_SHARDING_STRATEGIES,
         other_criteria=lambda param: param not in param_metadata
         or param_metadata[param].sharding_strategy == ShardingStrategy.NO_SHARD,
     )

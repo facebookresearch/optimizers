@@ -9,6 +9,8 @@ LICENSE file in the root directory of this source tree.
 
 from dataclasses import dataclass
 
+import torch
+
 from commons import AbstractDataclass
 
 
@@ -21,13 +23,22 @@ class MatrixFunctionConfig(AbstractDataclass):
 class EigenvalueDecompositionConfig(MatrixFunctionConfig):
     """Configuration for eigenvalue decomposition.
 
-    Args:
+    Attributes:
         retry_double_precision (bool): Whether to re-trying eigendecomposition with higher (double) precision if lower precision fails due
             to CuSOLVER failure. (Default: True)
+        eigen_decomp_offload_device (torch.device | str): Device to offload eigen decomposition to. If value is empty string, we don't perform offloading. (Default: "")
 
     """
 
     retry_double_precision: bool = True
+    eigen_decomp_offload_device: torch.device | str = ""
+
+    def __post_init__(self) -> None:
+        # Convert an non-empty string to a torch.device; this verifies that the string is a valid device string early.
+        if self.eigen_decomp_offload_device != "":
+            self.eigen_decomp_offload_device = torch.device(
+                self.eigen_decomp_offload_device
+            )
 
 
 @dataclass(init=False)
@@ -39,9 +50,10 @@ class RootInvConfig(MatrixFunctionConfig):
 class EigenConfig(RootInvConfig, EigenvalueDecompositionConfig):
     """Configuration for matrix root inverse via an eigendecomposition.
 
-    Args:
+    Attributes:
         retry_double_precision (bool): Whether to re-trying eigendecomposition with higher (double) precision if lower precision fails due
             to CuSOLVER failure. (Default: True)
+        eigen_decomp_offload_device (torch.device | str): Device to offload eigen decomposition to. If value is empty string, we don't perform offloading. (Default: "")
         make_positive_semidefinite (bool): Perturbs matrix eigenvalues to ensure it is numerically positive semi-definite. (Default: True)
         exponent_multiplier (float): Number to be multiplied to the numerator of the inverse root, i.e., eta where the
             exponent is -eta / (2 * p). (Default: 1.0)
@@ -59,7 +71,7 @@ DefaultEigenConfig = EigenConfig()
 class CoupledNewtonConfig(RootInvConfig):
     """Configuration for matrix root inverse via coupled Newton method.
 
-    Args:
+    Attributes:
         max_iterations (int): Maximum number of iterations for coupled Newton iteration. (Default: 100)
         tolerance (float): Tolerance for computing root inverse using coupled Newton iteration. (Default: 1e-6)
 
@@ -73,7 +85,7 @@ class CoupledNewtonConfig(RootInvConfig):
 class CoupledHigherOrderConfig(RootInvConfig):
     """Configuration for matrix root inverse via coupled higher-order method.
 
-    Args:
+    Attributes:
         rel_epsilon (float): Relative epsilon for coupled higher order method. Adds epsilon * lambda_max * I to matrix
             before taking matrix root, where lambda_max is an upper bound on maximum eigenvalue. (Default: 0.0)
         max_iterations (int): Maximum number of iterations for coupled higher order method. (Default: 100)
@@ -101,9 +113,10 @@ class EigenvectorConfig(MatrixFunctionConfig):
 class EighEigenvectorConfig(EigenvectorConfig, EigenvalueDecompositionConfig):
     """Configuration for eigenvectors via an eigendecomposition.
 
-    Args:
+    Attributes:
         retry_double_precision (bool): Whether to re-trying eigendecomposition with higher (double) precision if lower precision fails due
             to CuSOLVER failure. (Default: True)
+        eigen_decomp_offload_device (torch.device | str): Device to offload eigen decomposition to. If value is empty string, we don't perform offloading. (Default: "")
 
     """
 
@@ -115,7 +128,7 @@ DefaultEighEigenvectorConfig = EighEigenvectorConfig()
 class QRConfig(EigenvectorConfig):
     """Configuration for eigenvectors via orthogonal/simultaneous iterations/QR algorithm.
 
-    Args:
+    Attributes:
         max_iterations (int): The maximum number of iterations to perform. (Default: 1)
         tolerance (float): The tolerance for determining convergence in terms of the relative change of the eigenvectors estimate.
             (Default: 1e-5)
