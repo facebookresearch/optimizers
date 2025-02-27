@@ -333,7 +333,6 @@ class EigenRootTest(unittest.TestCase):
         self,
         A: torch.Tensor,
         root: int,
-        make_positive_semidefinite: bool,
         epsilon: float,
         tolerance: float,
         eig_sols: Tensor,
@@ -342,7 +341,6 @@ class EigenRootTest(unittest.TestCase):
             A=A,
             root=Fraction(root),
             epsilon=epsilon,
-            make_positive_semidefinite=make_positive_semidefinite,
         )
         abs_error = torch.dist(torch.linalg.matrix_power(X, -root), A, p=torch.inf)
         A_norm = torch.linalg.norm(A, ord=torch.inf)
@@ -355,7 +353,6 @@ class EigenRootTest(unittest.TestCase):
         A: Callable[[int], Tensor],
         dims: list[int],
         roots: list[int],
-        make_positive_semidefinite: bool,
         epsilons: list[float],
         tolerance: float,
         eig_sols: Callable[[int], Tensor],
@@ -365,7 +362,6 @@ class EigenRootTest(unittest.TestCase):
                 self._test_eigen_root(
                     A(n),
                     root,
-                    make_positive_semidefinite,
                     epsilon,
                     tolerance,
                     eig_sols(n),
@@ -376,7 +372,6 @@ class EigenRootTest(unittest.TestCase):
         dims = [10, 100]
         roots = [1, 2, 4, 8]
         epsilons = [0.0]
-        make_positive_semidefinite = False
 
         def eig_sols(n: int) -> Tensor:
             return torch.ones(n)
@@ -384,16 +379,13 @@ class EigenRootTest(unittest.TestCase):
         def A(n: int) -> Tensor:
             return torch.eye(n)
 
-        self._test_eigen_root_multi_dim(
-            A, dims, roots, make_positive_semidefinite, epsilons, tolerance, eig_sols
-        )
+        self._test_eigen_root_multi_dim(A, dims, roots, epsilons, tolerance, eig_sols)
 
     def test_eigen_root_tridiagonal_1(self) -> None:
         tolerance = 1e-4
         dims = [10, 100]
         roots = [1, 2, 4, 8]
         epsilons = [0.0]
-        make_positive_semidefinite = False
 
         for alpha, beta in itertools.product(
             [0.001, 0.01, 0.1, 1.0, 10.0, 100.0], repeat=2
@@ -425,7 +417,6 @@ class EigenRootTest(unittest.TestCase):
                     partial(A, alpha=alpha, beta=beta),
                     dims,
                     roots,
-                    make_positive_semidefinite,
                     epsilons,
                     tolerance,
                     partial(eig_sols, alpha=alpha, beta=beta),
@@ -436,7 +427,6 @@ class EigenRootTest(unittest.TestCase):
         dims = [10, 100]
         roots = [1, 2, 4, 8]
         epsilons = [0.0]
-        make_positive_semidefinite = False
 
         for alpha, beta in itertools.product(
             [0.001, 0.01, 0.1, 1.0, 10.0, 100.0], repeat=2
@@ -471,7 +461,6 @@ class EigenRootTest(unittest.TestCase):
                     partial(A, alpha=alpha, beta=beta),
                     dims,
                     roots,
-                    make_positive_semidefinite,
                     epsilons,
                     tolerance,
                     partial(eig_sols, alpha=alpha, beta=beta),

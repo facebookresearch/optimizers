@@ -54,13 +54,11 @@ class EigenConfig(RootInvConfig, EigenvalueDecompositionConfig):
         retry_double_precision (bool): Whether to re-trying eigendecomposition with higher (double) precision if lower precision fails due
             to CuSOLVER failure. (Default: True)
         eigen_decomp_offload_device (torch.device | str): Device to offload eigen decomposition to. If value is empty string, we don't perform offloading. (Default: "")
-        make_positive_semidefinite (bool): Perturbs matrix eigenvalues to ensure it is numerically positive semi-definite. (Default: True)
         exponent_multiplier (float): Number to be multiplied to the numerator of the inverse root, i.e., eta where the
             exponent is -eta / (2 * p). (Default: 1.0)
 
     """
 
-    make_positive_semidefinite: bool = True
     exponent_multiplier: float = 1.0
 
 
