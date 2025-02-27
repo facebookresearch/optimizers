@@ -104,7 +104,6 @@ def matrix_inverse_root(
             A=A,
             root=root,
             epsilon=epsilon,
-            make_positive_semidefinite=root_inv_config.make_positive_semidefinite,
             retry_double_precision=root_inv_config.retry_double_precision,
             eigen_decomp_offload_device=root_inv_config.eigen_decomp_offload_device,
         )
@@ -210,7 +209,6 @@ def _matrix_inverse_root_eigen(
     A: Tensor,
     root: Fraction,
     epsilon: float = 0.0,
-    make_positive_semidefinite: bool = True,
     retry_double_precision: bool = True,
     eigen_decomp_offload_device: torch.device | str = "",
 ) -> tuple[Tensor, Tensor, Tensor]:
@@ -224,7 +222,6 @@ def _matrix_inverse_root_eigen(
         A (Tensor): Square matrix of interest.
         root (Fraction): Root of interest. Any rational number.
         epsilon (float): Adds epsilon * I to matrix before taking matrix root. (Default: 0.0)
-        make_positive_semidefinite (bool): Perturbs matrix eigenvalues to ensure it is numerically positive semi-definite. (Default: True)
         retry_double_precision (bool): Flag for re-trying eigendecomposition with higher precision if lower precision fails due
             to CuSOLVER failure. (Default: True)
         eigen_decomp_offload_device (torch.device | str): Device to offload eigen decomposition computation. If value is empty string, do not perform offloading. (Default: "")
@@ -251,8 +248,7 @@ def _matrix_inverse_root_eigen(
     lambda_min = torch.min(L)
 
     # make eigenvalues >= 0 (if necessary)
-    if make_positive_semidefinite:
-        L += -torch.minimum(lambda_min, torch.as_tensor(0.0))
+    L += -torch.minimum(lambda_min, torch.as_tensor(0.0))
 
     # add epsilon
     L += epsilon
@@ -596,7 +592,6 @@ def compute_matrix_root_inverse_residuals(
         X_hat.double(),
         root=root,
         epsilon=0.0,
-        make_positive_semidefinite=True,
         eigen_decomp_offload_device=root_inv_config.eigen_decomp_offload_device,
     )
 
