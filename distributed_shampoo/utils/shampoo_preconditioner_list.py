@@ -24,9 +24,13 @@ from distributed_shampoo.shampoo_types import (
 )
 from distributed_shampoo.utils.shampoo_block_info import BlockInfo
 from distributed_shampoo.utils.shampoo_utils import compress_list, get_dtype_size
-from matrix_functions import check_diagonal, matrix_eigenvectors, matrix_inverse_root
+from matrix_functions import (
+    check_diagonal,
+    matrix_eigendecomposition,
+    matrix_inverse_root,
+)
 
-from matrix_functions_types import EigenvectorConfig, RootInvConfig
+from matrix_functions_types import EigendecompositionConfig, RootInvConfig
 from optimizer_modules import OptimizerModule
 from torch import Tensor
 from torch.autograd import profiler
@@ -936,8 +940,8 @@ class ShampooPreconditionerList(
             factor_matrix_indices=kronecker_factors_state.factor_matrix_indices,
         )
 
+    @staticmethod
     def _get_inverse_roots_from_override(
-        self,
         inv_root_override: int | Sequence[int],
         order_list: tuple[int, ...],
     ) -> tuple[int, ...]:
@@ -1128,8 +1132,8 @@ class EigenvalueCorrectedShampooPreconditionerList(
             factor_matrix_indices=kronecker_factors_state.factor_matrix_indices,
         )
 
+    @staticmethod
     def _get_inverse_roots_from_override(
-        self,
         inv_root_override: int | Sequence[int],
         order_list: tuple[int, ...],
     ) -> tuple[int, ...]:
@@ -1283,17 +1287,17 @@ class EigenvalueCorrectedShampooPreconditionerList(
                     )
 
                     # Compute eigenvectors of factor matrix.
-                    eigenvector_computation_config = cast(
-                        EigenvectorConfig,
+                    eigendecomposition_config = cast(
+                        EigendecompositionConfig,
                         self._preconditioner_config.amortized_computation_config,
                     )
                     try:
-                        computed_eigenvectors = matrix_eigenvectors(
+                        computed_eigenvectors = matrix_eigendecomposition(
                             A=factor_matrix,
                             eigenvectors_estimate=factor_matrix_eigenvectors,
-                            eigenvector_computation_config=eigenvector_computation_config,
+                            eigendecomposition_config=eigendecomposition_config,
                             is_diagonal=bool(is_factor_matrix_diagonal),
-                        )
+                        )[1]
                         # Add success to success tracker.
                         success_tracker.append(True)
                     except Exception as exception:

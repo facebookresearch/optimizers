@@ -338,13 +338,21 @@ class AbstractTest:
         def test_raise_nan_and_inf_in_inv_factor_matrix_amortized_computation(
             self,
         ) -> None:
-            for invalid_value in (torch.nan, torch.inf):
+            invalid_values = (
+                (torch.tensor([torch.nan]), torch.tensor([torch.inf]))
+                if self._amortized_computation_function() == "matrix_inverse_root"
+                else (  # matrix_eigendecomposition returns a tuple.
+                    (None, torch.tensor([torch.nan])),
+                    (None, torch.tensor([torch.inf])),
+                )
+            )
+            for invalid_value in invalid_values:
                 with (
                     self.subTest(invalid_value=invalid_value),
                     mock.patch.object(
                         shampoo_preconditioner_list,
                         self._amortized_computation_function(),
-                        side_effect=(torch.tensor([invalid_value]),),
+                        side_effect=(invalid_value,),
                     ) as mock_amortized_computation,
                 ):
                     self.assertRaisesRegex(
@@ -412,31 +420,40 @@ class AbstractTest:
             step = 1
             # Define the side effect for each call of the amortized computation function.
             fail = ValueError
-            success = torch.tensor([1.0])
+            success = (
+                torch.tensor([1.0])
+                if self._amortized_computation_function() == "matrix_inverse_root"
+                else (
+                    None,
+                    torch.tensor([1.0]),
+                )  # matrix_eigendecomposition returns a tuple.
+            )
             all_but_one_fail = (fail,) * (NUM_AMORTIZED_COMPUTATION_CALLS - 1) + (
                 success,
             )
             all_fail = (fail,) * NUM_AMORTIZED_COMPUTATION_CALLS
             all_success = (success,) * NUM_AMORTIZED_COMPUTATION_CALLS
-            with mock.patch.object(
-                shampoo_preconditioner_list,
-                self._amortized_computation_function(),
-                # Note that the cases causally depend on each other.
-                side_effect=[
-                    # Case 1: amortized computation fails less often than tolerance.
-                    *all_but_one_fail,  # Success for a single Kronecker factor is not enough to reset counter.
-                    # Case 2: amortized computation fails exactly as often as tolerance (3).
-                    *all_fail,
-                    *all_fail,
-                    # Case 3: amortized computation succeeds after tolerance hit (counter is reset).
-                    *all_success,
-                    # Case 4: amortized computation fails more often than tolerance.
-                    *all_fail,
-                    *all_fail,
-                    *all_fail,
-                    fail,  # One failure is enough to raise an exception in this case.
-                ],
-            ) as mock_amortized_computation:
+            with (
+                mock.patch.object(
+                    shampoo_preconditioner_list,
+                    self._amortized_computation_function(),
+                    # Note that the cases causally depend on each other.
+                    side_effect=[
+                        # Case 1: amortized computation fails less often than tolerance.
+                        *all_but_one_fail,  # Success for a single Kronecker factor is not enough to reset counter.
+                        # Case 2: amortized computation fails exactly as often as tolerance (3).
+                        *all_fail,
+                        *all_fail,
+                        # Case 3: amortized computation succeeds after tolerance hit (counter is reset).
+                        *all_success,
+                        # Case 4: amortized computation fails more often than tolerance.
+                        *all_fail,
+                        *all_fail,
+                        *all_fail,
+                        fail,  # One failure is enough to raise an exception in this case.
+                    ],
+                ) as mock_amortized_computation
+            ):
                 # Accumulate factor matrices for valid amortized computation.
                 self._preconditioner_list.update_preconditioners(
                     masked_grad_list=masked_grad_list0,
@@ -967,7 +984,7 @@ class EigenvalueCorrectedShampooPreconditionerListTest(
     AbstractTest.BaseShampooPreconditionerListTest
 ):
     def _amortized_computation_function(self) -> str:
-        return "matrix_eigenvectors"
+        return "matrix_eigendecomposition"
 
     def _instantiate_preconditioner_list(  # type: ignore[override]
         self, **kwargs: Any
