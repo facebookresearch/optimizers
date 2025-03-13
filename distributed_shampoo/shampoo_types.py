@@ -16,10 +16,10 @@ from commons import AbstractDataclass
 
 from matrix_functions_types import (
     DefaultEigenConfig,
-    DefaultEighEigenvectorConfig,
-    EigenvectorConfig,
+    DefaultEigendecompositionConfig,
+    EigendecompositionConfig,
     MatrixFunctionConfig,
-    QRConfig,
+    QREigendecompositionConfig,
     RootInvConfig,
 )
 from torch.distributed.device_mesh import DeviceMesh
@@ -84,7 +84,7 @@ class PreconditionerConfig(AbstractDataclass):
     """Configuration for preconditioner computation in DistributedShampoo.
 
     Attributes:
-        amortized_computation_config (MatrixFunctionConfig): Configuration for the amortized computation, e.g., inverse-root or eigenvector computation.
+        amortized_computation_config (MatrixFunctionConfig): Configuration for the amortized computation, e.g., inverse-root computation or eigendecomposition.
         num_tolerated_failed_amortized_computations (int): Number of failed amortized computations to tolerate before raising an error. (Default: 3)
         ignored_dims (list[int]): List of dimensions to ignore when computing the preconditioner. This is equivalent to setting the preconditioner for these dimensions to the identity matrix. (Default: [])
 
@@ -129,15 +129,15 @@ class EigenvalueCorrectedShampooPreconditionerConfig(PreconditionerConfig):
     """Configuration for eigenvalue-corrected Shampoo/SOAP preconditioner computation.
 
     Attributes:
-        amortized_computation_config (EigenvectorConfig): Configuration for the eigenvector computation.
-            (Default: DefaultEighEigenvectorConfig)
+        amortized_computation_config (EigendecompositionConfig): Configuration for the eigenvector computation.
+            (Default: DefaultEigendecompositionConfig)
         num_tolerated_failed_amortized_computations (int): Number of failed amortized computations to tolerate before raising an error. (Default: 3)
         ignored_dims (list[int]): List of dimensions to ignore when computing the preconditioner. This is equivalent to setting the preconditioner for these dimensions to the identity matrix. (Default: [])
 
     """
 
-    amortized_computation_config: EigenvectorConfig = field(
-        default_factory=lambda: DefaultEighEigenvectorConfig
+    amortized_computation_config: EigendecompositionConfig = field(
+        default_factory=lambda: DefaultEigendecompositionConfig
     )
 
 
@@ -145,7 +145,7 @@ DefaultEigenvalueCorrectedShampooConfig = (
     EigenvalueCorrectedShampooPreconditionerConfig()
 )
 DefaultSOAPConfig = EigenvalueCorrectedShampooPreconditionerConfig(
-    amortized_computation_config=QRConfig(),
+    amortized_computation_config=QREigendecompositionConfig(),
 )
 
 
