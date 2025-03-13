@@ -151,6 +151,7 @@ class MatrixInverseRootTest(unittest.TestCase):
                 EigenConfig(),
                 CoupledNewtonConfig(),
                 EigenConfig(eigen_decomp_offload_device="cpu"),
+                EigenConfig(enhance_stability=True),
             ):
                 with self.subTest(f"Test with {A=}, {root_inv_config=}"):
                     torch.testing.assert_close(

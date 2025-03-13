@@ -15,6 +15,7 @@ import re
 import unittest
 
 from collections.abc import Callable
+from functools import partial
 from itertools import product
 from unittest import mock
 
@@ -91,25 +92,21 @@ class AbstractTest:
         def _shampoo_optim_factory(
             distributed_config: DDPShampooConfig | None,
         ) -> Callable[[ParamsT], torch.optim.Optimizer]:
-            return lambda parameters: (
-                lambda distributed_config: DistributedShampoo(
-                    parameters,
-                    lr=0.001,
-                    betas=(0.9, 1.0),
+            return partial(
+                DistributedShampoo,
+                lr=0.001,
+                betas=(0.9, 1.0),
+                epsilon=1e-8,
+                momentum=0.9,
+                weight_decay=0.0,
+                max_preconditioner_dim=20,
+                precondition_frequency=1,
+                start_preconditioning_step=2,
+                use_decoupled_weight_decay=True,
+                grafting_config=AdaGradGraftingConfig(
                     epsilon=1e-8,
-                    momentum=0.9,
-                    weight_decay=0.0,
-                    max_preconditioner_dim=20,
-                    precondition_frequency=1,
-                    start_preconditioning_step=2,
-                    use_decoupled_weight_decay=True,
-                    grafting_config=AdaGradGraftingConfig(
-                        epsilon=1e-8,
-                    ),
-                    distributed_config=distributed_config,
-                )
-            )(
-                distributed_config,
+                ),
+                distributed_config=distributed_config,
             )
 
         def test_losses(self) -> None:

@@ -42,9 +42,9 @@ class NewtonConvergenceFlag(enum.Enum):
     EARLY_STOP: Error in residual stopped improving (unexpected).
     """
 
-    REACHED_MAX_ITERS = 0
-    CONVERGED = 1
-    EARLY_STOP = 2
+    REACHED_MAX_ITERS = enum.auto()
+    CONVERGED = enum.auto()
+    EARLY_STOP = enum.auto()
 
 
 def check_diagonal(A: Tensor) -> bool:
@@ -106,6 +106,7 @@ def matrix_inverse_root(
             epsilon=epsilon,
             retry_double_precision=root_inv_config.retry_double_precision,
             eigen_decomp_offload_device=root_inv_config.eigen_decomp_offload_device,
+            enhance_stability=root_inv_config.enhance_stability,
         )
     elif type(root_inv_config) is CoupledNewtonConfig:
         # NOTE: Use Fraction.is_integer() instead when Python 3.12+ is available
@@ -211,6 +212,7 @@ def _matrix_inverse_root_eigen(
     epsilon: float = 0.0,
     retry_double_precision: bool = True,
     eigen_decomp_offload_device: torch.device | str = "",
+    enhance_stability: bool = False,
 ) -> tuple[Tensor, Tensor, Tensor]:
     """Compute matrix inverse root using eigendecomposition of symmetric positive (semi-)definite matrix.
 
@@ -225,6 +227,7 @@ def _matrix_inverse_root_eigen(
         retry_double_precision (bool): Flag for re-trying eigendecomposition with higher precision if lower precision fails due
             to CuSOLVER failure. (Default: True)
         eigen_decomp_offload_device (torch.device | str): Device to offload eigen decomposition computation. If value is empty string, do not perform offloading. (Default: "")
+        enhance_stability (bool): Whether to use a (mathematically identical, yet numerically more stable) path for eigendecomposition (Default: False)
 
     Returns:
         X (Tensor): (Inverse) root of matrix. Same dimensions as A.
@@ -237,21 +240,31 @@ def _matrix_inverse_root_eigen(
     if root <= 0:
         raise ValueError(f"Root {root} should be positive!")
 
-    # compute eigendecomposition and compute minimum eigenvalue
+    # Add epsilon to the diagonal to help with numerical stability of the eigenvalue decomposition
+    # Only do it when "enhance_stability" is True
+    if enhance_stability:
+        dim = A.shape[0]
+        identity = torch.eye(dim, dtype=A.dtype, device=A.device)
+        A_ridge = A + epsilon * identity
+    else:
+        A_ridge = A
 
+    # compute eigendecomposition and compute minimum eigenvalue
     L, Q = matrix_eigenvalue_decomposition(
-        A,
+        A_ridge,
         retry_double_precision=retry_double_precision,
         eigen_decomp_offload_device=eigen_decomp_offload_device,
     )
-
     lambda_min = torch.min(L)
 
-    # make eigenvalues >= 0 (if necessary)
-    L += -torch.minimum(lambda_min, torch.as_tensor(0.0))
+    # make eigenvalues > 0 (if necessary)
 
-    # add epsilon
-    L += epsilon
+    if enhance_stability:
+        L += -torch.minimum(lambda_min - epsilon, torch.as_tensor(0.0))
+    else:
+        L += -torch.minimum(lambda_min, torch.as_tensor(0.0))
+        # and add the epsilon
+        L += epsilon
 
     # compute inverse preconditioner
     X = Q * L.pow(torch.as_tensor(-1.0 / root)).unsqueeze(0) @ Q.T
@@ -593,6 +606,7 @@ def compute_matrix_root_inverse_residuals(
         root=root,
         epsilon=0.0,
         eigen_decomp_offload_device=root_inv_config.eigen_decomp_offload_device,
+        enhance_stability=root_inv_config.enhance_stability,
     )
 
     A_reg = A.double() + epsilon * torch.eye(

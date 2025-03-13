@@ -653,7 +653,7 @@ class BaseShampooPreconditionerList(
         # the update factor matrix is diagonal.
         if is_factor_matrix_diagonal and not check_diagonal(factor_matrix):
             is_factor_matrix_diagonal.copy_(torch.tensor(False))
-            logger.debug(f"Factor matrix {factor_matrix_index} is not diagonal.")
+            logger.info(f"Factor matrix {factor_matrix_index} is not diagonal.")
 
         # Check for nan or inf values.
         if torch.isnan(factor_matrix).any():

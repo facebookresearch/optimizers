@@ -38,8 +38,8 @@ class DistributedShampooPytorchCompileTest(unittest.TestCase):
         betas: tuple[float, float],
         grafting_config: GraftingConfig | None,
     ) -> Callable[[ParamsT], torch.optim.Optimizer]:
-        return lambda parameters: DistributedShampoo(
-            parameters,
+        return partial(
+            DistributedShampoo,
             lr=0.01,
             betas=betas,
             # TODO: comment out beta3 to unblock quantization changes; need to fix PT2 FMA changes for this test

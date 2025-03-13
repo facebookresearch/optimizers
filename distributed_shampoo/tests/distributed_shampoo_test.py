@@ -173,7 +173,7 @@ class DistributedShampooInitTest(unittest.TestCase):
             self.assertRaisesRegex(
                 NotImplementedError,
                 re.escape(
-                    "distributed_config=DDPShampooConfig(communication_dtype=<CommunicationDType.DEFAULT: 0>, "
+                    "distributed_config=DDPShampooConfig(communication_dtype=<CommunicationDType.DEFAULT: 1>, "
                     "num_trainers_per_group=-1, communicate_params=False) not supported!"
                 ),
                 DistributedShampoo,
@@ -221,13 +221,13 @@ class DistributedShampooTest(unittest.TestCase):
     def test_step_with_closure(self) -> None:
         # Test the case without closure, the loss returned by step() is None.
         self._optimizer.zero_grad()
-        self._model[0].weight.grad = torch.rand(10, 5)
+        self._model[0].weight.grad = torch.rand_like(self._model[0].weight)
         self.assertIsNone(self._optimizer.step(closure=None))
 
         # Test the case that the closure returns a scalar.
         def closure() -> float:
             self._optimizer.zero_grad()
-            self._model[0].weight.grad = torch.rand(10, 5)
+            self._model[0].weight.grad = torch.rand_like(self._model[0].weight)
             return 1.0
 
         self.assertEqual(self._optimizer.step(closure=closure), 1.0)
@@ -608,11 +608,11 @@ class DistributedShampooNoneGradTest(unittest.TestCase):
     def test_step_with_consistent_grads(self) -> None:
         with self.assertNoLogs(level="WARNING"):
             self._optimizer.zero_grad()
-            self._model[0].weight.grad = torch.rand(10, 5)
+            self._model[0].weight.grad = torch.rand_like(self._model[0].weight)
             self._optimizer.step()
 
             self._optimizer.zero_grad()
-            self._model[0].weight.grad = torch.rand(10, 5)
+            self._model[0].weight.grad = torch.rand_like(self._model[0].weight)
             self._optimizer.step()
 
     def test_step_with_none_grads(self) -> None:
@@ -620,7 +620,7 @@ class DistributedShampooNoneGradTest(unittest.TestCase):
         ending_msg = "Changed gradient selector indices: [0, 1]"
         with self.assertLogs(level="WARNING") as cm:
             self._optimizer.zero_grad()
-            self._model[0].weight.grad = torch.rand(10, 5)
+            self._model[0].weight.grad = torch.rand_like(self._model[0].weight)
             self._optimizer.step()
 
             self._optimizer.zero_grad()  # Implicitly set grad=None in second step

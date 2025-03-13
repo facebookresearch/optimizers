@@ -554,7 +554,7 @@ class AbstractTest:
                 epsilon=1.0
             )
             with self.assertLogs(
-                level="DEBUG",
+                level="INFO",
             ) as cm:
                 self._preconditioner_list.update_preconditioners(
                     masked_grad_list=(
