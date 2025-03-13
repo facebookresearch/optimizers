@@ -27,18 +27,18 @@ from matrix_functions import (
     _matrix_inverse_root_newton,
     check_diagonal,
     compute_matrix_root_inverse_residuals,
-    matrix_eigenvectors,
+    matrix_eigendecomposition,
     matrix_inverse_root,
     NewtonConvergenceFlag,
 )
 from matrix_functions_types import (
     CoupledHigherOrderConfig,
     CoupledNewtonConfig,
-    DefaultEighEigenvectorConfig,
+    DefaultEigendecompositionConfig,
     EigenConfig,
-    EigenvectorConfig,
-    EighEigenvectorConfig,
-    QRConfig,
+    EigendecompositionConfig,
+    EighEigendecompositionConfig,
+    QREigendecompositionConfig,
     RootInvConfig,
 )
 from torch import Tensor
@@ -150,8 +150,8 @@ class MatrixInverseRootTest(unittest.TestCase):
             for root_inv_config in (
                 EigenConfig(),
                 CoupledNewtonConfig(),
-                EigenConfig(eigen_decomp_offload_device="cpu"),
                 EigenConfig(enhance_stability=True),
+                EigenConfig(eigendecomposition_offload_device="cpu"),
             ):
                 with self.subTest(f"Test with {A=}, {root_inv_config=}"):
                     torch.testing.assert_close(
@@ -238,23 +238,27 @@ class MatrixInverseRootTest(unittest.TestCase):
             implementation,
             msg,
         ) in root_inv_config_and_implementation_and_msg:
-            with mock.patch.object(
-                matrix_functions,
-                implementation,
-                return_value=(
-                    None,
-                    None,
-                    NewtonConvergenceFlag.REACHED_MAX_ITERS,
-                    None,
-                    None,
+            with (
+                mock.patch.object(
+                    matrix_functions,
+                    implementation,
+                    return_value=(
+                        None,
+                        None,
+                        NewtonConvergenceFlag.REACHED_MAX_ITERS,
+                        None,
+                        None,
+                    ),
                 ),
-            ), self.subTest(
-                root_inv_config=root_inv_config,
-                implementation=implementation,
-                msg=msg,
-            ), self.assertLogs(
-                level="WARNING",
-            ) as cm:
+                self.subTest(
+                    root_inv_config=root_inv_config,
+                    implementation=implementation,
+                    msg=msg,
+                ),
+                self.assertLogs(
+                    level="WARNING",
+                ) as cm,
+            ):
                 matrix_inverse_root(
                     A=A,
                     root=root,
@@ -771,39 +775,39 @@ class ComputeMatrixRootInverseResidualsTest(unittest.TestCase):
             )
 
 
-class MatrixEigenvectorsTest(unittest.TestCase):
-    def test_matrix_eigenvectors_scalar(self) -> None:
+class MatrixEigendecompositionTest(unittest.TestCase):
+    def test_matrix_eigendecomposition_scalar(self) -> None:
         A = torch.tensor(2.0)
         with self.subTest("Test with scalar case."):
             self.assertEqual(
-                torch.tensor(1),
-                matrix_eigenvectors(A),
+                (A, torch.tensor(1)),
+                matrix_eigendecomposition(A),
             )
         with self.subTest("Test with matrix case."):
             self.assertEqual(
-                torch.tensor([[1]]),
-                matrix_eigenvectors(torch.tensor([[A]])),
+                (torch.tensor([[A]]), torch.tensor([[1]])),
+                matrix_eigendecomposition(torch.tensor([[A]])),
             )
 
-    def test_matrix_eigenvectors_with_not_two_dim_matrix(self) -> None:
+    def test_matrix_eigendecomposition_with_not_two_dim_matrix(self) -> None:
         A = torch.zeros((1, 2, 3))
         self.assertRaisesRegex(
             ValueError,
             re.escape("Matrix is not 2-dimensional!"),
-            matrix_eigenvectors,
+            matrix_eigendecomposition,
             A=A,
         )
 
-    def test_matrix_eigenvectors_not_square(self) -> None:
+    def test_matrix_eigendecomposition_not_square(self) -> None:
         A = torch.zeros((2, 3))
         self.assertRaisesRegex(
             ValueError,
             re.escape("Matrix is not square!"),
-            matrix_eigenvectors,
+            matrix_eigendecomposition,
             A=A,
         )
 
-    def test_matrix_eigenvectors(self) -> None:
+    def test_matrix_eigendecomposition(self) -> None:
         A_list = [
             torch.tensor([[1.0, 0.0], [0.0, 4.0]]),
             torch.tensor(
@@ -813,6 +817,10 @@ class MatrixEigenvectorsTest(unittest.TestCase):
                     [-224.0, 177.0, 42.0],
                 ]
             ),
+        ]
+        expected_eigenvalues_list = [
+            torch.tensor([1.0, 4.0]),
+            torch.tensor([2.9009e-03, 1.7424e-01, 1.9828e03]),
         ]
         expected_eigenvectors_list = [
             torch.tensor([[1.0, 0.0], [0.0, 1.0]]),
@@ -825,58 +833,73 @@ class MatrixEigenvectorsTest(unittest.TestCase):
             ),
         ]
 
-        atol = 0.05
-        rtol = 1e-2
+        atol = 0.05  # TODO: Maybe switch to a case that allows for lower tolerance.
+        rtol = 1e-5
         with self.subTest("Test with diagonal case."):
             torch.testing.assert_close(
-                expected_eigenvectors_list[0],
-                matrix_eigenvectors(
+                (expected_eigenvalues_list[0], expected_eigenvectors_list[0]),
+                matrix_eigendecomposition(
                     A_list[0],
                     is_diagonal=True,
                 ),
                 atol=atol,
                 rtol=rtol,
             )
-        with self.subTest("Test with EIGEN."):
+        with self.subTest("Test with EighEigendecompositionConfig."):
             for (
                 A,
+                expected_eigenvalues,
                 expected_eigenvectors,
-            ), eigenvector_computation_config in itertools.product(
-                zip(A_list, expected_eigenvectors_list, strict=True),
+            ), eigendecomposition_config in itertools.product(
+                zip(
+                    A_list,
+                    expected_eigenvalues_list,
+                    expected_eigenvectors_list,
+                    strict=True,
+                ),
                 (
-                    DefaultEighEigenvectorConfig,
-                    EighEigenvectorConfig(eigen_decomp_offload_device="cpu"),
+                    DefaultEigendecompositionConfig,
+                    EighEigendecompositionConfig(
+                        eigendecomposition_offload_device="cpu"
+                    ),
                 ),
             ):
                 torch.testing.assert_close(
-                    expected_eigenvectors,
-                    matrix_eigenvectors(
+                    (expected_eigenvalues, expected_eigenvectors),
+                    matrix_eigendecomposition(
                         A,
-                        eigenvector_computation_config=eigenvector_computation_config,
+                        eigendecomposition_config=eigendecomposition_config,
                         is_diagonal=False,
                     ),
                     atol=atol,
                     rtol=rtol,
                 )
 
-        # Tests for `QRConfig`.
+        # Tests for `QREigendecompositionConfig`.
         initialization_strategies = {
             "zero": lambda A: torch.zeros_like(A),
             "identity": lambda A: torch.eye(A.shape[0], dtype=A.dtype, device=A.device),
-            "exact": lambda A: matrix_eigenvectors(A),  # Eigendecomposition.
+            "exact": lambda A: matrix_eigendecomposition(A)[1],
         }
         for name, initialization_fn in initialization_strategies.items():
-            with self.subTest(f"Test with QRConfig with {name} initialization."):
+            with self.subTest(
+                f"Test with QREigendecompositionConfig with {name} initialization."
+            ):
                 # Set `max_iterations` to large int to run until numerical tolerance.
-                qr_config = QRConfig(max_iterations=10_000)
-                for A, expected_eigenvectors in zip(
-                    A_list, expected_eigenvectors_list, strict=True
+                qr_config = QREigendecompositionConfig(max_iterations=10_000)
+                for A, expected_eigenvalues, expected_eigenvectors in zip(
+                    A_list,
+                    expected_eigenvalues_list,
+                    expected_eigenvectors_list,
+                    strict=True,
                 ):
-                    estimated_eigenvectors = matrix_eigenvectors(
-                        A,
-                        eigenvectors_estimate=initialization_fn(A),
-                        is_diagonal=False,
-                        eigenvector_computation_config=qr_config,
+                    estimated_eigenvalues, estimated_eigenvectors = (
+                        matrix_eigendecomposition(
+                            A,
+                            eigenvectors_estimate=initialization_fn(A),
+                            is_diagonal=False,
+                            eigendecomposition_config=qr_config,
+                        )
                     )
                     # Ensure that the signs of the eigenvectors are consistent.
                     estimated_eigenvectors[
@@ -884,28 +907,28 @@ class MatrixEigenvectorsTest(unittest.TestCase):
                         expected_eigenvectors[0, :] / estimated_eigenvectors[0, :] < 0,
                     ] *= -1
                     torch.testing.assert_close(
-                        expected_eigenvectors,
-                        estimated_eigenvectors,
+                        (expected_eigenvalues, expected_eigenvectors),
+                        (estimated_eigenvalues, estimated_eigenvectors),
                         atol=atol,
                         rtol=rtol,
                     )
 
-    def test_invalid_eigenvalue_correction_config(
+    def test_invalid_eigendecomposition_config(
         self,
     ) -> None:
         with (
             mock.patch.object(
                 matrix_functions,
                 "type",
-                side_effect=lambda object: EigenvectorConfig,
+                side_effect=lambda object: EigendecompositionConfig,
             ),
             self.assertRaisesRegex(
                 NotImplementedError,
                 re.escape(
-                    "Eigenvector computation method is not implemented! Specified eigenvector method is eigenvector_computation_config=EighEigenvectorConfig(retry_double_precision=True, eigen_decomp_offload_device='')."
+                    "Eigendecomposition config is not implemented! Specified eigendecomposition config is eigendecomposition_config=EighEigendecompositionConfig(retry_double_precision=True, eigendecomposition_offload_device='')."
                 ),
             ),
         ):
-            matrix_eigenvectors(
+            matrix_eigendecomposition(
                 A=torch.tensor([[1.0, 0.0], [0.0, 4.0]]),
             )
