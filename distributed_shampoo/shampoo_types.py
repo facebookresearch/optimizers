@@ -67,10 +67,10 @@ SHAMPOO_PRECONDITIONER_LIST = "shampoo_preconditioner_list"
 
 ###### ENUM CLASSES ######
 class CommunicationDType(enum.Enum):
-    DEFAULT = 0
-    FP16 = 1
-    BF16 = 2
-    FP32 = 3
+    DEFAULT = enum.auto()
+    FP16 = enum.auto()
+    BF16 = enum.auto()
+    FP32 = enum.auto()
 
 
 ###### ERROR CLASSES ######

@@ -56,10 +56,12 @@ class EigenConfig(RootInvConfig, EigenvalueDecompositionConfig):
         eigen_decomp_offload_device (torch.device | str): Device to offload eigen decomposition to. If value is empty string, we don't perform offloading. (Default: "")
         exponent_multiplier (float): Number to be multiplied to the numerator of the inverse root, i.e., eta where the
             exponent is -eta / (2 * p). (Default: 1.0)
+        enhance_stability (bool): Whether to enhance the stability of the root inverse computation through mathematically identical, but numerically more stable conditioning. (Default: False)
 
     """
 
     exponent_multiplier: float = 1.0
+    enhance_stability: bool = False
 
 
 DefaultEigenConfig = EigenConfig()
