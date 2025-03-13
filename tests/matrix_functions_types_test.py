@@ -10,8 +10,9 @@ LICENSE file in the root directory of this source tree.
 import re
 import unittest
 
+from commons import get_all_subclasses
+
 from matrix_functions_types import QREigendecompositionConfig
-from utils import get_all_subclasses
 
 
 class QREigendecompositionConfigSubclassesTest(unittest.TestCase):

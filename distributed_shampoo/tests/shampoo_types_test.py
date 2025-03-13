@@ -11,12 +11,13 @@ import itertools
 import re
 import unittest
 
+from commons import get_all_subclasses
+
 from distributed_shampoo.shampoo_types import (
     AdaGradGraftingConfig,
     PreconditionerConfig,
     RMSpropGraftingConfig,
 )
-from utils import get_all_subclasses
 
 
 class AdaGradGraftingConfigSubclassesTest(unittest.TestCase):
