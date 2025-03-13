@@ -1,9 +1,17 @@
+"""
+Copyright (c) Meta Platforms, Inc. and affiliates.
+All rights reserved.
+
+This source code is licensed under the BSD-style license found in the
+LICENSE file in the root directory of this source tree.
+
+"""
+
 import re
 import unittest
 
-from distributed_shampoo.tests.shampoo_types_test import get_all_subclasses
-
 from matrix_functions_types import QREigendecompositionConfig
+from utils import get_all_subclasses
 
 
 class QREigendecompositionConfigSubclassesTest(unittest.TestCase):

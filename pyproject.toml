@@ -57,6 +57,7 @@ py-modules = [
     "matrix_functions",
     "matrix_functions_types",
     "optimizer_modules",
+    "utils",
 ]
 
 [tool.setuptools.packages.find]
