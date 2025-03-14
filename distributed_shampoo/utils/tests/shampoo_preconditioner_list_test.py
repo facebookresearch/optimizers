@@ -338,13 +338,13 @@ class AbstractTest:
         def test_raise_nan_and_inf_in_inv_factor_matrix_amortized_computation(
             self,
         ) -> None:
-            for invalid_value in (torch.tensor([torch.nan]), torch.tensor([torch.inf])):
+            for invalid_value in (torch.nan, torch.inf):
                 with (
                     self.subTest(invalid_value=invalid_value),
                     mock.patch.object(
                         shampoo_preconditioner_list,
                         self._amortized_computation_function(),
-                        side_effect=(invalid_value,),
+                        side_effect=(torch.tensor([invalid_value]),),
                     ) as mock_amortized_computation,
                 ):
                     self.assertRaisesRegex(
