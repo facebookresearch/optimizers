@@ -74,7 +74,7 @@ __all__ = [
     "DefaultEigendecompositionConfig",  # Default `EigendecompositionConfig` using `EighEigendecompositionConfig`.
     "QREigendecompositionConfig",  # Based on `EigendecompositionConfig`.
     "RootInvConfig",  # Abstract base class (based on `MatrixFunctionConfig`).
-    "EigenConfig",  # Based on `RootInvConfig` and `EigenvalueDecompositionConfig`.
+    "EigenConfig",  # Based on `RootInvConfig` and `EigendecompositionConfig`.
     "DefaultEigenConfig",  # Default `RootInvConfig` using `EigenConfig`.
     "CoupledNewtonConfig",  # Based on `RootInvConfig`.
     "CoupledHigherOrderConfig",  # Based on `RootInvConfig`.

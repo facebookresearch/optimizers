@@ -172,12 +172,11 @@ def matrix_eigendecomposition(
     eigendecomposition_config: EigendecompositionConfig = DefaultEigendecompositionConfig,
     is_diagonal: bool = False,
 ) -> tuple[Tensor, Tensor]:
-    """
-    Compute the eigendecomposition of a symmetric matrix.
+    """Compute the eigendecomposition of a symmetric matrix.
 
     Args:
         A (Tensor): The input symmetric matrix.
-        eigendecomposition_config (EigenvalueDecompositionConfig): Determines how eigendecomposition is computed.
+        eigendecomposition_config (EigendecompositionConfig): Determines how eigendecomposition is computed.
         is_diagonal (bool): Whether A is diagonal. (Default: False)
 
     Returns:
@@ -218,6 +217,26 @@ def matrix_eigendecomposition(
         raise NotImplementedError(
             f"Eigendecomposition config is not implemented! Specified eigendecomposition config is {eigendecomposition_config=}."
         )
+
+
+def matrix_eigenvectors(
+    A: Tensor,
+    eigendecomposition_config: EigendecompositionConfig = DefaultEigendecompositionConfig,
+    is_diagonal: bool = False,
+) -> Tensor:
+    """Compute the eigenvectors of a symmetric matrix.
+
+    Wrapper function for matrix_eigendecomposition that only returns the eigenvectors.
+
+    Args:
+        A (Tensor): The input symmetric matrix.
+        eigendecomposition_config (EigendecompositionConfig): Determines how eigendecomposition is computed.
+        is_diagonal (bool): Whether A is diagonal. (Default: False)
+
+    Returns:
+        Tensor: The eigenvectors of the input matrix.
+    """
+    return matrix_eigendecomposition(A, eigendecomposition_config, is_diagonal)[1]
 
 
 def _eigh_eigenvalue_decomposition(

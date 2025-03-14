@@ -338,15 +338,7 @@ class AbstractTest:
         def test_raise_nan_and_inf_in_inv_factor_matrix_amortized_computation(
             self,
         ) -> None:
-            invalid_values = (
-                (torch.tensor([torch.nan]), torch.tensor([torch.inf]))
-                if self._amortized_computation_function() == "matrix_inverse_root"
-                else (  # matrix_eigendecomposition returns a tuple.
-                    (None, torch.tensor([torch.nan])),
-                    (None, torch.tensor([torch.inf])),
-                )
-            )
-            for invalid_value in invalid_values:
+            for invalid_value in (torch.tensor([torch.nan]), torch.tensor([torch.inf])):
                 with (
                     self.subTest(invalid_value=invalid_value),
                     mock.patch.object(
@@ -420,14 +412,7 @@ class AbstractTest:
             step = 1
             # Define the side effect for each call of the amortized computation function.
             fail = ValueError
-            success = (
-                torch.tensor([1.0])
-                if self._amortized_computation_function() == "matrix_inverse_root"
-                else (
-                    None,
-                    torch.tensor([1.0]),
-                )  # matrix_eigendecomposition returns a tuple.
-            )
+            success = torch.tensor([1.0])
             all_but_one_fail = (fail,) * (NUM_AMORTIZED_COMPUTATION_CALLS - 1) + (
                 success,
             )
@@ -984,7 +969,7 @@ class EigenvalueCorrectedShampooPreconditionerListTest(
     AbstractTest.BaseShampooPreconditionerListTest
 ):
     def _amortized_computation_function(self) -> str:
-        return "matrix_eigendecomposition"
+        return "matrix_eigenvectors"
 
     def _instantiate_preconditioner_list(  # type: ignore[override]
         self, **kwargs: Any
