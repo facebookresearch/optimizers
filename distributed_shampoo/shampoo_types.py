@@ -110,13 +110,13 @@ class ShampooPreconditionerConfig(PreconditionerConfig):
     """Configuration for Shampoo preconditioner computation.
 
     Attributes:
-        amortized_computation_config (RootInvConfig): Configuration for the inverse-root computation. (Default: DefaultEigenConfig)
+        amortized_computation_config (RootInvConfig | EigendecompositionConfig): Configuration for the inverse-root computation. (Default: DefaultEigenConfig)
         num_tolerated_failed_amortized_computations (int): Number of failed amortized computations to tolerate before raising an error. (Default: 3)
         ignored_dims (list[int]): List of dimensions to ignore when computing the preconditioner. This is equivalent to setting the preconditioner for these dimensions to the identity matrix. (Default: [])
 
     """
 
-    amortized_computation_config: RootInvConfig = field(
+    amortized_computation_config: RootInvConfig | EigendecompositionConfig = field(
         default_factory=lambda: DefaultEigenConfig
     )
 

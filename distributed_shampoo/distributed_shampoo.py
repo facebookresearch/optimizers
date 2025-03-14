@@ -84,11 +84,13 @@ from distributed_shampoo.utils.shampoo_hybrid_shard_distributor import (
 
 from distributed_shampoo.utils.shampoo_preconditioner_list import (
     AdagradPreconditionerList,
+    EigendecomposedShampooPreconditionerList,
     EigenvalueCorrectedShampooPreconditionerList,
     SGDPreconditionerList,
     ShampooPreconditionerList,
 )
 from distributed_shampoo.utils.shampoo_utils import compress_list
+from matrix_functions_types import EigendecompositionConfig, RootInvConfig
 
 from torch.optim.optimizer import ParamsT, StateDict
 
@@ -483,7 +485,20 @@ class DistributedShampoo(torch.optim.Optimizer):
             self._per_group_state_lists, self.param_groups, strict=True
         ):
             if type(group[PRECONDITIONER_CONFIG]) is ShampooPreconditionerConfig:
-                preconditioner_list_cls = ShampooPreconditionerList
+                if isinstance(
+                    group[PRECONDITIONER_CONFIG].amortized_computation_config,
+                    RootInvConfig,
+                ):
+                    preconditioner_list_cls = ShampooPreconditionerList
+                elif isinstance(
+                    group[PRECONDITIONER_CONFIG].amortized_computation_config,
+                    EigendecompositionConfig,
+                ):
+                    preconditioner_list_cls = EigendecomposedShampooPreconditionerList  # type: ignore[assignment]
+                else:
+                    raise NotImplementedError(
+                        f"{group[PRECONDITIONER_CONFIG].amortized_computation_config=} not supported!"
+                    )
             elif (
                 type(group[PRECONDITIONER_CONFIG])
                 is EigenvalueCorrectedShampooPreconditionerConfig
