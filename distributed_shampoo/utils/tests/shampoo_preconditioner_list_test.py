@@ -27,6 +27,7 @@ from distributed_shampoo.utils.shampoo_block_info import BlockInfo
 from distributed_shampoo.utils.shampoo_preconditioner_list import (
     AdagradPreconditionerList,
     BaseShampooPreconditionerList,
+    EigendecomposedShampooPreconditionerList,
     EigenvalueCorrectedShampooPreconditionerList,
     PreconditionerList,
     SGDPreconditionerList,
@@ -34,7 +35,7 @@ from distributed_shampoo.utils.shampoo_preconditioner_list import (
 )
 
 from distributed_shampoo.utils.shampoo_utils import compress_list
-from matrix_functions_types import EigenConfig
+from matrix_functions_types import DefaultEigendecompositionConfig, EigenConfig
 from torch import Tensor
 
 
@@ -338,13 +339,21 @@ class AbstractTest:
         def test_raise_nan_and_inf_in_inv_factor_matrix_amortized_computation(
             self,
         ) -> None:
-            for invalid_value in (torch.nan, torch.inf):
+            invalid_values = (
+                (torch.tensor([torch.nan]), torch.tensor([torch.inf]))
+                if self._amortized_computation_function() != "matrix_eigendecomposition"
+                else (  # matrix_eigendecomposition returns a tuple.
+                    (torch.tensor([torch.nan]), torch.tensor([torch.nan])),
+                    (torch.tensor([torch.inf]), torch.tensor([torch.inf])),
+                )
+            )
+            for invalid_value in invalid_values:
                 with (
                     self.subTest(invalid_value=invalid_value),
                     mock.patch.object(
                         shampoo_preconditioner_list,
                         self._amortized_computation_function(),
-                        side_effect=(torch.tensor([invalid_value]),),
+                        side_effect=(invalid_value,),
                     ) as mock_amortized_computation,
                 ):
                     self.assertRaisesRegex(
@@ -412,7 +421,14 @@ class AbstractTest:
             step = 1
             # Define the side effect for each call of the amortized computation function.
             fail = ValueError
-            success = torch.tensor([1.0])
+            success = (
+                torch.tensor([1.0])
+                if self._amortized_computation_function() != "matrix_eigendecomposition"
+                else (
+                    torch.tensor([1.0]),
+                    torch.tensor([1.0]),
+                )  # matrix_eigendecomposition returns a tuple.
+            )
             all_but_one_fail = (fail,) * (NUM_AMORTIZED_COMPUTATION_CALLS - 1) + (
                 success,
             )
@@ -523,7 +539,7 @@ class AbstractTest:
                     step += 1
                 # Exactly at failure tolerance now.
                 with self.assertLogs(level="WARNING") as cm:
-                    expected_error_message = r"The number of failed .* computations for factors \('0.block_0.0',\) exceeded the allowed tolerance\."
+                    expected_error_message = r"The number of failed .* for factors \('0.block_0.0',\) exceeded the allowed tolerance\."
                     self.assertRaisesRegex(
                         ValueError,
                         expected_error_message,
@@ -884,6 +900,9 @@ class ShampooPreconditionerListTest(AbstractTest.BaseShampooPreconditionerListTe
             preconditioner_list=self._instantiate_preconditioner_list(
                 beta2=1.0,
                 preconditioner_config=ShampooPreconditionerConfig(
+                    amortized_computation_config=EigenConfig()
+                    if self._amortized_computation_function() == "matrix_inverse_root"
+                    else DefaultEigendecompositionConfig,
                     ignored_dims=[0, 1],
                 ),
             ),
@@ -929,7 +948,19 @@ class ShampooPreconditionerListTest(AbstractTest.BaseShampooPreconditionerListTe
             Tests that the inverse roots are computed correctly from inv_root_override.
             """
             preconditioner_config = ShampooPreconditionerConfig(
-                amortized_computation_config=EigenConfig(exponent_multiplier=2.0),
+                amortized_computation_config=EigenConfig(exponent_multiplier=2.0)
+                if self._amortized_computation_function() == "matrix_inverse_root"
+                else DefaultEigendecompositionConfig,
+            )
+            inv_root_override = (
+                inv_root_override
+                if self._amortized_computation_function() == "matrix_inverse_root"
+                # Configs based on EigendecompositionConfig don't support exponent_multiplier.
+                else (
+                    int(inv_root_override / 2)
+                    if isinstance(inv_root_override, int)
+                    else [int(x / 2) for x in inv_root_override]
+                )
             )
 
             masked_grad_list1 = (
@@ -963,6 +994,31 @@ class ShampooPreconditionerListTest(AbstractTest.BaseShampooPreconditionerListTe
 
         test_inverse_roots_from_override(inv_root_override=2)
         test_inverse_roots_from_override(inv_root_override=[2, 2, 2])
+
+
+class EigendecomposedShampooPreconditionerListTest(ShampooPreconditionerListTest):
+    def _amortized_computation_function(self) -> str:
+        return "matrix_eigendecomposition"
+
+    def _instantiate_preconditioner_list(  # type: ignore[override]
+        self, **kwargs: Any
+    ) -> EigendecomposedShampooPreconditionerList:
+        kwargs = {
+            "beta2": 1.0,
+            "epsilon": 0.0,
+            "inv_root_override": 0,
+            "use_bias_correction": True,
+            "preconditioner_config": ShampooPreconditionerConfig(
+                amortized_computation_config=DefaultEigendecompositionConfig,
+            ),
+        } | kwargs
+        return EigendecomposedShampooPreconditionerList(
+            block_list=self._block_list,
+            state=self._state,
+            block_info_list=self._block_info_list,
+            factor_matrix_dtype=torch.float64,
+            **kwargs,  # type: ignore[arg-type]
+        )
 
 
 class EigenvalueCorrectedShampooPreconditionerListTest(
