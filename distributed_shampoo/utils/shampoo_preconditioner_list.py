@@ -30,7 +30,11 @@ from matrix_functions import (
     matrix_inverse_root,
 )
 
-from matrix_functions_types import EigendecompositionConfig, RootInvConfig
+from matrix_functions_types import (
+    EigendecompositionConfig,
+    QREigendecompositionConfig,
+    RootInvConfig,
+)
 from optimizer_modules import OptimizerModule
 from torch import Tensor
 from torch.autograd import profiler
@@ -1291,10 +1295,15 @@ class EigenvalueCorrectedShampooPreconditionerList(
                         EigendecompositionConfig,
                         self._preconditioner_config.amortized_computation_config,
                     )
+                    if isinstance(
+                        eigendecomposition_config, QREigendecompositionConfig
+                    ):
+                        eigendecomposition_config.eigenvectors_estimate = (
+                            factor_matrix_eigenvectors
+                        )
                     try:
                         computed_eigenvectors = matrix_eigendecomposition(
                             A=factor_matrix,
-                            eigenvectors_estimate=factor_matrix_eigenvectors,
                             eigendecomposition_config=eigendecomposition_config,
                             is_diagonal=bool(is_factor_matrix_diagonal),
                         )[1]

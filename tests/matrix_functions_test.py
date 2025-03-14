@@ -893,10 +893,10 @@ class MatrixEigendecompositionTest(unittest.TestCase):
                     expected_eigenvectors_list,
                     strict=True,
                 ):
+                    qr_config.eigenvectors_estimate = initialization_fn(A)
                     estimated_eigenvalues, estimated_eigenvectors = (
                         matrix_eigendecomposition(
                             A,
-                            eigenvectors_estimate=initialization_fn(A),
                             is_diagonal=False,
                             eigendecomposition_config=qr_config,
                         )

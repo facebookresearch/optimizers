@@ -7,7 +7,7 @@ LICENSE file in the root directory of this source tree.
 
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import torch
 
@@ -61,11 +61,13 @@ class QREigendecompositionConfig(EigendecompositionConfig):
         max_iterations (int): The maximum number of iterations to perform. (Default: 1)
         tolerance (float): The tolerance for determining convergence in terms of the norm of the off-diagonal elements of the eigenvalue estimate.
             (Default: 0.01)
+        eigenvectors_estimate (Tensor): The current estimate of the eigenvectors. Cannot be set at initialization.
 
     """
 
     max_iterations: int = 1
     tolerance: float = 0.01
+    eigenvectors_estimate: torch.Tensor = field(init=False)
 
     def __post_init__(self):
         if not (0.0 <= self.tolerance <= 1.0):

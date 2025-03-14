@@ -170,7 +170,6 @@ def _matrix_inverse_root_diagonal(
 def matrix_eigendecomposition(
     A: Tensor,
     eigendecomposition_config: EigendecompositionConfig = DefaultEigendecompositionConfig,
-    eigenvectors_estimate: Tensor | None = None,
     is_diagonal: bool = False,
 ) -> tuple[Tensor, Tensor]:
     """
@@ -179,7 +178,6 @@ def matrix_eigendecomposition(
     Args:
         A (Tensor): The input symmetric matrix.
         eigendecomposition_config (EigenvalueDecompositionConfig): Determines how eigendecomposition is computed.
-        eigenvectors_estimate (Tensor | None): The current estimate of the eigenvectors of A.
         is_diagonal (bool): Whether A is diagonal. (Default: False)
 
     Returns:
@@ -210,12 +208,9 @@ def matrix_eigendecomposition(
             eigendecomposition_offload_device=eigendecomposition_config.eigendecomposition_offload_device,
         )
     elif type(eigendecomposition_config) is QREigendecompositionConfig:
-        assert (
-            eigenvectors_estimate is not None
-        ), "Estimate of eigenvectors is required when using QREigenvalueDecompositionConfig."
         return _qr_algorithm(
             A,
-            eigenvectors_estimate=eigenvectors_estimate,
+            eigenvectors_estimate=eigendecomposition_config.eigenvectors_estimate,
             max_iterations=eigendecomposition_config.max_iterations,
             tolerance=eigendecomposition_config.tolerance,
         )
