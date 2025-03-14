@@ -418,25 +418,27 @@ class AbstractTest:
             )
             all_fail = (fail,) * NUM_AMORTIZED_COMPUTATION_CALLS
             all_success = (success,) * NUM_AMORTIZED_COMPUTATION_CALLS
-            with mock.patch.object(
-                shampoo_preconditioner_list,
-                self._amortized_computation_function(),
-                # Note that the cases causally depend on each other.
-                side_effect=[
-                    # Case 1: amortized computation fails less often than tolerance.
-                    *all_but_one_fail,  # Success for a single Kronecker factor is not enough to reset counter.
-                    # Case 2: amortized computation fails exactly as often as tolerance (3).
-                    *all_fail,
-                    *all_fail,
-                    # Case 3: amortized computation succeeds after tolerance hit (counter is reset).
-                    *all_success,
-                    # Case 4: amortized computation fails more often than tolerance.
-                    *all_fail,
-                    *all_fail,
-                    *all_fail,
-                    fail,  # One failure is enough to raise an exception in this case.
-                ],
-            ) as mock_amortized_computation:
+            with (
+                mock.patch.object(
+                    shampoo_preconditioner_list,
+                    self._amortized_computation_function(),
+                    # Note that the cases causally depend on each other.
+                    side_effect=[
+                        # Case 1: amortized computation fails less often than tolerance.
+                        *all_but_one_fail,  # Success for a single Kronecker factor is not enough to reset counter.
+                        # Case 2: amortized computation fails exactly as often as tolerance (3).
+                        *all_fail,
+                        *all_fail,
+                        # Case 3: amortized computation succeeds after tolerance hit (counter is reset).
+                        *all_success,
+                        # Case 4: amortized computation fails more often than tolerance.
+                        *all_fail,
+                        *all_fail,
+                        *all_fail,
+                        fail,  # One failure is enough to raise an exception in this case.
+                    ],
+                ) as mock_amortized_computation
+            ):
                 # Accumulate factor matrices for valid amortized computation.
                 self._preconditioner_list.update_preconditioners(
                     masked_grad_list=masked_grad_list0,
