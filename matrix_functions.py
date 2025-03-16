@@ -184,7 +184,7 @@ def matrix_eigendecomposition(
     """
     # check if matrix is scalar
     if torch.numel(A) == 1:
-        return A, torch.ones_like(A)
+        return A.squeeze(), torch.ones_like(A)
 
     # check matrix shape
     if len(A.shape) != 2:
