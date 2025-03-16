@@ -69,7 +69,7 @@ class QREigendecompositionConfig(EigendecompositionConfig):
     tolerance: float = 0.01
     eigenvectors_estimate: torch.Tensor = field(init=False)
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if not (0.0 <= self.tolerance <= 1.0):
             raise ValueError(
                 f"Invalid tolerance value: {self.tolerance}. Must be in the interval [0.0, 1.0]."
