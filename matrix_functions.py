@@ -295,6 +295,8 @@ def _qr_algorithm(
     Given an initial estimate of the eigenvectors Q of matrix A, a power iteration and a QR decomposition is performed each iteration, i.e. Q, _ <- QR(A @ Q).
     When the initial estimate is the zero matrix, the eigendecomposition is computed using _eigh_eigenvalue_decomposition.
 
+    Note that if the approximate eigenvalues criterion is already below or equal to the tolerance given the initial eigenvectors_estimate, the QR iterations will be skipped.
+
     Args:
         A (Tensor): The symmetric input matrix.
         eigenvectors_estimate (Tensor): The current estimate of the eigenvectors of A.
@@ -312,6 +314,7 @@ def _qr_algorithm(
     # Perform orthogonal/simultaneous iterations (QR algorithm).
     Q = eigenvectors_estimate
     iteration = 0
+    # NOTE: This will skip the QR iterations if the approximate eigenvalues criterion is already below or equal to the tolerance given the initial eigenvectors_estimate.
     while (
         iteration < max_iterations
         and not _approximate_eigenvalues_criterion_below_or_equal_tolerance(
