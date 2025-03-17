@@ -126,14 +126,14 @@ class SGDPreconditionerList(PreconditionerList):
 
 
 class AdagradPreconditionerList(PreconditionerList):
-    """Adagrad / Adam / RMSProp preconditioners for a list of parameters.
+    """Adagrad / Adam / RMSprop preconditioners for a list of parameters.
 
     Operations are performed in-place with foreach operators.
 
     NOTE: Does not support sparse gradients at this time.
 
     To enable Adagrad, set beta2 = 1.0.
-    To enable RMSProp, set beta2 = 0.999.
+    To enable RMSprop, set beta2 = 0.999.
     To enable Adam, set beta2 = 0.999, use_bias_correction = True.
 
     Other variants can also be specified.
