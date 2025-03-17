@@ -26,7 +26,7 @@ Key distinctives of this implementation include:
 - Learning rate grafting [3]. Our version of grafting only grafts the second moment/diagonal preconditioner. Momentum/first moment updates are performed separate from grafting. Supports the methods:
     - SGD
     - Adagrad
-    - RMSProp
+    - RMSprop
     - Adam
 - Supports both normal and AdamW (decoupled) weight decay.
 - Incorporates exponential moving averaging (with or without bias correction) to the estimate the first moment (akin to Adam).
