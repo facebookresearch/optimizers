@@ -579,9 +579,9 @@ class BaseShampooPreconditionerList(
 
         return kronecker_factors_list
 
+    @staticmethod
     @abstractmethod
     def _get_inverse_roots_from_override(
-        self,
         inv_root_override: int | Sequence[int],
         order_list: tuple[int, ...],
     ) -> tuple[int, ...]:
