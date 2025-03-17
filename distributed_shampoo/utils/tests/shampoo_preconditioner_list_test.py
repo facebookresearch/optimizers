@@ -309,7 +309,7 @@ class AbstractTest:
         @staticmethod
         @abc.abstractmethod
         def _invalid_amortized_computation_return_values() -> (
-            tuple[Tensor | tuple[Tensor, Tensor], Tensor | tuple[Tensor, Tensor]]
+            tuple[Tensor, Tensor] | tuple[tuple[Tensor, Tensor], tuple[Tensor, Tensor]]
         ): ...
 
         @staticmethod
