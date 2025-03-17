@@ -307,6 +307,18 @@ class AbstractTest:
         @abc.abstractmethod
         def _amortized_computation_function(self) -> str: ...
 
+        @staticmethod
+        @abc.abstractmethod
+        def _invalid_amortized_computation_return_values() -> (
+            tuple[Tensor | tuple[Tensor, Tensor], Tensor | tuple[Tensor, Tensor]]
+        ): ...
+
+        @staticmethod
+        @abc.abstractmethod
+        def _valid_amortized_computation_return_value() -> (
+            Tensor | tuple[Tensor, Tensor]
+        ): ...
+
         @abc.abstractmethod
         def _instantiate_preconditioner_list(  # type: ignore[override]
             self, **kwargs: Any
@@ -339,15 +351,7 @@ class AbstractTest:
         def test_raise_nan_and_inf_in_inv_factor_matrix_amortized_computation(
             self,
         ) -> None:
-            invalid_values = (
-                (torch.tensor([torch.nan]), torch.tensor([torch.inf]))
-                if self._amortized_computation_function() != "matrix_eigendecomposition"
-                else (  # matrix_eigendecomposition returns a tuple.
-                    (torch.tensor([torch.nan]), torch.tensor([torch.nan])),
-                    (torch.tensor([torch.inf]), torch.tensor([torch.inf])),
-                )
-            )
-            for invalid_value in invalid_values:
+            for invalid_value in self._invalid_amortized_computation_return_values():
                 with (
                     self.subTest(invalid_value=invalid_value),
                     mock.patch.object(
@@ -421,14 +425,7 @@ class AbstractTest:
             step = 1
             # Define the side effect for each call of the amortized computation function.
             fail = ValueError
-            success = (
-                torch.tensor([1.0])
-                if self._amortized_computation_function() != "matrix_eigendecomposition"
-                else (
-                    torch.tensor([1.0]),
-                    torch.tensor([1.0]),
-                )  # matrix_eigendecomposition returns a tuple.
-            )
+            success = self._valid_amortized_computation_return_value()
             all_but_one_fail = (fail,) * (NUM_AMORTIZED_COMPUTATION_CALLS - 1) + (
                 success,
             )
@@ -676,6 +673,14 @@ class AbstractTest:
 class ShampooPreconditionerListTest(AbstractTest.BaseShampooPreconditionerListTest):
     def _amortized_computation_function(self) -> str:
         return "matrix_inverse_root"
+
+    @staticmethod
+    def _invalid_amortized_computation_return_values() -> tuple[Tensor, Tensor]:
+        return (torch.tensor([torch.nan]), torch.tensor([torch.inf]))
+
+    @staticmethod
+    def _valid_amortized_computation_return_value() -> Tensor:
+        return torch.tensor([1.0])
 
     def _instantiate_preconditioner_list(  # type: ignore[override]
         self, **kwargs: Any
@@ -1000,6 +1005,19 @@ class EigendecomposedShampooPreconditionerListTest(ShampooPreconditionerListTest
     def _amortized_computation_function(self) -> str:
         return "matrix_eigendecomposition"
 
+    @staticmethod
+    def _invalid_amortized_computation_return_values() -> (
+        tuple[tuple[Tensor, Tensor], tuple[Tensor, Tensor]]
+    ):
+        return (
+            (torch.tensor([torch.nan]), torch.tensor([torch.nan])),
+            (torch.tensor([torch.inf]), torch.tensor([torch.inf])),
+        )
+
+    @staticmethod
+    def _valid_amortized_computation_return_value() -> tuple[Tensor, Tensor]:
+        return (torch.tensor([1.0]), torch.tensor([1.0]))
+
     def _instantiate_preconditioner_list(  # type: ignore[override]
         self, **kwargs: Any
     ) -> EigendecomposedShampooPreconditionerList:
@@ -1025,7 +1043,20 @@ class EigenvalueCorrectedShampooPreconditionerListTest(
     AbstractTest.BaseShampooPreconditionerListTest
 ):
     def _amortized_computation_function(self) -> str:
-        return "matrix_eigenvectors"
+        return "matrix_eigendecomposition"
+
+    @staticmethod
+    def _invalid_amortized_computation_return_values() -> (
+        tuple[tuple[Tensor, Tensor], tuple[Tensor, Tensor]]
+    ):
+        return (
+            (torch.tensor([torch.nan]), torch.tensor([torch.nan])),
+            (torch.tensor([torch.inf]), torch.tensor([torch.inf])),
+        )
+
+    @staticmethod
+    def _valid_amortized_computation_return_value() -> tuple[Tensor, Tensor]:
+        return (torch.tensor([1.0]), torch.tensor([1.0]))
 
     def _instantiate_preconditioner_list(  # type: ignore[override]
         self, **kwargs: Any

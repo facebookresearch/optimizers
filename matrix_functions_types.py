@@ -57,6 +57,8 @@ class QREigendecompositionConfig(EigendecompositionConfig):
     The approximate eigenvalues update criterion is then defined as ||B - diag(B)||_F <= tolerance * ||B||_F.  # TODO: Potentially improve the criterion.
     The tolerance hyperparameter should therefore be in the interval [0.0, 1.0].
 
+    Note that if the approximate eigenvalues criterion is already below or equal to the tolerance given the initial eigenvectors_estimate, the QR iterations will be skipped.
+
     Attributes:
         max_iterations (int): The maximum number of iterations to perform. (Default: 1)
         tolerance (float): The tolerance for determining convergence in terms of the norm of the off-diagonal elements of the eigenvalue estimate.
@@ -69,7 +71,7 @@ class QREigendecompositionConfig(EigendecompositionConfig):
     tolerance: float = 0.01
     eigenvectors_estimate: torch.Tensor = field(init=False)
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if not (0.0 <= self.tolerance <= 1.0):
             raise ValueError(
                 f"Invalid tolerance value: {self.tolerance}. Must be in the interval [0.0, 1.0]."

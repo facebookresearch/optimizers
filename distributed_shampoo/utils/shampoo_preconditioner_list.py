@@ -27,7 +27,6 @@ from distributed_shampoo.utils.shampoo_utils import compress_list, get_dtype_siz
 from matrix_functions import (
     check_diagonal,
     matrix_eigendecomposition,
-    matrix_eigenvectors,
     matrix_inverse_root,
 )
 
@@ -639,9 +638,9 @@ class BaseShampooPreconditionerList(
 
         return kronecker_factors_list
 
+    @staticmethod
     @abstractmethod
     def _get_inverse_roots_from_override(
-        self,
         inv_root_override: int | Sequence[int],
         order_list: tuple[int, ...],
     ) -> tuple[int, ...]:
@@ -1565,11 +1564,11 @@ class EigenvalueCorrectedShampooPreconditionerList(
                             factor_matrix_eigenvectors
                         )
                     try:
-                        computed_eigenvectors = matrix_eigenvectors(
+                        computed_eigenvectors = matrix_eigendecomposition(
                             A=factor_matrix,
                             eigendecomposition_config=eigendecomposition_config,
                             is_diagonal=bool(is_factor_matrix_diagonal),
-                        )
+                        )[1]
                         # Add success to success tracker.
                         success_tracker.append(True)
                     except Exception as exception:

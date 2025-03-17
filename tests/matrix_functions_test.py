@@ -833,7 +833,7 @@ class MatrixEigendecompositionTest(unittest.TestCase):
             ),
         ]
 
-        atol = 0.05  # TODO: Maybe switch to a case that allows for lower tolerance.
+        atol = 0.05  # TODO: Ensure consistent ordering of the eigenvectors and decrease tolerance.
         rtol = 1e-5
         with self.subTest("Test with diagonal case."):
             torch.testing.assert_close(
