@@ -11,11 +11,14 @@ import abc
 import math
 import re
 import unittest
+from dataclasses import dataclass, field
 from types import ModuleType
 from typing import Any
 from unittest import mock
 
 import torch
+
+from commons import AbstractDataclass
 from distributed_shampoo.shampoo_types import (
     DefaultEigenvalueCorrectedShampooConfig,
     DefaultShampooConfig,
@@ -33,9 +36,14 @@ from distributed_shampoo.utils.shampoo_preconditioner_list import (
     SGDPreconditionerList,
     ShampooPreconditionerList,
 )
-
 from distributed_shampoo.utils.shampoo_utils import compress_list
-from matrix_functions_types import DefaultEigendecompositionConfig, EigenConfig
+from matrix_functions_types import (
+    DefaultEigenConfig,
+    DefaultEigendecompositionConfig,
+    EigenConfig,
+    EigendecompositionConfig,
+    MatrixFunctionConfig,
+)
 from torch import Tensor
 
 
@@ -301,23 +309,61 @@ class BaseShampooPreconditionerListTest(unittest.TestCase):
             mock_update_factor_matrices.assert_called_once()
 
 
+@dataclass(init=False)
+class AmortizedComputationProperties(AbstractDataclass):
+    """Dataclass for properties of amortized computation functions."""
+
+    amortized_computation_function_name: str
+    amortized_computation_config: MatrixFunctionConfig
+    invalid_amortized_computation_return_values: (
+        tuple[Tensor, Tensor] | tuple[tuple[Tensor, Tensor], tuple[Tensor, Tensor]]
+    )
+    valid_amortized_computation_return_value: Tensor | tuple[Tensor, Tensor]
+
+
+@dataclass
+class InverseRootProperties(AmortizedComputationProperties):
+    """Dataclass for properties of matrix_inverse_root function."""
+
+    amortized_computation_function_name: str = "matrix_inverse_root"
+    amortized_computation_config: EigenConfig = field(
+        default_factory=lambda: DefaultEigenConfig
+    )
+    invalid_amortized_computation_return_values: tuple[Tensor, Tensor] = (
+        torch.tensor([torch.nan]),
+        torch.tensor([torch.inf]),
+    )
+    valid_amortized_computation_return_value: Tensor = torch.tensor([1.0])
+
+
+@dataclass
+class EigendecompositionProperties(AmortizedComputationProperties):
+    """Dataclass for properties of matrix_eigendecomposition function."""
+
+    amortized_computation_function_name: str = "matrix_eigendecomposition"
+    amortized_computation_config: EigendecompositionConfig = field(
+        default_factory=lambda: DefaultEigendecompositionConfig
+    )
+    invalid_amortized_computation_return_values: tuple[
+        tuple[Tensor, Tensor], tuple[Tensor, Tensor]
+    ] = (
+        (torch.tensor([torch.nan]), torch.tensor([torch.nan])),
+        (torch.tensor([torch.inf]), torch.tensor([torch.inf])),
+    )
+    valid_amortized_computation_return_value: tuple[Tensor, Tensor] = (
+        torch.tensor([1.0]),
+        torch.tensor([1.0]),
+    )
+
+
 # Use outer class as wrapper to avoid running the abstract test.
 class AbstractTest:
     class BaseShampooPreconditionerListTest(abc.ABC, AdagradPreconditionerListTest):
+        @property
         @abc.abstractmethod
-        def _amortized_computation_function(self) -> str: ...
-
-        @staticmethod
-        @abc.abstractmethod
-        def _invalid_amortized_computation_return_values() -> (
-            tuple[Tensor | tuple[Tensor, Tensor], Tensor | tuple[Tensor, Tensor]]
-        ): ...
-
-        @staticmethod
-        @abc.abstractmethod
-        def _valid_amortized_computation_return_value() -> (
-            Tensor | tuple[Tensor, Tensor]
-        ): ...
+        def _amortized_computation_properties(
+            self,
+        ) -> AmortizedComputationProperties: ...
 
         @abc.abstractmethod
         def _instantiate_preconditioner_list(  # type: ignore[override]
@@ -351,12 +397,12 @@ class AbstractTest:
         def test_raise_nan_and_inf_in_inv_factor_matrix_amortized_computation(
             self,
         ) -> None:
-            for invalid_value in self._invalid_amortized_computation_return_values():
+            for invalid_value in self._amortized_computation_properties.invalid_amortized_computation_return_values:
                 with (
                     self.subTest(invalid_value=invalid_value),
                     mock.patch.object(
                         shampoo_preconditioner_list,
-                        self._amortized_computation_function(),
+                        self._amortized_computation_properties.amortized_computation_function_name,
                         side_effect=(invalid_value,),
                     ) as mock_amortized_computation,
                 ):
@@ -377,7 +423,7 @@ class AbstractTest:
         def test_amortized_computation_internal_failure(self) -> None:
             with mock.patch.object(
                 shampoo_preconditioner_list,
-                self._amortized_computation_function(),
+                self._amortized_computation_properties.amortized_computation_function_name,
                 # Simulate the situation throws an exception (not nan and inf) to test the warning
                 side_effect=ZeroDivisionError,
             ) as mock_amortized_computation:
@@ -425,7 +471,7 @@ class AbstractTest:
             step = 1
             # Define the side effect for each call of the amortized computation function.
             fail = ValueError
-            success = self._valid_amortized_computation_return_value()
+            success = self._amortized_computation_properties.valid_amortized_computation_return_value
             all_but_one_fail = (fail,) * (NUM_AMORTIZED_COMPUTATION_CALLS - 1) + (
                 success,
             )
@@ -434,7 +480,7 @@ class AbstractTest:
             with (
                 mock.patch.object(
                     shampoo_preconditioner_list,
-                    self._amortized_computation_function(),
+                    self._amortized_computation_properties.amortized_computation_function_name,
                     # Note that the cases causally depend on each other.
                     side_effect=[
                         # Case 1: amortized computation fails less often than tolerance.
@@ -671,16 +717,9 @@ class AbstractTest:
 
 
 class ShampooPreconditionerListTest(AbstractTest.BaseShampooPreconditionerListTest):
-    def _amortized_computation_function(self) -> str:
-        return "matrix_inverse_root"
-
-    @staticmethod
-    def _invalid_amortized_computation_return_values() -> tuple[Tensor, Tensor]:
-        return (torch.tensor([torch.nan]), torch.tensor([torch.inf]))
-
-    @staticmethod
-    def _valid_amortized_computation_return_value() -> Tensor:
-        return torch.tensor([1.0])
+    @property
+    def _amortized_computation_properties(self) -> InverseRootProperties:
+        return InverseRootProperties()
 
     def _instantiate_preconditioner_list(  # type: ignore[override]
         self, **kwargs: Any
@@ -905,9 +944,7 @@ class ShampooPreconditionerListTest(AbstractTest.BaseShampooPreconditionerListTe
             preconditioner_list=self._instantiate_preconditioner_list(
                 beta2=1.0,
                 preconditioner_config=ShampooPreconditionerConfig(
-                    amortized_computation_config=EigenConfig()
-                    if self._amortized_computation_function() == "matrix_inverse_root"
-                    else DefaultEigendecompositionConfig,
+                    amortized_computation_config=self._amortized_computation_properties.amortized_computation_config,
                     ignored_dims=[0, 1],
                 ),
             ),
@@ -952,20 +989,11 @@ class ShampooPreconditionerListTest(AbstractTest.BaseShampooPreconditionerListTe
             """
             Tests that the inverse roots are computed correctly from inv_root_override.
             """
-            preconditioner_config = ShampooPreconditionerConfig(
-                amortized_computation_config=EigenConfig(exponent_multiplier=2.0)
-                if self._amortized_computation_function() == "matrix_inverse_root"
-                else DefaultEigendecompositionConfig,
-            )
+            # This is equivalent to setting exponent_multiplier = 2.0.
             inv_root_override = (
-                inv_root_override
-                if self._amortized_computation_function() == "matrix_inverse_root"
-                # Configs based on EigendecompositionConfig don't support exponent_multiplier.
-                else (
-                    int(inv_root_override / 2)
-                    if isinstance(inv_root_override, int)
-                    else [int(x / 2) for x in inv_root_override]
-                )
+                int(inv_root_override / 2)
+                if isinstance(inv_root_override, int)
+                else [int(x / 2) for x in inv_root_override]
             )
 
             masked_grad_list1 = (
@@ -991,7 +1019,6 @@ class ShampooPreconditionerListTest(AbstractTest.BaseShampooPreconditionerListTe
                         beta2=1.0,
                         use_bias_correction=True,
                         inv_root_override=inv_root_override,
-                        preconditioner_config=preconditioner_config,
                     ),
                     masked_grad_lists=[masked_grad_list1, masked_grad_list2],
                     masked_expected_preconditioned_grad_list=masked_expected_preconditioned_grad_list,
@@ -1002,21 +1029,9 @@ class ShampooPreconditionerListTest(AbstractTest.BaseShampooPreconditionerListTe
 
 
 class EigendecomposedShampooPreconditionerListTest(ShampooPreconditionerListTest):
-    def _amortized_computation_function(self) -> str:
-        return "matrix_eigendecomposition"
-
-    @staticmethod
-    def _invalid_amortized_computation_return_values() -> (
-        tuple[tuple[Tensor, Tensor], tuple[Tensor, Tensor]]
-    ):
-        return (
-            (torch.tensor([torch.nan]), torch.tensor([torch.nan])),
-            (torch.tensor([torch.inf]), torch.tensor([torch.inf])),
-        )
-
-    @staticmethod
-    def _valid_amortized_computation_return_value() -> tuple[Tensor, Tensor]:
-        return (torch.tensor([1.0]), torch.tensor([1.0]))
+    @property
+    def _amortized_computation_properties(self) -> EigendecompositionProperties:  # type: ignore[override]
+        return EigendecompositionProperties()
 
     def _instantiate_preconditioner_list(  # type: ignore[override]
         self, **kwargs: Any
@@ -1027,7 +1042,7 @@ class EigendecomposedShampooPreconditionerListTest(ShampooPreconditionerListTest
             "inv_root_override": 0,
             "use_bias_correction": True,
             "preconditioner_config": ShampooPreconditionerConfig(
-                amortized_computation_config=DefaultEigendecompositionConfig,
+                amortized_computation_config=self._amortized_computation_properties.amortized_computation_config,
             ),
         } | kwargs
         return EigendecomposedShampooPreconditionerList(
@@ -1042,21 +1057,9 @@ class EigendecomposedShampooPreconditionerListTest(ShampooPreconditionerListTest
 class EigenvalueCorrectedShampooPreconditionerListTest(
     AbstractTest.BaseShampooPreconditionerListTest
 ):
-    def _amortized_computation_function(self) -> str:
-        return "matrix_eigendecomposition"
-
-    @staticmethod
-    def _invalid_amortized_computation_return_values() -> (
-        tuple[tuple[Tensor, Tensor], tuple[Tensor, Tensor]]
-    ):
-        return (
-            (torch.tensor([torch.nan]), torch.tensor([torch.nan])),
-            (torch.tensor([torch.inf]), torch.tensor([torch.inf])),
-        )
-
-    @staticmethod
-    def _valid_amortized_computation_return_value() -> tuple[Tensor, Tensor]:
-        return (torch.tensor([1.0]), torch.tensor([1.0]))
+    @property
+    def _amortized_computation_properties(self) -> EigendecompositionProperties:
+        return EigendecompositionProperties()
 
     def _instantiate_preconditioner_list(  # type: ignore[override]
         self, **kwargs: Any
