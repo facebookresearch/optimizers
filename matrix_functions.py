@@ -219,26 +219,6 @@ def matrix_eigendecomposition(
         )
 
 
-def matrix_eigenvectors(
-    A: Tensor,
-    eigendecomposition_config: EigendecompositionConfig = DefaultEigendecompositionConfig,
-    is_diagonal: bool = False,
-) -> Tensor:
-    """Compute the eigenvectors of a symmetric matrix.
-
-    Wrapper function for matrix_eigendecomposition that only returns the eigenvectors.
-
-    Args:
-        A (Tensor): The input symmetric matrix.
-        eigendecomposition_config (EigendecompositionConfig): Determines how eigendecomposition is computed.
-        is_diagonal (bool): Whether A is diagonal. (Default: False)
-
-    Returns:
-        Tensor: The eigenvectors of the input matrix.
-    """
-    return matrix_eigendecomposition(A, eigendecomposition_config, is_diagonal)[1]
-
-
 def _eigh_eigenvalue_decomposition(
     A: Tensor,
     retry_double_precision: bool = True,
