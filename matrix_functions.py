@@ -263,8 +263,13 @@ def _approximate_eigenvalues_criterion_below_or_equal_tolerance(
     """Evaluates if a criterion using approximate eigenvalues is below or equal to the tolerance.
 
     Let Q^T A Q =: B be the estimate of the eigenvalues of the matrix A, where Q is the matrix containing the last computed eigenvectors.
-    The approximate eigenvalues criterion is defined as ||B - diag(B)||_F <= tolerance * ||B||_F.  # TODO: Potentially improve the criterion.
+    The approximate eigenvalues criterion is defined as ||B - diag(B)||_F <= tolerance * ||B||_F.
     The tolerance hyperparameter should therefore be in the interval [0.0, 1.0].
+
+    This convergence criterion can be motivated by considering A' = Q diag(B) Q^T as an approximation of A.
+    We have ||A - A'||_F = ||A - Q diag(B) Q^T||_F = ||Q^T A Q - diag(B)||_F = ||B - diag(B)||_F.
+    Moreover, we have ||B||_F = ||Q^T A Q||_F = ||A||_F.
+    Hence, the two relative errors are also equivalent: ||A - A'||_F / ||A||_F = ||B - diag(B)||_F / ||B||_F.
 
     Args:
         A (Tensor): The symmetric input matrix.

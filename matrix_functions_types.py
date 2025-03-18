@@ -54,10 +54,15 @@ class QREigendecompositionConfig(EigendecompositionConfig):
     """Configuration for eigenvalue decomposition via QR algorithm.
 
     Determines whether the QR algorithm has converged based on the approximate eigenvalues Q^T A Q =: B, where Q is the last computed eigenvectors and A is the current Kronecker factor.
-    The approximate eigenvalues update criterion is then defined as ||B - diag(B)||_F <= tolerance * ||B||_F.  # TODO: Potentially improve the criterion.
+    The approximate eigenvalues update criterion is then defined as ||B - diag(B)||_F <= tolerance * ||B||_F.
     The tolerance hyperparameter should therefore be in the interval [0.0, 1.0].
 
     Note that if the approximate eigenvalues criterion is already below or equal to the tolerance given the initial eigenvectors_estimate, the QR iterations will be skipped.
+
+    This convergence criterion can be motivated by considering A' = Q diag(B) Q^T as an approximation of A.
+    We have ||A - A'||_F = ||A - Q diag(B) Q^T||_F = ||Q^T A Q - diag(B)||_F = ||B - diag(B)||_F.
+    Moreover, we have ||B||_F = ||Q^T A Q||_F = ||A||_F.
+    Hence, the two relative errors are also equivalent: ||A - A'||_F / ||A||_F = ||B - diag(B)||_F / ||B||_F.
 
     Attributes:
         max_iterations (int): The maximum number of iterations to perform. (Default: 1)
