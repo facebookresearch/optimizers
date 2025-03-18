@@ -182,7 +182,6 @@ def matrix_eigendecomposition(
 
     Returns:
         tuple[Tensor, Tensor]: A tuple containing the eigenvalues and eigenvectors of the input matrix.
-            The eigenvalues are returned in ascending order.
     """
     # check if matrix is scalar
     if torch.numel(A) == 1:
@@ -196,12 +195,11 @@ def matrix_eigendecomposition(
 
     # Return the (sorted) diagonal of A and identity matrix if A is diagonal.
     if is_diagonal:
-        eigenvalues, indices = A.diag().sort()
-        return eigenvalues, torch.eye(
+        return A.diag(), torch.eye(
             A.shape[0],
             dtype=A.dtype,
             device=A.device,
-        )[:, indices]
+        )
 
     if type(eigendecomposition_config) is EighEigendecompositionConfig:
         return _eigh_eigenvalue_decomposition(

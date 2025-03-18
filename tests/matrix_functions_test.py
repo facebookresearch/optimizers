@@ -809,7 +809,7 @@ class MatrixEigendecompositionTest(unittest.TestCase):
 
     def test_matrix_eigendecomposition(self) -> None:
         A_list = [
-            torch.tensor([[4.0, 0.0], [0.0, 1.0]]),
+            torch.tensor([[1.0, 0.0], [0.0, 4.0]]),
             torch.tensor(
                 [
                     [1195.0, -944.0, -224.0],
@@ -823,7 +823,7 @@ class MatrixEigendecompositionTest(unittest.TestCase):
             torch.tensor([2.9008677229e-03, 1.7424316704e-01, 1.9828229980e03]),
         ]
         expected_eigenvectors_list = [
-            torch.tensor([[0.0, 1.0], [1.0, 0.0]]),
+            torch.tensor([[1.0, 0.0], [0.0, 1.0]]),
             torch.tensor(
                 [
                     [0.0460073575, -0.6286827326, 0.7762997746],
