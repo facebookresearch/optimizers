@@ -280,11 +280,10 @@ def _approximate_eigenvalues_criterion_below_or_equal_tolerance(
         bool: Whether the criterion is below or equal to the tolerance
 
     """
-    squared_approximate_eigenvalues = torch.square_(Q.T @ A @ Q)
-    diagonal_summed = squared_approximate_eigenvalues.diag().sum()
-    off_diagonal_summed = squared_approximate_eigenvalues.fill_diagonal_(0.0).sum()
-    norm = torch.sqrt(diagonal_summed + off_diagonal_summed)
-    off_diagonal_norm = torch.sqrt(off_diagonal_summed)
+    approximate_eigenvalues = Q.T @ A @ Q
+    norm = torch.linalg.norm(approximate_eigenvalues)
+    diagonal_norm = torch.linalg.norm(approximate_eigenvalues.diag())
+    off_diagonal_norm = torch.sqrt(norm**2 - diagonal_norm**2)
     return bool(off_diagonal_norm <= tolerance * norm)
 
 
