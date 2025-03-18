@@ -286,17 +286,18 @@ class BaseShampooKroneckerFactors(OptimizerModule):
 
     factor_matrices: tuple[Tensor, ...]
     factor_matrix_indices: tuple[str, ...]
-    is_factor_matrices_diagonal: tuple[Tensor, ...] = field(init=False)
+    is_factor_matrices_diagonal: tuple[Tensor, ...] = field(default_factory=tuple)
 
     def __post_init__(self) -> None:
         super().__init__()
         assert len(self.factor_matrices) == len(self.factor_matrix_indices)
-        self.is_factor_matrices_diagonal = tuple(
-            torch.tensor(True) for _ in range(len(self.factor_matrices))
-        )
+        if not self.is_factor_matrices_diagonal:
+            self.is_factor_matrices_diagonal = tuple(
+                torch.tensor(True) for _ in range(len(self.factor_matrices))
+            )
 
 
-@dataclass
+@dataclass(kw_only=True)
 class ShampooKroneckerFactorsState(BaseShampooKroneckerFactors):
     """Shampoo Kronecker factors (wrapped) for storing in the optimizer state.
 
@@ -314,7 +315,7 @@ class ShampooKroneckerFactorsState(BaseShampooKroneckerFactors):
         assert len(self.factor_matrices) == len(self.inv_factor_matrices)
 
 
-@dataclass
+@dataclass(kw_only=True)
 class ShampooKroneckerFactorsList(BaseShampooKroneckerFactors):
     """Shampoo Kronecker factors (unwrapped) for operations during optimizer computation.
 
@@ -332,7 +333,7 @@ class ShampooKroneckerFactorsList(BaseShampooKroneckerFactors):
         assert len(self.factor_matrices) == len(self.inv_factor_matrices)
 
 
-@dataclass
+@dataclass(kw_only=True)
 class EigenvalueCorrectedShampooKroneckerFactorsState(BaseShampooKroneckerFactors):
     """Eigenvalue-corrected Shampoo Kronecker factors (wrapped) for storing in the optimizer state.
 
@@ -352,7 +353,7 @@ class EigenvalueCorrectedShampooKroneckerFactorsState(BaseShampooKroneckerFactor
         assert len(self.factor_matrices) == len(self.factor_matrices_eigenvectors)
 
 
-@dataclass
+@dataclass(kw_only=True)
 class EigenvalueCorrectedShampooKroneckerFactorsList(BaseShampooKroneckerFactors):
     """Eigenvalue-corrected Shampoo Kronecker factors (unwrapped) for operations during optimizer computation.
 
@@ -557,14 +558,12 @@ class BaseShampooPreconditionerList(
             if block_index not in state[block_info.param]:
                 state[block_info.param][block_index] = {}
             block_state = state[block_info.param][block_index]
-
             block_state[SHAMPOO] = self._create_kronecker_factors_state_for_block(
                 block=block,
                 block_info=block_info,
                 dims=dims,
                 preconditioned_dims=preconditioned_dims,
             )
-
             kronecker_factors_list.append(
                 self._create_kronecker_factors_list(block_state[SHAMPOO], block_info)
             )
@@ -934,6 +933,7 @@ class ShampooPreconditionerList(
                 for t in kronecker_factors_state.inv_factor_matrices
             ),
             factor_matrix_indices=kronecker_factors_state.factor_matrix_indices,
+            is_factor_matrices_diagonal=kronecker_factors_state.is_factor_matrices_diagonal,
         )
 
     def _get_inverse_roots_from_override(
@@ -1126,6 +1126,7 @@ class EigenvalueCorrectedShampooPreconditionerList(
                 kronecker_factors_state.corrected_eigenvalues
             ),
             factor_matrix_indices=kronecker_factors_state.factor_matrix_indices,
+            is_factor_matrices_diagonal=kronecker_factors_state.is_factor_matrices_diagonal,
         )
 
     def _get_inverse_roots_from_override(
