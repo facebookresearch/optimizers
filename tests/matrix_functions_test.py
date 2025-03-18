@@ -809,7 +809,7 @@ class MatrixEigendecompositionTest(unittest.TestCase):
 
     def test_matrix_eigendecomposition(self) -> None:
         A_list = [
-            torch.tensor([[1.0, 0.0], [0.0, 4.0]]),
+            torch.tensor([[4.0, 0.0], [0.0, 1.0]]),
             torch.tensor(
                 [
                     [1195.0, -944.0, -224.0],
@@ -820,20 +820,20 @@ class MatrixEigendecompositionTest(unittest.TestCase):
         ]
         expected_eigenvalues_list = [
             torch.tensor([1.0, 4.0]),
-            torch.tensor([2.9009e-03, 1.7424e-01, 1.9828e03]),
+            torch.tensor([2.9008677229e-03, 1.7424316704e-01, 1.9828229980e03]),
         ]
         expected_eigenvectors_list = [
-            torch.tensor([[1.0, 0.0], [0.0, 1.0]]),
+            torch.tensor([[0.0, 1.0], [1.0, 0.0]]),
             torch.tensor(
                 [
-                    [0.0460, -0.6287, 0.7763],
-                    [-0.1752, -0.7702, -0.6133],
-                    [0.9835, -0.1078, -0.1455],
+                    [0.0460073575, -0.6286827326, 0.7762997746],
+                    [-0.1751257628, -0.7701635957, -0.6133345366],
+                    [0.9834705591, -0.1077321917, -0.1455317289],
                 ]
             ),
         ]
 
-        atol = 0.05  # TODO: Ensure consistent ordering of the eigenvectors and decrease tolerance.
+        atol = 1e-4
         rtol = 1e-5
         with self.subTest("Test with diagonal case."):
             torch.testing.assert_close(
@@ -906,6 +906,8 @@ class MatrixEigendecompositionTest(unittest.TestCase):
                         :,
                         expected_eigenvectors[0, :] / estimated_eigenvectors[0, :] < 0,
                     ] *= -1
+                    if name in ("identity", "exact"):
+                        atol = 2e-3
                     torch.testing.assert_close(
                         (expected_eigenvalues, expected_eigenvectors),
                         (estimated_eigenvalues, estimated_eigenvectors),
