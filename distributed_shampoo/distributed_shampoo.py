@@ -115,7 +115,7 @@ class DistributedShampoo(torch.optim.Optimizer):
             - GraftingType.NONE: Performs no grafting.
             - GraftingType.SGD: Grafts the stochastic gradient method.
             - GraftingType.ADAGRAD: Grafts the Adagrad method.
-            - GraftingType.RMSPROP: Grafts the RMSProp method.
+            - GraftingType.RMSPROP: Grafts the RMSprop method.
             - GraftingType.ADAM: Grafts the Adam method.
 
         NOTE: These methods do not graft the first-moment component - it is entirely based upon grafting using the

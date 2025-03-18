@@ -33,7 +33,7 @@ from torch.optim.rmsprop import RMSprop
 
 
 # Note: We have to set the epsilon to a very small value (i.e., 1e-15) due to the
-# the place epsilon is added in the PyTorch optimizers (i.e., AdaGrad, RMSProp, Adam, AdamW)
+# the place epsilon is added in the PyTorch optimizers (i.e., AdaGrad, RMSprop, Adam, AdamW)
 # and Distributed Shampoo.
 # The PyTorch optimizers add epsilon outside of the square root, and Distributed Shampoo
 # adds epsilon inside of the square root.

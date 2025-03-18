@@ -14,6 +14,7 @@ import time
 from dataclasses import asdict
 from fractions import Fraction
 from math import isfinite
+from typing import NamedTuple
 
 import torch
 from matrix_functions_types import (
@@ -257,14 +258,26 @@ def _eigh_eigenvalue_decomposition(
     return L.to(device=current_device), Q.to(device=current_device)
 
 
+class Criterion(NamedTuple):
+    """Named tuple for result of convergence criterion."""
+
+    converged: bool
+    approximate_eigenvalues: Tensor
+
+
 def _approximate_eigenvalues_criterion_below_or_equal_tolerance(
     A: Tensor, Q: Tensor, tolerance: float
-) -> bool:
+) -> Criterion:
     """Evaluates if a criterion using approximate eigenvalues is below or equal to the tolerance.
 
     Let Q^T A Q =: B be the estimate of the eigenvalues of the matrix A, where Q is the matrix containing the last computed eigenvectors.
-    The approximate eigenvalues criterion is defined as ||B - diag(B)||_F <= tolerance * ||B||_F.  # TODO: Potentially improve the criterion.
+    The approximate eigenvalues criterion is defined as ||B - diag(B)||_F <= tolerance * ||B||_F.
     The tolerance hyperparameter should therefore be in the interval [0.0, 1.0].
+
+    This convergence criterion can be motivated by considering A' = Q diag(B) Q^T as an approximation of A.
+    We have ||A - A'||_F = ||A - Q diag(B) Q^T||_F = ||Q^T A Q - diag(B)||_F = ||B - diag(B)||_F.
+    Moreover, we have ||B||_F = ||Q^T A Q||_F = ||A||_F.
+    Hence, the two relative errors are also equivalent: ||A - A'||_F / ||A||_F = ||B - diag(B)||_F / ||B||_F.
 
     Args:
         A (Tensor): The symmetric input matrix.
@@ -272,15 +285,17 @@ def _approximate_eigenvalues_criterion_below_or_equal_tolerance(
         tolerance (float): The tolerance for the criterion.
 
     Returns:
-        bool: Whether the criterion is below or equal to the tolerance
+        Criterion: Named tuple with the fields 'converged' and 'approximate_eigenvalues':
+            converged (bool): whether the criterion is below or equal to the tolerance.
+            approximate_eigenvalues (Tensor): the approximate eigenvalues of A as a vector.
 
     """
-    squared_approximate_eigenvalues = torch.square_(Q.T @ A @ Q)
-    diagonal_summed = squared_approximate_eigenvalues.diag().sum()
-    off_diagonal_summed = squared_approximate_eigenvalues.fill_diagonal_(0.0).sum()
-    norm = torch.sqrt(diagonal_summed + off_diagonal_summed)
-    off_diagonal_norm = torch.sqrt(off_diagonal_summed)
-    return bool(off_diagonal_norm <= tolerance * norm)
+    approximate_eigenvalues = Q.T @ A @ Q
+    norm = torch.linalg.norm(approximate_eigenvalues)
+    diagonal_norm = torch.linalg.norm(approximate_eigenvalues.diag())
+    off_diagonal_norm = torch.sqrt(norm**2 - diagonal_norm**2)
+    converged = bool(off_diagonal_norm <= tolerance * norm)
+    return Criterion(converged, approximate_eigenvalues.diag())
 
 
 def _qr_algorithm(
@@ -317,16 +332,23 @@ def _qr_algorithm(
     # NOTE: This will skip the QR iterations if the approximate eigenvalues criterion is already below or equal to the tolerance given the initial eigenvectors_estimate.
     while (
         iteration < max_iterations
-        and not _approximate_eigenvalues_criterion_below_or_equal_tolerance(
-            A, Q, tolerance
-        )
+        and not (
+            criterion := _approximate_eigenvalues_criterion_below_or_equal_tolerance(
+                A, Q, tolerance
+            )
+        ).converged
     ):
         power_iteration = A @ Q
         Q = torch.linalg.qr(power_iteration).Q
         iteration += 1
 
     # Ensure consistent ordering of estimated eigenvalues and eigenvectors.
-    estimated_eigenvalues, indices = torch.einsum("ij, ik, kj -> j", Q, A, Q).sort()
+    estimated_eigenvalues = (
+        criterion.approximate_eigenvalues
+        if iteration == 0  # Re-use approximate eigenvalues if iterations were skipped.
+        else torch.einsum("ij, ik, kj -> j", Q, A, Q)
+    )
+    estimated_eigenvalues, indices = estimated_eigenvalues.sort()
     Q = Q[:, indices]
 
     return estimated_eigenvalues, Q
