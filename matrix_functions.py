@@ -348,7 +348,7 @@ def _qr_algorithm(
         if iteration == 0  # Re-use approximate eigenvalues if iterations were skipped.
         else torch.einsum("ij, ik, kj -> j", Q, A, Q)
     )
-    estimated_eigenvalues, indices = estimated_eigenvalues.sort()
+    estimated_eigenvalues, indices = estimated_eigenvalues.sort(stable=True)
     Q = Q[:, indices]
 
     return estimated_eigenvalues, Q
