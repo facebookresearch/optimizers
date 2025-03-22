@@ -24,9 +24,17 @@ from distributed_shampoo.shampoo_types import (
 )
 from distributed_shampoo.utils.shampoo_block_info import BlockInfo
 from distributed_shampoo.utils.shampoo_utils import compress_list, get_dtype_size
-from matrix_functions import check_diagonal, matrix_eigenvectors, matrix_inverse_root
+from matrix_functions import (
+    check_diagonal,
+    matrix_eigendecomposition,
+    matrix_inverse_root,
+)
 
-from matrix_functions_types import EigenvectorConfig, RootInvConfig
+from matrix_functions_types import (
+    EigendecompositionConfig,
+    QREigendecompositionConfig,
+    RootInvConfig,
+)
 from optimizer_modules import OptimizerModule
 from torch import Tensor
 from torch.autograd import profiler
@@ -574,9 +582,9 @@ class BaseShampooPreconditionerList(
 
         return kronecker_factors_list
 
+    @staticmethod
     @abstractmethod
     def _get_inverse_roots_from_override(
-        self,
         inv_root_override: int | Sequence[int],
         order_list: tuple[int, ...],
     ) -> tuple[int, ...]:
@@ -936,8 +944,8 @@ class ShampooPreconditionerList(
             is_factor_matrices_diagonal=kronecker_factors_state.is_factor_matrices_diagonal,
         )
 
+    @staticmethod
     def _get_inverse_roots_from_override(
-        self,
         inv_root_override: int | Sequence[int],
         order_list: tuple[int, ...],
     ) -> tuple[int, ...]:
@@ -1129,8 +1137,8 @@ class EigenvalueCorrectedShampooPreconditionerList(
             is_factor_matrices_diagonal=kronecker_factors_state.is_factor_matrices_diagonal,
         )
 
+    @staticmethod
     def _get_inverse_roots_from_override(
-        self,
         inv_root_override: int | Sequence[int],
         order_list: tuple[int, ...],
     ) -> tuple[int, ...]:
@@ -1284,17 +1292,22 @@ class EigenvalueCorrectedShampooPreconditionerList(
                     )
 
                     # Compute eigenvectors of factor matrix.
-                    eigenvector_computation_config = cast(
-                        EigenvectorConfig,
+                    eigendecomposition_config = cast(
+                        EigendecompositionConfig,
                         self._preconditioner_config.amortized_computation_config,
                     )
-                    try:
-                        computed_eigenvectors = matrix_eigenvectors(
-                            A=factor_matrix,
-                            eigenvectors_estimate=factor_matrix_eigenvectors,
-                            eigenvector_computation_config=eigenvector_computation_config,
-                            is_diagonal=bool(is_factor_matrix_diagonal),
+                    if isinstance(
+                        eigendecomposition_config, QREigendecompositionConfig
+                    ):
+                        eigendecomposition_config.eigenvectors_estimate = (
+                            factor_matrix_eigenvectors
                         )
+                    try:
+                        computed_eigenvectors = matrix_eigendecomposition(
+                            A=factor_matrix,
+                            eigendecomposition_config=eigendecomposition_config,
+                            is_diagonal=bool(is_factor_matrix_diagonal),
+                        )[1]
                         # Add success to success tracker.
                         success_tracker.append(True)
                     except Exception as exception:
