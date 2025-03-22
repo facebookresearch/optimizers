@@ -881,6 +881,7 @@ class MatrixEigendecompositionTest(unittest.TestCase):
             "identity": lambda A: torch.eye(A.shape[0], dtype=A.dtype, device=A.device),
             "exact": lambda A: matrix_eigendecomposition(A)[1],
         }
+        atol_map = {"zero": atol, "identity": 2e-3, "exact": 2e-3}
         for name, initialization_fn in initialization_strategies.items():
             with self.subTest(
                 f"Test with QREigendecompositionConfig with {name} initialization."
@@ -906,12 +907,10 @@ class MatrixEigendecompositionTest(unittest.TestCase):
                         :,
                         expected_eigenvectors[0, :] / estimated_eigenvectors[0, :] < 0,
                     ] *= -1
-                    if name in ("identity", "exact"):
-                        atol = 2e-3
                     torch.testing.assert_close(
                         (expected_eigenvalues, expected_eigenvectors),
                         (estimated_eigenvalues, estimated_eigenvectors),
-                        atol=atol,
+                        atol=atol_map[name],
                         rtol=rtol,
                     )
 
