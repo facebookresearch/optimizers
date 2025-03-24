@@ -20,11 +20,11 @@ from matrix_functions_types import (
     CoupledHigherOrderConfig,
     CoupledNewtonConfig,
     DefaultEigenConfig,
-    DefaultEighEigenvectorConfig,
+    DefaultEigendecompositionConfig,
     EigenConfig,
-    EigenvectorConfig,
-    EighEigenvectorConfig,
-    QRConfig,
+    EigendecompositionConfig,
+    EighEigendecompositionConfig,
+    QREigendecompositionConfig,
     RootInvConfig,
 )
 
@@ -105,8 +105,8 @@ def matrix_inverse_root(
             root=root,
             epsilon=epsilon,
             retry_double_precision=root_inv_config.retry_double_precision,
-            eigen_decomp_offload_device=root_inv_config.eigen_decomp_offload_device,
             enhance_stability=root_inv_config.enhance_stability,
+            eigendecomposition_offload_device=root_inv_config.eigendecomposition_offload_device,
         )
     elif type(root_inv_config) is CoupledNewtonConfig:
         # NOTE: Use Fraction.is_integer() instead when Python 3.12+ is available
@@ -167,26 +167,77 @@ def _matrix_inverse_root_diagonal(
     return torch.diag((torch.diagonal(A) + epsilon).pow(torch.as_tensor(-1.0 / root)))
 
 
-def matrix_eigenvalue_decomposition(
+def matrix_eigendecomposition(
+    A: Tensor,
+    eigendecomposition_config: EigendecompositionConfig = DefaultEigendecompositionConfig,
+    is_diagonal: bool = False,
+) -> tuple[Tensor, Tensor]:
+    """Compute the eigendecomposition of a symmetric matrix.
+
+    Args:
+        A (Tensor): The input symmetric matrix.
+        eigendecomposition_config (EigendecompositionConfig): Determines how eigendecomposition is computed.
+        is_diagonal (bool): Whether A is diagonal. (Default: False)
+
+    Returns:
+        tuple[Tensor, Tensor]: A tuple containing the eigenvalues and eigenvectors of the input matrix.
+    """
+    # check if matrix is scalar
+    if torch.numel(A) == 1:
+        return A.squeeze(), torch.ones_like(A)
+
+    # check matrix shape
+    if len(A.shape) != 2:
+        raise ValueError("Matrix is not 2-dimensional!")
+    elif A.shape[0] != A.shape[1]:
+        raise ValueError("Matrix is not square!")
+
+    # Return the (sorted) diagonal of A and identity matrix if A is diagonal.
+    if is_diagonal:
+        return A.diag(), torch.eye(
+            A.shape[0],
+            dtype=A.dtype,
+            device=A.device,
+        )
+
+    if type(eigendecomposition_config) is EighEigendecompositionConfig:
+        return _eigh_eigenvalue_decomposition(
+            A,
+            retry_double_precision=eigendecomposition_config.retry_double_precision,
+            eigendecomposition_offload_device=eigendecomposition_config.eigendecomposition_offload_device,
+        )
+    elif type(eigendecomposition_config) is QREigendecompositionConfig:
+        return _qr_algorithm(
+            A,
+            eigenvectors_estimate=eigendecomposition_config.eigenvectors_estimate,
+            max_iterations=eigendecomposition_config.max_iterations,
+            tolerance=eigendecomposition_config.tolerance,
+        )
+    else:
+        raise NotImplementedError(
+            f"Eigendecomposition config is not implemented! Specified eigendecomposition config is {eigendecomposition_config=}."
+        )
+
+
+def _eigh_eigenvalue_decomposition(
     A: Tensor,
     retry_double_precision: bool = True,
-    eigen_decomp_offload_device: torch.device | str = "",
+    eigendecomposition_offload_device: torch.device | str = "",
 ) -> tuple[Tensor, Tensor]:
-    """
-    Compute the eigendecomposition of a symmetric matrix.
+    """Compute the eigendecomposition of a symmetric matrix using torch.linalg.eigh.
 
     Args:
         A (Tensor): The input symmetric matrix.
         retry_double_precision (bool, optional): Whether to retry the computation in double precision if it fails in the current precision. Defaults to True.
-        eigen_decomp_offload_device (torch.device | str): Device to offload eigen decomposition computation. If value is empty string, do not perform offloading. (Default: "")
+        eigendecomposition_offload_device (torch.device | str): Device to offload eigendecomposition computation. If value is empty string, do not perform offloading. (Default: "")
 
     Returns:
         tuple[Tensor, Tensor]: A tuple containing the eigenvalues and eigenvectors of the input matrix.
     """
 
     current_device = A.device
-    if eigen_decomp_offload_device != "":
-        A = A.to(device=eigen_decomp_offload_device)
+    if eigendecomposition_offload_device != "":
+        A = A.to(device=eigendecomposition_offload_device)
 
     try:
         # Attempt to compute the eigendecomposition in the current precision
@@ -206,13 +257,92 @@ def matrix_eigenvalue_decomposition(
     return L.to(device=current_device), Q.to(device=current_device)
 
 
+def _estimated_eigenvalues_criterion_below_or_equal_tolerance(
+    estimated_eigenvalues: Tensor, tolerance: float
+) -> bool:
+    """Evaluates if a criterion using estimated eigenvalues is below or equal to the tolerance.
+
+    Let Q^T A Q =: B be the estimate of the eigenvalues of the matrix A, where Q is the matrix containing the last computed eigenvectors.
+    The criterion based on the estimated eigenvalues is defined as ||B - diag(B)||_F <= tolerance * ||B||_F.
+    The tolerance hyperparameter should therefore be in the interval [0.0, 1.0].
+
+    This convergence criterion can be motivated by considering A' = Q diag(B) Q^T as an approximation of A.
+    We have ||A - A'||_F = ||A - Q diag(B) Q^T||_F = ||Q^T A Q - diag(B)||_F = ||B - diag(B)||_F.
+    Moreover, we have ||B||_F = ||Q^T A Q||_F = ||A||_F.
+    Hence, the two relative errors are also equivalent: ||A - A'||_F / ||A||_F = ||B - diag(B)||_F / ||B||_F.
+
+    Args:
+        A (Tensor): The symmetric input matrix.
+        Q (Tensor): An estimate of the eigenvectors of A.
+        tolerance (float): The tolerance for the criterion.
+
+    Returns:
+        bool: True if the criterion is below or equal to the tolerance, False otherwise.
+
+    """
+    norm = torch.linalg.norm(estimated_eigenvalues)
+    diagonal_norm = torch.linalg.norm(estimated_eigenvalues.diag())
+    off_diagonal_norm = torch.sqrt(norm**2 - diagonal_norm**2)
+    return bool(off_diagonal_norm <= tolerance * norm)
+
+
+def _qr_algorithm(
+    A: Tensor,
+    eigenvectors_estimate: Tensor,
+    max_iterations: int = 1,
+    tolerance: float = 0.01,
+) -> tuple[Tensor, Tensor]:
+    """Approximately compute the eigendecomposition of a symmetric matrix by performing the QR algorithm.
+
+    Given an initial estimate of the eigenvectors Q of matrix A, a power iteration and a QR decomposition is performed each iteration, i.e. Q, _ <- QR(A @ Q).
+    When the initial estimate is the zero matrix, the eigendecomposition is computed using _eigh_eigenvalue_decomposition.
+
+    Note that if the criterion based on the estimated eigenvalues is already below or equal to the tolerance given the initial eigenvectors_estimate, the QR iterations will be skipped.
+
+    Args:
+        A (Tensor): The symmetric input matrix.
+        eigenvectors_estimate (Tensor): The current estimate of the eigenvectors of A.
+        max_iterations (int): The maximum number of iterations to perform. (Default: 1)
+        tolerance (float): The tolerance for determining convergence in terms of the norm of the off-diagonal elements of the eigenvalue estimate.
+            (Default: 0.01)
+
+    Returns:
+        tuple[Tensor, Tensor]: The estimated eigenvalues and eigenvectors of the input matrix A.
+
+    """
+    if not eigenvectors_estimate.any():
+        return _eigh_eigenvalue_decomposition(A)
+
+    # Perform orthogonal/simultaneous iterations (QR algorithm).
+    Q = eigenvectors_estimate
+    estimated_eigenvalues = Q.T @ A @ Q
+    iteration = 0
+    # NOTE: This will skip the QR iterations if the criterion is already below or equal to the tolerance given the initial eigenvectors_estimate.
+    while (
+        iteration < max_iterations
+        and not _estimated_eigenvalues_criterion_below_or_equal_tolerance(
+            estimated_eigenvalues, tolerance
+        )
+    ):
+        power_iteration = A @ Q
+        Q = torch.linalg.qr(power_iteration).Q
+        iteration += 1
+        estimated_eigenvalues = Q.T @ A @ Q
+
+    # Ensure consistent ordering of estimated eigenvalues and eigenvectors.
+    estimated_eigenvalues, indices = estimated_eigenvalues.diag().sort(stable=True)
+    Q = Q[:, indices]
+
+    return estimated_eigenvalues, Q
+
+
 def _matrix_inverse_root_eigen(
     A: Tensor,
     root: Fraction,
     epsilon: float = 0.0,
     retry_double_precision: bool = True,
-    eigen_decomp_offload_device: torch.device | str = "",
     enhance_stability: bool = False,
+    eigendecomposition_offload_device: torch.device | str = "",
 ) -> tuple[Tensor, Tensor, Tensor]:
     """Compute matrix inverse root using eigendecomposition of symmetric positive (semi-)definite matrix.
 
@@ -226,8 +356,8 @@ def _matrix_inverse_root_eigen(
         epsilon (float): Adds epsilon * I to matrix before taking matrix root. (Default: 0.0)
         retry_double_precision (bool): Flag for re-trying eigendecomposition with higher precision if lower precision fails due
             to CuSOLVER failure. (Default: True)
-        eigen_decomp_offload_device (torch.device | str): Device to offload eigen decomposition computation. If value is empty string, do not perform offloading. (Default: "")
         enhance_stability (bool): Whether to use a (mathematically identical, yet numerically more stable) path for eigendecomposition (Default: False)
+        eigendecomposition_offload_device (torch.device | str): Device to offload eigendecomposition computation. If value is empty string, do not perform offloading. (Default: "")
 
     Returns:
         X (Tensor): (Inverse) root of matrix. Same dimensions as A.
@@ -250,10 +380,10 @@ def _matrix_inverse_root_eigen(
         A_ridge = A
 
     # compute eigendecomposition and compute minimum eigenvalue
-    L, Q = matrix_eigenvalue_decomposition(
+    L, Q = _eigh_eigenvalue_decomposition(
         A_ridge,
         retry_double_precision=retry_double_precision,
-        eigen_decomp_offload_device=eigen_decomp_offload_device,
+        eigendecomposition_offload_device=eigendecomposition_offload_device,
     )
     lambda_min = torch.min(L)
 
@@ -605,8 +735,8 @@ def compute_matrix_root_inverse_residuals(
         X_hat.double(),
         root=root,
         epsilon=0.0,
-        eigen_decomp_offload_device=root_inv_config.eigen_decomp_offload_device,
         enhance_stability=root_inv_config.enhance_stability,
+        eigendecomposition_offload_device=root_inv_config.eigendecomposition_offload_device,
     )
 
     A_reg = A.double() + epsilon * torch.eye(
@@ -617,112 +747,3 @@ def compute_matrix_root_inverse_residuals(
     )
 
     return relative_error, relative_residual
-
-
-def matrix_eigenvectors(
-    A: Tensor,
-    eigenvectors_estimate: Tensor | None = None,
-    eigenvector_computation_config: EigenvectorConfig = DefaultEighEigenvectorConfig,
-    is_diagonal: bool = False,
-) -> Tensor:
-    """Compute eigenvectors of matrix using eigendecomposition of symmetric positive (semi-)definite matrix.
-
-            A = Q L Q^T => Q
-
-    Assumes matrix A is symmetric.
-
-    Args:
-        A (Tensor): Square matrix of interest.
-        eigenvectors_estimate (Tensor | None): The current estimate of the eigenvectors of A.
-            (Default: None)
-        eigenvector_computation_config (EigenvectorConfig): Determines how eigenvectors are computed.
-            (Default: DefaultEighEigenvectorConfig)
-        is_diagonal (bool): Whether A is diagonal. (Default: False)
-
-    Returns:
-        Q (Tensor): Orthogonal matrix containing eigenvectors of A.
-
-    """
-    # check if matrix is scalar
-    if torch.numel(A) == 1:
-        return torch.ones_like(A)
-
-    # check matrix shape
-    if len(A.shape) != 2:
-        raise ValueError("Matrix is not 2-dimensional!")
-    elif A.shape[0] != A.shape[1]:
-        raise ValueError("Matrix is not square!")
-
-    # return identity matrix if A is diagonal
-    if is_diagonal:
-        return torch.eye(
-            A.shape[0],
-            dtype=A.dtype,
-            device=A.device,
-        )
-
-    if type(eigenvector_computation_config) is EighEigenvectorConfig:
-        return matrix_eigenvalue_decomposition(
-            A,
-            retry_double_precision=eigenvector_computation_config.retry_double_precision,
-            eigen_decomp_offload_device=eigenvector_computation_config.eigen_decomp_offload_device,
-        )[1]
-    elif type(eigenvector_computation_config) is QRConfig:
-        assert (
-            eigenvectors_estimate is not None
-        ), "Estimate of eigenvectors is required when using QRConfig."
-        return _compute_orthogonal_iterations(
-            A,
-            eigenvectors_estimate=eigenvectors_estimate,
-            max_iterations=eigenvector_computation_config.max_iterations,
-            tolerance=eigenvector_computation_config.tolerance,
-        )
-    else:
-        raise NotImplementedError(
-            f"Eigenvector computation method is not implemented! Specified eigenvector method is {eigenvector_computation_config=}."
-        )
-
-
-def _compute_orthogonal_iterations(
-    A: Tensor,
-    eigenvectors_estimate: Tensor,
-    max_iterations: int = 1,
-    tolerance: float = 1e-5,
-) -> Tensor:
-    """
-    Approximately compute the eigenvectors of a symmetric matrix by performing orthogonal/simultaneous iterations (QR algorithm).
-
-    Given an initial estimate of the eigenvectors Q of matrix A, a power iteration and a QR decomposition is performed each iteration, i.e. Q, _ <- QR(A @ Q).
-    When the initial estimate is the zero matrix, the eigenvectors are computed using an eigendecomposition.
-
-    Used in https://arxiv.org/abs/2405.18144 (see Appendix B) and https://arxiv.org/abs/2409.11321.
-
-    Args:
-        A (Tensor): The symmetric input matrix.
-        eigenvectors_estimate (Tensor): The current estimate of the eigenvectors of A.
-        max_iterations (int): The maximum number of iterations to perform. (Default: 1)
-        tolerance (float): The tolerance for determining convergence in terms of the relative change of the eigenvectors estimate.
-            (Default: 1e-5)
-
-    Returns:
-        Tensor: The approximate eigenvectors of the input matrix A.
-
-    """
-    if not eigenvectors_estimate.any():
-        return matrix_eigenvalue_decomposition(A)[1]
-
-    # Perform orthogonal/simultaneous iterations (QR algorithm).
-    Q = eigenvectors_estimate
-    iteration = 0
-    error = torch.inf
-    while iteration < max_iterations and error > tolerance:
-        power_iteration = A @ Q
-        last_Q, Q = Q, torch.linalg.qr(power_iteration).Q
-        iteration += 1
-        error = last_Q.sub(Q).norm().div_(last_Q.norm())
-
-    # Ensure consistent ordering of estimated eigenvectors.
-    estimated_eigenvalues = torch.einsum("ij, ik, kj -> j", Q, A, Q)
-    Q = Q[:, estimated_eigenvalues.argsort()]
-
-    return Q

@@ -33,13 +33,12 @@ from matrix_functions_types import (
     CoupledHigherOrderConfig,
     CoupledNewtonConfig,
     DefaultEigenConfig,
-    DefaultEighEigenvectorConfig,
+    DefaultEigendecompositionConfig,
     EigenConfig,
-    EigenvalueDecompositionConfig,
-    EigenvectorConfig,
-    EighEigenvectorConfig,
+    EigendecompositionConfig,
+    EighEigendecompositionConfig,
     MatrixFunctionConfig,
-    QRConfig,
+    QREigendecompositionConfig,
     RootInvConfig,
 )
 
@@ -66,20 +65,19 @@ __all__ = [
     "ShampooPreconditionerConfig",  # Based on `PreconditionerConfig`.
     "DefaultShampooConfig",  # Default `ShampooPreconditionerConfig` using `EigenConfig`.
     "EigenvalueCorrectedShampooPreconditionerConfig",  # Based on `PreconditionerConfig`.
-    "DefaultEigenvalueCorrectedShampooConfig",  # Default `EigenvalueCorrectedShampooPreconditionerConfig` using `EighEigenvectorConfig`.
-    "DefaultSOAPConfig",  # Default `EigenvalueCorrectedShampooPreconditionerConfig` using `QRConfig`.
+    "DefaultEigenvalueCorrectedShampooConfig",  # Default `EigenvalueCorrectedShampooPreconditionerConfig` using `EighEigendecompositionConfig`.
+    "DefaultSOAPConfig",  # Default `EigenvalueCorrectedShampooPreconditionerConfig` using `QREigendecompositionConfig`.
     # matrix functions configs.
     "MatrixFunctionConfig",  # Abstract base class.
-    "EigenvalueDecompositionConfig",  # Abstract base class (based on `MatrixFunctionConfig`).
+    "EigendecompositionConfig",  # Abstract base class (based on `MatrixFunctionConfig`).
+    "EighEigendecompositionConfig",  # Based on `EigendecompositionConfig`.
+    "DefaultEigendecompositionConfig",  # Default `EigendecompositionConfig` using `EighEigendecompositionConfig`.
+    "QREigendecompositionConfig",  # Based on `EigendecompositionConfig`.
     "RootInvConfig",  # Abstract base class (based on `MatrixFunctionConfig`).
-    "EigenConfig",  # Based on `RootInvConfig` and `EigenvalueDecompositionConfig`.
+    "EigenConfig",  # Based on `RootInvConfig` and `EigendecompositionConfig`.
     "DefaultEigenConfig",  # Default `RootInvConfig` using `EigenConfig`.
     "CoupledNewtonConfig",  # Based on `RootInvConfig`.
     "CoupledHigherOrderConfig",  # Based on `RootInvConfig`.
-    "EigenvectorConfig",  # Abstract base class (based on `MatrixFunctionConfig`).
-    "EighEigenvectorConfig",  # Based on `EigenvectorConfig` and `EigenvalueDecompositionConfig`.
-    "DefaultEighEigenvectorConfig",  # Default `EigenvectorConfig` using `EighEigenvectorConfig`.
-    "QRConfig",  # Based on `EigenvectorConfig`.
     # Other utilities.
     "compile_fsdp_parameter_metadata",  # For `FSDPShampooConfig` and `HSDPShampooConfig`.
     "CommunicationDType",  # For `DDPShampooConfig` and `HSDPShampooConfig`.
