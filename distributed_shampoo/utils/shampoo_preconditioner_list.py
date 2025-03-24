@@ -936,6 +936,9 @@ class BaseShampooPreconditionerList(
     ) -> Tensor:
         # TODO: Need to refactor this function to be more efficient. Ideally eliminate those branches.
         # Might consider einsum?
+        assert (
+            sum(preconditioned_dims_selector) == len(preconditioner_list)
+        ), f"The number of dimensions to precondition ({sum(preconditioned_dims_selector)}) must match the number of preconditioners ({len(preconditioner_list)})."
         preconditioner_list_iter = iter(preconditioner_list)
         return reduce(
             lambda grad, should_precondition: torch.tensordot(

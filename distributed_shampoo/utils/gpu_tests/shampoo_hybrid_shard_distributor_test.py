@@ -21,6 +21,7 @@ from distributed_shampoo.distributed_shampoo import DistributedShampoo
 from distributed_shampoo.shampoo_types import (
     AdaGradGraftingConfig,
     CommunicationDType,
+    FullyShardShampooConfig,
     HybridShardShampooConfig,
 )
 from distributed_shampoo.tests.shampoo_test_utils import construct_training_problem
@@ -29,7 +30,7 @@ from distributed_shampoo.utils.shampoo_preconditioner_list import SHAMPOO
 from torch import nn
 from torch.distributed._composable.fsdp import fully_shard
 from torch.distributed.checkpoint._nested_dict import flatten_state_dict
-from torch.distributed.device_mesh import init_device_mesh
+from torch.distributed.device_mesh import DeviceMesh, init_device_mesh
 from torch.distributed.tensor import DTensor
 from torch.optim.optimizer import ParamsT
 from torch.testing._internal.common_distributed import skip_if_lt_x_gpu
@@ -52,27 +53,34 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
     @staticmethod
     def _construct_model(
         device: torch.device,
-        distributed_config: HybridShardShampooConfig | None,
+        distributed_config: FullyShardShampooConfig | HybridShardShampooConfig | None,
+        device_mesh: DeviceMesh | None,
     ) -> tuple[nn.Module, nn.Module, torch.Tensor, torch.Tensor, bool]:
         IN_DIM = 16
         data = torch.arange(IN_DIM, dtype=torch.float, device=device)
         data /= torch.norm(data)
-        # NOTE: We construct the model here specifically in order to ensure that
-        #       FullyShard Shampoo and default Shampoo produce equivalent results.
+        # NOTE: We construct the model here specifically in order to ensure that HybridShard
+        #       Shampoo, and default Shampoo produce equivalent results.
         #       This requires us to construct a model such that FullyShard will split the
-        #       parameters such that the preconditioners created between the FullyShard
+        #       parameters such that the preconditioners created between the HybridShard Shampoo,
         #       and default Shampoo are equivalent.
-        #      +----------------+
-        #      |     [4, 16]    |
-        #      |      GPU0      |
-        #     --------------------     +------+
-        #      |     [4, 16]    |      |[4, 4]|
-        #      |      GPU1      |      |      |
-        #      +----------------+      +------+
+        #
+        #       In a (2, 2) mesh, we have the following parameter distribution:
+        #
+        #      +----------------+                       +----------------+
+        #      |     [4, 16]    |                       |     [4, 16]    |
+        #      |      GPU0      |                       |      GPU1      |
+        #     --------------------     +------+        --------------------     +------+
+        #      |     [4, 16]    |      |[4, 4]|         |     [4, 16]    |      |[4, 4]|
+        #      |      GPU2      |      |      |         |      GPU3      |      |      |
+        #      +----------------+      +------+         +----------------+      +------+
+        #
+        #      Each FSDP group has the complete model. (GPU0, GPU2) and (GPU1, GPU3) are
+        #      2 FDSP groups.
+        #
         #      For the first linear layer, each GPU has a [4, 16] parameter. The blocked
-        #      parameters are of size [4, 4] and each GPU has four local blocks (eight
-        #      blocks in total). In comparison, with default shampoo, the eight blocks
-        #      are replicated on two GPUs.
+        #      parameters are of size [4, 4] and each GPU has four local blocks. In comparison,
+        #      with default shampoo, the eight blocks are replicated on four GPUs.
         #      Similarly, the second linear layer has a [1, 8] parameter and is split
         #      into two [4] chunks.
 
@@ -86,16 +94,15 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
             fill=0.1,
         )
 
-        if uses_hybrid_shard := isinstance(
-            distributed_config, HybridShardShampooConfig
+        if use_fsdp2 := (
+            isinstance(
+                distributed_config, (HybridShardShampooConfig, FullyShardShampooConfig)
+            )
         ):
             # Need this to get pass type-checking test.
             assert distributed_config is not None
-            model = fully_shard(
-                model,
-                mesh=distributed_config.device_mesh,
-            )
-        return model, loss, data, target, uses_hybrid_shard
+            model = fully_shard(model, mesh=device_mesh)
+        return model, loss, data, target, use_fsdp2
 
     @staticmethod
     def _train_model(
@@ -190,7 +197,7 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
 
     @staticmethod
     def _shampoo_optim_factory(
-        distributed_config: HybridShardShampooConfig | None,
+        distributed_config: FullyShardShampooConfig | HybridShardShampooConfig | None,
     ) -> Callable[
         [ParamsT],
         torch.optim.Optimizer,
@@ -214,7 +221,8 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
 
     @staticmethod
     def _model_factory(
-        distributed_config: HybridShardShampooConfig | None,
+        distributed_config: FullyShardShampooConfig | HybridShardShampooConfig | None,
+        device_mesh: DeviceMesh | None,
     ) -> Callable[
         [torch.device],
         tuple[
@@ -228,6 +236,7 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
         return partial(
             ShampooHybridShardDistributorTest._construct_model,
             distributed_config=distributed_config,
+            device_mesh=device_mesh,
         )
 
     @with_comms
@@ -266,12 +275,66 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
                     ),
                     ShampooHybridShardDistributorTest._model_factory(
                         None,
+                        None,
                     ),
                     ShampooHybridShardDistributorTest._shampoo_optim_factory(
                         distributed_config=hybrid_shard_config,
                     ),
                     ShampooHybridShardDistributorTest._model_factory(
                         hybrid_shard_config,
+                        mesh_2d,
+                    ),
+                    device=torch.device("cuda"),
+                )
+
+    @with_comms
+    @skip_if_lt_x_gpu(4)
+    def test_hybrid_shard_shampoo_config_against_fully_shard_shampoo_config(
+        self,
+    ) -> None:
+        mesh_2d = init_device_mesh(
+            "cuda", (2, 2), mesh_dim_names=("replicate", "shard")
+        )
+        for num_trainers_per_group, (
+            communication_dtype,
+            communicate_params,
+        ) in product(
+            (-1, 1, 2),
+            (
+                (CommunicationDType.DEFAULT, False),
+                (CommunicationDType.DEFAULT, True),
+                (CommunicationDType.FP16, False),
+                (CommunicationDType.BF16, False),
+            ),
+        ):
+            hybrid_shard_config = HybridShardShampooConfig(
+                device_mesh=mesh_2d,
+                communication_dtype=communication_dtype,
+                num_trainers_per_group=num_trainers_per_group,
+                communicate_params=communicate_params,
+            )
+
+            fully_shard_config = FullyShardShampooConfig()
+
+            with self.subTest(
+                communication_dtype=communication_dtype,
+                num_trainers_per_group=num_trainers_per_group,
+                communicate_params=communicate_params,
+            ):
+                ShampooHybridShardDistributorTest._test_two_configs(
+                    ShampooHybridShardDistributorTest._shampoo_optim_factory(
+                        distributed_config=fully_shard_config,
+                    ),
+                    ShampooHybridShardDistributorTest._model_factory(
+                        fully_shard_config,
+                        mesh_2d,
+                    ),
+                    ShampooHybridShardDistributorTest._shampoo_optim_factory(
+                        distributed_config=hybrid_shard_config,
+                    ),
+                    ShampooHybridShardDistributorTest._model_factory(
+                        hybrid_shard_config,
+                        mesh_2d,
                     ),
                     device=torch.device("cuda"),
                 )
@@ -286,7 +349,8 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
             device_mesh=mesh_2d,
         )
         model_factory = ShampooHybridShardDistributorTest._model_factory(
-            hybrid_shard_config
+            hybrid_shard_config,
+            device_mesh=mesh_2d,
         )
         optim_factory = ShampooHybridShardDistributorTest._shampoo_optim_factory(
             hybrid_shard_config
@@ -336,7 +400,8 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
                 distributed_config=hybrid_shard_config,
             ),
             model_factory=ShampooHybridShardDistributorTest._model_factory(
-                hybrid_shard_config
+                hybrid_shard_config,
+                device_mesh=mesh_2d,
             ),
             device=torch.device("cuda"),
         )
@@ -362,7 +427,8 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
                     distributed_config=hybrid_shard_config,
                 ),
                 model_factory=ShampooHybridShardDistributorTest._model_factory(
-                    hybrid_shard_config
+                    hybrid_shard_config,
+                    device_mesh=mesh_2d,
                 ),
                 device=torch.device("cuda"),
             )
@@ -394,7 +460,8 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
                     distributed_config=hybrid_shard_config,
                 ),
                 model_factory=ShampooHybridShardDistributorTest._model_factory(
-                    hybrid_shard_config
+                    hybrid_shard_config,
+                    device_mesh=mesh_2d,
                 ),
                 device=torch.device("cuda"),
             )
