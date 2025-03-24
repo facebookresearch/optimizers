@@ -820,20 +820,20 @@ class MatrixEigendecompositionTest(unittest.TestCase):
         ]
         expected_eigenvalues_list = [
             torch.tensor([1.0, 4.0]),
-            torch.tensor([2.9009e-03, 1.7424e-01, 1.9828e03]),
+            torch.tensor([2.9008677229e-03, 1.7424316704e-01, 1.9828229980e03]),
         ]
         expected_eigenvectors_list = [
             torch.tensor([[1.0, 0.0], [0.0, 1.0]]),
             torch.tensor(
                 [
-                    [0.0460, -0.6287, 0.7763],
-                    [-0.1752, -0.7702, -0.6133],
-                    [0.9835, -0.1078, -0.1455],
+                    [0.0460073575, -0.6286827326, 0.7762997746],
+                    [-0.1751257628, -0.7701635957, -0.6133345366],
+                    [0.9834705591, -0.1077321917, -0.1455317289],
                 ]
             ),
         ]
 
-        atol = 0.05  # TODO: Ensure consistent ordering of the eigenvectors and decrease tolerance.
+        atol = 1e-4
         rtol = 1e-5
         with self.subTest("Test with diagonal case."):
             torch.testing.assert_close(
@@ -876,12 +876,18 @@ class MatrixEigendecompositionTest(unittest.TestCase):
                 )
 
         # Tests for `QREigendecompositionConfig`.
-        initialization_strategies = {
-            "zero": lambda A: torch.zeros_like(A),
-            "identity": lambda A: torch.eye(A.shape[0], dtype=A.dtype, device=A.device),
-            "exact": lambda A: matrix_eigendecomposition(A)[1],
+        initialization_strategies_to_functions_atol = {
+            "zero": (lambda A: torch.zeros_like(A), atol),
+            "identity": (
+                lambda A: torch.eye(A.shape[0], dtype=A.dtype, device=A.device),
+                2e-3,
+            ),
+            "exact": (lambda A: matrix_eigendecomposition(A)[1], 2e-3),
         }
-        for name, initialization_fn in initialization_strategies.items():
+        for name, (
+            initialization_fn,
+            atol,
+        ) in initialization_strategies_to_functions_atol.items():
             with self.subTest(
                 f"Test with QREigendecompositionConfig with {name} initialization."
             ):

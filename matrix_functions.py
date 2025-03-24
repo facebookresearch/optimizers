@@ -14,7 +14,6 @@ import time
 from dataclasses import asdict
 from fractions import Fraction
 from math import isfinite
-from typing import NamedTuple
 
 import torch
 from matrix_functions_types import (
@@ -193,7 +192,7 @@ def matrix_eigendecomposition(
     elif A.shape[0] != A.shape[1]:
         raise ValueError("Matrix is not square!")
 
-    # return the diagonal of A and the identity matrix if A is diagonal
+    # Return the (sorted) diagonal of A and identity matrix if A is diagonal.
     if is_diagonal:
         return A.diag(), torch.eye(
             A.shape[0],
@@ -258,20 +257,13 @@ def _eigh_eigenvalue_decomposition(
     return L.to(device=current_device), Q.to(device=current_device)
 
 
-class Criterion(NamedTuple):
-    """Named tuple for result of convergence criterion."""
-
-    converged: bool
-    approximate_eigenvalues: Tensor
-
-
-def _approximate_eigenvalues_criterion_below_or_equal_tolerance(
-    A: Tensor, Q: Tensor, tolerance: float
-) -> Criterion:
-    """Evaluates if a criterion using approximate eigenvalues is below or equal to the tolerance.
+def _estimated_eigenvalues_criterion_below_or_equal_tolerance(
+    estimated_eigenvalues: Tensor, tolerance: float
+) -> bool:
+    """Evaluates if a criterion using estimated eigenvalues is below or equal to the tolerance.
 
     Let Q^T A Q =: B be the estimate of the eigenvalues of the matrix A, where Q is the matrix containing the last computed eigenvectors.
-    The approximate eigenvalues criterion is defined as ||B - diag(B)||_F <= tolerance * ||B||_F.
+    The criterion based on the estimated eigenvalues is defined as ||B - diag(B)||_F <= tolerance * ||B||_F.
     The tolerance hyperparameter should therefore be in the interval [0.0, 1.0].
 
     This convergence criterion can be motivated by considering A' = Q diag(B) Q^T as an approximation of A.
@@ -285,17 +277,13 @@ def _approximate_eigenvalues_criterion_below_or_equal_tolerance(
         tolerance (float): The tolerance for the criterion.
 
     Returns:
-        Criterion: Named tuple with the fields 'converged' and 'approximate_eigenvalues':
-            converged (bool): whether the criterion is below or equal to the tolerance.
-            approximate_eigenvalues (Tensor): the approximate eigenvalues of A as a vector.
+        bool: True if the criterion is below or equal to the tolerance, False otherwise.
 
     """
-    approximate_eigenvalues = Q.T @ A @ Q
-    norm = torch.linalg.norm(approximate_eigenvalues)
-    diagonal_norm = torch.linalg.norm(approximate_eigenvalues.diag())
+    norm = torch.linalg.norm(estimated_eigenvalues)
+    diagonal_norm = torch.linalg.norm(estimated_eigenvalues.diag())
     off_diagonal_norm = torch.sqrt(norm**2 - diagonal_norm**2)
-    converged = bool(off_diagonal_norm <= tolerance * norm)
-    return Criterion(converged, approximate_eigenvalues.diag())
+    return bool(off_diagonal_norm <= tolerance * norm)
 
 
 def _qr_algorithm(
@@ -304,13 +292,12 @@ def _qr_algorithm(
     max_iterations: int = 1,
     tolerance: float = 0.01,
 ) -> tuple[Tensor, Tensor]:
-    """
-    Approximately compute the eigendecomposition of a symmetric matrix by performing the QR algorithm.
+    """Approximately compute the eigendecomposition of a symmetric matrix by performing the QR algorithm.
 
     Given an initial estimate of the eigenvectors Q of matrix A, a power iteration and a QR decomposition is performed each iteration, i.e. Q, _ <- QR(A @ Q).
     When the initial estimate is the zero matrix, the eigendecomposition is computed using _eigh_eigenvalue_decomposition.
 
-    Note that if the approximate eigenvalues criterion is already below or equal to the tolerance given the initial eigenvectors_estimate, the QR iterations will be skipped.
+    Note that if the criterion based on the estimated eigenvalues is already below or equal to the tolerance given the initial eigenvectors_estimate, the QR iterations will be skipped.
 
     Args:
         A (Tensor): The symmetric input matrix.
@@ -320,7 +307,7 @@ def _qr_algorithm(
             (Default: 0.01)
 
     Returns:
-        tuple[Tensor, Tensor]: The approximate eigenvalues and eigenvectors of the input matrix A.
+        tuple[Tensor, Tensor]: The estimated eigenvalues and eigenvectors of the input matrix A.
 
     """
     if not eigenvectors_estimate.any():
@@ -328,27 +315,22 @@ def _qr_algorithm(
 
     # Perform orthogonal/simultaneous iterations (QR algorithm).
     Q = eigenvectors_estimate
+    estimated_eigenvalues = Q.T @ A @ Q
     iteration = 0
-    # NOTE: This will skip the QR iterations if the approximate eigenvalues criterion is already below or equal to the tolerance given the initial eigenvectors_estimate.
+    # NOTE: This will skip the QR iterations if the criterion is already below or equal to the tolerance given the initial eigenvectors_estimate.
     while (
         iteration < max_iterations
-        and not (
-            criterion := _approximate_eigenvalues_criterion_below_or_equal_tolerance(
-                A, Q, tolerance
-            )
-        ).converged
+        and not _estimated_eigenvalues_criterion_below_or_equal_tolerance(
+            estimated_eigenvalues, tolerance
+        )
     ):
         power_iteration = A @ Q
         Q = torch.linalg.qr(power_iteration).Q
         iteration += 1
+        estimated_eigenvalues = Q.T @ A @ Q
 
     # Ensure consistent ordering of estimated eigenvalues and eigenvectors.
-    estimated_eigenvalues = (
-        criterion.approximate_eigenvalues
-        if iteration == 0  # Re-use approximate eigenvalues if iterations were skipped.
-        else torch.einsum("ij, ik, kj -> j", Q, A, Q)
-    )
-    estimated_eigenvalues, indices = estimated_eigenvalues.sort()
+    estimated_eigenvalues, indices = estimated_eigenvalues.diag().sort(stable=True)
     Q = Q[:, indices]
 
     return estimated_eigenvalues, Q
