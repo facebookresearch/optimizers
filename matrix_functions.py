@@ -272,8 +272,7 @@ def _estimated_eigenvalues_criterion_below_or_equal_tolerance(
     Hence, the two relative errors are also equivalent: ||A - A'||_F / ||A||_F = ||B - diag(B)||_F / ||B||_F.
 
     Args:
-        A (Tensor): The symmetric input matrix.
-        Q (Tensor): An estimate of the eigenvectors of A.
+        estimated_eigenvalues (Tensor): The estimated eigenvalues.
         tolerance (float): The tolerance for the criterion.
 
     Returns:
