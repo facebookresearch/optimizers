@@ -37,7 +37,6 @@ BETAS = "betas"
 DAMPENING = "dampening"
 EPSILON = "epsilon"
 GRAFTING_CONFIG = "grafting_config"
-INV_ROOT_OVERRIDE = "inv_root_override"
 LR = "lr"
 MAX_PRECONDITIONER_DIM = "max_preconditioner_dim"
 PARAMS = "params"  # While this is stored in groups by default, we do not checkpoint this quantity.
@@ -86,22 +85,16 @@ class PreconditionerConfig(AbstractDataclass):
     Attributes:
         amortized_computation_config (MatrixFunctionConfig): Configuration for the amortized computation, e.g., inverse-root computation or eigendecomposition.
         num_tolerated_failed_amortized_computations (int): Number of failed amortized computations to tolerate before raising an error. (Default: 3)
-        ignored_dims (list[int]): List of dimensions to ignore when computing the preconditioner. This is equivalent to setting the preconditioner for these dimensions to the identity matrix. (Default: [])
 
     """
 
     amortized_computation_config: MatrixFunctionConfig  # type: ignore
     num_tolerated_failed_amortized_computations: int = 3
-    ignored_dims: list[int] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if self.num_tolerated_failed_amortized_computations < 0:
             raise ValueError(
                 f"Invalid num_tolerated_failed_amortized_computations value: {self.num_tolerated_failed_amortized_computations}. Must be >= 0."
-            )
-        if len(self.ignored_dims) != len(set(self.ignored_dims)):
-            raise ValueError(
-                f"Invalid ignored_dims value: {self.ignored_dims}. Must be a list of unique dimensions."
             )
 
 
@@ -112,13 +105,72 @@ class ShampooPreconditionerConfig(PreconditionerConfig):
     Attributes:
         amortized_computation_config (RootInvConfig | EigendecompositionConfig): Configuration for the inverse-root computation. (Default: DefaultEigenConfig)
         num_tolerated_failed_amortized_computations (int): Number of failed amortized computations to tolerate before raising an error. (Default: 3)
-        ignored_dims (list[int]): List of dimensions to ignore when computing the preconditioner. This is equivalent to setting the preconditioner for these dimensions to the identity matrix. (Default: [])
+        inverse_exponent_override (dict[int, dict[int, float]]): The inverse_exponent_override attribute is a dictionary that allows for customizing the inverse exponent used in the Shampoo preconditioner computation.
+            The keys of the dictionary represent the order of the tensor, and the values are dictionaries with dimension indices as keys and override values as values. All unspecified dimensions use a default exponent of 1/(2*o), where o is the order of the tensor. (Default: {})
+
+            As an example, suppose inverse_exponent_override={2: {0: 0.5, 1: 0.2}, 3: {0: 0.0, 1: 0.25}}. In this case, all 1-D tensors will use the default exponent of 0.5 for preconditioning the first (and only) dimension. All 2-D tensors will be preconditioned with an exponent of 0.5 on the first dimension and 0.2 on the second dimension. All 3-D tensors will have the first dimension be preconditioned with an exponent of 0.5, the second dimension not preconditioned, and the third dimension preconditioned with the default exponent 0.1667.
+            A visualization of this example can be seen below:
+            1-D:
+                            +-------x-------+
+                                    |
+                                    |
+                            (^0.5), the default inverse exponent 1/(2*1)
+            2-D:
+                            +-----------+
+                            |           |
+                            |           |
+                   (^0.2)---|           |
+                            |           |
+                            |           |
+                            +-----------+
+                                  |
+                                  |
+                                (^0.5)
+            3-D:
+                               +---------------+
+                              /               /|
+                             /               / |
+                            +---------------+  |
+                            |               |  |
+                            |               |  |
+                  (^0.25)---|               |  +
+                            |               | /
+                            |               |/\
+                            +---------------+  \
+                                    |          (^0.1667), the default inverse exponent 1/(2*3)
+                                    |
+                            no preconditioning
 
     """
 
     amortized_computation_config: RootInvConfig | EigendecompositionConfig = field(
         default_factory=lambda: DefaultEigenConfig
     )
+    inverse_exponent_override: dict[int, dict[int, float]] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+
+        if non_positive_orders := [
+            order for order in self.inverse_exponent_override.keys() if order < 0
+        ]:
+            raise ValueError(
+                f"Invalid orders in {self.inverse_exponent_override=}: {non_positive_orders}. All orders must be >= 0."
+            )
+
+        for order, dim_and_override in self.inverse_exponent_override.items():
+            if illegal_dimensions := [
+                dim for dim in dim_and_override if not (0 <= dim <= max(order - 1, 0))
+            ]:
+                raise ValueError(
+                    f"Invalid dimensions in {self.inverse_exponent_override[order]=}: {illegal_dimensions}. All dimensions must be within [0, {max(order - 1, 0)}]."
+                )
+            if non_positive_overrides := [
+                override for override in dim_and_override.values() if override < 0
+            ]:
+                raise ValueError(
+                    f"Invalid override value in {self.inverse_exponent_override[order]=}: {non_positive_overrides}. All overrides must be >= 0."
+                )
 
 
 DefaultShampooConfig = ShampooPreconditionerConfig()
@@ -128,17 +180,99 @@ DefaultShampooConfig = ShampooPreconditionerConfig()
 class EigenvalueCorrectedShampooPreconditionerConfig(PreconditionerConfig):
     """Configuration for eigenvalue-corrected Shampoo/SOAP preconditioner computation.
 
+    Recall that in eigenvalue-corrected Shampoo, the eigenvectors and eigenvalues of the factor matrices are computed separately and stored in place of the full inverted preconditioner, as opposed to the single inverse-root computation of the factor matrices in Shampoo.
+    In eigenvalue-corrected Shampoo, the eigenvectors are updated periodically like the inverted preconditioners in Shampoo, but the eigenvalues are updated every iteration.
+
     Attributes:
         amortized_computation_config (EigendecompositionConfig): Configuration for the eigenvector computation.
             (Default: DefaultEigendecompositionConfig)
         num_tolerated_failed_amortized_computations (int): Number of failed amortized computations to tolerate before raising an error. (Default: 3)
-        ignored_dims (list[int]): List of dimensions to ignore when computing the preconditioner. This is equivalent to setting the preconditioner for these dimensions to the identity matrix. (Default: [])
+        ignored_basis_change_dims (dict[int, list[int]]): The ignored_basis_change_dims attribute is a dictionary that specifies the dimensions of the gradient to ignore when transforming the basis of the gradient using the corresponding factor matrix's eigenvectors. 
+            (This is analogous to turning off preconditioning for the specified dimensions in default Shampoo.)
+            The keys of the dictionary represent the order of the tensor, and the values are lists of dimension indices to ignore. (Default: {})
+
+            Below is a visualized example of how ignored_basis_change_dims is applied on 1-D, 2-D, and 3-D tensors when given ignored_eigenvector_rotation_dims={1: [0], 2: [1], 3: [0, 2]}:
+            1-D:
+                            +-------x-------+
+                                    |
+                                    |
+                             no change basis
+            2-D:
+                                +-----------+
+                                |           |
+                                |           |
+             no change basis ---|           |
+                                |           |
+                                |           |
+                                +-----------+
+            3-D:
+                               +---------------+
+                              /               /|
+                             /               / |
+                            +---------------+  |
+                            |               |  |
+                            |               |  |
+                            |               |  +
+                            |               | /
+                            |               |/\
+                            +---------------+  \
+                                    |        no change basis
+                                    |
+                             no change basis
+
+        inverse_exponent_override (dict[int, float]): The inverse_exponent_override attribute is a dictionary that allows for customizing the inverse exponent used in eigenvalue correction.
+            The keys of the dictionary represent the order of the tensor, and the values are the exponent override values. For example, if we want to use a custom inverse exponent for 3-D tensors, we can set inverse_exponent_override as inverse_exponent_override={3: 0.25}.
+            Note that the inverse_exponent_override dictionary can contain multiple entries for different tensor orders. If the order of the tensor is not specified in the dictionary, the default exponent, 1/2, will be used. (Default: {})
 
     """
 
     amortized_computation_config: EigendecompositionConfig = field(
         default_factory=lambda: DefaultEigendecompositionConfig
     )
+    ignored_basis_change_dims: dict[int, list[int]] = field(default_factory=dict)
+    inverse_exponent_override: dict[int, float] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+
+        if non_positive_orders := [
+            order for order in self.ignored_basis_change_dims.keys() if order < 0
+        ]:
+            raise ValueError(
+                f"Invalid orders in {self.ignored_basis_change_dims=}: {non_positive_orders}. All orders must be >= 0."
+            )
+
+        for (
+            order,
+            ignored_basis_change_dims_in_one_order,
+        ) in self.ignored_basis_change_dims.items():
+            if illegal_ignored_dimensions := [
+                dim
+                for dim in ignored_basis_change_dims_in_one_order
+                if not (0 <= dim <= max(order - 1, 0))
+            ]:
+                raise ValueError(
+                    f"Invalid dimensions in {self.ignored_basis_change_dims[order]=}: {illegal_ignored_dimensions}. All dimensions must be within [0, {max(order - 1, 0)}]."
+                )
+            if len(ignored_basis_change_dims_in_one_order) != len(
+                set(ignored_basis_change_dims_in_one_order)
+            ):
+                raise ValueError(
+                    f"Invalid ignored dimensions in {self.ignored_basis_change_dims[order]=}. Duplicate dimensions found in {ignored_basis_change_dims_in_one_order}. All dimensions must be unique."
+                )
+
+        if non_positive_orders := [
+            order for order in self.inverse_exponent_override.keys() if order < 0
+        ]:
+            raise ValueError(
+                f"Invalid orders in {self.inverse_exponent_override=}: {non_positive_orders}. All orders must be >= 0."
+            )
+
+        for order, override in self.inverse_exponent_override.items():
+            if override <= 0:
+                raise ValueError(
+                    f"Invalid override value in {self.inverse_exponent_override[order]=}: {override}. All overrides must be > 0."
+                )
 
 
 DefaultEigenvalueCorrectedShampooConfig = (

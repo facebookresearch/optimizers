@@ -29,6 +29,7 @@ from distributed_shampoo.shampoo_types import (
     SGDGraftingConfig,
     ShampooPreconditionerConfig,
 )
+from matrix_functions_types import EigenConfig
 from torch import nn
 
 
@@ -119,16 +120,18 @@ class DistributedShampooInitTest(unittest.TestCase):
                 "Invalid start preconditioning step: -2. Must be >= -1.",
             ),
             (
-                {"inv_root_override": [-1, 2, 3]},
-                "Invalid exponent override list: [-1, 2, 3]. All values must be >= 0.",
-            ),
-            (
-                {"inv_root_override": -1},
-                "Invalid exponent override: -1. Must be >= 0.",
-            ),
-            (
                 {"start_preconditioning_step": 10, "precondition_frequency": 100},
                 "Invalid start_preconditioning_step value: 10. Must be >= precondition_frequency=100.",
+            ),
+            (
+                {
+                    "preconditioner_config": ShampooPreconditionerConfig(
+                        amortized_computation_config=EigenConfig(
+                            exponent_multiplier=0.5
+                        )
+                    )
+                },
+                "preconditioner_config.amortized_computation_config.exponent_multiplier is not supported. Please use PreconditionerConfig.inverse_exponent_override instead.",
             ),
         ]
 
@@ -180,22 +183,6 @@ class DistributedShampooInitTest(unittest.TestCase):
                 params=self._model.parameters(),
                 distributed_config=DDPShampooConfig(),
             )
-
-    def test_ignored_dims_conflicts_with_inv_root_override(self) -> None:
-        inv_root_override = 2
-        preconditioner_config = ShampooPreconditionerConfig(
-            ignored_dims=[1, 3],
-        )
-        self.assertRaisesRegex(
-            ValueError,
-            re.escape(
-                f"{preconditioner_config.ignored_dims=} is not supported when {inv_root_override=} is not set to 0. Please set {inv_root_override=} to 0 if you set {preconditioner_config.ignored_dims=}."
-            ),
-            DistributedShampoo,
-            params=self._model.parameters(),
-            inv_root_override=inv_root_override,
-            preconditioner_config=preconditioner_config,
-        )
 
 
 class DistributedShampooTest(unittest.TestCase):
@@ -408,7 +395,6 @@ class DistributedShampooStateDictTest(unittest.TestCase):
                     "max_preconditioner_dim": 5,
                     "precondition_frequency": 1,
                     "start_preconditioning_step": 1,
-                    "inv_root_override": 0,
                     "use_nesterov": False,
                     "use_bias_correction": True,
                     "use_decoupled_weight_decay": True,
