@@ -7,9 +7,7 @@ LICENSE file in the root directory of this source tree.
 
 """
 
-import heapq
 import logging
-import operator
 from functools import partial
 from itertools import islice
 from typing import Any, Iterable
@@ -25,6 +23,7 @@ from distributed_shampoo.utils.shampoo_dist_utils import get_device_mesh
 from distributed_shampoo.utils.shampoo_distributor import DistributorInterface
 from distributed_shampoo.utils.shampoo_utils import (
     compress_list,
+    distribute_buffer_sizes,
     generate_pairwise_indices,
     get_dtype_size,
 )
@@ -179,11 +178,12 @@ class HybridShardDistributor(DistributorInterface):
         comms_group_rank: int = dist.get_rank(self._comms_dist_group)
 
         # Assign ranks to blocks with their respective buffer size.
-        buffer_size_ranks = self._distribute_buffer_sizes(
+        buffer_size_ranks = distribute_buffer_sizes(
             buffer_sizes=tuple(
                 blocked_param.numel() * get_dtype_size(communication_dtype)
                 for blocked_param in self._global_blocked_params
-            )
+            ),
+            group_size=self._dist_group_size,
         )
 
         global_block_info_list = self._construct_global_block_info_list(
@@ -317,48 +317,8 @@ class HybridShardDistributor(DistributorInterface):
         Example:
             Assuming ALIGNMENT_BYTES = 64, given buffer_sizes = [128, 64, 500, 256], group_size = 2
             -> buffer_size_ranks = [(128, 1), (64, 1), (512, 0), (256, 1)]
-
         """
-        ALIGNMENT_BYTES = (
-            64  # necessary for determining buffer size, possibly hardware-dependent
-        )
-
-        # Convert each of buffer_sizes into smallest multiple of ALIGNMENT_BYTES that is >= buffer size.
-        aligned_buffer_sizes = [
-            (buffer_size + ALIGNMENT_BYTES - 1) // ALIGNMENT_BYTES * ALIGNMENT_BYTES
-            for buffer_size in buffer_sizes
-        ]
-        buffer_size_ranks = [(-1, -1)] * len(buffer_sizes)
-        allocated_buffer_sizes = [
-            (0, group_index) for group_index in range(self._dist_group_size)
-        ]
-        heapq.heapify(allocated_buffer_sizes)
-
-        for index, aligned_buffer_size in sorted(
-            enumerate(aligned_buffer_sizes),
-            key=operator.itemgetter(1),
-            reverse=True,
-        ):
-            # Greedily find the group with the least allocated buffer size and its group index
-            # in order to allocate buffers on that group.
-            (
-                min_allocated_buffer_size,
-                min_allocated_buffer_size_group_index,
-            ) = heapq.heappop(allocated_buffer_sizes)
-
-            heapq.heappush(
-                allocated_buffer_sizes,
-                (
-                    min_allocated_buffer_size + aligned_buffer_size,
-                    min_allocated_buffer_size_group_index,
-                ),
-            )
-            buffer_size_ranks[index] = (
-                aligned_buffer_size,
-                min_allocated_buffer_size_group_index,
-            )
-
-        return tuple(buffer_size_ranks)
+        return distribute_buffer_sizes(buffer_sizes, self._dist_group_size)
 
     def _construct_composable_block_ids(
         self,
