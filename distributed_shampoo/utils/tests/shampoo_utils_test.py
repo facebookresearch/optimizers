@@ -15,6 +15,7 @@ import torch
 
 from distributed_shampoo.utils.shampoo_utils import (
     compress_list,
+    distribute_buffer_sizes,
     generate_pairwise_indices,
     get_dtype_size,
     merge_small_dims,
@@ -185,3 +186,50 @@ class ParameterizeEnterExitContextTest(unittest.TestCase):
 
         # Due to the invocation of test_class.exit(), the state of test_class.test_var should be -1.
         self.assertEqual(test_class.test_var, -1)
+
+
+class DistributeBufferSizesTest(unittest.TestCase):
+    def test_distribute_buffer_sizes(self) -> None:
+        # Test case 1: Even distribution of buffer sizes
+        buffer_sizes = (128, 64, 500, 256)
+        group_size = 2
+        expected_result = (
+            (128, 1),
+            (64, 1),
+            (512, 0),
+            (256, 1),
+        )
+        self.assertEqual(
+            distribute_buffer_sizes(buffer_sizes, group_size), expected_result
+        )
+
+        # Test case 2: Single group
+        buffer_sizes = (128, 64, 500, 256)
+        group_size = 1
+        expected_result_single = (
+            (128, 0),
+            (64, 0),
+            (512, 0),
+            (256, 0),
+        )
+        self.assertEqual(
+            distribute_buffer_sizes(buffer_sizes, group_size), expected_result_single
+        )
+
+        # Test case 3: More groups than buffers
+        buffer_sizes_small = (128, 64)
+        group_size = 4
+        expected_result_small: tuple[tuple[int, int], ...] = ((128, 0), (64, 1))
+        self.assertEqual(
+            distribute_buffer_sizes(buffer_sizes_small, group_size),
+            expected_result_small,
+        )
+
+        # Test case 4: Empty buffer sizes
+        buffer_sizes_empty = ()
+        group_size = 2
+        expected_result_empty = ()
+        self.assertEqual(
+            distribute_buffer_sizes(buffer_sizes_empty, group_size),
+            expected_result_empty,
+        )
