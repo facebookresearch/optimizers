@@ -293,33 +293,6 @@ class HybridShardDistributor(DistributorInterface):
                 self._global_masked_dist_blocked_buffers,
             )
 
-    def _distribute_buffer_sizes(
-        self,
-        buffer_sizes: tuple[int, ...],
-    ) -> tuple[tuple[int, int], ...]:
-        """Distribute given buffer sizes across ranks in a group.
-
-        Buffer sizes will be rounded up for memory allocation. Buffers are distributed such that
-        total buffer sizes of each rank are as even as possible. This is currently performed
-        using a greedy algorithm. We do not currently consider computational cost
-        or kernel launching overheads.
-
-        Note: A better distribution strategy should try to minimize the delta of buffer sizes
-        between the most and the least allocated groups.
-
-        Args:
-            buffer_sizes (tuple[int, ...]): Buffer sizes of blocks to be distributed.
-
-        Returns:
-            buffer_size_ranks (tuple[tuple[int, int], ...]): A list of tuples containing the
-                buffer size for each block and its assigned rank.
-
-        Example:
-            Assuming ALIGNMENT_BYTES = 64, given buffer_sizes = [128, 64, 500, 256], group_size = 2
-            -> buffer_size_ranks = [(128, 1), (64, 1), (512, 0), (256, 1)]
-        """
-        return distribute_buffer_sizes(buffer_sizes, self._dist_group_size)
-
     def _construct_composable_block_ids(
         self,
         param_index: int,
