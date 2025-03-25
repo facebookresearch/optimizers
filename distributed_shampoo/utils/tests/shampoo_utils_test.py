@@ -207,17 +207,19 @@ class DistributeBufferSizesTest(unittest.TestCase):
         )
 
         # Test case 3: More groups than buffers
-        buffer_sizes = (128, 64)
+        buffer_sizes_small = (128, 64)
         group_size = 4
-        expected_result = ((128, 0), (64, 1))
+        expected_result_small = ((128, 0), (64, 1))
         self.assertEqual(
-            distribute_buffer_sizes(buffer_sizes, group_size), expected_result
+            distribute_buffer_sizes(buffer_sizes_small, group_size),
+            expected_result_small,
         )
 
         # Test case 4: Empty buffer sizes
-        buffer_sizes = ()
+        buffer_sizes_empty = ()
         group_size = 2
-        expected_result = ()
+        expected_result_empty = ()
         self.assertEqual(
-            distribute_buffer_sizes(buffer_sizes, group_size), expected_result
+            distribute_buffer_sizes(buffer_sizes_empty, group_size),
+            expected_result_empty,
         )

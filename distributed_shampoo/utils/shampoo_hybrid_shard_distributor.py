@@ -183,7 +183,7 @@ class HybridShardDistributor(DistributorInterface):
                 blocked_param.numel() * get_dtype_size(communication_dtype)
                 for blocked_param in self._global_blocked_params
             ),
-            group_size=self._group_size,
+            group_size=self._dist_group_size,
         )
 
         global_block_info_list = self._construct_global_block_info_list(
