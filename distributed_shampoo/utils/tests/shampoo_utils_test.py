@@ -193,7 +193,12 @@ class DistributeBufferSizesTest(unittest.TestCase):
         # Test case 1: Even distribution of buffer sizes
         buffer_sizes = (128, 64, 500, 256)
         group_size = 2
-        expected_result = ((128, 1), (64, 1), (512, 0), (256, 1))
+        expected_result: tuple[tuple[int, int], ...] = (
+            (128, 1),
+            (64, 1),
+            (512, 0),
+            (256, 1),
+        )
         self.assertEqual(
             distribute_buffer_sizes(buffer_sizes, group_size), expected_result
         )
@@ -201,7 +206,12 @@ class DistributeBufferSizesTest(unittest.TestCase):
         # Test case 2: Single group
         buffer_sizes = (128, 64, 500, 256)
         group_size = 1
-        expected_result = ((128, 0), (64, 0), (512, 0), (256, 0))
+        expected_result: tuple[tuple[int, int], ...] = (
+            (128, 0),
+            (64, 0),
+            (512, 0),
+            (256, 0),
+        )
         self.assertEqual(
             distribute_buffer_sizes(buffer_sizes, group_size), expected_result
         )
@@ -209,7 +219,7 @@ class DistributeBufferSizesTest(unittest.TestCase):
         # Test case 3: More groups than buffers
         buffer_sizes_small = (128, 64)
         group_size = 4
-        expected_result_small = ((128, 0), (64, 1))
+        expected_result_small: tuple[tuple[int, int], ...] = ((128, 0), (64, 1))
         self.assertEqual(
             distribute_buffer_sizes(buffer_sizes_small, group_size),
             expected_result_small,
