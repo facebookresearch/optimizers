@@ -63,7 +63,9 @@ class DistributedShampooEigenvalueCorrectionTest(unittest.TestCase):
                 (math.inf, DefaultSOAPConfig),
                 (
                     1,
-                    EigenvalueCorrectedShampooPreconditionerConfig(ignored_dims=[0, 1]),
+                    EigenvalueCorrectedShampooPreconditionerConfig(
+                        ignored_basis_change_dims={0: [0], 1: [0], 2: [0, 1]}
+                    ),
                 ),
             ),
         ):
@@ -113,7 +115,9 @@ class DistributedShampooEigenvalueCorrectionTest(unittest.TestCase):
                 (math.inf, DefaultSOAPConfig),
                 (
                     1,
-                    EigenvalueCorrectedShampooPreconditionerConfig(ignored_dims=[0, 1]),
+                    EigenvalueCorrectedShampooPreconditionerConfig(
+                        ignored_basis_change_dims={0: [0], 1: [0], 2: [0, 1]}
+                    ),
                 ),
             ),
         ):
@@ -165,7 +169,9 @@ class DistributedShampooEigenvalueCorrectionTest(unittest.TestCase):
                 (math.inf, DefaultSOAPConfig),
                 (
                     1,
-                    EigenvalueCorrectedShampooPreconditionerConfig(ignored_dims=[0, 1]),
+                    EigenvalueCorrectedShampooPreconditionerConfig(
+                        ignored_basis_change_dims={0: [0], 1: [0], 2: [0, 1]}
+                    ),
                 ),
             ),
         ):
@@ -217,7 +223,9 @@ class DistributedShampooEigenvalueCorrectionTest(unittest.TestCase):
                 (math.inf, DefaultSOAPConfig),
                 (
                     1,
-                    EigenvalueCorrectedShampooPreconditionerConfig(ignored_dims=[0, 1]),
+                    EigenvalueCorrectedShampooPreconditionerConfig(
+                        ignored_basis_change_dims={0: [0], 1: [0], 2: [0, 1]}
+                    ),
                 ),
             ),
         ):

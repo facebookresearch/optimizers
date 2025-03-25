@@ -22,6 +22,7 @@ from commons import AbstractDataclass
 from distributed_shampoo.shampoo_types import (
     DefaultEigenvalueCorrectedShampooConfig,
     DefaultShampooConfig,
+    EigenvalueCorrectedShampooPreconditionerConfig,
     PreconditionerValueError,
     ShampooPreconditionerConfig,
 )
@@ -281,9 +282,15 @@ class BaseShampooPreconditionerListTest(unittest.TestCase):
         # Disable the abstract methods check from the interface so it is possible to instantiate BaseShampooPreconditionerList.
         BaseShampooPreconditionerList.__abstractmethods__ = frozenset()
 
-        # Mock _update_factor_matrices() otherwise the access of factor_matrices will throw errors.
         with mock.patch.object(
-            BaseShampooPreconditionerList, "_update_factor_matrices"
+            # Mock _create_preconditioned_dims_selector_list() to enable the instantiation of BaseShampooPreconditionerList.
+            BaseShampooPreconditionerList,
+            "_create_preconditioned_dims_selector_list",
+            return_value=((True,) * max(param.dim(), 1),),
+        ), mock.patch.object(
+            # Mock _update_factor_matrices() otherwise the access of factor_matrices will throw errors.
+            BaseShampooPreconditionerList,
+            "_update_factor_matrices",
         ) as mock_update_factor_matrices:
             # Test the abstract methods _create_kronecker_factors_state_for_block(), _create_kronecker_factors_list(), and _get_inverse_roots_from_override().
             preconditioner_list = BaseShampooPreconditionerList(  # type: ignore
@@ -313,12 +320,14 @@ class BaseShampooPreconditionerListTest(unittest.TestCase):
 class AmortizedComputationProperties(AbstractDataclass):
     """Dataclass for properties of amortized computation functions."""
 
-    amortized_computation_function_name: str
-    amortized_computation_config: MatrixFunctionConfig
+    amortized_computation_function_name: str = field(init=False)
+    amortized_computation_config: MatrixFunctionConfig = field(init=False)
     invalid_amortized_computation_return_values: (
         tuple[Tensor, Tensor] | tuple[tuple[Tensor, Tensor], tuple[Tensor, Tensor]]
+    ) = field(init=False)
+    valid_amortized_computation_return_value: Tensor | tuple[Tensor, Tensor] = field(
+        init=False
     )
-    valid_amortized_computation_return_value: Tensor | tuple[Tensor, Tensor]
 
 
 @dataclass
@@ -725,7 +734,6 @@ class ShampooPreconditionerListTest(AbstractTest.BaseShampooPreconditionerListTe
         kwargs = {
             "beta2": 1.0,
             "epsilon": 0.0,
-            "inv_root_override": 0,
             "use_bias_correction": True,
             "preconditioner_config": DefaultShampooConfig,
         } | kwargs
@@ -882,7 +890,9 @@ class ShampooPreconditionerListTest(AbstractTest.BaseShampooPreconditionerListTe
             ),
         )
 
-    def test_update_preconditioners_and_precondition_with_ignored_dims(self) -> None:
+    def test_update_preconditioners_and_precondition_with_ignored_basis_change_dims(
+        self,
+    ) -> None:
         """
 
         (1) Tensor of Size 2
@@ -937,23 +947,26 @@ class ShampooPreconditionerListTest(AbstractTest.BaseShampooPreconditionerListTe
             ),
         )
 
-        # When ignoring all the dimensions, the preconditioner should be the identity matrix, and the expected preconditioned gradient should be the same as the input gradient.
+        # When ignoring all the dimensions by setting all inverse exponent override values to 0.0, the preconditioner should be the identity matrix, and the expected preconditioned gradient should be the same as the input gradient.
         self._test_update_preconditioners_and_precondition(
             preconditioner_list=self._instantiate_preconditioner_list(
                 beta2=1.0,
                 preconditioner_config=ShampooPreconditionerConfig(
-                    amortized_computation_config=self._amortized_computation_properties.amortized_computation_config,
-                    ignored_dims=[0, 1],
+                    inverse_exponent_override={
+                        0: {0: 0.0},
+                        1: {0: 0.0},
+                        2: {0: 0.0, 1: 0.0},
+                    }
                 ),
             ),
             masked_grad_lists=[masked_grad_list1, masked_grad_list2],
             masked_expected_preconditioned_grad_list=masked_grad_list2,
         )
 
-    def test_inv_root_override_and_exponent_multiplier(self) -> None:
+    def test_inverse_exponent_override(self) -> None:
         """
-        For this example, we modify the one given above such that the inv_root_override = 2
-        and exponent_multiplier = 2.0. Therefore, in all cases, the exponent is -2 / 2 = -1.
+        For this example, we modify the one given above such that the inverse_exponent_override = {0: 1.0, 1: 1.0, 2: 1.0}.
+        This effectively means all tensors in this test setting will use the inverse root of 1 rather than the default.
         This should result in the following behavior:
 
         (1) Tensor of Size 2
@@ -981,49 +994,40 @@ class ShampooPreconditionerListTest(AbstractTest.BaseShampooPreconditionerListTe
 
         """
 
-        def test_inverse_roots_from_override(
-            inv_root_override: int | list[int],
-        ) -> None:
-            """
-            Tests that the inverse roots are computed correctly from inv_root_override.
-            """
-            # This is equivalent to setting exponent_multiplier = 2.0.
-            inv_root_override = (
-                int(inv_root_override / 2)
-                if isinstance(inv_root_override, int)
-                else [int(x / 2) for x in inv_root_override]
-            )
+        preconditioner_config = ShampooPreconditionerConfig(
+            inverse_exponent_override={
+                0: {0: 1.0},
+                1: {0: 1.0},
+                2: {0: 1.0, 1: 1.0},
+            }
+        )
 
-            masked_grad_list1 = (
-                torch.tensor([1.0, 0.0]),
-                torch.eye(2) / torch.tensor(2.0).sqrt(),
-                torch.tensor([[1.0, 0.0]]),
-            )
-            masked_grad_list2 = (
-                torch.tensor([0.0, 2.0]),
-                torch.eye(2) / torch.tensor(2.0).sqrt(),
-                torch.tensor([[0.0, 2.0]]),
-            )
+        masked_grad_list1 = (
+            torch.tensor([1.0, 0.0]),
+            torch.eye(2) / torch.tensor(2.0).sqrt(),
+            torch.tensor([[1.0, 0.0]]),
+        )
+        masked_grad_list2 = (
+            torch.tensor([0.0, 2.0]),
+            torch.eye(2) / torch.tensor(2.0).sqrt(),
+            torch.tensor([[0.0, 2.0]]),
+        )
 
-            masked_expected_preconditioned_grad_list = (
-                torch.tensor([0, 0.5]),
-                torch.eye(2) / torch.tensor(2.0).sqrt(),
-                torch.tensor([[0, 0.1]]),
-            )
+        masked_expected_preconditioned_grad_list = (
+            torch.tensor([0, 0.5]),
+            torch.eye(2) / torch.tensor(2.0).sqrt(),
+            torch.tensor([[0, 0.1]]),
+        )
 
-            with self.subTest(inv_root_override=inv_root_override):
-                self._test_update_preconditioners_and_precondition(
-                    preconditioner_list=self._instantiate_preconditioner_list(
-                        beta2=1.0,
-                        use_bias_correction=True,
-                        inv_root_override=inv_root_override,
-                    ),
-                    masked_grad_lists=[masked_grad_list1, masked_grad_list2],
-                    masked_expected_preconditioned_grad_list=masked_expected_preconditioned_grad_list,
-                )
-
-        test_inverse_roots_from_override(inv_root_override=2)
-        test_inverse_roots_from_override(inv_root_override=[2, 2, 2])
+        self._test_update_preconditioners_and_precondition(
+            preconditioner_list=self._instantiate_preconditioner_list(
+                beta2=1.0,
+                use_bias_correction=True,
+                preconditioner_config=preconditioner_config,
+            ),
+            masked_grad_lists=[masked_grad_list1, masked_grad_list2],
+            masked_expected_preconditioned_grad_list=masked_expected_preconditioned_grad_list,
+        )
 
 
 class EigendecomposedShampooPreconditionerListTest(ShampooPreconditionerListTest):
@@ -1037,7 +1041,6 @@ class EigendecomposedShampooPreconditionerListTest(ShampooPreconditionerListTest
         kwargs = {
             "beta2": 1.0,
             "epsilon": 0.0,
-            "inv_root_override": 0,
             "use_bias_correction": True,
             "preconditioner_config": ShampooPreconditionerConfig(
                 amortized_computation_config=self._amortized_computation_properties.amortized_computation_config,
@@ -1065,7 +1068,6 @@ class EigenvalueCorrectedShampooPreconditionerListTest(
         kwargs = {
             "beta2": 1.0,
             "epsilon": 1e-12,
-            "inv_root_override": 0,
             "use_bias_correction": True,
             "preconditioner_config": DefaultEigenvalueCorrectedShampooConfig,
         } | kwargs
@@ -1231,10 +1233,10 @@ class EigenvalueCorrectedShampooPreconditionerListTest(
             ),
         )
 
-    def test_inv_root_override(self) -> None:
+    def test_inverse_exponent_override(self) -> None:
         """
-        For this example, we modify the one given above such that the inv_root_override = 1.
-        Therefore, in all cases, the exponent is -2 / 2 = -1.
+        For this example, we modify the one given above such that the inverse_exponent_override = {0: 1.0, 1: 1.0, 2: 1.0}.
+        This effectively means all tensors in this test setting will use the inverse root of 1 rather than the default, 1/2.
         This should result in the following behavior:
 
         (1) Tensor of Size 2
@@ -1270,40 +1272,33 @@ class EigenvalueCorrectedShampooPreconditionerListTest(
 
         """
 
-        def test_inverse_roots_from_override(
-            inv_root_override: int | list[int],
-        ) -> None:
-            """
-            Tests that the inverse roots are computed correctly from inv_root_override.
-            """
-            masked_grad_list1 = (
-                torch.tensor([1.0, 0.0]),
-                torch.eye(2) / torch.tensor(2.0).sqrt(),
-                torch.tensor([[1.0, 0.0]]),
-            )
-            masked_grad_list2 = (
-                torch.tensor([0.0, 2.0]),
-                torch.eye(2) / torch.tensor(2.0).sqrt(),
-                torch.tensor([[0.0, 2.0]]),
-            )
+        preconditioner_config = EigenvalueCorrectedShampooPreconditionerConfig(
+            inverse_exponent_override={0: 1.0, 1: 1.0, 2: 1.0},
+        )
 
-            masked_expected_preconditioned_grad_list = (
-                torch.tensor([0, 0.5]),
-                torch.eye(2) / torch.tensor(2.0).sqrt(),
-                torch.tensor([[0, 0.5]]),
-            )
+        masked_grad_list1 = (
+            torch.tensor([1.0, 0.0]),
+            torch.eye(2) / torch.tensor(2.0).sqrt(),
+            torch.tensor([[1.0, 0.0]]),
+        )
+        masked_grad_list2 = (
+            torch.tensor([0.0, 2.0]),
+            torch.eye(2) / torch.tensor(2.0).sqrt(),
+            torch.tensor([[0.0, 2.0]]),
+        )
 
-            with self.subTest(inv_root_override=inv_root_override):
-                self._test_update_preconditioners_and_precondition(
-                    preconditioner_list=self._instantiate_preconditioner_list(
-                        beta2=1.0,
-                        use_bias_correction=True,
-                        inv_root_override=inv_root_override,
-                        preconditioner_config=DefaultEigenvalueCorrectedShampooConfig,
-                    ),
-                    masked_grad_lists=[masked_grad_list1, masked_grad_list2],
-                    masked_expected_preconditioned_grad_list=masked_expected_preconditioned_grad_list,
-                )
+        masked_expected_preconditioned_grad_list = (
+            torch.tensor([0, 0.5]),
+            torch.eye(2) / torch.tensor(2.0).sqrt(),
+            torch.tensor([[0, 0.5]]),
+        )
 
-        test_inverse_roots_from_override(inv_root_override=1)
-        test_inverse_roots_from_override(inv_root_override=[1, 1, 1])
+        self._test_update_preconditioners_and_precondition(
+            preconditioner_list=self._instantiate_preconditioner_list(
+                beta2=1.0,
+                use_bias_correction=True,
+                preconditioner_config=preconditioner_config,
+            ),
+            masked_grad_lists=[masked_grad_list1, masked_grad_list2],
+            masked_expected_preconditioned_grad_list=masked_expected_preconditioned_grad_list,
+        )

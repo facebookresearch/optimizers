@@ -13,7 +13,6 @@ import unittest
 import torch
 
 from commons import get_all_subclasses
-
 from matrix_functions_types import QREigendecompositionConfig
 
 

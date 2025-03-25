@@ -8,7 +8,7 @@ LICENSE file in the root directory of this source tree.
 """
 
 import logging
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator
 from copy import deepcopy
 from functools import partial
 from typing import Any
@@ -36,7 +36,6 @@ from distributed_shampoo.shampoo_types import (
     GraftingConfig,
     HSDPShampooConfig,
     HybridShardShampooConfig,
-    INV_ROOT_OVERRIDE,
     LR,
     MASKED_BLOCKED_GRADS,
     MASKED_BLOCKED_PARAMS,
@@ -265,12 +264,6 @@ class DistributedShampoo(torch.optim.Optimizer):
             (Default: 1)
         start_preconditioning_step (int): Iteration to start computing inverse preconditioner. If -1, uses
             the same value as precondition_frequency. (Default: -1)
-        inv_root_override (int, Sequence[int]): Inverse root to use in Shampoo. If a list [l1, l2, ..., lp], then we will
-            use -1 / l1 for 1-D tensor (vectors), -1 / l2 for 2-D tensors (matrices), and so on. If the order of the
-            tensor exceeds the order of the tensor, reverts to the default value. If 0 is used, uses the default inverse
-            root -1 / (2 * o), where o is the order of the tensor. If preconditioner_config is an instance of
-            EigenvalueCorrectedShampooPreconditionerConfig, the default is -1 / 2.
-            (Default: 0)
         use_nesterov (bool): Flag for using Nesterov momentum. (default: False)
         use_bias_correction (bool): Flag for using bias correction. (Default: True)
         use_decoupled_weight_decay (bool): Flag for using AdamW-style decoupled weight decay. (Default: True)
@@ -303,7 +296,6 @@ class DistributedShampoo(torch.optim.Optimizer):
         max_preconditioner_dim: int = 1024,
         precondition_frequency: int = 1,
         start_preconditioning_step: int = -1,
-        inv_root_override: int | Sequence[int] = 0,
         use_nesterov: bool = False,
         use_bias_correction: bool = True,
         use_decoupled_weight_decay: bool = True,
@@ -357,16 +349,6 @@ class DistributedShampoo(torch.optim.Optimizer):
             raise ValueError(
                 f"Invalid start preconditioning step: {start_preconditioning_step}. Must be >= -1."
             )
-        if isinstance(inv_root_override, Sequence):
-            if not all(e >= 0 for e in inv_root_override):
-                raise ValueError(
-                    f"Invalid exponent override list: {inv_root_override}. All values must be >= 0."
-                )
-        else:
-            if not inv_root_override >= 0:
-                raise ValueError(
-                    f"Invalid exponent override: {inv_root_override}. Must be >= 0."
-                )
 
         # Provide warning/error for start_preconditioning_step.
         if start_preconditioning_step == -1:
@@ -387,10 +369,17 @@ class DistributedShampoo(torch.optim.Optimizer):
                 "Continuing without using momentum or Nesterov acceleration..."
             )
 
-        # Check potential conflict between preconditioner_config.ignored_dims and inv_root_override.
-        if preconditioner_config.ignored_dims != [] and inv_root_override != 0:
+        # No use of preconditioner_config.amortized_computation_config.exponent_multiplier.
+        if (
+            getattr(
+                preconditioner_config.amortized_computation_config,
+                "exponent_multiplier",
+                1.0,
+            )
+            != 1.0
+        ):
             raise ValueError(
-                f"{preconditioner_config.ignored_dims=} is not supported when {inv_root_override=} is not set to 0. Please set {inv_root_override=} to 0 if you set {preconditioner_config.ignored_dims=}."
+                "preconditioner_config.amortized_computation_config.exponent_multiplier is not supported. Please use PreconditionerConfig.inverse_exponent_override instead."
             )
 
         super().__init__(
@@ -406,7 +395,6 @@ class DistributedShampoo(torch.optim.Optimizer):
                 MAX_PRECONDITIONER_DIM: max_preconditioner_dim,
                 PRECONDITION_FREQUENCY: precondition_frequency,
                 START_PRECONDITIONING_STEP: start_preconditioning_step,
-                INV_ROOT_OVERRIDE: inv_root_override,
                 USE_NESTEROV: use_nesterov,
                 USE_BIAS_CORRECTION: use_bias_correction,
                 USE_DECOUPLED_WEIGHT_DECAY: use_decoupled_weight_decay,
@@ -516,7 +504,6 @@ class DistributedShampoo(torch.optim.Optimizer):
                 preconditioner_config=group[PRECONDITIONER_CONFIG],
                 beta2=group[BETAS][1],
                 epsilon=group[EPSILON],
-                inv_root_override=group[INV_ROOT_OVERRIDE],
                 use_bias_correction=group[USE_BIAS_CORRECTION],
                 factor_matrix_dtype=group[PRECONDITIONER_DTYPE],
             )

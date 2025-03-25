@@ -124,7 +124,6 @@ def create_model_and_optimizer_and_loss_fn(args, device):
         max_preconditioner_dim=args.max_preconditioner_dim,
         precondition_frequency=args.precondition_frequency,
         start_preconditioning_step=args.start_preconditioning_step,
-        inv_root_override=args.inv_root_override,
         exponent_multiplier=args.exponent_multiplier,
         use_nesterov=args.use_nesterov,
         use_bias_correction=args.use_bias_correction,

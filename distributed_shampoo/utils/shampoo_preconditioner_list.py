@@ -9,7 +9,7 @@ LICENSE file in the root directory of this source tree.
 
 import logging
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from fractions import Fraction
 from functools import reduce
@@ -460,10 +460,6 @@ class BaseShampooPreconditionerList(
         beta2 (float): Exponential moving average factor for Shampoo factor matrices. If beta2 = 1., will use unweighted sum.
             (Default: 1.0)
         epsilon (float): Epsilon term for regularizing preconditioner to ensure positive definiteness. (Default: 1e-12)
-        inv_root_override (int | tuple[int, ...]): Inverse root to use in Shampoo. If a list [l0, l1, l2, ..., lp], then we will
-            use -1 / l0 for 0-D tensors (scalars), -1 / l1 for 1-D tensor (vectors), -1 / l2 for 2-D tensors (matrices), and so on.
-            If the order of the tensor exceeds the length of the list, we revert to using the default value. If 0 is used, uses the
-            default inverse root -1 / (2 * o), where o is the order of the tensor. (Default: 0)
         use_bias_correction (bool): Flag for using bias correction. (Default: True)
         factor_matrix_dtype (torch.dtype): Data type for accumulating and computing root inverse of preconditioners. (Default: torch.float)
 
@@ -478,7 +474,6 @@ class BaseShampooPreconditionerList(
         preconditioner_config: PreconditionerConfig,
         beta2: float = 1.0,
         epsilon: float = 1e-12,
-        inv_root_override: int | tuple[int, ...] = 0,
         use_bias_correction: bool = True,
         factor_matrix_dtype: torch.dtype = torch.float,
     ) -> None:
@@ -488,14 +483,12 @@ class BaseShampooPreconditionerList(
         self._preconditioner_config = preconditioner_config
         self._beta2 = beta2
         self._epsilon = epsilon
-        self._inv_root_override = inv_root_override
         self._factor_matrix_dtype = factor_matrix_dtype
         self._use_bias_correction = use_bias_correction
         self._bias_correction2: Tensor = torch.tensor(1.0)
 
-        preconditioned_dims_selector_list: tuple[tuple[bool, ...], ...] = tuple(
-            tuple(d not in preconditioner_config.ignored_dims for d in range(len(dims)))
-            for dims in self._dims_list
+        preconditioned_dims_selector_list: tuple[tuple[bool, ...], ...] = (
+            self._create_preconditioned_dims_selector_list()
         )
         preconditioned_dims_list: tuple[tuple[int, ...], ...] = tuple(
             compress_list(dims, preconditioned_dims_selector)
@@ -521,6 +514,18 @@ class BaseShampooPreconditionerList(
             preconditioned_dims_list=preconditioned_dims_list,
             preconditioned_dims_selector_list=preconditioned_dims_selector_list,
         )
+
+    @abstractmethod
+    def _create_preconditioned_dims_selector_list(
+        self,
+    ) -> tuple[tuple[bool, ...], ...]:
+        """
+        Creates a list of preconditioned dimensions selectors for each block.
+
+        Returns:
+            preconditioned_dims_selector_list (tuple[tuple[bool, ...], ...]): A list of preconditioned dimensions selectors for each block.
+        """
+        ...
 
     def _create_base_kronecker_factors(
         self,
@@ -637,64 +642,25 @@ class BaseShampooPreconditionerList(
 
         return kronecker_factors_list
 
-    @staticmethod
     @abstractmethod
     def _get_inverse_roots_from_override(
-        inv_root_override: int | Sequence[int],
-        order_list: tuple[int, ...],
-    ) -> tuple[int, ...]:
+        self,
+        preconditioned_dims_selector_list: tuple[tuple[bool, ...], ...],
+    ) -> tuple[tuple[float, ...], ...]:
         """
-        Retrieves the inverse roots from the override parameter.
+        Retrieves the inverse roots from the override parameter for each block.
+
+        For each block, we compute the inverse root from the inverse exponent override parameter according to its order.
+        If the order is not present in the inverse exponent override parameter, the default value is used for the inverse exponent override.
+        The inverse root is then computed as 1 / inverse exponent override.
 
         Args:
-            inv_root_override (int | Sequence[int]): The override value for the inverse root.
-            order_list (tuple[int, ...]): A list of orders for each tensor in the preconditioner.
+            preconditioned_dims_selector_list (tuple[tuple[bool, ...], ...]): A list of selectors indicating which dimensions are preconditioned for each block.
 
         Returns:
-            tuple[int, ...]: A list of inverse roots for each tensor in the preconditioner.
+            inverse_roots (tuple[tuple[float, ...], ...]): A list of inverse roots for each tensor in the preconditioner.
         """
         ...
-
-    @staticmethod
-    def _get_inverse_roots_from_override_with_high_order_default(
-        inv_root_override: int | Sequence[int],
-        order_list: tuple[int, ...],
-        high_order_default: Callable[[int], int],
-    ) -> tuple[int, ...]:
-        """Retrieves the appropriate root from the inverse root override parameter
-        for a list of tensor orders.
-
-        For example, suppose inv_root_override = (2, 1, 4, 3).
-        If order = 0, then we will return 2;
-        If order = 1, then we will return 1;
-        If order = 2, then we will return 4;
-        If order = 3, then we will return 3;
-        If order > 3, then we will return high_order_default(order).
-
-        Args:
-            inv_root_override (int | Sequence[int]): Inverse root override int or list.
-            order_list (tuple[int, ...]): List of orders for their corresponding tensors.
-            higher_order_default (Callable[[int], int]): Function for computing the inverse root for orders greater than the length of the inverse root override list.
-
-        Returns:
-            root_list (tuple[int, ...]): Inverse roots to use in Shampoo for a list of tensors.
-
-        """
-        if isinstance(inv_root_override, Sequence):
-            return tuple(
-                (
-                    high_order_default(order)
-                    if order >= len(inv_root_override)
-                    else inv_root_override[order]
-                )
-                for order in order_list
-            )
-        else:
-            return (
-                tuple(high_order_default(order) for order in order_list)
-                if inv_root_override == 0
-                else (inv_root_override,) * len(order_list)
-            )
 
     @abstractmethod
     def _amortized_computation(self) -> None:
@@ -804,7 +770,7 @@ class BaseShampooPreconditionerList(
                 self._bias_correction2 = torch.tensor(1.0) - self._beta2**step
 
             # In Shampoo, this is equivalent to computing the inverse factor matrix.
-            # In Eigenvalue-Corrected Shampoo, this is equivalent to computing the eigenvector of the factor matrix.
+            # In eigenvalue-corrected Shampoo, this is equivalent to computing the eigenvectors of the factor matrix.
             if perform_amortized_computation:
                 self._amortized_computation()
 
@@ -823,9 +789,8 @@ class BaseShampooPreconditionerList(
         self._local_order_list: tuple[int, ...] = tuple(
             block.dim() for block in block_list
         )
-        self._local_root_list: tuple[int, ...] = self._get_inverse_roots_from_override(
-            self._inv_root_override,
-            self._local_order_list,
+        self._local_roots_list: tuple[tuple[float, ...], ...] = (
+            self._get_inverse_roots_from_override(preconditioned_dims_selector_list)
         )
         self._local_failed_amortized_computation_counter_list: list[int] = [0] * len(
             self._local_kronecker_factors_list
@@ -836,7 +801,7 @@ class BaseShampooPreconditionerList(
 
         # Masked lists are the list of active preconditioners or values after filtering out gradients with None.
         self._masked_order_list: tuple[int, ...] = self._local_order_list
-        self._masked_root_list: tuple[int, ...] = self._local_root_list
+        self._masked_roots_list: tuple[tuple[float, ...], ...] = self._local_roots_list
         self._masked_failed_amortized_computation_counter_list: list[int] = (
             self._local_failed_amortized_computation_counter_list
         )
@@ -870,8 +835,8 @@ class BaseShampooPreconditionerList(
             self._masked_order_list: tuple[int, ...] = compress_list(  # type: ignore[no-redef]
                 self._local_order_list, local_grad_selector
             )
-            self._masked_root_list: tuple[int, ...] = compress_list(  # type: ignore[no-redef]
-                self._local_root_list, local_grad_selector
+            self._masked_roots_list: tuple[tuple[float, ...], ...] = compress_list(  # type: ignore[no-redef]
+                self._local_roots_list, local_grad_selector
             )
             self._masked_failed_amortized_computation_counter_list: list[int] = (  # type: ignore[no-redef]
                 list(
@@ -984,6 +949,20 @@ class ShampooPreconditionerList(
             inv_factor_matrices=inv_factor_matrices,
         )
 
+    def _create_preconditioned_dims_selector_list(self) -> tuple[tuple[bool, ...], ...]:
+        return tuple(
+            tuple(
+                getattr(self._preconditioner_config, "inverse_exponent_override", {})
+                .get(len(dims), {})
+                .get(d, 1 / (2 * len(dims)))
+                != 0.0
+                # Traverse through each dim of a block.
+                for d in range(len(dims))
+            )
+            # Traverse through each block's dims.
+            for dims in self._dims_list
+        )
+
     def _create_kronecker_factors_list(
         self,
         kronecker_factors_state: ShampooKroneckerFactorsState,
@@ -1002,13 +981,22 @@ class ShampooPreconditionerList(
             is_factor_matrices_diagonal=kronecker_factors_state.is_factor_matrices_diagonal,
         )
 
-    @staticmethod
     def _get_inverse_roots_from_override(
-        inv_root_override: int | Sequence[int],
-        order_list: tuple[int, ...],
-    ) -> tuple[int, ...]:
-        return BaseShampooPreconditionerList._get_inverse_roots_from_override_with_high_order_default(
-            inv_root_override, order_list, high_order_default=lambda order: 2 * order
+        self, preconditioned_dims_selector_list: tuple[tuple[bool, ...], ...]
+    ) -> tuple[tuple[float, ...], ...]:
+        return tuple(
+            tuple(
+                # Compute the inverse root, 1 / inverse_exponent{_override}, accordingly for each required dim.
+                1
+                / getattr(self._preconditioner_config, "inverse_exponent_override", {})
+                .get(len(preconditioned_dims_selector), {})
+                .get(k, 1 / (2 * len(preconditioned_dims_selector)))
+                # Traverse through each dim of a block that requires precondition.
+                for k, should_precondition in enumerate(preconditioned_dims_selector)
+                if should_precondition
+            )
+            # Traverse through each block's preconditioned_dims_selector.
+            for preconditioned_dims_selector in preconditioned_dims_selector_list
         )
 
     def precondition(self, masked_grad_list: tuple[Tensor, ...]) -> tuple[Tensor, ...]:
@@ -1019,7 +1007,7 @@ class ShampooPreconditionerList(
             masked_grad_list (tuple[Tensor, ...]): A list of gradients with their corresponding masks.
 
         Returns:
-            tuple[Tensor, ...]: A list of preconditioned gradients.
+            preconditioned_grads (tuple[Tensor, ...]): A list of preconditioned gradients.
         """
         with profiler.record_function(
             f"## {self.__class__.__name__}:{self.precondition.__name__} ##"
@@ -1048,10 +1036,10 @@ class ShampooPreconditionerList(
         with profiler.record_function(
             f"## {self.__class__.__name__}:{self._amortized_computation.__name__} ##"
         ):
-            for idx, (kronecker_factors, root) in enumerate(
+            for idx, (kronecker_factors, roots) in enumerate(
                 zip(
                     self._masked_kronecker_factors_list,
-                    self._masked_root_list,
+                    self._masked_roots_list,
                     strict=True,
                 )
             ):
@@ -1061,11 +1049,13 @@ class ShampooPreconditionerList(
                     inv_factor_matrix,
                     is_factor_matrix_diagonal,
                     factor_matrix_index,
+                    root,
                 ) in zip(
                     kronecker_factors.factor_matrices,
                     kronecker_factors.inv_factor_matrices,
                     kronecker_factors.is_factor_matrices_diagonal,
                     kronecker_factors.factor_matrix_indices,
+                    roots,
                     strict=True,
                 ):
                     # Incorporate bias correction.
@@ -1087,14 +1077,7 @@ class ShampooPreconditionerList(
                     try:
                         computed_inv_factor_matrix = matrix_inverse_root(
                             A=bias_corrected_factor_matrix,
-                            root=Fraction(
-                                root
-                                / getattr(
-                                    root_inv_config,
-                                    "exponent_multiplier",
-                                    1,
-                                )
-                            ),
+                            root=Fraction(root),
                             root_inv_config=root_inv_config,
                             epsilon=self._epsilon,
                             is_diagonal=bool(is_factor_matrix_diagonal),
@@ -1175,6 +1158,20 @@ class EigendecomposedShampooPreconditionerList(
             factor_matrix_indices=base_kronecker_factors.factor_matrix_indices,
         )
 
+    def _create_preconditioned_dims_selector_list(self) -> tuple[tuple[bool, ...], ...]:
+        return tuple(
+            tuple(
+                getattr(self._preconditioner_config, "inverse_exponent_override", {})
+                .get(len(dims), {})
+                .get(d, 1 / (2 * len(dims)))
+                != 0.0
+                # Traverse through each dim of a block.
+                for d in range(len(dims))
+            )
+            # Traverse through each block's dims.
+            for dims in self._dims_list
+        )
+
     def _create_kronecker_factors_list(
         self,
         kronecker_factors_state: EigendecomposedShampooKroneckerFactorsState,
@@ -1197,13 +1194,22 @@ class EigendecomposedShampooPreconditionerList(
             is_factor_matrices_diagonal=kronecker_factors_state.is_factor_matrices_diagonal,
         )
 
-    @staticmethod
     def _get_inverse_roots_from_override(
-        inv_root_override: int | Sequence[int],
-        order_list: tuple[int, ...],
-    ) -> tuple[int, ...]:
-        return ShampooPreconditionerList._get_inverse_roots_from_override(
-            inv_root_override, order_list
+        self, preconditioned_dims_selector_list: tuple[tuple[bool, ...], ...]
+    ) -> tuple[tuple[float, ...], ...]:
+        return tuple(
+            tuple(
+                # Compute the inverse root, 1 / inverse_exponent{_override}, accordingly for each required dim.
+                1
+                / getattr(self._preconditioner_config, "inverse_exponent_override", {})
+                .get(len(preconditioned_dims_selector), {})
+                .get(k, 1 / (2 * len(preconditioned_dims_selector)))
+                # Traverse through each dim of a block that requires precondition.
+                for k, should_precondition in enumerate(preconditioned_dims_selector)
+                if should_precondition
+            )
+            # Traverse through each block's preconditioned_dims_selector.
+            for preconditioned_dims_selector in preconditioned_dims_selector_list
         )
 
     def precondition(self, masked_grad_list: tuple[Tensor, ...]) -> tuple[Tensor, ...]:
@@ -1227,18 +1233,19 @@ class EigendecomposedShampooPreconditionerList(
                         eigenvectors
                         * eigenvalues.add(self._epsilon).pow_(-1.0 / root).unsqueeze(0)
                         @ eigenvectors.T
-                        for eigenvectors, eigenvalues in zip(
+                        for eigenvectors, eigenvalues, root in zip(
                             kronecker_factors.factor_matrices_eigenvectors,
                             kronecker_factors.factor_matrices_eigenvalues,
+                            roots,
                             strict=True,
                         )
                     ),
                 )
-                for masked_grad, preconditioned_dims_selector, kronecker_factors, root in zip(
+                for masked_grad, preconditioned_dims_selector, kronecker_factors, roots in zip(
                     masked_grad_list,
                     self._masked_preconditioned_dims_selector_list,
                     self._masked_kronecker_factors_list,
-                    self._masked_root_list,
+                    self._masked_roots_list,
                     strict=True,
                 )
             )
@@ -1382,6 +1389,22 @@ class EigenvalueCorrectedShampooPreconditionerList(
             factor_matrix_indices=base_kronecker_factors.factor_matrix_indices,
         )
 
+    def _create_preconditioned_dims_selector_list(self) -> tuple[tuple[bool, ...], ...]:
+        return tuple(
+            tuple(
+                d
+                not in getattr(
+                    self._preconditioner_config,
+                    "ignored_basis_change_dims",
+                    {},
+                ).get(len(dims), [])
+                # Traverse through each dim of a block.
+                for d in range(len(dims))
+            )
+            # Traverse through each block's dims.
+            for dims in self._dims_list
+        )
+
     def _create_kronecker_factors_list(
         self,
         kronecker_factors_state: EigenvalueCorrectedShampooKroneckerFactorsState,
@@ -1403,13 +1426,22 @@ class EigenvalueCorrectedShampooPreconditionerList(
             is_factor_matrices_diagonal=kronecker_factors_state.is_factor_matrices_diagonal,
         )
 
-    @staticmethod
     def _get_inverse_roots_from_override(
-        inv_root_override: int | Sequence[int],
-        order_list: tuple[int, ...],
-    ) -> tuple[int, ...]:
-        return BaseShampooPreconditionerList._get_inverse_roots_from_override_with_high_order_default(
-            inv_root_override, order_list, high_order_default=lambda order: 2
+        self, preconditioned_dims_selector_list: tuple[tuple[bool, ...], ...]
+    ) -> tuple[tuple[float, ...], ...]:
+        # NOTE: In eigenvalue-corrected Shampoo, there is only a single inverse root that is applied to the corrected eigenvalues.
+        return tuple(
+            (
+                # Compute the inverse root, 1 / eigenvalue_inverse_exponent{_override}, for each block.
+                1
+                / getattr(
+                    self._preconditioner_config,
+                    "inverse_exponent_override",
+                    {},
+                ).get(len(preconditioned_dims_selector), 1 / 2),
+            )
+            # Traverse through each block's preconditioned_dims_selector.
+            for preconditioned_dims_selector in preconditioned_dims_selector_list
         )
 
     def update_preconditioners(
@@ -1472,13 +1504,13 @@ class EigenvalueCorrectedShampooPreconditionerList(
 
     def precondition(self, masked_grad_list: tuple[Tensor, ...]) -> tuple[Tensor, ...]:
         """
-        Preconditions a list of gradients using the Eigenvalue-Corrected Shampoo preconditioner.
+        Preconditions a list of gradients using the eigenvalue-corrected Shampoo preconditioner.
 
         Args:
             masked_grad_list (tuple[Tensor, ...]): A list of gradients with their corresponding masks.
 
         Returns:
-            tuple[Tensor, ...]: A list of preconditioned gradients.
+            preconditioned_grads (tuple[Tensor, ...]): A list of preconditioned gradients.
         """
         with profiler.record_function(
             f"## {self.__class__.__name__}:{self.precondition.__name__} ##"
@@ -1488,12 +1520,12 @@ class EigenvalueCorrectedShampooPreconditionerList(
                 masked_grad,
                 preconditioned_dims_selector,
                 kronecker_factors,
-                root,
+                roots,
             ) in zip(
                 masked_grad_list,
                 self._masked_preconditioned_dims_selector_list,
                 self._masked_kronecker_factors_list,
-                self._masked_root_list,
+                self._masked_roots_list,
                 strict=True,
             ):
                 factor_eigenvectors = kronecker_factors.factor_matrices_eigenvectors
@@ -1508,11 +1540,13 @@ class EigenvalueCorrectedShampooPreconditionerList(
                         preconditioner_list=factor_eigenvectors,
                     )
 
+                # Verify that the number of roots is 1 in Eigenvalue-Corrected Shampoo preconditioner.
+                assert len(roots) == 1, f"{len(roots)=} != 1"
                 # Precondition with inverse root of corrected eigenvalues.
                 grad.div_(
                     corrected_eigenvalues.div(self._bias_correction2)
                     .add_(self._epsilon)
-                    .pow_(1 / root)
+                    .pow_(1 / roots[0])
                 )
                 if use_eigenbasis:
                     # Convert back to basis of the parameters.
