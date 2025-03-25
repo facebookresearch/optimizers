@@ -10,11 +10,15 @@ jobs:
         - name: Set up and update uv.
           run: |
             curl -LsSf https://astral.sh/uv/install.sh | sh
+            export PATH="$HOME/.local/bin:$PATH"
             uv self update
         - name: Install Python.
-          run: uv python install 3.10
+          run: |
+            export PATH="$HOME/.local/bin:$PATH"
+            uv python install 3.10
         - name: Create venv and install the package.
           run: |
+            export PATH="$HOME/.local/bin:$PATH"
             uv venv && source .venv/bin/activate
             uv pip install -e ".[dev]"
         - name: Run type checking with mypy.
