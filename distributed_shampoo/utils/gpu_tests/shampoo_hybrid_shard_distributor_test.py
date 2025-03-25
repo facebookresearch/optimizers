@@ -314,7 +314,7 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
                 communicate_params=communicate_params,
             )
 
-            fully_shard_config = FullyShardShampooConfig()
+            fully_shard_config = FullyShardShampooConfig()  # type: ignore[abstract]
 
             with self.subTest(
                 communication_dtype=communication_dtype,
