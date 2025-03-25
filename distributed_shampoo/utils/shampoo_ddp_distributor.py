@@ -98,11 +98,12 @@ class DDPDistributor(DistributorInterface):
         group_rank: int = dist.get_rank(group=self._dist_group)
 
         # Assign ranks to blocks with their respective buffer size.
-        buffer_size_ranks = self._distribute_buffer_sizes(
+        buffer_size_ranks = distribute_buffer_sizes(
             buffer_sizes=tuple(
                 blocked_param.numel() * get_dtype_size(communication_dtype)
                 for blocked_param in self._global_blocked_params
-            )
+            ),
+            group_size=self._group_size,
         )
 
         global_block_info_list = self._construct_global_block_info_list(
