@@ -952,11 +952,12 @@ class ShampooPreconditionerListTest(AbstractTest.BaseShampooPreconditionerListTe
             preconditioner_list=self._instantiate_preconditioner_list(
                 beta2=1.0,
                 preconditioner_config=ShampooPreconditionerConfig(
+                    amortized_computation_config=self._amortized_computation_properties.amortized_computation_config,
                     inverse_exponent_override={
                         0: {0: 0.0},
                         1: {0: 0.0},
                         2: {0: 0.0, 1: 0.0},
-                    }
+                    },
                 ),
             ),
             masked_grad_lists=[masked_grad_list1, masked_grad_list2],
@@ -988,18 +989,19 @@ class ShampooPreconditionerListTest(AbstractTest.BaseShampooPreconditionerListTe
             G1 = [[1, 0]]
             G2 = [[0, 2]]
 
-            L = G1 * G1^T + G2 * G2^T = 2
+            L = G1 * G1^T + G2 * G2^T = 5
             R = G1^T * G1 + G2^T * G2 = [[1, 0], [0, 4]]
             P = L^{-1} G2 R^{-1} =  [[0, 0.1]]
 
         """
 
         preconditioner_config = ShampooPreconditionerConfig(
+            amortized_computation_config=self._amortized_computation_properties.amortized_computation_config,
             inverse_exponent_override={
                 0: {0: 1.0},
                 1: {0: 1.0},
                 2: {0: 1.0, 1: 1.0},
-            }
+            },
         )
 
         masked_grad_list1 = (
@@ -1263,7 +1265,7 @@ class EigenvalueCorrectedShampooPreconditionerListTest(
             G1 = [[1, 0]]
             G2 = [[0, 2]]
 
-            L = G1 * G1^T + G2 * G2^T = 2
+            L = G1 * G1^T + G2 * G2^T = 5
             R = G1^T * G1 + G2^T * G2 = [[1, 0], [0, 4]]
             B_L = 1                    # eigenvectors of L
             B_R = [[1, 0], [0, 1]]     # eigenvectors of R
