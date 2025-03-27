@@ -29,7 +29,7 @@ from distributed_shampoo.shampoo_types import (
     SGDGraftingConfig,
     ShampooPreconditionerConfig,
 )
-from matrix_functions_types import EigenConfig
+from matrix_functions_types import EigenConfig, EigendecompositionConfig, RootInvConfig
 from torch import nn
 
 
@@ -50,6 +50,23 @@ class DistributedShampooInitTest(unittest.TestCase):
             self.assertRaisesRegex(
                 NotImplementedError,
                 re.escape("group[PRECONDITIONER_CONFIG]=ShampooPreconditionerConfig"),
+                DistributedShampoo,
+                self._model.parameters(),
+                preconditioner_config=DefaultShampooConfig,
+            )
+
+        with mock.patch.object(
+            distributed_shampoo,
+            "isinstance",
+            side_effect=lambda object, classinfo: False
+            if classinfo in (RootInvConfig, EigendecompositionConfig)
+            else None,
+        ):
+            self.assertRaisesRegex(
+                NotImplementedError,
+                re.escape(
+                    "group[PRECONDITIONER_CONFIG].amortized_computation_config=EigenConfig(retry_double_precision=True, eigendecomposition_offload_device='', exponent_multiplier=1.0, enhance_stability=False) not supported!"
+                ),
                 DistributedShampoo,
                 self._model.parameters(),
                 preconditioner_config=DefaultShampooConfig,
