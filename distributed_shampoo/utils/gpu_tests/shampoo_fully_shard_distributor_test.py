@@ -74,7 +74,7 @@ class ShampooFullyShardDistributorTest(FSDPTest):
 
         uses_fully_shard = False
         if distributed_config is not None:
-            model = fully_shard(model)  # FSDPv2 (per-param FSDP)
+            model = fully_shard(model)  # FSDP2 (per-param FSDP)
             uses_fully_shard = True
         return model, loss, data, target, uses_fully_shard
 

@@ -353,7 +353,7 @@ class HSDPShampooConfig(FSDPShampooConfig, DDPShampooConfig):
 
     Attributes:
         device_mesh (torch.distributed.device_mesh.DeviceMesh): A 2D device mesh that specifies the layout of the numbers of
-            shard and replicate dimensions.
+            replicate and shard dimensions.
         param_to_metadata (dict[Parameter, FSDPParameterMetadata]): Dictionary mapping parameter to its metadata from HSDP.
         communication_dtype (CommunicationDType): Data type for communication between ranks. (Default: DEFAULT)
         num_trainers_per_group (int): Number of GPUs per distributed process group for distributed computation/memory.

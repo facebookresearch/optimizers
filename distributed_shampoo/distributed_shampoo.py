@@ -204,13 +204,33 @@ class DistributedShampoo(torch.optim.Optimizer):
             Requirements:
                 - torch.distributed must be initialized in advance.
                 - One must enable the option use_orig_params = True in HSDP.
+                - Only works with the option sharding_strategy=ShardingStrategy.HYBRID_SHARD.
                 - Within data parallelism process groups, only supports homogeneous hardware architectures.
 
-        - FullyShardShampooConfig: Supports per-parameter FSDP training, a.k.a. FSDPv2, or "fully_shard" api in torch.distributed. Please see
-            README for more detailed introduction on Shampoo FSDPv2.
+        - FullyShardShampooConfig: Supports per-parameter FSDP training, a.k.a. FSDP2, or "fully_shard" api in torch.distributed. Please see
+            README for more detailed introduction on Shampoo FSDP2.
 
             Requirements:
                 - torch.distributed must be initialized in advance.
+
+        - HybridShardShampooConfig: Supports hierarchical parallelism approach that combines DDP and FSDP to scale up training on large models
+            for FSDP2. Please see README for more detailed introduction.
+
+            Distributed Training Specific Fields:
+                - device_mesh: A 2D device mesh that specifies the layout of the model parallelism and data parallelism.
+                - communication_dtype: We can specify the communication dtype used for the AllGather communication in order to
+                    reduce communication overhead per-iteration.
+                - num_trainers_per_group: Specifies the number of GPUs used per distributed group. This enables us to only
+                    distribute computation across a subset of GPUs, and replicate the same computation across different distributed
+                    groups. This is useful for performance by trading off communication costs vs. computational costs.
+                - communicate_params: We offer the option to communicate the parameter updates or the updated parameters. Enabling
+                    this option specifically communicates the updated parameters. Note that using a lower-precision
+                    communication_dtype is more amenable to the case where this option is disabled (i.e., we are communicating the
+                    parameter updates).
+
+            Requirements:
+                - torch.distributed must be initialized in advance.
+                - Within data parallelism process groups, only supports homogeneous hardware architectures.
 
     4. PyTorch 2.0 Compile Support: Shampoo supports PyTorch 2.0's compilation feature to speed up model training. This is enabled by
         setting up the shampoo_pt2_compile_config arg for Shampoo PyTorch 2.0 compilation.
