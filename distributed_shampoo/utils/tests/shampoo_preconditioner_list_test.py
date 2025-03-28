@@ -21,8 +21,8 @@ import torch
 
 from commons import AbstractDataclass
 from distributed_shampoo.shampoo_types import (
-    DefaultEigenvalueCorrectedShampooConfig,
     DefaultShampooConfig,
+    DefaultSOAPConfig,
     EigenvalueCorrectedShampooPreconditionerConfig,
     PreconditionerConfig,
     PreconditionerValueError,
@@ -40,7 +40,7 @@ from distributed_shampoo.utils.shampoo_preconditioner_list import (
     ShampooPreconditionerList,
 )
 from distributed_shampoo.utils.shampoo_utils import compress_list
-from matrix_functions_types import DefaultEigendecompositionConfig
+from matrix_functions_types import QREigendecompositionConfig
 from torch import Tensor
 
 
@@ -1037,7 +1037,7 @@ class EigendecomposedShampooPreconditionerListTest(ShampooPreconditionerListTest
     @property
     def _default_preconditioner_config(self) -> ShampooPreconditionerConfig:
         return ShampooPreconditionerConfig(
-            amortized_computation_config=DefaultEigendecompositionConfig
+            amortized_computation_config=QREigendecompositionConfig()
         )
 
     @property
@@ -1056,7 +1056,7 @@ class EigenvalueCorrectedShampooPreconditionerListTest(
     def _default_preconditioner_config(
         self,
     ) -> EigenvalueCorrectedShampooPreconditionerConfig:
-        return DefaultEigenvalueCorrectedShampooConfig
+        return DefaultSOAPConfig
 
     @property
     def _preconditioner_list_factory(self) -> Callable[..., PreconditionerList]:
