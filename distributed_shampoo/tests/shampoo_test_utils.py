@@ -68,7 +68,7 @@ def construct_training_problem(
         target (torch.Tensor): A target tensor of zeros corresponding to the output dimension.
     """
     data = torch.arange(model_linear_layers_dims[0], dtype=torch.float, device=device)
-    data /= torch.norm(data)
+    data /= torch.linalg.norm(data)
 
     model = _ModelWithLinearAndDeadLayers(
         model_linear_layers_dims=model_linear_layers_dims,
@@ -88,6 +88,45 @@ def construct_training_problem(
     target = torch.tensor([0.0] * model_linear_layers_dims[-1]).to(device=device)
 
     return model, loss, data, target
+
+
+def _train(
+    optim_factory: Callable[[ParamsT], torch.optim.Optimizer],
+    model_linear_layers_dims: tuple[int, ...],
+    model_dead_layer_dims: tuple[int, ...] | None,
+    device: torch.device | None,
+    fill: float | tuple[float, ...],
+    total_steps: int,
+) -> tuple[list[Parameter], torch.Tensor]:
+    """
+    Train a neural network using the given optimizer.
+
+    Args:
+        optim_factory (Callable[[ParamsT], torch.optim.Optimizer]): A factory function that returns an instance of the optimizer.
+        model_linear_layers_dims (tuple[int, ...]): The dimensions of the model linear layers.
+        model_dead_layer_dims (tuple[int, ...] | None): The dimensions of the model dead linear layers. (Default: None)
+        device (torch.device | None): The device to use for training. (Default: None)
+        fill (float | tuple[float, ...]): The value(s) to fill the model parameters. If a tuple, each element should correspond to one layer.
+        total_steps (int): The number of training steps.
+
+    Returns:
+        tuple[list[Parameter], torch.Tensor]: A tuple containing the list of trained weights of the linear layers and the final loss tensor.
+    """
+    model, loss, data, target = construct_training_problem(
+        model_linear_layers_dims=model_linear_layers_dims,
+        model_dead_layer_dims=model_dead_layer_dims,
+        device=device,
+        fill=fill,
+    )
+    optimizer = optim_factory(model.parameters())
+    for _ in range(total_steps):
+        optimizer.zero_grad()
+        objective = loss(model(data), target)
+        objective.backward()
+        optimizer.step()
+
+    # Return the weight of linear_layers (i.e., non-dead layers) only because dead layers weights are random and never-changed.
+    return list(model.get_submodule("linear_layers").parameters()), objective.detach()
 
 
 def compare_two_optimizers_on_weight_and_loss(
@@ -119,40 +158,82 @@ def compare_two_optimizers_on_weight_and_loss(
     Returns:
         None
     """
-
-    def train(
-        optim_factory: Callable[[ParamsT], torch.optim.Optimizer],
-    ) -> tuple[list[Parameter], torch.Tensor]:
-        """
-        Train a neural network using the given optimizer.
-
-        Args:
-            optim_factory (Callable[[ParamsT], torch.optim.Optimizer]): A factory function that returns an instance of the optimizer.
-
-        Returns:
-            weight_and_loss (tuple[list[torch.Tensor], torch.Tensor]): A tuple containing the trained weight and loss.
-        """
-        model, loss, data, target = construct_training_problem(
-            model_linear_layers_dims=model_linear_layers_dims,
-            model_dead_layer_dims=model_dead_layer_dims,
-            device=device,
-            fill=fill,
-        )
-        optimizer = optim_factory(model.parameters())
-        for _ in range(total_steps):
-            optimizer.zero_grad()
-            objective = loss(model(data), target)
-            objective.backward()
-            optimizer.step()
-
-        # Retrun the weight of linear_layers (i.e., non-dead layers) only because dead layers weights are random and never-changed.
-        return list(
-            model.get_submodule("linear_layers").parameters()
-        ), objective.detach()
-
-    control_params, control_loss = train(control_optim_factory)
-    experimental_params, experimental_loss = train(experimental_optim_factory)
+    control_params, control_loss = _train(
+        control_optim_factory,
+        model_linear_layers_dims,
+        model_dead_layer_dims,
+        device,
+        fill,
+        total_steps,
+    )
+    experimental_params, experimental_loss = _train(
+        experimental_optim_factory,
+        model_linear_layers_dims,
+        model_dead_layer_dims,
+        device,
+        fill,
+        total_steps,
+    )
     torch.testing.assert_close(experimental_loss, control_loss, rtol=rtol, atol=atol)
     torch.testing.assert_close(
         experimental_params, control_params, rtol=rtol, atol=atol
+    )
+
+
+def compare_optimizer_on_cpu_and_device(
+    optim_factory: Callable[[ParamsT], torch.optim.Optimizer],
+    device: torch.device,
+    model_linear_layers_dims: tuple[int, ...] = (10, 1, 1),
+    model_dead_layer_dims: tuple[int, ...] | None = None,
+    fill: float | tuple[float, ...] = 1.0,
+    total_steps: int = 5,
+    rtol: float | None = None,
+    atol: float | None = None,
+) -> None:
+    """
+    Compare the performance of same optimizer on a simple neural network on different devices
+
+    Args:
+        optim_factory (Callable[[ParamsT], torch.optim.Optimizer]): A factory function that returns an instance of the optimizer.
+        device (torch.device): The device to use for training.
+        model_linear_layers_dims (tuple[int, ...]): The dimensions of the linear layers in the neural network. (Defaults: (10, 1, 1))
+        model_dead_layer_dims (tuple[int, ...] | None): The dimensions of the dead layers in the neural network. (Defaults: None)
+        fill (float | tuple[float, ...]): The value(s) to fill the model parameters. If a tuple, each element should correspond to one layer. (Default: 1.0)
+        total_steps (int): The number of training steps. (Defaults: 5)
+        rtol (float | None): The relative tolerance for comparing weights and losses. (Defaults: None)
+        atol (float | None): The absolute tolerance for comparing weights and losses. (Defaults: None)
+
+    Returns:
+        None
+    """
+    cpu_params, cpu_loss = _train(
+        optim_factory,
+        model_linear_layers_dims,
+        model_dead_layer_dims,
+        torch.device("cpu"),
+        fill,
+        total_steps,
+    )
+    device_params, device_loss = _train(
+        optim_factory,
+        model_linear_layers_dims,
+        model_dead_layer_dims,
+        device,
+        fill,
+        total_steps,
+    )
+    # Compare the loss and parameters on two devices, remove device first to avoid comparison error
+    torch.testing.assert_close(
+        device_loss,
+        cpu_loss,
+        rtol=rtol,
+        atol=atol,
+        check_device=False,
+    )
+    torch.testing.assert_close(
+        device_params,
+        cpu_params,
+        rtol=rtol,
+        atol=atol,
+        check_device=False,
     )
