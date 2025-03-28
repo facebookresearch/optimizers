@@ -140,7 +140,7 @@ def create_model_and_optimizer_and_loss_fn(args, device):
 
 
 if __name__ == "__main__":
-    """Multi-GPU CIFAR-10 Per-parameter Fully Sharded Data Parallel (a.k.a FSDPv2) Training Example Script
+    """Multi-GPU CIFAR-10 Per-parameter Fully Sharded Data Parallel (a.k.a FSDP2) Training Example Script
 
     Uses torch.distributed to launch distributed training run.
 
