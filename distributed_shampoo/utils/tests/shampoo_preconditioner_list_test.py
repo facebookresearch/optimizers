@@ -287,7 +287,7 @@ class BaseShampooPreconditionerListTest(unittest.TestCase):
             BaseShampooPreconditionerList,
             "_create_preconditioned_dims_selector_list",
             return_value=((True,) * max(param.dim(), 1),),
-        ), mock.patch.object(
+        ) as mock_create_preconditioned_dims_selector_list, mock.patch.object(
             # Mock _update_factor_matrices() otherwise the access of factor_matrices will throw errors.
             BaseShampooPreconditionerList,
             "_update_factor_matrices",
@@ -313,6 +313,7 @@ class BaseShampooPreconditionerListTest(unittest.TestCase):
                 perform_amortized_computation=True,
             )
 
+            mock_create_preconditioned_dims_selector_list.assert_called_once()
             mock_update_factor_matrices.assert_called_once()
 
 
