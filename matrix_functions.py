@@ -203,15 +203,12 @@ def matrix_eigendecomposition(
     if type(eigendecomposition_config) is EighEigendecompositionConfig:
         return _eigh_eigenvalue_decomposition(
             A,
-            retry_double_precision=eigendecomposition_config.retry_double_precision,
-            eigendecomposition_offload_device=eigendecomposition_config.eigendecomposition_offload_device,
+            **asdict(eigendecomposition_config),
         )
     elif type(eigendecomposition_config) is QREigendecompositionConfig:
         return _qr_algorithm(
             A,
-            eigenvectors_estimate=eigendecomposition_config.eigenvectors_estimate,
-            max_iterations=eigendecomposition_config.max_iterations,
-            tolerance=eigendecomposition_config.tolerance,
+            **asdict(eigendecomposition_config),
         )
     else:
         raise NotImplementedError(
@@ -395,7 +392,7 @@ def _matrix_inverse_root_eigen(
         # and add the epsilon
         L += epsilon
 
-    # compute inverse preconditioner
+    # compute the matrix inverse root
     X = Q * L.pow(torch.as_tensor(-1.0 / root)).unsqueeze(0) @ Q.T
 
     return X, L, Q
