@@ -279,6 +279,12 @@ class Parser:
             default="./checkpoints",
             help="Directory to save checkpoints and logs.",
         )
+        parser.add_argument(
+            "--dp-replicate-degree",
+            type=int,
+            default=2,
+            help="Default HSDP replicate degree.",
+        )
 
         return parser.parse_args()
 

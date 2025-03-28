@@ -22,6 +22,7 @@ from distributed_shampoo.shampoo_types import (
     FullyShardShampooConfig,
     GraftingConfig,
     HSDPShampooConfig,
+    HybridShardShampooConfig,
     PreconditionerConfig,
     RMSpropGraftingConfig,
     SGDGraftingConfig,
@@ -59,6 +60,7 @@ __all__ = [
     "FSDPShampooConfig",
     "FullyShardShampooConfig",
     "HSDPShampooConfig",
+    "HybridShardShampooConfig",
     # `precision_config`.
     # `preconditioner_config` options.
     "PreconditionerConfig",  # Abstract base class.
