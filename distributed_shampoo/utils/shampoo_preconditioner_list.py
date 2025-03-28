@@ -939,6 +939,9 @@ class ShampooPreconditionerList(
             )
             for dim in preconditioned_dims
         )
+        # Initialize inv_factor_matrices as identity matrices.
+        for t in inv_factor_matrices:
+            block_info.get_tensor(t).fill_diagonal_(1.0)
 
         base_kronecker_factors = self._create_base_kronecker_factors(
             block_info=block_info, preconditioned_dims=preconditioned_dims
