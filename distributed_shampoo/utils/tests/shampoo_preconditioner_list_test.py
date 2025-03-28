@@ -11,7 +11,8 @@ import abc
 import math
 import re
 import unittest
-from dataclasses import dataclass, field
+from collections.abc import Callable
+from dataclasses import dataclass, field, replace
 from types import ModuleType
 from typing import Any
 from unittest import mock
@@ -23,6 +24,7 @@ from distributed_shampoo.shampoo_types import (
     DefaultEigenvalueCorrectedShampooConfig,
     DefaultShampooConfig,
     EigenvalueCorrectedShampooPreconditionerConfig,
+    PreconditionerConfig,
     PreconditionerValueError,
     ShampooPreconditionerConfig,
 )
@@ -38,13 +40,7 @@ from distributed_shampoo.utils.shampoo_preconditioner_list import (
     ShampooPreconditionerList,
 )
 from distributed_shampoo.utils.shampoo_utils import compress_list
-from matrix_functions_types import (
-    DefaultEigenConfig,
-    DefaultEigendecompositionConfig,
-    EigenConfig,
-    EigendecompositionConfig,
-    MatrixFunctionConfig,
-)
+from matrix_functions_types import DefaultEigendecompositionConfig
 from torch import Tensor
 
 
@@ -322,7 +318,6 @@ class AmortizedComputationProperties(AbstractDataclass):
     """Dataclass for properties of amortized computation functions."""
 
     amortized_computation_function_name: str = field(init=False)
-    amortized_computation_config: MatrixFunctionConfig = field(init=False)
     invalid_amortized_computation_return_values: (
         tuple[Tensor, Tensor] | tuple[tuple[Tensor, Tensor], tuple[Tensor, Tensor]]
     ) = field(init=False)
@@ -336,9 +331,6 @@ class InverseRootProperties(AmortizedComputationProperties):
     """Dataclass for properties of matrix_inverse_root function."""
 
     amortized_computation_function_name: str = "matrix_inverse_root"
-    amortized_computation_config: EigenConfig = field(
-        default_factory=lambda: DefaultEigenConfig
-    )
     invalid_amortized_computation_return_values: tuple[Tensor, Tensor] = (
         torch.tensor([torch.nan]),
         torch.tensor([torch.inf]),
@@ -351,9 +343,6 @@ class EigendecompositionProperties(AmortizedComputationProperties):
     """Dataclass for properties of matrix_eigendecomposition function."""
 
     amortized_computation_function_name: str = "matrix_eigendecomposition"
-    amortized_computation_config: EigendecompositionConfig = field(
-        default_factory=lambda: DefaultEigendecompositionConfig
-    )
     invalid_amortized_computation_return_values: tuple[
         tuple[Tensor, Tensor], tuple[Tensor, Tensor]
     ] = (
@@ -375,10 +364,28 @@ class AbstractTest:
             self,
         ) -> AmortizedComputationProperties: ...
 
+        @property
         @abc.abstractmethod
-        def _instantiate_preconditioner_list(  # type: ignore[override]
-            self, **kwargs: Any
-        ) -> PreconditionerList: ...
+        def _default_preconditioner_config(self) -> PreconditionerConfig: ...
+
+        @property
+        @abc.abstractmethod
+        def _preconditioner_list_factory(self) -> Callable[..., PreconditionerList]: ...
+
+        def _instantiate_preconditioner_list(self, **kwargs: Any) -> PreconditionerList:  # type: ignore[override]
+            kwargs = {
+                "beta2": 1.0,
+                "epsilon": 1e-12,
+                "use_bias_correction": True,
+                "preconditioner_config": self._default_preconditioner_config,
+            } | kwargs
+            return self._preconditioner_list_factory(
+                block_list=self._block_list,
+                state=self._state,
+                block_info_list=self._block_info_list,
+                factor_matrix_dtype=torch.float64,
+                **kwargs,
+            )
 
         def _test_raise_invalid_value_in_factor_matrix(
             self, invalid_value: float
@@ -729,22 +736,13 @@ class ShampooPreconditionerListTest(AbstractTest.BaseShampooPreconditionerListTe
     def _amortized_computation_properties(self) -> InverseRootProperties:
         return InverseRootProperties()
 
-    def _instantiate_preconditioner_list(  # type: ignore[override]
-        self, **kwargs: Any
-    ) -> ShampooPreconditionerList:
-        kwargs = {
-            "beta2": 1.0,
-            "epsilon": 0.0,
-            "use_bias_correction": True,
-            "preconditioner_config": DefaultShampooConfig,
-        } | kwargs
-        return ShampooPreconditionerList(
-            block_list=self._block_list,
-            state=self._state,
-            block_info_list=self._block_info_list,
-            factor_matrix_dtype=torch.float64,
-            **kwargs,  # type: ignore[arg-type]
-        )
+    @property
+    def _default_preconditioner_config(self) -> ShampooPreconditionerConfig:
+        return DefaultShampooConfig
+
+    @property
+    def _preconditioner_list_factory(self) -> Callable[..., PreconditionerList]:
+        return ShampooPreconditionerList
 
     def test_update_preconditioners_and_precondition(self) -> None:
         """
@@ -891,9 +889,7 @@ class ShampooPreconditionerListTest(AbstractTest.BaseShampooPreconditionerListTe
             ),
         )
 
-    def test_update_preconditioners_and_precondition_with_ignored_basis_change_dims(
-        self,
-    ) -> None:
+    def test_update_preconditioners_and_precondition_with_dims_ignored(self) -> None:
         """
 
         (1) Tensor of Size 2
@@ -952,8 +948,8 @@ class ShampooPreconditionerListTest(AbstractTest.BaseShampooPreconditionerListTe
         self._test_update_preconditioners_and_precondition(
             preconditioner_list=self._instantiate_preconditioner_list(
                 beta2=1.0,
-                preconditioner_config=ShampooPreconditionerConfig(
-                    amortized_computation_config=self._amortized_computation_properties.amortized_computation_config,
+                preconditioner_config=replace(
+                    self._default_preconditioner_config,
                     inverse_exponent_override={
                         0: {0: 0.0},
                         1: {0: 0.0},
@@ -996,8 +992,8 @@ class ShampooPreconditionerListTest(AbstractTest.BaseShampooPreconditionerListTe
 
         """
 
-        preconditioner_config = ShampooPreconditionerConfig(
-            amortized_computation_config=self._amortized_computation_properties.amortized_computation_config,
+        preconditioner_config = replace(
+            self._default_preconditioner_config,
             inverse_exponent_override={
                 0: {0: 1.0},
                 1: {0: 1.0},
@@ -1038,24 +1034,15 @@ class EigendecomposedShampooPreconditionerListTest(ShampooPreconditionerListTest
     def _amortized_computation_properties(self) -> EigendecompositionProperties:  # type: ignore[override]
         return EigendecompositionProperties()
 
-    def _instantiate_preconditioner_list(  # type: ignore[override]
-        self, **kwargs: Any
-    ) -> EigendecomposedShampooPreconditionerList:
-        kwargs = {
-            "beta2": 1.0,
-            "epsilon": 0.0,
-            "use_bias_correction": True,
-            "preconditioner_config": ShampooPreconditionerConfig(
-                amortized_computation_config=self._amortized_computation_properties.amortized_computation_config,
-            ),
-        } | kwargs
-        return EigendecomposedShampooPreconditionerList(
-            block_list=self._block_list,
-            state=self._state,
-            block_info_list=self._block_info_list,
-            factor_matrix_dtype=torch.float64,
-            **kwargs,  # type: ignore[arg-type]
+    @property
+    def _default_preconditioner_config(self) -> ShampooPreconditionerConfig:
+        return ShampooPreconditionerConfig(
+            amortized_computation_config=DefaultEigendecompositionConfig
         )
+
+    @property
+    def _preconditioner_list_factory(self) -> Callable[..., PreconditionerList]:
+        return EigendecomposedShampooPreconditionerList
 
 
 class EigenvalueCorrectedShampooPreconditionerListTest(
@@ -1065,22 +1052,15 @@ class EigenvalueCorrectedShampooPreconditionerListTest(
     def _amortized_computation_properties(self) -> EigendecompositionProperties:
         return EigendecompositionProperties()
 
-    def _instantiate_preconditioner_list(  # type: ignore[override]
-        self, **kwargs: Any
-    ) -> EigenvalueCorrectedShampooPreconditionerList:
-        kwargs = {
-            "beta2": 1.0,
-            "epsilon": 1e-12,
-            "use_bias_correction": True,
-            "preconditioner_config": DefaultEigenvalueCorrectedShampooConfig,
-        } | kwargs
-        return EigenvalueCorrectedShampooPreconditionerList(
-            block_list=self._block_list,
-            state=self._state,
-            block_info_list=self._block_info_list,
-            factor_matrix_dtype=torch.float64,
-            **kwargs,  # type: ignore[arg-type]
-        )
+    @property
+    def _default_preconditioner_config(
+        self,
+    ) -> EigenvalueCorrectedShampooPreconditionerConfig:
+        return DefaultEigenvalueCorrectedShampooConfig
+
+    @property
+    def _preconditioner_list_factory(self) -> Callable[..., PreconditionerList]:
+        return EigenvalueCorrectedShampooPreconditionerList
 
     def test_update_preconditioners_and_precondition(self) -> None:
         """
