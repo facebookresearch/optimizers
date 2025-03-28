@@ -187,7 +187,7 @@ if __name__ == "__main__":
     device_mesh = init_device_mesh(
         "cuda",
         (args.dp_replicate_degree, WORLD_RANK // args.dp_replicate_degree),
-        ("dp_replicate", "dp_shard"),
+        mesh_dim_names=("dp_replicate", "dp_shard"),
     )
 
     model, optimizer, loss_fn = create_model_and_optimizer_and_loss_fn(
