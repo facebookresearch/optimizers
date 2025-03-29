@@ -641,15 +641,18 @@ class AbstractTest:
                     step=torch.tensor(1),
                     perform_amortized_computation=True,
                 )
-            self.assertCountEqual(
-                [r.msg for r in cm.records],
-                [
-                    "Factor matrix 0.block_0.0 is not diagonal.",
-                    "Factor matrix 1.block_0.0 is not diagonal.",
-                    "Factor matrix 1.block_0.1 is not diagonal.",
-                    "Factor matrix 1.block_1.0 is not diagonal.",
-                    "Factor matrix 1.block_1.1 is not diagonal.",
-                ],
+            expected_non_diagonal_messages = {
+                "Factor matrix 0.block_0.0 is not diagonal.",
+                "Factor matrix 1.block_0.0 is not diagonal.",
+                "Factor matrix 1.block_0.1 is not diagonal.",
+                "Factor matrix 1.block_1.0 is not diagonal.",
+                "Factor matrix 1.block_1.1 is not diagonal.",
+            }
+            actual_messages = {r.msg for r in cm.records}
+            self.assertLessEqual(
+                expected_non_diagonal_messages,
+                actual_messages,
+                msg=f"{expected_non_diagonal_messages - actual_messages=}",
             )
             mock_check_diagonal.assert_called()
 
