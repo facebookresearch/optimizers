@@ -1097,7 +1097,7 @@ class ShampooPreconditionerList(
                         computed_inv_factor_matrix = inv_factor_matrix
 
                     # Check if we encounter NaN or inf values in computed inverse matrix.
-                    if not torch.isfinite(computed_quantity).all():
+                    if not torch.isfinite(computed_inv_factor_matrix).all():
                         torch.set_printoptions(threshold=100_000)
                         raise PreconditionerValueError(
                             f"Encountered nan or inf values in inverse factor matrix {factor_matrix_index}! "
@@ -1327,7 +1327,7 @@ class EigendecomposedShampooPreconditionerList(
                         (factor_matrix_eigenvalues, factor_matrix_eigenvectors),
                         strict=True,
                     ):
-                        if not torch.isfinite(computed_inv_factor_matrix).all():
+                        if not torch.isfinite(computed_quantity).all():
                             torch.set_printoptions(threshold=100_000)
                             raise PreconditionerValueError(
                                 f"Encountered nan or inf values in {quantity_name} of factor matrix {factor_matrix_index}! "
