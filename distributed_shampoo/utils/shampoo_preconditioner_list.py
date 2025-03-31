@@ -684,20 +684,19 @@ class BaseShampooPreconditionerList(
             logger.info(f"Factor matrix {factor_matrix_index} is not diagonal.")
 
         # Check for nan or inf values.
-        if torch.isnan(factor_matrix).any():
-            raise PreconditionerValueError(
-                f"Encountered nan values in factor matrix {factor_matrix_index}! "
-                f"To mitigate, check if nan inputs are being passed into the network or nan gradients "
-                f"are being passed to the optimizer."
-                f"For debugging purposes, factor_matrix {factor_matrix_index}: "
-                f"{torch.min(factor_matrix)=}, {torch.max(factor_matrix)=}, "
-                f"{factor_matrix.isinf().any()=}, {factor_matrix.isnan().any()=}."
+        if not torch.isfinite(factor_matrix).all():
+            has_nan = torch.isnan(factor_matrix).any()
+
+            error_type = "nan" if has_nan else "inf"
+            mitigation_message = (
+                "To mitigate, check if nan inputs or gradients are being passed to the optimizer. "
+                if has_nan else
+                "In some cases, this may be due to divergence of the algorithm. To mitigate, try decreasing the learning rate or increasing grafting epsilon. "
             )
-        if torch.isinf(factor_matrix).any():
+
             raise PreconditionerValueError(
-                f"Encountered inf values in factor matrix {factor_matrix_index}! "
-                f"In some cases, this may be due to divergence of the algorithm. "
-                f"To mitigate, try decreasing the learning rate or increasing grafting epsilon."
+                f"Encountered {error_type} values in factor matrix {factor_matrix_index}! "
+                f"{mitigation_message}"
                 f"For debugging purposes, factor_matrix {factor_matrix_index}: "
                 f"{torch.min(factor_matrix)=}, {torch.max(factor_matrix)=}, "
                 f"{factor_matrix.isinf().any()=}, {factor_matrix.isnan().any()=}."
@@ -1098,10 +1097,7 @@ class ShampooPreconditionerList(
                         computed_inv_factor_matrix = inv_factor_matrix
 
                     # Check if we encounter NaN or inf values in computed inverse matrix.
-                    if (
-                        torch.isnan(computed_inv_factor_matrix).any()
-                        or torch.isinf(computed_inv_factor_matrix).any()
-                    ):
+                    if not torch.isfinite(computed_quantity).all():
                         torch.set_printoptions(threshold=100_000)
                         raise PreconditionerValueError(
                             f"Encountered nan or inf values in inverse factor matrix {factor_matrix_index}! "
@@ -1621,10 +1617,7 @@ class EigenvalueCorrectedShampooPreconditionerList(
                         computed_eigenvectors = factor_matrix_eigenvectors
 
                     # Check if we encounter NaN or inf values in computed eigenvectors.
-                    if (
-                        torch.isnan(computed_eigenvectors).any()
-                        or torch.isinf(computed_eigenvectors).any()
-                    ):
+                    if not torch.isfinite(computed_eigenvectors).all():
                         torch.set_printoptions(threshold=100_000)
                         raise PreconditionerValueError(
                             f"Encountered nan or inf values in eigenvectors of factor matrix {factor_matrix_index}! "
