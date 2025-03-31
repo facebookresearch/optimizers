@@ -666,7 +666,7 @@ def _matrix_inverse_root_higher_order(
         # If we have inf/nan in our answer also raise an arithmetic exception.
         # Usually, this is due to the powering to q > 1 which can blow up entries.
         # We have not seen this yet for q = 1 in Shampoo.
-        if torch.isnan(X).any() or torch.isinf(X).any():
+        if not torch.isfinite(X).all():
             raise ArithmeticError(
                 "NaN/Inf in matrix inverse root (after powering for fractions), raising an exception!"
             )
