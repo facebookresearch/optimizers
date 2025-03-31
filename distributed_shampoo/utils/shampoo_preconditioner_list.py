@@ -685,29 +685,10 @@ class BaseShampooPreconditionerList(
 
         # Check for nan or inf values.
         if not torch.isfinite(factor_matrix).all():
-            has_nan = torch.isnan(factor_matrix).any()
-
-            error_type = "nan" if has_nan else "inf"
-            mitigation_message = (
-                "To mitigate, check if nan inputs or gradients are being passed to the optimizer. "
-                if has_nan else
-                "In some cases, this may be due to divergence of the algorithm. To mitigate, try decreasing the learning rate or increasing grafting epsilon. "
-        if not torch.isfinite(factor_matrix).all():
-            has_nan = torch.isnan(factor_matrix).any()
-
-            error_type = "nan" if has_nan else "inf"
-            mitigation_message = (
-                "To mitigate, check if nan inputs or gradients are being passed to the optimizer. "
-                if has_nan else
-                "In some cases, this may be due to divergence of the algorithm. To mitigate, try decreasing the learning rate or increasing grafting epsilon. "
-            )
-
-
             raise PreconditionerValueError(
-                f"Encountered {error_type} values in factor matrix {factor_matrix_index}! "
-                f"{mitigation_message}"
-                f"Encountered {error_type} values in factor matrix {factor_matrix_index}! "
-                f"{mitigation_message}"
+                f"Encountered nan/inf values in factor matrix {factor_matrix_index}! "
+                f"To mitigate, check if nan inputs are being passed into the network or nan gradients are being passed to the optimizer. "
+                f"Otherwise, in some cases, this may be due to divergence of the algorithm. To mitigate, try decreasing the learning rate or increasing grafting epsilon. "
                 f"For debugging purposes, factor_matrix {factor_matrix_index}: "
                 f"{torch.min(factor_matrix)=}, {torch.max(factor_matrix)=}, "
                 f"{factor_matrix.isinf().any()=}, {factor_matrix.isnan().any()=}."

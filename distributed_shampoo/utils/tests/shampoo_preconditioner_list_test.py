@@ -392,7 +392,7 @@ class AbstractTest:
         ) -> None:
             self.assertRaisesRegex(
                 PreconditionerValueError,
-                re.escape(f"Encountered {str(invalid_value)} values in factor matrix"),
+                re.escape("Encountered nan/inf values in factor matrix"),
                 self._preconditioner_list.update_preconditioners,
                 masked_grad_list=(
                     torch.tensor([invalid_value, invalid_value]),
