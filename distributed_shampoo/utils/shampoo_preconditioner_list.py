@@ -684,24 +684,14 @@ class BaseShampooPreconditionerList(
             logger.info(f"Factor matrix {factor_matrix_index} is not diagonal.")
 
         # Check for nan or inf values.
-        common_message = (
-            f"{torch.min(factor_matrix)=}, {torch.max(factor_matrix)=}, "
-            f"{factor_matrix.isinf().any()=}, {factor_matrix.isnan().any()=}."
-        )
-
-        if torch.isnan(factor_matrix).any():
+        if not torch.isfinite(factor_matrix).all():
             raise PreconditionerValueError(
-                f"Encountered nan values in factor matrix {factor_matrix_index}! "
-                f"To mitigate, check if nan inputs are being passed into the network or nan gradients "
-                f"are being passed to the optimizer. "
-                f"{common_message}"
-            )
-        if torch.isinf(factor_matrix).any():
-            raise PreconditionerValueError(
-                f"Encountered inf values in factor matrix {factor_matrix_index}! "
-                f"In some cases, this may be due to divergence of the algorithm. "
-                f"To mitigate, try decreasing the learning rate or increasing grafting epsilon. "
-                f"{common_message}"
+                f"Encountered nan/inf values in factor matrix {factor_matrix_index}! "
+                f"To mitigate, check if nan inputs are being passed into the network or nan gradients are being passed to the optimizer. "
+                f"Otherwise, in some cases, this may be due to divergence of the algorithm. To mitigate, try decreasing the learning rate or increasing grafting epsilon. "
+                f"For debugging purposes, factor_matrix {factor_matrix_index}: "
+                f"{torch.min(factor_matrix)=}, {torch.max(factor_matrix)=}, "
+                f"{factor_matrix.isinf().any()=}, {factor_matrix.isnan().any()=}."
             )
 
     def _raise_exception_if_failure_tolerance_exceeded(
