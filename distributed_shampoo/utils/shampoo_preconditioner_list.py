@@ -1331,10 +1331,7 @@ class EigendecomposedShampooPreconditionerList(
                         (factor_matrix_eigenvalues, factor_matrix_eigenvectors),
                         strict=True,
                     ):
-                        if (
-                            torch.isnan(computed_quantity).any()
-                            or torch.isinf(computed_quantity).any()
-                        ):
+                        if not torch.isfinite(computed_inv_factor_matrix).all():
                             torch.set_printoptions(threshold=100_000)
                             raise PreconditionerValueError(
                                 f"Encountered nan or inf values in {quantity_name} of factor matrix {factor_matrix_index}! "
