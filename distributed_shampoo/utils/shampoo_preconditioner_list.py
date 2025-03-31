@@ -1617,7 +1617,7 @@ class EigenvalueCorrectedShampooPreconditionerList(
                         computed_eigenvectors = factor_matrix_eigenvectors
 
                     # Check if we encounter NaN or inf values in computed eigenvectors.
-                    if not torch.isfinite(computed_quantity).all():
+                    if not torch.isfinite(computed_eigenvectors).all():
                         torch.set_printoptions(threshold=100_000)
                         raise PreconditionerValueError(
                             f"Encountered nan or inf values in eigenvectors of factor matrix {factor_matrix_index}! "
