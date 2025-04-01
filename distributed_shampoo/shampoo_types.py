@@ -191,7 +191,7 @@ class EigenvalueCorrectedShampooPreconditionerConfig(PreconditionerConfig):
             (This is analogous to turning off preconditioning for the specified dimensions in default Shampoo.)
             The keys of the dictionary represent the order of the tensor, and the values are lists of dimension indices to ignore. (Default: {})
 
-            Below is a visualized example of how ignored_basis_change_dims is applied on 1-D, 2-D, and 3-D tensors when given ignored_eigenvector_rotation_dims={1: [0], 2: [1], 3: [0, 2]}:
+            Below is a visualized example of how ignored_basis_change_dims is applied on 1-D, 2-D, and 3-D tensors when given ignored_basis_change_dims={1: [0], 2: [1], 3: [0, 2]}:
             1-D:
                             +-------x-------+
                                     |
