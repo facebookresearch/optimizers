@@ -15,13 +15,59 @@ from commons import AbstractDataclass
 
 
 @dataclass(init=False)
+class NonInvertibleHandlingConfig(AbstractDataclass):
+    """Base data class for configurations for handling non-invertible (i.e. singular/rank-deficient) matrices."""
+
+
+@dataclass(kw_only=True)
+class RegularizationConfig(NonInvertibleHandlingConfig):
+    """
+    Configuration for perturbing matrix values by a small amount, i.e. epsilon, to guarantee invertibility.
+
+    Attributes:
+        add_epsilon_before_computation (bool): Whether to apply epsilon before amortized computation instead of after. Note
+            that both options are mathematically equivalent. Recommended to be set to True for numerical stability.
+            (Default: True)
+    """
+
+    add_epsilon_before_computation: bool = True
+
+
+DefaultRegularizationConfig = RegularizationConfig()
+
+
+@dataclass(kw_only=True)
+class PseudoInverseConfig(NonInvertibleHandlingConfig):
+    """
+    Configuration for filtering zero/near-zero singular values (i.e. determining rank) to return a pseudo-inverse when the matrix is non-invertible.
+    For more information, refer to https://pytorch.org/docs/stable/generated/torch.linalg.matrix_rank.html.
+
+    Attributes:
+        rank_atol: Absolute tolerance for filtering singular values. (Default: 0.0)
+        rank_rtol: Relative tolerance for filtering singular values. When None, takes value of max dim of the matrix times the
+            epsilon of the dtype of the matrix. (Default: None)
+    """
+
+    rank_atol: float = 0.0
+    rank_rtol: float | None = None
+
+
+@dataclass(init=False)
 class MatrixFunctionConfig(AbstractDataclass):
     """Base dataclass for matrix function configurations."""
 
 
 @dataclass(init=False)
 class EigendecompositionConfig(MatrixFunctionConfig):
-    """Configuration for eigenvalue decomposition."""
+    """Configuration for eigenvalue decomposition.
+
+    Attributes:
+        noninvertible_handling_config (NonInvertibleHandlingConfig): Config for handling non-invertible matrices. (Default: DefaultRegularizationConfig) TODO: generalize this to MatrixFunctionConfig
+    """
+
+    noninvertible_handling_config: NonInvertibleHandlingConfig = field(
+        default_factory=lambda: DefaultRegularizationConfig
+    )
 
 
 @dataclass(kw_only=True)
@@ -98,12 +144,10 @@ class EigenConfig(RootInvConfig, EighEigendecompositionConfig):
         eigendecomposition_offload_device (torch.device | str): Device to offload eigendecomposition to. If value is empty string, we don't perform offloading. (Default: "")
         exponent_multiplier (float): Number to be multiplied to the numerator of the inverse root, i.e., eta where the
             exponent is -eta / (2 * p). (Default: 1.0)
-        enhance_stability (bool): Whether to enhance the stability of the root inverse computation through mathematically identical, but numerically more stable conditioning. (Default: False)
 
     """
 
     exponent_multiplier: float = 1.0
-    enhance_stability: bool = False
 
 
 DefaultEigenConfig = EigenConfig()
@@ -130,9 +174,11 @@ class CoupledHigherOrderConfig(RootInvConfig):
     Attributes:
         rel_epsilon (float): Relative epsilon for coupled higher order method. Adds epsilon * lambda_max * I to matrix
             before taking matrix root, where lambda_max is an upper bound on maximum eigenvalue. (Default: 0.0)
-        max_iterations (int): Maximum number of iterations for coupled higher order method. (Default: 100)
-        tolerance (float): Tolerance for computing root inverse using coupled higher order method. (Default: 1e-8)
-        order (int): Order of the method. Order must be >= 2.  Higher order methods accelerate convergence (fewer iterations),
+        max_iterations (int): Maximum number of iterations for coupled higher order method. Typically we need < 20 iterations.
+            (Default: 100)
+        tolerance (float): Tolerance for computing root inverse using coupled higher order method. In practice, 1e-20
+            guarantees a run to convergence. (Default: 1e-8)
+        order (int): Order of the method. Order must be >= 2. Higher order methods accelerate convergence (fewer iterations),
             but can take more matmuls per iteration. order=2 represents Newton's method. (Default: 3)
         disable_tf32 (bool): Whether to disable tf32 matmuls or not internally. Highly recommend keeping True,
             since tf32 is challenging numerically here. (Default: True)

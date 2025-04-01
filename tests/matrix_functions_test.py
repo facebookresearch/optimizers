@@ -38,7 +38,9 @@ from matrix_functions_types import (
     EigenConfig,
     EigendecompositionConfig,
     EighEigendecompositionConfig,
+    PseudoInverseConfig,
     QREigendecompositionConfig,
+    RegularizationConfig,
     RootInvConfig,
 )
 from torch import Tensor
@@ -150,7 +152,14 @@ class MatrixInverseRootTest(unittest.TestCase):
             for root_inv_config in (
                 EigenConfig(),
                 CoupledNewtonConfig(),
-                EigenConfig(enhance_stability=True),
+                EigenConfig(
+                    noninvertible_handling_config=RegularizationConfig(
+                        add_epsilon_before_computation=False
+                    )
+                ),
+                EigenConfig(
+                    noninvertible_handling_config=PseudoInverseConfig()
+                ),  # equivalent behavior when test matrices are full rank
                 EigenConfig(eigendecomposition_offload_device="cpu"),
             ):
                 with self.subTest(f"Test with {A=}, {root_inv_config=}"):
@@ -471,6 +480,26 @@ class EigenRootTest(unittest.TestCase):
                     partial(eig_sols, alpha=alpha, beta=beta),
                 )
 
+    def test_eigen_root_nonfull_rank(self) -> None:
+        A = torch.tensor([[2.0, 1.0], [2.0, 1.0]])
+        root = Fraction(2)
+        epsilon = 0.0
+
+        M_default = matrix_inverse_root(
+            A, root=root, root_inv_config=EigenConfig(), epsilon=epsilon
+        )
+        self.assertTrue(torch.all(torch.isinf(M_default)))
+
+        M_pseudoinverse = matrix_inverse_root(
+            A,
+            root=root,
+            root_inv_config=EigenConfig(
+                noninvertible_handling_config=PseudoInverseConfig()
+            ),
+            epsilon=epsilon,
+        )
+        self.assertTrue(torch.all(torch.isreal(M_pseudoinverse)))
+
     def test_matrix_root_eigen_nonpositive_root(self) -> None:
         A = torch.tensor([[-1.0, 0.0], [0.0, 2.0]])
         root = -1
@@ -482,10 +511,25 @@ class EigenRootTest(unittest.TestCase):
             root=root,
         )
 
-    torch_lianlg_module: ModuleType = torch.linalg
+    def test_pseudoinverse_epsilon_nonzero(self) -> None:
+        A = torch.tensor([[1.0, 0.0], [0.0, 0.0]])
+        epsilon = 1e-8
+        self.assertRaisesRegex(
+            ValueError,
+            re.escape(f"{epsilon=} should be 0.0 when using pseudo-inverse!"),
+            matrix_inverse_root,
+            A=A,
+            root=Fraction(2),
+            epsilon=epsilon,
+            root_inv_config=EigenConfig(
+                noninvertible_handling_config=PseudoInverseConfig()
+            ),
+        )
+
+    torch_linalg_module: ModuleType = torch.linalg
 
     @mock.patch.object(
-        torch_lianlg_module, "eigh", side_effect=RuntimeError("Mock Eigen Error")
+        torch_linalg_module, "eigh", side_effect=RuntimeError("Mock Eigen Error")
     )
     def test_no_retry_double_precision_raise_exception(
         self, mock_eigh: mock.Mock
@@ -501,7 +545,7 @@ class EigenRootTest(unittest.TestCase):
         mock_eigh.assert_called_once()
 
     @mock.patch.object(
-        torch_lianlg_module, "eigh", side_effect=RuntimeError("Mock Eigen Error")
+        torch_linalg_module, "eigh", side_effect=RuntimeError("Mock Eigen Error")
     )
     def test_retry_double_precision_raise_exception(self, mock_eigh: mock.Mock) -> None:
         A = torch.tensor([[-1.0, 0.0], [0.0, 2.0]])
@@ -515,7 +559,7 @@ class EigenRootTest(unittest.TestCase):
         self.assertEqual(mock_eigh.call_count, 2)
 
     @mock.patch.object(
-        torch_lianlg_module,
+        torch_linalg_module,
         "eigh",
         side_effect=[
             RuntimeError("Mock Eigen Error"),
@@ -931,7 +975,7 @@ class MatrixEigendecompositionTest(unittest.TestCase):
             self.assertRaisesRegex(
                 NotImplementedError,
                 re.escape(
-                    "Eigendecomposition config is not implemented! Specified eigendecomposition config is eigendecomposition_config=EighEigendecompositionConfig(retry_double_precision=True, eigendecomposition_offload_device='')."
+                    "Eigendecomposition config is not implemented! Specified eigendecomposition config is eigendecomposition_config=EighEigendecompositionConfig(noninvertible_handling_config=RegularizationConfig(add_epsilon_before_computation=True), retry_double_precision=True, eigendecomposition_offload_device='')."
                 ),
             ),
         ):
