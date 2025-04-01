@@ -311,6 +311,9 @@ def _qr_algorithm(
 
     # Perform orthogonal/simultaneous iterations (QR algorithm).
     Q = eigenvectors_estimate
+    assert (
+        Q.dtype == A.dtype
+    ), f"Q and A must have the same dtype! {Q.dtype=} {A.dtype=}"
     estimated_eigenvalues = Q.T @ A @ Q
     iteration = 0
     # NOTE: This will skip the QR iterations if the criterion is already below or equal to the tolerance given the initial eigenvectors_estimate.
