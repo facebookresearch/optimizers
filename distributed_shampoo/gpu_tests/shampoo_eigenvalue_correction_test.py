@@ -23,6 +23,7 @@ from distributed_shampoo.shampoo_types import (
     EigenvalueCorrectedShampooPreconditionerConfig,
 )
 from distributed_shampoo.tests.shampoo_test_utils import (
+    compare_optimizer_on_cpu_and_device,
     compare_two_optimizers_on_weight_and_loss,
 )
 from torch.optim.adagrad import Adagrad
@@ -80,24 +81,30 @@ class DistributedShampooEigenvalueCorrectionTest(unittest.TestCase):
                 start_preconditioning_step=start_preconditioning_step,
                 preconditioner_config=preconditioner_config,
             ):
+                experimental_optim_factory = partial(
+                    optim_factory,
+                    optim_cls=DistributedShampoo,
+                    betas=(0.0, 1.0),
+                    epsilon=1e-15,
+                    momentum=0.0,
+                    max_preconditioner_dim=10,
+                    precondition_frequency=1,
+                    start_preconditioning_step=start_preconditioning_step,
+                    use_decoupled_weight_decay=False,
+                    grafting_config=None,
+                    preconditioner_config=preconditioner_config,
+                )
+
                 compare_two_optimizers_on_weight_and_loss(
                     control_optim_factory=partial(
                         optim_factory, optim_cls=Adagrad, eps=1e-15
                     ),
-                    experimental_optim_factory=partial(
-                        optim_factory,
-                        optim_cls=DistributedShampoo,
-                        betas=(0.0, 1.0),
-                        epsilon=1e-15,
-                        momentum=0.0,
-                        max_preconditioner_dim=10,
-                        precondition_frequency=1,
-                        start_preconditioning_step=start_preconditioning_step,
-                        use_decoupled_weight_decay=False,
-                        grafting_config=None,
-                        preconditioner_config=preconditioner_config,
-                    ),
+                    experimental_optim_factory=experimental_optim_factory,
                     device=device,
+                )
+
+                compare_optimizer_on_cpu_and_device(
+                    optim_factory=experimental_optim_factory, device=device
                 )
 
     def test_adam_eigenvalue_correction_on_quadratic(self) -> None:
@@ -133,25 +140,31 @@ class DistributedShampooEigenvalueCorrectionTest(unittest.TestCase):
                 start_preconditioning_step=start_preconditioning_step,
                 preconditioner_config=preconditioner_config,
             ):
+                experimental_optim_factory = partial(
+                    optim_factory,
+                    optim_cls=DistributedShampoo,
+                    epsilon=1e-15,
+                    momentum=0.0,
+                    max_preconditioner_dim=10,
+                    precondition_frequency=1,
+                    start_preconditioning_step=start_preconditioning_step,
+                    use_decoupled_weight_decay=False,
+                    grafting_config=None,
+                    preconditioner_config=preconditioner_config,
+                )
+
                 compare_two_optimizers_on_weight_and_loss(
                     control_optim_factory=partial(
                         optim_factory,
                         optim_cls=Adam,
                         eps=1e-15,
                     ),
-                    experimental_optim_factory=partial(
-                        optim_factory,
-                        optim_cls=DistributedShampoo,
-                        epsilon=1e-15,
-                        momentum=0.0,
-                        max_preconditioner_dim=10,
-                        precondition_frequency=1,
-                        start_preconditioning_step=start_preconditioning_step,
-                        use_decoupled_weight_decay=False,
-                        grafting_config=None,
-                        preconditioner_config=preconditioner_config,
-                    ),
+                    experimental_optim_factory=experimental_optim_factory,
                     device=device,
+                )
+
+                compare_optimizer_on_cpu_and_device(
+                    optim_factory=experimental_optim_factory, device=device
                 )
 
     def test_adamw_eigenvalue_correction_on_quadratic(self) -> None:
@@ -187,25 +200,31 @@ class DistributedShampooEigenvalueCorrectionTest(unittest.TestCase):
                 start_preconditioning_step=start_preconditioning_step,
                 preconditioner_config=preconditioner_config,
             ):
+                experimental_optim_factory = partial(
+                    optim_factory,
+                    optim_cls=DistributedShampoo,
+                    epsilon=1e-15,
+                    momentum=0.0,
+                    max_preconditioner_dim=10,
+                    precondition_frequency=1,
+                    start_preconditioning_step=start_preconditioning_step,
+                    use_decoupled_weight_decay=True,
+                    grafting_config=None,
+                    preconditioner_config=preconditioner_config,
+                )
+
                 compare_two_optimizers_on_weight_and_loss(
                     control_optim_factory=partial(
                         optim_factory,
                         optim_cls=AdamW,
                         eps=1e-15,
                     ),
-                    experimental_optim_factory=partial(
-                        optim_factory,
-                        optim_cls=DistributedShampoo,
-                        epsilon=1e-15,
-                        momentum=0.0,
-                        max_preconditioner_dim=10,
-                        precondition_frequency=1,
-                        start_preconditioning_step=start_preconditioning_step,
-                        use_decoupled_weight_decay=True,
-                        grafting_config=None,
-                        preconditioner_config=preconditioner_config,
-                    ),
+                    experimental_optim_factory=experimental_optim_factory,
                     device=device,
+                )
+
+                compare_optimizer_on_cpu_and_device(
+                    optim_factory=experimental_optim_factory, device=device
                 )
 
     def test_rmsprop_eigenvalue_correction_on_quadratic(self) -> None:
@@ -240,6 +259,21 @@ class DistributedShampooEigenvalueCorrectionTest(unittest.TestCase):
                 start_preconditioning_step=start_preconditioning_step,
                 preconditioner_config=preconditioner_config,
             ):
+                experimental_optim_factory = partial(
+                    optim_factory,
+                    optim_cls=DistributedShampoo,
+                    betas=(0.0, 0.99),
+                    epsilon=1e-15,
+                    momentum=0.0,
+                    max_preconditioner_dim=10,
+                    precondition_frequency=1,
+                    start_preconditioning_step=start_preconditioning_step,
+                    use_decoupled_weight_decay=False,
+                    grafting_config=None,
+                    use_bias_correction=False,
+                    preconditioner_config=preconditioner_config,
+                )
+
                 compare_two_optimizers_on_weight_and_loss(
                     control_optim_factory=partial(
                         optim_factory,
@@ -247,19 +281,10 @@ class DistributedShampooEigenvalueCorrectionTest(unittest.TestCase):
                         alpha=0.99,
                         eps=1e-15,
                     ),
-                    experimental_optim_factory=partial(
-                        optim_factory,
-                        optim_cls=DistributedShampoo,
-                        betas=(0.0, 0.99),
-                        epsilon=1e-15,
-                        momentum=0.0,
-                        max_preconditioner_dim=10,
-                        precondition_frequency=1,
-                        start_preconditioning_step=start_preconditioning_step,
-                        use_decoupled_weight_decay=False,
-                        grafting_config=None,
-                        use_bias_correction=False,
-                        preconditioner_config=preconditioner_config,
-                    ),
+                    experimental_optim_factory=experimental_optim_factory,
                     device=device,
+                )
+
+                compare_optimizer_on_cpu_and_device(
+                    optim_factory=experimental_optim_factory, device=device
                 )
