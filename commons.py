@@ -10,7 +10,7 @@ LICENSE file in the root directory of this source tree.
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from functools import reduce
-from operator import or_
+from operator import methodcaller, or_
 from typing import Any, TypeVar
 
 
@@ -80,9 +80,10 @@ def get_all_subclasses(
 
     def get_all_unique_subclasses(cls: SubclassesType) -> set[SubclassesType]:
         """Gets all unique subclasses of a given class recursively."""
-        assert (
-            subclasses := getattr(cls, "__subclasses__", lambda: None)()
-        ) is not None, f"{cls} does not have __subclasses__."
-        return reduce(or_, map(get_all_unique_subclasses, subclasses), {cls})
+        return reduce(
+            or_,
+            map(get_all_unique_subclasses, methodcaller("__subclasses__")(cls)),
+            {cls},
+        )
 
     return list(get_all_unique_subclasses(cls) - (set() if include_cls_self else {cls}))

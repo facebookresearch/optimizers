@@ -106,14 +106,3 @@ class GetAllSubclassesTest(unittest.TestCase):
                     ),
                     [DummyLeafClass] if include_cls_self else [],
                 )
-
-    def test_assertion_error(self) -> None:
-        """Test error handling for non-class objects."""
-        for obj in (42, "string", DummyRootClass()):
-            with self.subTest(obj=obj):
-                self.assertRaisesRegex(
-                    AssertionError,
-                    f"{obj} does not have __subclasses__.",
-                    get_all_subclasses,
-                    obj,
-                )
