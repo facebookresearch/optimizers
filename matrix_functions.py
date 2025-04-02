@@ -229,7 +229,9 @@ def _eigh_eigenvalue_decomposition(
         eigendecomposition_offload_device (torch.device | str): Device to offload eigendecomposition computation. If value is empty string, do not perform offloading. (Default: "")
 
     Returns:
-        tuple[Tensor, Tensor]: A tuple containing the eigenvalues and eigenvectors of the input matrix.
+        eigenvalues (Tensor): The eigenvalues of the input matrix A.
+        eigenvectors (Tensor): The eigenvectors of the input matrix A.
+
     """
 
     current_device = A.device
@@ -251,7 +253,7 @@ def _eigh_eigenvalue_decomposition(
             # If retry_double_precision is False or the computation fails in double precision, raise the exception
             raise exception
 
-    return L.to(device=current_device), Q.to(device=current_device)
+    return L.to(device=current_device), Q.to(device=current_device, dtype=A.dtype)
 
 
 def _estimated_eigenvalues_criterion_below_or_equal_tolerance(
