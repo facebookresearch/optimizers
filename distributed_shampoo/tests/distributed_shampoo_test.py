@@ -65,7 +65,7 @@ class DistributedShampooInitTest(unittest.TestCase):
             self.assertRaisesRegex(
                 NotImplementedError,
                 re.escape(
-                    "group[PRECONDITIONER_CONFIG].amortized_computation_config=EigenConfig(retry_double_precision=True, eigendecomposition_offload_device='', exponent_multiplier=1.0, enhance_stability=False) not supported!"
+                    "group[PRECONDITIONER_CONFIG].amortized_computation_config=EigenConfig(noninvertible_handling_config=RegularizationConfig(add_epsilon_before_computation=True), retry_double_precision=True, eigendecomposition_offload_device='', exponent_multiplier=1.0) not supported!"
                 ),
                 DistributedShampoo,
                 self._model.parameters(),

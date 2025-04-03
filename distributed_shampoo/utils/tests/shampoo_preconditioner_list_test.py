@@ -40,7 +40,11 @@ from distributed_shampoo.utils.shampoo_preconditioner_list import (
     ShampooPreconditionerList,
 )
 from distributed_shampoo.utils.shampoo_utils import compress_list
-from matrix_functions_types import QREigendecompositionConfig
+from matrix_functions_types import (
+    EighEigendecompositionConfig,
+    QREigendecompositionConfig,
+    RegularizationConfig,
+)
 from torch import Tensor
 
 
@@ -1257,6 +1261,11 @@ class EigenvalueCorrectedShampooPreconditionerListTest(
 
         preconditioner_config = EigenvalueCorrectedShampooPreconditionerConfig(
             inverse_exponent_override={0: 1.0, 1: 1.0, 2: 1.0},
+            amortized_computation_config=EighEigendecompositionConfig(
+                noninvertible_handling_config=RegularizationConfig(
+                    add_epsilon_before_computation=False
+                )
+            ),
         )
 
         masked_grad_list1 = (

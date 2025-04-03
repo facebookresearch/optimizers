@@ -21,10 +21,14 @@ from matrix_functions_types import (
     CoupledNewtonConfig,
     DefaultEigenConfig,
     DefaultEigendecompositionConfig,
+    DefaultRegularizationConfig,
     EigenConfig,
     EigendecompositionConfig,
     EighEigendecompositionConfig,
+    NonInvertibleHandlingConfig,
+    PseudoInverseConfig,
     QREigendecompositionConfig,
+    RegularizationConfig,
     RootInvConfig,
 )
 
@@ -104,9 +108,7 @@ def matrix_inverse_root(
             A=A,
             root=root,
             epsilon=epsilon,
-            retry_double_precision=root_inv_config.retry_double_precision,
-            enhance_stability=root_inv_config.enhance_stability,
-            eigendecomposition_offload_device=root_inv_config.eigendecomposition_offload_device,
+            root_inv_config=root_inv_config,
         )
     elif type(root_inv_config) is CoupledNewtonConfig:
         # NOTE: Use Fraction.is_integer() instead when Python 3.12+ is available
@@ -169,6 +171,7 @@ def _matrix_inverse_root_diagonal(
 
 def matrix_eigendecomposition(
     A: Tensor,
+    epsilon: float = 0.0,
     eigendecomposition_config: EigendecompositionConfig = DefaultEigendecompositionConfig,
     is_diagonal: bool = False,
 ) -> tuple[Tensor, Tensor]:
@@ -200,15 +203,37 @@ def matrix_eigendecomposition(
             device=A.device,
         )
 
+    # TODO: reduce redundant code when noninvertible_handling_config is generalized to all methods
+    # check epsilon is 0 when using pseudo-inverse
+    if (
+        isinstance(
+            eigendecomposition_config.noninvertible_handling_config,
+            PseudoInverseConfig,
+        )
+        and epsilon != 0.0
+    ):
+        raise ValueError(f"{epsilon=} should be 0.0 when using pseudo-inverse!")
+
+    # Add epsilon to the diagonal to help with numerical stability of the eigenvalue decomposition
+    # Only do it when add_epsilon_before_computation is True (root_inv_config must be a RegularizationConfig)
+    if getattr(eigendecomposition_config, "add_epsilon_before_computation", False):
+        dim = A.shape[0]
+        identity = torch.eye(dim, dtype=A.dtype, device=A.device)
+        A = A + epsilon * identity
+
+    # exclude noninvertible_handling_config from being passed to eigendecomposition method
+    kwargs = asdict(eigendecomposition_config)
+    kwargs.pop("noninvertible_handling_config", None)
+
     if type(eigendecomposition_config) is EighEigendecompositionConfig:
         return _eigh_eigenvalue_decomposition(
             A,
-            **asdict(eigendecomposition_config),
+            **kwargs,
         )
     elif type(eigendecomposition_config) is QREigendecompositionConfig:
         return _qr_algorithm(
             A,
-            **asdict(eigendecomposition_config),
+            **kwargs,
         )
     else:
         raise NotImplementedError(
@@ -341,9 +366,7 @@ def _matrix_inverse_root_eigen(
     A: Tensor,
     root: Fraction,
     epsilon: float = 0.0,
-    retry_double_precision: bool = True,
-    enhance_stability: bool = False,
-    eigendecomposition_offload_device: torch.device | str = "",
+    root_inv_config: EigenConfig = DefaultEigenConfig,
 ) -> tuple[Tensor, Tensor, Tensor]:
     """Compute matrix inverse root using eigendecomposition of symmetric positive (semi-)definite matrix.
 
@@ -357,7 +380,7 @@ def _matrix_inverse_root_eigen(
         epsilon (float): Adds epsilon * I to matrix before taking matrix root. (Default: 0.0)
         retry_double_precision (bool): Flag for re-trying eigendecomposition with higher precision if lower precision fails due
             to CuSOLVER failure. (Default: True)
-        enhance_stability (bool): Whether to use a (mathematically identical, yet numerically more stable) path for eigendecomposition (Default: False)
+        epsilon_behavior (EigenEpsilonBehavior): How to use epsilon (default behavior, enhance numerical stability of eigh, or pseudo-inverse). (Default: EigenEpsilonBehavior.DEFAULT)
         eigendecomposition_offload_device (torch.device | str): Device to offload eigendecomposition computation. If value is empty string, do not perform offloading. (Default: "")
 
     Returns:
@@ -371,9 +394,20 @@ def _matrix_inverse_root_eigen(
     if root <= 0:
         raise ValueError(f"Root {root} should be positive!")
 
+    # TODO: reduce redundant code when noninvertible_handling_config is generalized to all methods
+    # check epsilon is 0 when using pseudo-inverse
+    if (
+        isinstance(
+            root_inv_config.noninvertible_handling_config,
+            PseudoInverseConfig,
+        )
+        and epsilon != 0.0
+    ):
+        raise ValueError(f"{epsilon=} should be 0.0 when using pseudo-inverse!")
+
     # Add epsilon to the diagonal to help with numerical stability of the eigenvalue decomposition
-    # Only do it when "enhance_stability" is True
-    if enhance_stability:
+    # Only do it when add_epsilon_before_computation is True (root_inv_config must be a RegularizationConfig)
+    if getattr(root_inv_config, "add_epsilon_before_computation", False):
         dim = A.shape[0]
         identity = torch.eye(dim, dtype=A.dtype, device=A.device)
         A_ridge = A + epsilon * identity
@@ -383,24 +417,63 @@ def _matrix_inverse_root_eigen(
     # compute eigendecomposition and compute minimum eigenvalue
     L, Q = _eigh_eigenvalue_decomposition(
         A_ridge,
-        retry_double_precision=retry_double_precision,
-        eigendecomposition_offload_device=eigendecomposition_offload_device,
+        retry_double_precision=root_inv_config.retry_double_precision,
+        eigendecomposition_offload_device=root_inv_config.eigendecomposition_offload_device,
     )
-    lambda_min = torch.min(L)
 
-    # make eigenvalues > 0 (if necessary)
+    power_L = scale_and_pow_eigenvalues(
+        L,
+        root,
+        epsilon=epsilon,
+        noninvertible_handling_config=root_inv_config.noninvertible_handling_config,
+    )
 
-    if enhance_stability:
-        L += -torch.minimum(lambda_min - epsilon, torch.as_tensor(0.0))
-    else:
-        L += -torch.minimum(lambda_min, torch.as_tensor(0.0))
-        # and add the epsilon
-        L += epsilon
-
-    # compute the matrix inverse root
-    X = Q * L.pow(torch.as_tensor(-1.0 / root)).unsqueeze(0) @ Q.T
+    # compute inverse preconditioner
+    X = Q * power_L.unsqueeze(0) @ Q.T
 
     return X, L, Q
+
+
+def scale_and_pow_eigenvalues(
+    L: Tensor,
+    root: Fraction,
+    epsilon: float = 0.0,
+    noninvertible_handling_config: NonInvertibleHandlingConfig = DefaultRegularizationConfig,
+) -> Tensor:
+    if isinstance(noninvertible_handling_config, PseudoInverseConfig):
+        assert epsilon == 0.0, f"{epsilon=} must be 0.0 when using pseudo-inverse!"
+
+        # Filter the eigenvalues based on the numerical rank of the matrix
+        # The procedure below mimics the steps described in the documentation of
+        # https://pytorch.org/docs/stable/generated/torch.linalg.matrix_rank.html
+        if noninvertible_handling_config.rank_rtol is None:
+            rtol = L.numel() * torch.finfo(L.dtype).eps
+        else:
+            rtol = noninvertible_handling_config.rank_rtol
+        spectrum_cutoff = max(
+            noninvertible_handling_config.rank_atol, rtol * L.max().relu().item()
+        )
+        power_L = torch.where(
+            L <= spectrum_cutoff,
+            torch.zeros_like(L),
+            L.pow(torch.as_tensor(-1.0 / root)),
+        )
+    else:
+        assert isinstance(noninvertible_handling_config, RegularizationConfig)
+
+        lambda_min = torch.min(L)
+
+        # make eigenvalues > 0 (if necessary)
+        if noninvertible_handling_config.add_epsilon_before_computation:
+            L += -torch.minimum(lambda_min - epsilon, torch.as_tensor(0.0))
+        else:
+            L += -torch.minimum(lambda_min, torch.as_tensor(0.0))
+            # and add the epsilon
+            L += epsilon
+
+        power_L = L.pow(torch.as_tensor(-1.0 / root))
+
+    return power_L
 
 
 def _matrix_inverse_root_newton(
@@ -733,11 +806,7 @@ def compute_matrix_root_inverse_residuals(
 
     # compute residual
     X_invr, _, _ = _matrix_inverse_root_eigen(
-        X_hat.double(),
-        root=root,
-        epsilon=0.0,
-        enhance_stability=root_inv_config.enhance_stability,
-        eigendecomposition_offload_device=root_inv_config.eigendecomposition_offload_device,
+        X_hat.double(), root=root, epsilon=0.0, root_inv_config=root_inv_config
     )
 
     A_reg = A.double() + epsilon * torch.eye(

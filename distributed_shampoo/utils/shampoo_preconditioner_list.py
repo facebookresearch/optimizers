@@ -28,6 +28,7 @@ from matrix_functions import (
     check_diagonal,
     matrix_eigendecomposition,
     matrix_inverse_root,
+    scale_and_pow_eigenvalues,
 )
 
 from matrix_functions_types import (
@@ -1216,13 +1217,26 @@ class EigendecomposedShampooPreconditionerList(
         with profiler.record_function(
             f"## {self.__class__.__name__}:{self.precondition.__name__} ##"
         ):
+            # TODO: remove assertion when noninvertible_handling_config is generalized to MatrixFunctionConfig
+            noninvertible_handling_config = getattr(
+                self._preconditioner_config.amortized_computation_config,
+                "noninvertible_handling_config",
+                None,
+            )
+            assert noninvertible_handling_config is not None
+
             return tuple(
                 self._precondition_grad(
                     grad=masked_grad,
                     preconditioned_dims_selector=preconditioned_dims_selector,
                     preconditioner_list=tuple(
                         eigenvectors
-                        * eigenvalues.add(self._epsilon).pow_(-1.0 / root).unsqueeze(0)
+                        * scale_and_pow_eigenvalues(
+                            eigenvalues,
+                            root=Fraction(root),
+                            epsilon=self._epsilon,
+                            noninvertible_handling_config=noninvertible_handling_config,
+                        ).unsqueeze(0)
                         @ eigenvectors.T
                         for eigenvectors, eigenvalues, root in zip(
                             kronecker_factors.factor_matrices_eigenvectors,
@@ -1295,6 +1309,7 @@ class EigendecomposedShampooPreconditionerList(
                         computed_eigenvalues, computed_eigenvectors = (
                             matrix_eigendecomposition(
                                 A=bias_corrected_factor_matrix,
+                                epsilon=self._epsilon,
                                 eigendecomposition_config=eigendecomposition_config,
                                 is_diagonal=bool(is_factor_matrix_diagonal),
                             )
@@ -1531,11 +1546,23 @@ class EigenvalueCorrectedShampooPreconditionerList(
 
                 # Verify that the number of roots is 1 in Eigenvalue-Corrected Shampoo preconditioner.
                 assert len(roots) == 1, f"{len(roots)=} != 1"
+                # TODO: remove assertion when noninvertible_handling_config is generalized to MatrixFunctionConfig
+                noninvertible_handling_config = getattr(
+                    self._preconditioner_config.amortized_computation_config,
+                    "noninvertible_handling_config",
+                    None,
+                )
+                assert noninvertible_handling_config is not None
+
                 # Precondition with inverse root of corrected eigenvalues.
-                grad.div_(
-                    corrected_eigenvalues.div(self._bias_correction2)
-                    .add_(self._epsilon)
-                    .pow_(1 / roots[0])
+                # Note that scale_and_pow_eigenvalues() takes the inverse of the root, so the result can be directly multiplied to the gradient.
+                grad.mul_(
+                    scale_and_pow_eigenvalues(
+                        corrected_eigenvalues.div(self._bias_correction2),
+                        root=Fraction(roots[0]),
+                        epsilon=self._epsilon,
+                        noninvertible_handling_config=noninvertible_handling_config,
+                    )
                 )
                 if use_eigenbasis:
                     # Convert back to basis of the parameters.
@@ -1594,6 +1621,7 @@ class EigenvalueCorrectedShampooPreconditionerList(
                     try:
                         computed_eigenvectors = matrix_eigendecomposition(
                             A=factor_matrix,
+                            epsilon=self._epsilon,
                             eigendecomposition_config=eigendecomposition_config,
                             is_diagonal=bool(is_factor_matrix_diagonal),
                         )[1]
