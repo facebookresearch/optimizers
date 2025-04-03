@@ -482,10 +482,10 @@ class EigenRootTest(unittest.TestCase):
             root=root,
         )
 
-    torch_lianlg_module: ModuleType = torch.linalg
+    torch_linalg_module: ModuleType = torch.linalg
 
     @mock.patch.object(
-        torch_lianlg_module, "eigh", side_effect=RuntimeError("Mock Eigen Error")
+        torch_linalg_module, "eigh", side_effect=RuntimeError("Mock Eigen Error")
     )
     def test_no_retry_double_precision_raise_exception(
         self, mock_eigh: mock.Mock
@@ -501,7 +501,7 @@ class EigenRootTest(unittest.TestCase):
         mock_eigh.assert_called_once()
 
     @mock.patch.object(
-        torch_lianlg_module, "eigh", side_effect=RuntimeError("Mock Eigen Error")
+        torch_linalg_module, "eigh", side_effect=RuntimeError("Mock Eigen Error")
     )
     def test_retry_double_precision_raise_exception(self, mock_eigh: mock.Mock) -> None:
         A = torch.tensor([[-1.0, 0.0], [0.0, 2.0]])
@@ -515,7 +515,7 @@ class EigenRootTest(unittest.TestCase):
         self.assertEqual(mock_eigh.call_count, 2)
 
     @mock.patch.object(
-        torch_lianlg_module,
+        torch_linalg_module,
         "eigh",
         side_effect=[
             RuntimeError("Mock Eigen Error"),
