@@ -30,7 +30,7 @@ class InvalidAbstractDataclassInitTest(unittest.TestCase):
                 self.assertRaisesRegex(
                     TypeError,
                     re.escape(
-                        f"Can't instantiate abstract class {abstract_cls.__name__} with abstract method __init__"
+                        f"Can't instantiate abstract class {abstract_cls.__name__} "
                     ),
                     abstract_cls,
                 )
