@@ -313,9 +313,12 @@ def _qr_algorithm(
 
     # Perform orthogonal/simultaneous iterations (QR algorithm).
     Q = eigenvectors_estimate
+
+    # This assertion provides a more clear error message than the internal error message in `torch.mm`, and assertion makes sure that user-side is unable to catch the error.
     assert (
         Q.dtype == A.dtype
     ), f"Q and A must have the same dtype! {Q.dtype=} {A.dtype=}"
+
     estimated_eigenvalues = Q.T @ A @ Q
     iteration = 0
     # NOTE: This will skip the QR iterations if the criterion is already below or equal to the tolerance given the initial eigenvectors_estimate.
