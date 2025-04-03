@@ -228,12 +228,6 @@ class AbstractTest:
                         device_mesh=DeviceMesh(str(self._device), [1]),
                         placements=(Replicate(),),
                     ),
-                    '["block_1", "shampoo", "is_factor_matrices_diagonal", 0]': tensor(
-                        False
-                    ),
-                    '["block_1", "shampoo", "is_factor_matrices_diagonal", 1]': tensor(
-                        False
-                    ),
                     '["block_1", "shampoo", "inv_factor_matrices", 0]': DTensor.from_local(
                         local_tensor=tensor(
                             [
@@ -313,12 +307,6 @@ class AbstractTest:
                         ),
                         device_mesh=DeviceMesh(str(self._device), [0]),
                         placements=(Replicate(),),
-                    ),
-                    '["block_0", "shampoo", "is_factor_matrices_diagonal", 0]': tensor(
-                        False
-                    ),
-                    '["block_0", "shampoo", "is_factor_matrices_diagonal", 1]': tensor(
-                        False
                     ),
                     '["block_0", "shampoo", "inv_factor_matrices", 0]': DTensor.from_local(
                         local_tensor=tensor(
