@@ -13,7 +13,6 @@ import re
 import unittest
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
-from types import ModuleType
 from typing import Any
 from unittest import mock
 
@@ -615,44 +614,6 @@ class AbstractTest:
                         ],
                     )
 
-        # Note: This is needed for type checking to infer the type of argument into mock.patch.object.
-        shampoo_preconditioner_list_module: ModuleType = shampoo_preconditioner_list
-
-        @mock.patch.object(
-            shampoo_preconditioner_list_module,
-            "check_diagonal",
-            return_value=False,
-        )
-        def test_amortized_computation_factor_matrix_non_diagonal(
-            self, mock_check_diagonal: mock.Mock
-        ) -> None:
-            self._preconditioner_list = self._instantiate_preconditioner_list(
-                epsilon=1.0
-            )
-            with self.assertLogs(
-                level="INFO",
-            ) as cm:
-                self._preconditioner_list.update_preconditioners(
-                    masked_grad_list=(
-                        torch.tensor([1.0, 0.0]),
-                        torch.eye(2) / torch.tensor(2.0).sqrt(),
-                        torch.tensor([[1.0, 0.0]]),
-                    ),
-                    step=torch.tensor(1),
-                    perform_amortized_computation=True,
-                )
-            self.assertCountEqual(
-                [r.msg for r in cm.records],
-                [
-                    "Factor matrix 0.block_0.0 is not diagonal.",
-                    "Factor matrix 1.block_0.0 is not diagonal.",
-                    "Factor matrix 1.block_0.1 is not diagonal.",
-                    "Factor matrix 1.block_1.0 is not diagonal.",
-                    "Factor matrix 1.block_1.1 is not diagonal.",
-                ],
-            )
-            mock_check_diagonal.assert_called()
-
         def test_precondition_grad(self) -> None:
             # Generate a random gradient tensor with shape (2, 3, 4, 5, 6, 7).
             grad = torch.randn((2, 3, 4, 5, 6, 7))
@@ -1073,12 +1034,12 @@ class EigenvalueCorrectedShampooPreconditionerListTest(
 
         (1) Tensor of Size 2
             G1 = [1, 0]^T
-            G2 = [0, 1]^T
+            G2 = [0, 2]^T
 
-            L = G1 * G1^T + G2 * G2^T = [[1, 0], [0, 1]]
+            L = G1 * G1^T + G2 * G2^T = [[1, 0], [0, 4]]
             B = [[1, 0], [0, 1]]  # eigenvectors of L
             E = G1^2 + (B G2)^2   # corrected eigenvalues
-            P = B ((B G2) / sqrt(E + eps)) = G2 / sqrt(E + eps) ≈ G2
+            P = B ((B G2) / sqrt(E + eps)) = G2 / sqrt(E + eps)
 
         (2) Tensor of Size 2 x 2
             G1 = [[1, 0], [0, 1]] / sqrt(2)
@@ -1089,18 +1050,18 @@ class EigenvalueCorrectedShampooPreconditionerListTest(
             B_L = [[1, 0], [0, 1]]     # eigenvectors of L
             B_R = [[1, 0], [0, 1]]     # eigenvectors of R
             E = G1^2 + (B_L G2 B_R)^2  # corrected eigenvalues
-            P = B_L ((B_L G2 B_R) / sqrt(E + eps) B_R = G2 / sqrt(E + eps) ≈ G2
+            P = B_L ((B_L G2 B_R) / sqrt(E + eps) B_R = G2 / sqrt(E + eps)
 
         (3) Tensor of Size 1 x 2
             G1 = [[1, 0]]
-            G2 = [[0, 1]]
+            G2 = [[0, 2]]
 
-            L = G1 * G1^T + G2 * G2^T = 2
-            R = G1^T * G1 + G2^T * G2 = [[1, 0], [0, 1]]
+            L = G1 * G1^T + G2 * G2^T = 5
+            R = G1^T * G1 + G2^T * G2 = [[1, 0], [0, 4]]
             B_L = 1                    # eigenvectors of L
             B_R = [[1, 0], [0, 1]]     # eigenvectors of R
             E = G1^2 + (B_L G2 B_R)^2  # corrected eigenvalues
-            P = B_L ((B_L G2 B_R) / sqrt(E + eps) B_R = G2 / sqrt(E + eps) ≈ G2
+            P = B_L ((B_L G2 B_R) / sqrt(E + eps) B_R = G2 / sqrt(E + eps)
 
         """
         masked_grad_list1 = (
@@ -1109,9 +1070,9 @@ class EigenvalueCorrectedShampooPreconditionerListTest(
             torch.tensor([[1.0, 0.0]]),
         )
         masked_grad_list2 = (
-            torch.tensor([0.0, 1.0]),
+            torch.tensor([0.0, 2.0]),
             torch.eye(2) / torch.tensor(2.0).sqrt(),
-            torch.tensor([[0.0, 1.0]]),
+            torch.tensor([[0.0, 2.0]]),
         )
 
         masked_expected_preconditioned_grad_list = (

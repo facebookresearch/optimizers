@@ -314,12 +314,6 @@ class DistributedShampooStateDictTest(unittest.TestCase):
                             [0.0, 0.0, 0.0, 0.0, 1.0],
                         ]
                     ),
-                    '["block_0", "shampoo", "is_factor_matrices_diagonal", 0]': torch.tensor(
-                        True
-                    ),
-                    '["block_0", "shampoo", "is_factor_matrices_diagonal", 1]': torch.tensor(
-                        True
-                    ),
                     '["block_1", "shampoo", "factor_matrices", 0]': torch.tensor(
                         [
                             [0.0, 0.0, 0.0, 0.0, 0.0],
@@ -355,12 +349,6 @@ class DistributedShampooStateDictTest(unittest.TestCase):
                             [0.0, 0.0, 0.0, 1.0, 0.0],
                             [0.0, 0.0, 0.0, 0.0, 1.0],
                         ]
-                    ),
-                    '["block_1", "shampoo", "is_factor_matrices_diagonal", 0]': torch.tensor(
-                        True
-                    ),
-                    '["block_1", "shampoo", "is_factor_matrices_diagonal", 1]': torch.tensor(
-                        True
                     ),
                     '["block_0", "adagrad"]': torch.tensor(
                         [
@@ -486,44 +474,6 @@ class DistributedShampooStateDictTest(unittest.TestCase):
         torch.testing.assert_close(
             state_dict_without_param_groups["state"],
             self._distributed_state_dict["state"],
-        )
-
-    def test_distributed_state_dict_with_non_diagonal_factor_matrices(self) -> None:
-        for _ in range(3):
-            self._optimizer.zero_grad()
-            # Set the grad to an non-zero value to ensure non-diagonal factor matrices.
-            self._model[0].weight.grad = torch.ones_like(self._model[0].weight)
-            self._optimizer.step()
-
-        state_dict = self._optimizer.distributed_state_dict(
-            key_to_param=self._model.named_parameters(),
-            save_param_groups=False,
-        )
-        first_layer_state_dict = state_dict["state"]["0.weight"]
-        first_layer_is_factor_matrices_diagonal_key_value_pairs = [
-            (key, value)
-            for key, value in first_layer_state_dict.items()
-            if '"is_factor_matrices_diagonal"' in key
-        ]
-
-        # Make sure there are '"is_factor_matrices_diagonal"' keys in the state dict, and all of them are False.
-        self.assertTrue(first_layer_is_factor_matrices_diagonal_key_value_pairs)
-        for key, value in first_layer_is_factor_matrices_diagonal_key_value_pairs:
-            with self.subTest(key=key):
-                self.assertFalse(value)
-
-        # Make sure all the keys with the same cardinality. Ignore the '"factor_matrix_indices"' key because it is not stored due to its value is a string but not a tensor.
-        keys_with_the_same_cardinality = (
-            '"factor_matrices"',
-            '"inv_factor_matrices"',
-            '"is_factor_matrices_diagonal"',
-        )
-        key_to_cardinality = {
-            k: sum(k in keys for keys in first_layer_state_dict.keys())
-            for k in keys_with_the_same_cardinality
-        }
-        self.assertEqual(
-            len(set(key_to_cardinality.values())), 1, f"{key_to_cardinality=}"
         )
 
     def test_load_distributed_state_dict(self) -> None:

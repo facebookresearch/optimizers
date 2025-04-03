@@ -10,7 +10,7 @@ LICENSE file in the root directory of this source tree.
 import logging
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from fractions import Fraction
 from functools import reduce
 
@@ -24,11 +24,7 @@ from distributed_shampoo.shampoo_types import (
 )
 from distributed_shampoo.utils.shampoo_block_info import BlockInfo
 from distributed_shampoo.utils.shampoo_utils import compress_list, get_dtype_size
-from matrix_functions import (
-    check_diagonal,
-    matrix_eigendecomposition,
-    matrix_inverse_root,
-)
+from matrix_functions import matrix_eigendecomposition, matrix_inverse_root
 
 from matrix_functions_types import (
     EigendecompositionConfig,
@@ -289,20 +285,14 @@ class BaseShampooKroneckerFactors(OptimizerModule):
     Attributes:
         factor_matrices (tuple[Tensor, ...]): A tuple of tensors representing the factor matrices.
         factor_matrix_indices (tuple[str, ...]): A tuple of strings representing the indices of the factor matrices.
-        is_factor_matrices_diagonal (tuple[Tensor, ...]): A tuple of tensors indicating if the factor matrices are diagonal.
     """
 
     factor_matrices: tuple[Tensor, ...]
     factor_matrix_indices: tuple[str, ...]
-    is_factor_matrices_diagonal: tuple[Tensor, ...] = field(default_factory=tuple)
 
     def __post_init__(self) -> None:
         super().__init__()
         assert len(self.factor_matrices) == len(self.factor_matrix_indices)
-        if not self.is_factor_matrices_diagonal:
-            self.is_factor_matrices_diagonal = tuple(
-                torch.tensor(True) for _ in range(len(self.factor_matrices))
-            )
 
 
 @dataclass(kw_only=True)
@@ -313,7 +303,6 @@ class ShampooKroneckerFactorsState(BaseShampooKroneckerFactors):
         inv_factor_matrices (tuple[Tensor, ...]): A tuple of tensors representing the inverse of the factor matrices.
         factor_matrices (tuple[Tensor, ...]): A tuple of tensors representing the factor matrices.
         factor_matrix_indices (tuple[str, ...]): A tuple of strings representing the indices of the factor matrices.
-        is_factor_matrices_diagonal (tuple[Tensor, ...]): A tuple of tensors indicating if the factor matrices are diagonal.
     """
 
     inv_factor_matrices: tuple[Tensor, ...]
@@ -331,7 +320,6 @@ class ShampooKroneckerFactorsList(BaseShampooKroneckerFactors):
         inv_factor_matrices (tuple[Tensor, ...]): A tuple of tensors representing the inverse of the factor matrices.
         factor_matrices (tuple[Tensor, ...]): A tuple of tensors representing the factor matrices.
         factor_matrix_indices (tuple[str, ...]): A tuple of strings representing the indices of the factor matrices.
-        is_factor_matrices_diagonal (tuple[Tensor, ...]): A tuple of tensors indicating if the factor matrices are diagonal.
     """
 
     inv_factor_matrices: tuple[Tensor, ...]
@@ -350,7 +338,6 @@ class EigendecomposedShampooKroneckerFactorsState(BaseShampooKroneckerFactors):
         factor_matrices_eigenvalues (tuple[Tensor, ...]): A tuple of tensors representing the eigenvalues of the factor matrices.
         factor_matrices (tuple[Tensor, ...]): A tuple of tensors representing the factor matrices.
         factor_matrix_indices (tuple[str, ...]): A tuple of strings representing the indices of the factor matrices.
-        is_factor_matrices_diagonal (tuple[Tensor, ...]): A tuple of tensors indicating if the factor matrices are diagonal.
     """
 
     factor_matrices_eigenvectors: tuple[Tensor, ...]
@@ -374,7 +361,6 @@ class EigendecomposedShampooKroneckerFactorsList(BaseShampooKroneckerFactors):
         factor_matrices_eigenvalues (tuple[Tensor, ...]): A tuple of tensors representing the eigenvalues of the factor matrices.
         factor_matrices (tuple[Tensor, ...]): A tuple of tensors representing the factor matrices.
         factor_matrix_indices (tuple[str, ...]): A tuple of strings representing the indices of the factor matrices.
-        is_factor_matrices_diagonal (tuple[Tensor, ...]): A tuple of tensors indicating if the factor matrices are diagonal.
     """
 
     factor_matrices_eigenvectors: tuple[Tensor, ...]
@@ -398,7 +384,6 @@ class EigenvalueCorrectedShampooKroneckerFactorsState(BaseShampooKroneckerFactor
         corrected_eigenvalues (Tensor): A tensor representing the corrected eigenvalues.
         factor_matrices (tuple[Tensor, ...]): A tuple of tensors representing the factor matrices.
         factor_matrix_indices (tuple[str, ...]): A tuple of strings representing the indices of the factor matrices.
-        is_factor_matrices_diagonal (tuple[Tensor, ...]): A tuple of tensors indicating if the factor matrices are diagonal.
     """
 
     factor_matrices_eigenvectors: tuple[Tensor, ...]
@@ -418,7 +403,6 @@ class EigenvalueCorrectedShampooKroneckerFactorsList(BaseShampooKroneckerFactors
         corrected_eigenvalues (Tensor): A tensor representing the corrected eigenvalues.
         factor_matrices (tuple[Tensor, ...]): A tuple of tensors representing the factor matrices.
         factor_matrix_indices (tuple[str, ...]): A tuple of strings representing the indices of the factor matrices.
-        is_factor_matrices_diagonal (tuple[Tensor, ...]): A tuple of tensors indicating if the factor matrices are diagonal.
     """
 
     factor_matrices_eigenvectors: tuple[Tensor, ...]
@@ -671,18 +655,10 @@ class BaseShampooPreconditionerList(
         ...
 
     @staticmethod
-    def _check_factor_matrix_for_diagonality_nan_and_inf(
+    def _check_factor_matrix_for_nan_and_inf(
         factor_matrix: Tensor,
-        is_factor_matrix_diagonal: Tensor,
         factor_matrix_index: str,
     ) -> None:
-        # For tracking diagonality of the factor matrix.
-        # Checks if the factor matrix is currently diagonal, then checks whether or not
-        # the update factor matrix is diagonal.
-        if is_factor_matrix_diagonal and not check_diagonal(factor_matrix):
-            is_factor_matrix_diagonal.copy_(torch.tensor(False))
-            logger.info(f"Factor matrix {factor_matrix_index} is not diagonal.")
-
         # Check for nan or inf values.
         if not torch.isfinite(factor_matrix).all():
             raise PreconditionerValueError(
@@ -972,7 +948,6 @@ class ShampooPreconditionerList(
                 for t in kronecker_factors_state.inv_factor_matrices
             ),
             factor_matrix_indices=kronecker_factors_state.factor_matrix_indices,
-            is_factor_matrices_diagonal=kronecker_factors_state.is_factor_matrices_diagonal,
         )
 
     def _get_inverse_roots_from_override(
@@ -1041,13 +1016,11 @@ class ShampooPreconditionerList(
                 for (
                     factor_matrix,
                     inv_factor_matrix,
-                    is_factor_matrix_diagonal,
                     factor_matrix_index,
                     root,
                 ) in zip(
                     kronecker_factors.factor_matrices,
                     kronecker_factors.inv_factor_matrices,
-                    kronecker_factors.is_factor_matrices_diagonal,
                     kronecker_factors.factor_matrix_indices,
                     roots,
                     strict=True,
@@ -1057,9 +1030,8 @@ class ShampooPreconditionerList(
                         factor_matrix / self._bias_correction2
                     )
 
-                    BaseShampooPreconditionerList._check_factor_matrix_for_diagonality_nan_and_inf(
+                    BaseShampooPreconditionerList._check_factor_matrix_for_nan_and_inf(
                         factor_matrix=bias_corrected_factor_matrix,
-                        is_factor_matrix_diagonal=is_factor_matrix_diagonal,
                         factor_matrix_index=factor_matrix_index,
                     )
 
@@ -1074,7 +1046,7 @@ class ShampooPreconditionerList(
                             root=Fraction(root),
                             root_inv_config=root_inv_config,
                             epsilon=self._epsilon,
-                            is_diagonal=bool(is_factor_matrix_diagonal),
+                            is_diagonal=False,
                         ).to(dtype=inv_factor_matrix.dtype)
                         # Add success to success tracker.
                         success_tracker.append(True)
@@ -1182,7 +1154,6 @@ class EigendecomposedShampooPreconditionerList(
                 for t in kronecker_factors_state.factor_matrices_eigenvalues
             ),
             factor_matrix_indices=kronecker_factors_state.factor_matrix_indices,
-            is_factor_matrices_diagonal=kronecker_factors_state.is_factor_matrices_diagonal,
         )
 
     def _get_inverse_roots_from_override(
@@ -1259,13 +1230,11 @@ class EigendecomposedShampooPreconditionerList(
                     factor_matrix,
                     factor_matrix_eigenvectors,
                     factor_matrix_eigenvalues,
-                    is_factor_matrix_diagonal,
                     factor_matrix_index,
                 ) in zip(
                     kronecker_factors.factor_matrices,
                     kronecker_factors.factor_matrices_eigenvectors,
                     kronecker_factors.factor_matrices_eigenvalues,
-                    kronecker_factors.is_factor_matrices_diagonal,
                     kronecker_factors.factor_matrix_indices,
                     strict=True,
                 ):
@@ -1274,9 +1243,8 @@ class EigendecomposedShampooPreconditionerList(
                         factor_matrix / self._bias_correction2
                     )
 
-                    BaseShampooPreconditionerList._check_factor_matrix_for_diagonality_nan_and_inf(
+                    BaseShampooPreconditionerList._check_factor_matrix_for_nan_and_inf(
                         factor_matrix=bias_corrected_factor_matrix,
-                        is_factor_matrix_diagonal=is_factor_matrix_diagonal,
                         factor_matrix_index=factor_matrix_index,
                     )
 
@@ -1296,7 +1264,7 @@ class EigendecomposedShampooPreconditionerList(
                             matrix_eigendecomposition(
                                 A=bias_corrected_factor_matrix,
                                 eigendecomposition_config=eigendecomposition_config,
-                                is_diagonal=bool(is_factor_matrix_diagonal),
+                                is_diagonal=False,
                             )
                         )
                         # Add success to success tracker.
@@ -1412,7 +1380,6 @@ class EigenvalueCorrectedShampooPreconditionerList(
                 kronecker_factors_state.corrected_eigenvalues
             ),
             factor_matrix_indices=kronecker_factors_state.factor_matrix_indices,
-            is_factor_matrices_diagonal=kronecker_factors_state.is_factor_matrices_diagonal,
         )
 
     def _get_inverse_roots_from_override(
@@ -1565,18 +1532,15 @@ class EigenvalueCorrectedShampooPreconditionerList(
                 for (
                     factor_matrix,
                     factor_matrix_eigenvectors,
-                    is_factor_matrix_diagonal,
                     factor_matrix_index,
                 ) in zip(
                     kronecker_factors.factor_matrices,
                     kronecker_factors.factor_matrices_eigenvectors,
-                    kronecker_factors.is_factor_matrices_diagonal,
                     kronecker_factors.factor_matrix_indices,
                     strict=True,
                 ):
-                    BaseShampooPreconditionerList._check_factor_matrix_for_diagonality_nan_and_inf(
+                    BaseShampooPreconditionerList._check_factor_matrix_for_nan_and_inf(
                         factor_matrix=factor_matrix,
-                        is_factor_matrix_diagonal=is_factor_matrix_diagonal,
                         factor_matrix_index=factor_matrix_index,
                     )
 
@@ -1595,7 +1559,7 @@ class EigenvalueCorrectedShampooPreconditionerList(
                         computed_eigenvectors = matrix_eigendecomposition(
                             A=factor_matrix,
                             eigendecomposition_config=eigendecomposition_config,
-                            is_diagonal=bool(is_factor_matrix_diagonal),
+                            is_diagonal=False,
                         )[1]
                         # Add success to success tracker.
                         success_tracker.append(True)
