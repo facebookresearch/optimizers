@@ -264,7 +264,7 @@ class DistributedShampooStateDictTest(unittest.TestCase):
             lr=0.01,
             betas=(0.9, 1.0),
             epsilon=1e-12,
-            momentum=0.0,
+            momentum=0.9,
             weight_decay=0.0,
             max_preconditioner_dim=5,
             precondition_frequency=1,
@@ -380,6 +380,24 @@ class DistributedShampooStateDictTest(unittest.TestCase):
                             [0.0, 0.0, 0.0, 0.0, 0.0],
                         ]
                     ),
+                    '["block_0", "momentum"]': torch.tensor(
+                        [
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                        ]
+                    ),
+                    '["block_1", "momentum"]': torch.tensor(
+                        [
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                        ]
+                    ),
                     '["block_0", "filtered_grad"]': torch.tensor(
                         [
                             [0.0, 0.0, 0.0, 0.0, 0.0],
@@ -406,7 +424,7 @@ class DistributedShampooStateDictTest(unittest.TestCase):
                     "betas": (0.9, 1.0),
                     "beta3": 0.9,
                     "epsilon": 1e-12,
-                    "momentum": 0.0,
+                    "momentum": 0.9,
                     "dampening": 0.0,
                     "weight_decay": 0.0,
                     "max_preconditioner_dim": 5,
