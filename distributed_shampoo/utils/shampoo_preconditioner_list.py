@@ -1257,9 +1257,10 @@ class EigendecomposedShampooPreconditionerList(
                     if isinstance(
                         eigendecomposition_config, QREigendecompositionConfig
                     ):
+                        # Due to the use of QR algorithm, we need to pass in the previous eigenvectors with the same type as the input matrix, i.e., bias_corrected_factor_matrix.
                         eigendecomposition_config.eigenvectors_estimate = (
                             factor_matrix_eigenvectors
-                        )
+                        ).to(dtype=bias_corrected_factor_matrix.dtype)
                     try:
                         computed_eigenvalues, computed_eigenvectors = (
                             matrix_eigendecomposition(
@@ -1268,6 +1269,8 @@ class EigendecomposedShampooPreconditionerList(
                                 is_diagonal=False,
                             )
                         )
+                        computed_eigenvalues.to(dtype=factor_matrix_eigenvalues.dtype)
+                        computed_eigenvectors.to(dtype=factor_matrix_eigenvectors.dtype)
                         # Add success to success tracker.
                         success_tracker.append(True)
                     except Exception as exception:
@@ -1551,15 +1554,16 @@ class EigenvalueCorrectedShampooPreconditionerList(
                     if isinstance(
                         eigendecomposition_config, QREigendecompositionConfig
                     ):
+                        # Due to the use of QR algorithm, we need to pass in the previous eigenvectors with the same type as the input matrix, i.e., factor_matrix.
                         eigendecomposition_config.eigenvectors_estimate = (
                             factor_matrix_eigenvectors
-                        )
+                        ).to(dtype=factor_matrix.dtype)
                     try:
                         computed_eigenvectors = matrix_eigendecomposition(
                             A=factor_matrix,
                             eigendecomposition_config=eigendecomposition_config,
                             is_diagonal=False,
-                        )[1]
+                        )[1].to(dtype=factor_matrix_eigenvectors.dtype)
                         # Add success to success tracker.
                         success_tracker.append(True)
                     except Exception as exception:
