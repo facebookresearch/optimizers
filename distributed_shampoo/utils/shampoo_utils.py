@@ -106,7 +106,7 @@ def generate_pairwise_indices(input_list: Sequence[int]) -> Iterator[tuple[int, 
     number of blocks within each parameter.
 
     Args:
-        input_list (Sequence[int]): A list of intergers specifying the number of elements within each partition.
+        input_list (Sequence[int]): A list of integers specifying the number of elements within each partition.
 
     Returns:
         partition_indices: Iterator[tuple[int, int]]: An iterator containing pairs of indices which specify
