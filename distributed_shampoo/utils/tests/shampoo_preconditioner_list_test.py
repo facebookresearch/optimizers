@@ -278,11 +278,11 @@ class BaseShampooPreconditionerListTest(unittest.TestCase):
         BaseShampooPreconditionerList.__abstractmethods__ = frozenset()
 
         with mock.patch.object(
-            # Mock _create_preconditioned_dims_selector_list() to enable the instantiation of BaseShampooPreconditionerList.
+            # Mock _create_preconditioned_dims_selector() to enable the instantiation of BaseShampooPreconditionerList.
             BaseShampooPreconditionerList,
-            "_create_preconditioned_dims_selector_list",
-            return_value=((True,) * max(param.dim(), 1),),
-        ) as mock_create_preconditioned_dims_selector_list, mock.patch.object(
+            "_create_preconditioned_dims_selector",
+            return_value=(True,) * max(param.dim(), 1),
+        ) as mock_create_preconditioned_dims_selector, mock.patch.object(
             # Mock _update_factor_matrices() otherwise the access of factor_matrices will throw errors.
             BaseShampooPreconditionerList,
             "_update_factor_matrices",
@@ -308,7 +308,7 @@ class BaseShampooPreconditionerListTest(unittest.TestCase):
                 perform_amortized_computation=True,
             )
 
-            mock_create_preconditioned_dims_selector_list.assert_called_once()
+            mock_create_preconditioned_dims_selector.assert_called_once()
             mock_update_factor_matrices.assert_called_once()
 
 
