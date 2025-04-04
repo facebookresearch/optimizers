@@ -1105,6 +1105,10 @@ class EigendecomposedShampooPreconditionerList(
             )
             for dim in preconditioned_dims
         )
+        # Initialize factor_matrices_eigenvectors as identity matrices.
+        for t in factor_matrices_eigenvectors:
+            block_info.get_tensor(t).fill_diagonal_(1.0)
+
         factor_matrices_eigenvalues = tuple(
             block_info.allocate_zeros_tensor(
                 size=(dim,),
@@ -1113,6 +1117,9 @@ class EigendecomposedShampooPreconditionerList(
             )
             for dim in preconditioned_dims
         )
+        # Initialize factor_matrices_eigenvalues all ones.
+        for t in factor_matrices_eigenvalues:
+            block_info.get_tensor(t).fill_(1.0)
 
         base_kronecker_factors = self._create_base_kronecker_factors(
             block_info=block_info, preconditioned_dims=preconditioned_dims
@@ -1333,6 +1340,10 @@ class EigenvalueCorrectedShampooPreconditionerList(
             )
             for dim in preconditioned_dims
         )
+        # Initialize factor_matrices_eigenvectors as identity matrices.
+        for t in factor_matrices_eigenvectors:
+            block_info.get_tensor(t).fill_diagonal_(1.0)
+
         corrected_eigenvalues = block_info.allocate_zeros_tensor(
             # Note that the corrected eigenvalues are not affected by the preconditioned_dims.
             size=tuple(dims),
