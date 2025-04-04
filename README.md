@@ -1,7 +1,6 @@
 # Optimizers
 
-[![Python
-3.10 | 3.11 | 3.12](https://img.shields.io/badge/python-3.10_|_3.11_|_3.12-blue.svg)](https://www.python.org/downloads/)
+[![Python3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/downloads/)
 ![tests](https://github.com/facebookresearch/optimizers/actions/workflows/tests.yaml/badge.svg)
 ![gpu-tests](https://github.com/facebookresearch/optimizers/actions/workflows/gpu-tests.yaml/badge.svg)
 ![linting](https://github.com/facebookresearch/optimizers/actions/workflows/lint.yaml/badge.svg)
@@ -24,7 +23,7 @@ See the [CONTRIBUTING](CONTRIBUTING.md) file for how to help out.
 Optimizers is BSD licensed, as found in the LICENSE file.
 
 ## Installation and Dependencies
-This code requires `python>=3.10` and `torch>=2.5.0`.
+This code requires `python>=3.12` and `torch>=2.5.0`.
 Install `distributed_shampoo` with all dependencies:
 ```bash
 git clone git@github.com:facebookresearch/optimizers.git

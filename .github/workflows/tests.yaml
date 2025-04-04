@@ -4,7 +4,7 @@ on: [push, pull_request]
 
 jobs:
   tests:
-    name: "Python 3.10"
+    name: "Python 3.12"
     runs-on: ubuntu-latest
     steps:
         - uses: actions/checkout@v4
@@ -13,7 +13,7 @@ jobs:
             curl -LsSf https://astral.sh/uv/install.sh | sh
             uv self update
         - name: Install Python.
-          run: uv python install 3.10
+          run: uv python install 3.12
         - name: Create venv and install the package.
           run: |
             uv venv && source .venv/bin/activate

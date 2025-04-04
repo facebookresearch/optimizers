@@ -46,7 +46,7 @@ if __name__ == "__main__":
     Uses torch.distributed to launch distributed training run.
 
     Requirements:
-        - Python 3.10 or above
+        - Python 3.12 or above
         - PyTorch / TorchVision
 
     To run this training script with a single node, one can run from the optimizers directory:
