@@ -471,8 +471,10 @@ class BaseShampooPreconditionerList(
         self._use_bias_correction = use_bias_correction
         self._bias_correction2: Tensor = torch.tensor(1.0)
 
-        preconditioned_dims_selector_list: tuple[tuple[bool, ...], ...] = (
-            self._create_preconditioned_dims_selector_list()
+        preconditioned_dims_selector_list: tuple[tuple[bool, ...], ...] = tuple(
+            self._create_preconditioned_dims_selector(dims)
+            # Traverse through each block's dims.
+            for dims in self._dims_list
         )
         preconditioned_dims_list: tuple[tuple[int, ...], ...] = tuple(
             compress_list(dims, preconditioned_dims_selector)
@@ -500,14 +502,17 @@ class BaseShampooPreconditionerList(
         )
 
     @abstractmethod
-    def _create_preconditioned_dims_selector_list(
-        self,
-    ) -> tuple[tuple[bool, ...], ...]:
+    def _create_preconditioned_dims_selector(
+        self, dims: torch.Size
+    ) -> tuple[bool, ...]:
         """
-        Creates a list of preconditioned dimensions selectors for each block.
+        Creates a preconditioned dimensions selectors for a block.
+
+        Args:
+            dims (torch.Size): The dimensions of the block.
 
         Returns:
-            preconditioned_dims_selector_list (tuple[tuple[bool, ...], ...]): A list of preconditioned dimensions selectors for each block.
+            preconditioned_dims_selector (tuple[bool, ...]): A preconditioned dimensions selectors for a block.
         """
         ...
 
@@ -919,18 +924,16 @@ class ShampooPreconditionerList(
             inv_factor_matrices=inv_factor_matrices,
         )
 
-    def _create_preconditioned_dims_selector_list(self) -> tuple[tuple[bool, ...], ...]:
+    def _create_preconditioned_dims_selector(
+        self, dims: torch.Size
+    ) -> tuple[bool, ...]:
         return tuple(
-            tuple(
-                getattr(self._preconditioner_config, "inverse_exponent_override", {})
-                .get(len(dims), {})
-                .get(d, 1 / (2 * len(dims)))
-                != 0.0
-                # Traverse through each dim of a block.
-                for d in range(len(dims))
-            )
-            # Traverse through each block's dims.
-            for dims in self._dims_list
+            getattr(self._preconditioner_config, "inverse_exponent_override", {})
+            .get(len(dims), {})
+            .get(d, 1 / (2 * len(dims)))
+            != 0.0
+            # Traverse through each dim of a block.
+            for d in range(len(dims))
         )
 
     def _create_kronecker_factors_list(
@@ -1102,6 +1105,10 @@ class EigendecomposedShampooPreconditionerList(
             )
             for dim in preconditioned_dims
         )
+        # Initialize factor_matrices_eigenvectors as identity matrices.
+        for t in factor_matrices_eigenvectors:
+            block_info.get_tensor(t).fill_diagonal_(1.0)
+
         factor_matrices_eigenvalues = tuple(
             block_info.allocate_zeros_tensor(
                 size=(dim,),
@@ -1110,6 +1117,9 @@ class EigendecomposedShampooPreconditionerList(
             )
             for dim in preconditioned_dims
         )
+        # Initialize factor_matrices_eigenvalues all ones.
+        for t in factor_matrices_eigenvalues:
+            block_info.get_tensor(t).fill_(1.0)
 
         base_kronecker_factors = self._create_base_kronecker_factors(
             block_info=block_info, preconditioned_dims=preconditioned_dims
@@ -1121,18 +1131,16 @@ class EigendecomposedShampooPreconditionerList(
             factor_matrix_indices=base_kronecker_factors.factor_matrix_indices,
         )
 
-    def _create_preconditioned_dims_selector_list(self) -> tuple[tuple[bool, ...], ...]:
+    def _create_preconditioned_dims_selector(
+        self, dims: torch.Size
+    ) -> tuple[bool, ...]:
         return tuple(
-            tuple(
-                getattr(self._preconditioner_config, "inverse_exponent_override", {})
-                .get(len(dims), {})
-                .get(d, 1 / (2 * len(dims)))
-                != 0.0
-                # Traverse through each dim of a block.
-                for d in range(len(dims))
-            )
-            # Traverse through each block's dims.
-            for dims in self._dims_list
+            getattr(self._preconditioner_config, "inverse_exponent_override", {})
+            .get(len(dims), {})
+            .get(d, 1 / (2 * len(dims)))
+            != 0.0
+            # Traverse through each dim of a block.
+            for d in range(len(dims))
         )
 
     def _create_kronecker_factors_list(
@@ -1256,9 +1264,10 @@ class EigendecomposedShampooPreconditionerList(
                     if isinstance(
                         eigendecomposition_config, QREigendecompositionConfig
                     ):
+                        # Due to the use of QR algorithm, we need to pass in the previous eigenvectors with the same type as the input matrix, i.e., bias_corrected_factor_matrix.
                         eigendecomposition_config.eigenvectors_estimate = (
                             factor_matrix_eigenvectors
-                        )
+                        ).to(dtype=bias_corrected_factor_matrix.dtype)
                     try:
                         computed_eigenvalues, computed_eigenvectors = (
                             matrix_eigendecomposition(
@@ -1267,6 +1276,8 @@ class EigendecomposedShampooPreconditionerList(
                                 is_diagonal=False,
                             )
                         )
+                        computed_eigenvalues.to(dtype=factor_matrix_eigenvalues.dtype)
+                        computed_eigenvectors.to(dtype=factor_matrix_eigenvectors.dtype)
                         # Add success to success tracker.
                         success_tracker.append(True)
                     except Exception as exception:
@@ -1329,6 +1340,10 @@ class EigenvalueCorrectedShampooPreconditionerList(
             )
             for dim in preconditioned_dims
         )
+        # Initialize factor_matrices_eigenvectors as identity matrices.
+        for t in factor_matrices_eigenvectors:
+            block_info.get_tensor(t).fill_diagonal_(1.0)
+
         corrected_eigenvalues = block_info.allocate_zeros_tensor(
             # Note that the corrected eigenvalues are not affected by the preconditioned_dims.
             size=tuple(dims),
@@ -1346,20 +1361,18 @@ class EigenvalueCorrectedShampooPreconditionerList(
             factor_matrix_indices=base_kronecker_factors.factor_matrix_indices,
         )
 
-    def _create_preconditioned_dims_selector_list(self) -> tuple[tuple[bool, ...], ...]:
+    def _create_preconditioned_dims_selector(
+        self, dims: torch.Size
+    ) -> tuple[bool, ...]:
         return tuple(
-            tuple(
-                d
-                not in getattr(
-                    self._preconditioner_config,
-                    "ignored_basis_change_dims",
-                    {},
-                ).get(len(dims), [])
-                # Traverse through each dim of a block.
-                for d in range(len(dims))
-            )
-            # Traverse through each block's dims.
-            for dims in self._dims_list
+            d
+            not in getattr(
+                self._preconditioner_config,
+                "ignored_basis_change_dims",
+                {},
+            ).get(len(dims), [])
+            # Traverse through each dim of a block.
+            for d in range(len(dims))
         )
 
     def _create_kronecker_factors_list(
@@ -1552,15 +1565,16 @@ class EigenvalueCorrectedShampooPreconditionerList(
                     if isinstance(
                         eigendecomposition_config, QREigendecompositionConfig
                     ):
+                        # Due to the use of QR algorithm, we need to pass in the previous eigenvectors with the same type as the input matrix, i.e., factor_matrix.
                         eigendecomposition_config.eigenvectors_estimate = (
                             factor_matrix_eigenvectors
-                        )
+                        ).to(dtype=factor_matrix.dtype)
                     try:
                         computed_eigenvectors = matrix_eigendecomposition(
                             A=factor_matrix,
                             eigendecomposition_config=eigendecomposition_config,
                             is_diagonal=False,
-                        )[1]
+                        )[1].to(dtype=factor_matrix_eigenvectors.dtype)
                         # Add success to success tracker.
                         success_tracker.append(True)
                     except Exception as exception:
