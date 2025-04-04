@@ -471,8 +471,10 @@ class BaseShampooPreconditionerList(
         self._use_bias_correction = use_bias_correction
         self._bias_correction2: Tensor = torch.tensor(1.0)
 
-        preconditioned_dims_selector_list: tuple[tuple[bool, ...], ...] = (
-            self._create_preconditioned_dims_selector_list()
+        preconditioned_dims_selector_list: tuple[tuple[bool, ...], ...] = tuple(
+            self._create_preconditioned_dims_selector(dims)
+            # Traverse through each block's dims.
+            for dims in self._dims_list
         )
         preconditioned_dims_list: tuple[tuple[int, ...], ...] = tuple(
             compress_list(dims, preconditioned_dims_selector)
@@ -500,14 +502,17 @@ class BaseShampooPreconditionerList(
         )
 
     @abstractmethod
-    def _create_preconditioned_dims_selector_list(
-        self,
-    ) -> tuple[tuple[bool, ...], ...]:
+    def _create_preconditioned_dims_selector(
+        self, dims: torch.Size
+    ) -> tuple[bool, ...]:
         """
-        Creates a list of preconditioned dimensions selectors for each block.
+        Creates a preconditioned dimensions selectors for a block.
+
+        Args:
+            dims (torch.Size): The dimensions of the block.
 
         Returns:
-            preconditioned_dims_selector_list (tuple[tuple[bool, ...], ...]): A list of preconditioned dimensions selectors for each block.
+            preconditioned_dims_selector (tuple[bool, ...]): A preconditioned dimensions selectors for a block.
         """
         ...
 
@@ -919,18 +924,16 @@ class ShampooPreconditionerList(
             inv_factor_matrices=inv_factor_matrices,
         )
 
-    def _create_preconditioned_dims_selector_list(self) -> tuple[tuple[bool, ...], ...]:
+    def _create_preconditioned_dims_selector(
+        self, dims: torch.Size
+    ) -> tuple[bool, ...]:
         return tuple(
-            tuple(
-                getattr(self._preconditioner_config, "inverse_exponent_override", {})
-                .get(len(dims), {})
-                .get(d, 1 / (2 * len(dims)))
-                != 0.0
-                # Traverse through each dim of a block.
-                for d in range(len(dims))
-            )
-            # Traverse through each block's dims.
-            for dims in self._dims_list
+            getattr(self._preconditioner_config, "inverse_exponent_override", {})
+            .get(len(dims), {})
+            .get(d, 1 / (2 * len(dims)))
+            != 0.0
+            # Traverse through each dim of a block.
+            for d in range(len(dims))
         )
 
     def _create_kronecker_factors_list(
@@ -1121,18 +1124,16 @@ class EigendecomposedShampooPreconditionerList(
             factor_matrix_indices=base_kronecker_factors.factor_matrix_indices,
         )
 
-    def _create_preconditioned_dims_selector_list(self) -> tuple[tuple[bool, ...], ...]:
+    def _create_preconditioned_dims_selector(
+        self, dims: torch.Size
+    ) -> tuple[bool, ...]:
         return tuple(
-            tuple(
-                getattr(self._preconditioner_config, "inverse_exponent_override", {})
-                .get(len(dims), {})
-                .get(d, 1 / (2 * len(dims)))
-                != 0.0
-                # Traverse through each dim of a block.
-                for d in range(len(dims))
-            )
-            # Traverse through each block's dims.
-            for dims in self._dims_list
+            getattr(self._preconditioner_config, "inverse_exponent_override", {})
+            .get(len(dims), {})
+            .get(d, 1 / (2 * len(dims)))
+            != 0.0
+            # Traverse through each dim of a block.
+            for d in range(len(dims))
         )
 
     def _create_kronecker_factors_list(
@@ -1346,20 +1347,18 @@ class EigenvalueCorrectedShampooPreconditionerList(
             factor_matrix_indices=base_kronecker_factors.factor_matrix_indices,
         )
 
-    def _create_preconditioned_dims_selector_list(self) -> tuple[tuple[bool, ...], ...]:
+    def _create_preconditioned_dims_selector(
+        self, dims: torch.Size
+    ) -> tuple[bool, ...]:
         return tuple(
-            tuple(
-                d
-                not in getattr(
-                    self._preconditioner_config,
-                    "ignored_basis_change_dims",
-                    {},
-                ).get(len(dims), [])
-                # Traverse through each dim of a block.
-                for d in range(len(dims))
-            )
-            # Traverse through each block's dims.
-            for dims in self._dims_list
+            d
+            not in getattr(
+                self._preconditioner_config,
+                "ignored_basis_change_dims",
+                {},
+            ).get(len(dims), [])
+            # Traverse through each dim of a block.
+            for d in range(len(dims))
         )
 
     def _create_kronecker_factors_list(
