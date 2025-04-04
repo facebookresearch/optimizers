@@ -73,7 +73,7 @@ if __name__ == "__main__":
     Trains a simple convolutional network with a single GPU.
 
     Requirements:
-        - Python 3.10 or above
+        - Python 3.12 or above
         - PyTorch / TorchVision
 
     To run this simple training script, one can run from the optimizers directory:

@@ -47,7 +47,7 @@ if __name__ == "__main__":
     Uses torch.distributed to launch distributed training run.
 
     Requirements:
-        - Python 3.10 or above
+        - Python 3.12 or above
         - PyTorch / TorchVision
         - 8 GPU machine
 
