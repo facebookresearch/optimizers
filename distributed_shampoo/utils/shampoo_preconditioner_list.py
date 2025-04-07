@@ -10,7 +10,7 @@ LICENSE file in the root directory of this source tree.
 import logging
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from fractions import Fraction
 from functools import reduce
 
@@ -903,23 +903,21 @@ class ShampooPreconditionerList(
         dims: torch.Size,
         preconditioned_dims: tuple[int, ...],
     ) -> ShampooKroneckerFactorsState:
-        # Initialize inv_factor_matrices as identity matrices.
-        inv_factor_matrices = tuple(
-            block_info.allocate_eye_tensor(
-                n=dim,
-                dtype=block.dtype,
-                device=block_info.param.device,
-            )
-            for dim in preconditioned_dims
-        )
-
-        base_kronecker_factors = self._create_base_kronecker_factors(
-            block_info=block_info, preconditioned_dims=preconditioned_dims
-        )
         return ShampooKroneckerFactorsState(
-            factor_matrices=base_kronecker_factors.factor_matrices,
-            factor_matrix_indices=base_kronecker_factors.factor_matrix_indices,
-            inv_factor_matrices=inv_factor_matrices,
+            **asdict(
+                self._create_base_kronecker_factors(
+                    block_info=block_info, preconditioned_dims=preconditioned_dims
+                )
+            ),
+            # Initialize inv_factor_matrices as identity matrices.
+            inv_factor_matrices=tuple(
+                block_info.allocate_eye_tensor(
+                    n=dim,
+                    dtype=block.dtype,
+                    device=block_info.param.device,
+                )
+                for dim in preconditioned_dims
+            ),
         )
 
     def _create_preconditioned_dims_selector(
@@ -1095,34 +1093,30 @@ class EigendecomposedShampooPreconditionerList(
         dims: torch.Size,
         preconditioned_dims: tuple[int, ...],
     ) -> EigendecomposedShampooKroneckerFactorsState:
-        # Initialize factor_matrices_eigenvectors as identity matrices.
-        factor_matrices_eigenvectors = tuple(
-            block_info.allocate_eye_tensor(
-                n=dim,
-                dtype=block.dtype,
-                device=block_info.param.device,
-            )
-            for dim in preconditioned_dims
-        )
-
-        # Initialize factor_matrices_eigenvalues all ones.
-        factor_matrices_eigenvalues = tuple(
-            block_info.allocate_ones_tensor(
-                size=(dim,),
-                dtype=block.dtype,
-                device=block_info.param.device,
-            )
-            for dim in preconditioned_dims
-        )
-
-        base_kronecker_factors = self._create_base_kronecker_factors(
-            block_info=block_info, preconditioned_dims=preconditioned_dims
-        )
         return EigendecomposedShampooKroneckerFactorsState(
-            factor_matrices=base_kronecker_factors.factor_matrices,
-            factor_matrices_eigenvectors=factor_matrices_eigenvectors,
-            factor_matrices_eigenvalues=factor_matrices_eigenvalues,
-            factor_matrix_indices=base_kronecker_factors.factor_matrix_indices,
+            **asdict(
+                self._create_base_kronecker_factors(
+                    block_info=block_info, preconditioned_dims=preconditioned_dims
+                )
+            ),
+            # Initialize factor_matrices_eigenvectors as identity matrices.
+            factor_matrices_eigenvectors=tuple(
+                block_info.allocate_eye_tensor(
+                    n=dim,
+                    dtype=block.dtype,
+                    device=block_info.param.device,
+                )
+                for dim in preconditioned_dims
+            ),
+            # Initialize factor_matrices_eigenvalues all ones.
+            factor_matrices_eigenvalues=tuple(
+                block_info.allocate_ones_tensor(
+                    size=(dim,),
+                    dtype=block.dtype,
+                    device=block_info.param.device,
+                )
+                for dim in preconditioned_dims
+            ),
         )
 
     def _create_preconditioned_dims_selector(
@@ -1326,31 +1320,27 @@ class EigenvalueCorrectedShampooPreconditionerList(
         dims: torch.Size,
         preconditioned_dims: tuple[int, ...],
     ) -> EigenvalueCorrectedShampooKroneckerFactorsState:
-        # Initialize factor_matrices_eigenvectors as identity matrices.
-        factor_matrices_eigenvectors = tuple(
-            block_info.allocate_eye_tensor(
-                n=dim,
+        return EigenvalueCorrectedShampooKroneckerFactorsState(
+            **asdict(
+                self._create_base_kronecker_factors(
+                    block_info=block_info, preconditioned_dims=preconditioned_dims
+                )
+            ),
+            # Initialize factor_matrices_eigenvectors as identity matrices.
+            factor_matrices_eigenvectors=tuple(
+                block_info.allocate_eye_tensor(
+                    n=dim,
+                    dtype=block.dtype,
+                    device=block_info.param.device,
+                )
+                for dim in preconditioned_dims
+            ),
+            corrected_eigenvalues=block_info.allocate_zeros_tensor(
+                # Note that the corrected eigenvalues are not affected by the preconditioned_dims.
+                size=tuple(dims),
                 dtype=block.dtype,
                 device=block_info.param.device,
-            )
-            for dim in preconditioned_dims
-        )
-
-        corrected_eigenvalues = block_info.allocate_zeros_tensor(
-            # Note that the corrected eigenvalues are not affected by the preconditioned_dims.
-            size=tuple(dims),
-            dtype=block.dtype,
-            device=block_info.param.device,
-        )
-
-        base_kronecker_factors = self._create_base_kronecker_factors(
-            block_info=block_info, preconditioned_dims=preconditioned_dims
-        )
-        return EigenvalueCorrectedShampooKroneckerFactorsState(
-            factor_matrices=base_kronecker_factors.factor_matrices,
-            factor_matrices_eigenvectors=factor_matrices_eigenvectors,
-            corrected_eigenvalues=corrected_eigenvalues,
-            factor_matrix_indices=base_kronecker_factors.factor_matrix_indices,
+            ),
         )
 
     def _create_preconditioned_dims_selector(
