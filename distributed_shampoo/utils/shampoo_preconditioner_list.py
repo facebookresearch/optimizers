@@ -1095,16 +1095,19 @@ class EigendecomposedShampooPreconditionerList(
         dims: torch.Size,
         preconditioned_dims: tuple[int, ...],
     ) -> EigendecomposedShampooKroneckerFactorsState:
+        # Initialize factor_matrices_eigenvectors as identity matrices.
         factor_matrices_eigenvectors = tuple(
-            block_info.allocate_zeros_tensor(
-                size=(dim, dim),
+            block_info.allocate_eye_tensor(
+                n=dim,
                 dtype=block.dtype,
                 device=block_info.param.device,
             )
             for dim in preconditioned_dims
         )
+
+        # Initialize factor_matrices_eigenvalues all ones.
         factor_matrices_eigenvalues = tuple(
-            block_info.allocate_zeros_tensor(
+            block_info.allocate_ones_tensor(
                 size=(dim,),
                 dtype=block.dtype,
                 device=block_info.param.device,
@@ -1323,14 +1326,16 @@ class EigenvalueCorrectedShampooPreconditionerList(
         dims: torch.Size,
         preconditioned_dims: tuple[int, ...],
     ) -> EigenvalueCorrectedShampooKroneckerFactorsState:
+        # Initialize factor_matrices_eigenvectors as identity matrices.
         factor_matrices_eigenvectors = tuple(
-            block_info.allocate_zeros_tensor(
-                size=(dim, dim),
+            block_info.allocate_eye_tensor(
+                n=dim,
                 dtype=block.dtype,
                 device=block_info.param.device,
             )
             for dim in preconditioned_dims
         )
+
         corrected_eigenvalues = block_info.allocate_zeros_tensor(
             # Note that the corrected eigenvalues are not affected by the preconditioned_dims.
             size=tuple(dims),

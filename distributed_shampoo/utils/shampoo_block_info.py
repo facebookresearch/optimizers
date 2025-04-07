@@ -38,6 +38,10 @@ class BlockInfo:
             This tensor might be DTensor. get_tensor() must be used to access the value.
             Its function signature is (size, dtype, device) -> Tensor.
             (Default: lambda size, dtype, device: torch.zeros(size, dtype=dtype, device=device))
+        allocate_ones_tensor (Callable[..., Tensor]): A function that returns a tensor filled with ones.
+            This tensor is used for operations requiring a tensor of ones and might be a DTensor.
+            Its function signature is (size, dtype, device) -> Tensor.
+            (Default: lambda size, dtype, device: torch.ones(size, dtype=dtype, device=device))
         allocate_eye_tensor (Callable[..., Tensor]): A function that returns an identity matrix tensor.
             This tensor is used for operations requiring an identity matrix and might be a DTensor.
             Its function signature is (n, dtype, device) -> Tensor.
@@ -50,6 +54,9 @@ class BlockInfo:
     param: Tensor
     composable_block_ids: tuple[int, str]
     allocate_zeros_tensor: Callable[..., Tensor] = partial(torch.zeros)
+    allocate_ones_tensor: Callable[..., Tensor] = field(
+        init=False, default_factory=lambda: torch.ones
+    )
     allocate_eye_tensor: Callable[..., Tensor] = field(
         init=False, default_factory=lambda: torch.eye
     )
@@ -81,6 +88,10 @@ class DTensorBlockInfo(BlockInfo):
             This tensor might be DTensor. get_tensor() must be used to access the value.
             Its function signature is (size, dtype, device) -> Tensor.
             (Default: lambda size, dtype, device: torch.zeros(size, dtype=dtype, device=device))
+        allocate_ones_tensor (Callable[..., Tensor]): A function that returns a tensor filled with ones.
+            This tensor is used for operations requiring a tensor of ones and might be a DTensor.
+            Its function signature is (size, dtype, device) -> Tensor.
+            (Default: lambda size, dtype, device: torch.ones(size, dtype=dtype, device=device))
         allocate_eye_tensor (Callable[..., Tensor]): A function that returns an identity matrix tensor.
             This tensor is used for operations requiring an identity matrix and might be a DTensor.
             Its function signature is (n, dtype, device) -> Tensor.
@@ -95,6 +106,21 @@ class DTensorBlockInfo(BlockInfo):
     )
 
     def __post_init__(self) -> None:
+        # Due to the lack of `torch.ones`-like support for DTensor, we need to manually construct a matrix with all ones.
+        def allocate_ones_tensor(
+            size: tuple[int, ...],
+            dtype: torch.dtype | None = None,
+            device: torch.device | None = None,
+        ) -> Tensor:
+            self.get_tensor(
+                ones := self.allocate_zeros_tensor(
+                    size=size, dtype=dtype, device=device
+                )
+            ).fill_(1.0)
+            return ones
+
+        self.allocate_ones_tensor = allocate_ones_tensor
+
         # Due to the lack of `torch.eye`-like support for DTensor, we need to manually construct the identity matrix.
         def allocate_eye_tensor(
             n: int, dtype: torch.dtype | None = None, device: torch.device | None = None
