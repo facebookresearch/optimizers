@@ -18,7 +18,7 @@ from distributed_shampoo.shampoo_types import (
     PARAMS,
     USE_MERGE_DIMS,
 )
-from distributed_shampoo.utils.shampoo_block_info import BlockInfo, DDPBlockInfo
+from distributed_shampoo.utils.shampoo_block_info import BlockInfo
 from distributed_shampoo.utils.shampoo_utils import (
     compress_list,
     generate_pairwise_indices,
@@ -64,7 +64,7 @@ class DistributorInterface(ABC):
         # Local masked blocked params are the parameters masked by the distributor selector AND the local grad selector.
         self._local_masked_blocked_params: tuple[Tensor, ...]
         # Local block info list contains information about each block masked by the distributor selector.
-        self._local_block_info_list: tuple[BlockInfo, ...] | tuple[DDPBlockInfo, ...]
+        self._local_block_info_list: tuple[BlockInfo, ...]
 
     @abstractmethod
     @torch.no_grad()

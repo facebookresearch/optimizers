@@ -22,7 +22,7 @@ from distributed_shampoo.shampoo_types import (
     PARAMS,
     USE_MERGE_DIMS,
 )
-from distributed_shampoo.utils.shampoo_block_info import DDPBlockInfo
+from distributed_shampoo.utils.shampoo_block_info import DTensorBlockInfo
 from distributed_shampoo.utils.shampoo_dist_utils import get_device_mesh
 from distributed_shampoo.utils.shampoo_distributor import DistributorInterface
 from distributed_shampoo.utils.shampoo_utils import (
@@ -200,15 +200,18 @@ class HSDPDistributor(DistributorInterface):
             group_size=self._dist_group_size,
         )
 
-        global_block_info_list = self._construct_global_block_info_list(
-            group_source_ranks=tuple(
-                group_source_rank for _, group_source_rank in buffer_size_ranks
+        self._local_block_info_list: tuple[DTensorBlockInfo, ...] = (
+            self._construct_local_block_info_list(
+                group_source_ranks=tuple(
+                    group_source_rank for _, group_source_rank in buffer_size_ranks
+                ),
+                group_rank=comms_group_rank,
             )
         )
         # Initialize selectors and local blocked (masked) parameters.
         self._distributor_selector: tuple[bool, ...] = tuple(
-            block_info.group_source_rank == comms_group_rank
-            for block_info in global_block_info_list
+            group_source_rank == comms_group_rank
+            for _, group_source_rank in buffer_size_ranks
         )
         self._local_blocked_params: tuple[Tensor, ...] = compress_list(
             self._global_blocked_params, self._distributor_selector
@@ -218,9 +221,6 @@ class HSDPDistributor(DistributorInterface):
         )
         self._local_grad_selector: tuple[bool, ...] = (True,) * len(
             self._local_blocked_params
-        )
-        self._local_block_info_list: tuple[DDPBlockInfo, ...] = compress_list(
-            global_block_info_list, self._distributor_selector
         )
 
         self._construct_distributed_buffers(
@@ -309,26 +309,26 @@ class HSDPDistributor(DistributorInterface):
         return (param_index, f"rank_{rank}-block_{block_index}")
 
     @torch.no_grad()
-    def _construct_global_block_info_list(
-        self, group_source_ranks: tuple[int, ...]
-    ) -> tuple[DDPBlockInfo, ...]:
-        """Construct the global block info list.
+    def _construct_local_block_info_list(
+        self, group_source_ranks: tuple[int, ...], group_rank: int
+    ) -> tuple[DTensorBlockInfo, ...]:
+        """Construct the local block info list.
 
-        This method creates a list of DDPBlockInfo objects, which contain information
-        about each parameter block, including its composable block IDs, a function to
-        allocate zero tensors, a method to retrieve tensors, and the group source rank.
+        This method creates a list of DTensorBlockInfo objects, which contain information about each parameter block,
+        including its composable block IDs, functions to allocate tensors, and a method to retrieve tensors.
 
         Args:
             group_source_ranks (tuple[int, ...]): A list of assigned ranks for each block.
+            group_rank (int): Rank of the current process group.
 
         Returns:
-            tuple[DDPBlockInfo, ...]: A tuple of DDPBlockInfo objects for each parameter block.
+            tuple[DTensorBlockInfo, ...]: A tuple of DTensorBlockInfo objects for each parameter block.
         """
         # Note that for HSDP, we want to get the rank within each sharded group for the block id.
         # When using a device mesh, 0 corresponds to the replicated group and 1 corresponds to the sharded group.
         sharded_group_rank = self._hsdp_device_mesh.get_local_rank(1)
         return tuple(
-            DDPBlockInfo(
+            DTensorBlockInfo(
                 param=param,
                 composable_block_ids=self._construct_composable_block_ids(
                     param_index=param_index,
@@ -339,7 +339,6 @@ class HSDPDistributor(DistributorInterface):
                     self._allocate_zeros_distributed_tensor,
                     group_source_rank=group_source_rank,
                 ),
-                group_source_rank=group_source_rank,
             )
             for (
                 (param_index, param),
@@ -354,6 +353,7 @@ class HSDPDistributor(DistributorInterface):
                     group_source_ranks, buffer_size_ranks_start, buffer_size_ranks_end
                 )
             )
+            if group_source_rank == group_rank
         )
 
     def _merge_and_block_parameters(

@@ -52,11 +52,10 @@ class BlockInfo:
 
 
 @dataclass
-class DDPBlockInfo(BlockInfo):
-    """Utilies and metadata for each parameter block specific to DDP Distributor.
+class DTensorBlockInfo(BlockInfo):
+    """Utilies and metadata for each parameter block specific using DTensor.
 
     Attributes:
-        group_source_rank (int): Group rank of the owner of this block. (Default: 0)
         param (Tensor): The original parameter that contains the block.
         composable_block_ids (tuple[int, str]): Tuple containing the per-parameter, per-block index tuple.
             In the DDP case, this will contain (param_index, block_index), where the param_index corresponds to
@@ -80,7 +79,6 @@ class DDPBlockInfo(BlockInfo):
             (Default: lambda input_tensor: input_tensor.to_local())
     """
 
-    group_source_rank: int = 0
     get_tensor: Callable[..., Tensor] = field(
         init=False, default_factory=lambda: lambda input_tensor: input_tensor.to_local()
     )
