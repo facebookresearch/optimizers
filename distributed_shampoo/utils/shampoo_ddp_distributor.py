@@ -222,11 +222,6 @@ class DDPDistributor(DistributorInterface):
                     self._allocate_zeros_distributed_tensor,
                     group_source_rank=group_source_rank,
                 ),
-                get_tensor=lambda input_tensor: (
-                    input_tensor.to_local()
-                    if isinstance(input_tensor, dtensor.DTensor)
-                    else input_tensor
-                ),
                 group_source_rank=group_source_rank,
             )
             for (

@@ -8,7 +8,7 @@ LICENSE file in the root directory of this source tree.
 """
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import partial
 
 import torch
@@ -40,13 +40,15 @@ class BlockInfo:
             (Default: lambda size, dtype, device: torch.zeros(size, dtype=dtype, device=device))
         get_tensor (Callable[..., Tensor]): A function that takes a tensor allocated by allocator and returns its local tensor.
             Its function signature is (tensor: Tensor) -> Tensor.
-            (Default: lambda tensor: tensor)
+            (Default: lambda input_tensor: input_tensor)
     """
 
     param: Tensor
     composable_block_ids: tuple[int, str]
     allocate_zeros_tensor: Callable[..., Tensor] = partial(torch.zeros)
-    get_tensor: Callable[..., Tensor] = lambda tensor_obj: tensor_obj
+    get_tensor: Callable[..., Tensor] = field(
+        init=False, default_factory=lambda: lambda input_tensor: input_tensor
+    )
 
 
 @dataclass
@@ -75,7 +77,10 @@ class DDPBlockInfo(BlockInfo):
             (Default: lambda size, dtype, device: torch.zeros(size, dtype=dtype, device=device))
         get_tensor (Callable[..., Tensor]): A function that takes a tensor allocated by allocator and returns its local tensor.
             Its function signature is (tensor: Tensor) -> Tensor.
-            (Default: lambda tensor: tensor)
+            (Default: lambda input_tensor: input_tensor.to_local())
     """
 
     group_source_rank: int = 0
+    get_tensor: Callable[..., Tensor] = field(
+        init=False, default_factory=lambda: lambda input_tensor: input_tensor.to_local()
+    )

@@ -117,6 +117,16 @@ class DistributorTest(DistributorInterfaceTest):
         )
 
     def test_local_block_info_list(self) -> None:
+        def block_info_equality(
+            a: BlockInfo, b: BlockInfo, msg: str | None = None
+        ) -> None:
+            # Only comparing param and composable_block_ids fields but not others like get_tensor()
+            # because function objects are not comparable in BlockInfo.
+            torch.testing.assert_close(a.param, b.param)
+            self.assertEqual(a.composable_block_ids, b.composable_block_ids)
+
+        self.addTypeEqualityFunc(BlockInfo, block_info_equality)
+
         expected_local_block_info_list = (
             BlockInfo(
                 param=self._model.linear_layers[0].weight,  # type: ignore[index, union-attr]
@@ -131,10 +141,18 @@ class DistributorTest(DistributorInterfaceTest):
                 composable_block_ids=(1, "block_0"),
             ),
         )
-        self.assertEqual(
-            self._distributor.local_block_info_list,
-            expected_local_block_info_list,
-        )
+        for index, (a, b) in enumerate(
+            zip(
+                self._distributor.local_block_info_list,
+                expected_local_block_info_list,
+                strict=True,
+            )
+        ):
+            self.assertEqual(
+                a,
+                b,
+                f"Difference found at {index=}: {self._distributor.local_block_info_list[index]=} != {expected_local_block_info_list[index]=}",
+            )
 
     def test_merge_and_block_gradients(self) -> None:
         self._model.linear_layers[0].weight.grad = torch.ones((5, 10))  # type: ignore[index, union-attr]
