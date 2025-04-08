@@ -109,9 +109,10 @@ def matrix_inverse_root(
             eigendecomposition_offload_device=root_inv_config.eigendecomposition_offload_device,
         )
     elif type(root_inv_config) is CoupledNewtonConfig:
-        if not root.is_integer():
+        # NOTE: Use Fraction.is_integer() instead when downstream applications are Python 3.12+ available
+        if root.denominator != 1:
             raise ValueError(
-                f"{root=} must be an integer to use coupled inverse Newton iteration!"
+                f"{root.denominator=} must be equal to 1 to use coupled inverse Newton iteration!"
             )
 
         X, _, termination_flag, _, _ = _matrix_inverse_root_newton(

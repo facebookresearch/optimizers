@@ -208,15 +208,15 @@ class MatrixInverseRootTest(unittest.TestCase):
 
     def test_matrix_inverse_root_with_no_effect_exponent_multiplier(self) -> None:
         A = torch.tensor([[1.0, 0.0], [0.0, 4.0]])
-        root = Fraction(2, 3)
+        exp = 3
         self.assertRaisesRegex(
             ValueError,
             re.escape(
-                f"{root=} must be an integer to use coupled inverse Newton iteration!"
+                f"root.denominator={exp} must be equal to 1 to use coupled inverse Newton iteration!"
             ),
             matrix_inverse_root,
             A=A,
-            root=root,
+            root=Fraction(2, exp),
             root_inv_config=CoupledNewtonConfig(),
         )
 
