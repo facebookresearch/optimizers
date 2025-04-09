@@ -71,7 +71,10 @@ from distributed_shampoo.utils.shampoo_checkpoint_utils import (
     update_param_state_dict_object,
 )
 from distributed_shampoo.utils.shampoo_ddp_distributor import DDPDistributor
-from distributed_shampoo.utils.shampoo_distributor import Distributor
+from distributed_shampoo.utils.shampoo_distributor import (
+    Distributor,
+    DistributorInterface,
+)
 from distributed_shampoo.utils.shampoo_fsdp_distributor import FSDPDistributor
 from distributed_shampoo.utils.shampoo_fully_shard_distributor import (
     FullyShardDistributor,
@@ -445,25 +448,23 @@ class DistributedShampoo(torch.optim.Optimizer):
         self, distributed_config: DistributedConfig | None
     ) -> None:
         if distributed_config is None:
-            distributor = Distributor
+            distributor: Callable[..., DistributorInterface] = Distributor
         elif type(distributed_config) is DDPShampooConfig:
-            distributor = partial(DDPDistributor, distributed_config=distributed_config)  # type: ignore[assignment]
+            distributor = partial(DDPDistributor, distributed_config=distributed_config)
         elif type(distributed_config) is FSDPShampooConfig:
             distributor = partial(
                 FSDPDistributor, distributed_config=distributed_config
-            )  # type: ignore[assignment]
+            )
         elif type(distributed_config) is FullyShardShampooConfig:
             distributor = FullyShardDistributor
         elif type(distributed_config) is HSDPShampooConfig:
             distributor = partial(
-                HSDPDistributor,
-                distributed_config=distributed_config,
-            )  # type: ignore[assignment]
+                HSDPDistributor, distributed_config=distributed_config
+            )
         elif type(distributed_config) is HybridShardShampooConfig:
             distributor = partial(
-                HybridShardDistributor,
-                distributed_config=distributed_config,
-            )  # type: ignore[assignment]
+                HybridShardDistributor, distributed_config=distributed_config
+            )
         else:
             raise NotImplementedError(f"{distributed_config=} not supported!")
 

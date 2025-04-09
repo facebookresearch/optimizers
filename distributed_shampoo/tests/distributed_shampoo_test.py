@@ -13,6 +13,7 @@ import abc
 import copy
 import re
 import unittest
+from dataclasses import dataclass
 from itertools import chain
 from typing import Any
 from unittest import mock
@@ -29,7 +30,6 @@ from distributed_shampoo.shampoo_types import (
     EigenvalueCorrectedShampooPreconditionerConfig,
     GraftingConfig,
     PreconditionerConfig,
-    SGDGraftingConfig,
     ShampooPreconditionerConfig,
 )
 from matrix_functions_types import (
@@ -81,20 +81,19 @@ class DistributedShampooInitTest(unittest.TestCase):
             )
 
     def test_invalid_grafting_config(self) -> None:
-        with mock.patch.object(
-            distributed_shampoo,
-            "type",
-            side_effect=lambda object: {SGDGraftingConfig: GraftingConfig}.get(
-                type(object), type(object)
-            ),
-        ):
-            self.assertRaisesRegex(
-                NotImplementedError,
-                re.escape("group[GRAFTING_CONFIG]=SGDGraftingConfig"),
-                DistributedShampoo,
-                self._model.parameters(),
-                grafting_config=SGDGraftingConfig(),  # type: ignore[abstract]
-            )
+        @dataclass
+        class NotSupportedGraftingConfig(GraftingConfig):
+            """A dummy grafting config that is not supported."""
+
+            unsupported_epsilon: float = 1e-7
+
+        self.assertRaisesRegex(
+            NotImplementedError,
+            r"group\[GRAFTING_CONFIG\]=.*\.NotSupportedGraftingConfig\(unsupported_epsilon=1e-07\) not supported!",
+            DistributedShampoo,
+            self._model.parameters(),
+            grafting_config=NotSupportedGraftingConfig(),
+        )
 
     def test_invalid_with_incorrect_hyperparameter_setting(self) -> None:
         incorrect_hyperparameter_setting_and_expected_error_msg: list[

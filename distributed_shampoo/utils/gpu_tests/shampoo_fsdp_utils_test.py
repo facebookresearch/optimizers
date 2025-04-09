@@ -101,7 +101,7 @@ class CompileFSDPParameterMetadataTest(FSDPTest):
         fsdp_model = FSDP(model, use_orig_params=True, ignored_states=params)
         actual_fsdp_parameter_metadata = compile_fsdp_parameter_metadata(fsdp_model)
 
-        expected_fsdp_parameter_metadata = {}  # type: ignore[var-annotated]
+        expected_fsdp_parameter_metadata: dict[Parameter, FSDPParameterMetadata] = {}
 
         self.assertEqual(
             actual_fsdp_parameter_metadata, expected_fsdp_parameter_metadata
@@ -116,7 +116,9 @@ class ParseFSDPParamsTest(FSDPTest):
 
     @skip_if_lt_x_gpu(4)
     def test_parse_fsdp_params(self) -> None:
-        HYBRID_SHARDING_STRATEGIES_TO_EXPECTED_KEYS = {  # type: ignore[var-annotated]
+        HYBRID_SHARDING_STRATEGIES_TO_EXPECTED_KEYS: dict[
+            ShardingStrategy, tuple[list[str], list[str], list[str]]
+        ] = {
             ShardingStrategy.HYBRID_SHARD: (
                 [],
                 [
@@ -134,7 +136,9 @@ class ParseFSDPParamsTest(FSDPTest):
                 ["1.weight"],
             ),
         }
-        SHARDING_STRATEGIES_TO_EXPECTED_KEYS = {  # type: ignore[var-annotated]
+        SHARDING_STRATEGIES_TO_EXPECTED_KEYS: dict[
+            ShardingStrategy, tuple[list[str], list[str], list[str]]
+        ] = {
             ShardingStrategy.NO_SHARD: (
                 [],
                 [],

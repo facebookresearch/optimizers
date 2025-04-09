@@ -44,11 +44,6 @@ from matrix_functions_types import (
 from torch import Tensor
 
 
-@dataclass
-class InvalidRootInvConfig(RootInvConfig):
-    """Dummy dataclass for testing."""
-
-
 class CheckDiagonalTest(unittest.TestCase):
     def test_check_diagonal_for_not_two_dim_matrix(self) -> None:
         A = torch.zeros((2, 2, 2))
@@ -302,20 +297,23 @@ class MatrixInverseRootTest(unittest.TestCase):
             )
 
     def test_matrix_inverse_root_with_invalid_root_inv_config(self) -> None:
+        @dataclass
+        class NotSupportedRootInvConfig(RootInvConfig):
+            """A dummy root inv config that is not supported."""
+
+            unsupported_root: int = -1
+
         A = torch.tensor([[1.0, 0.0], [0.0, 4.0]])
         root = Fraction(4)
-        with self.assertRaisesRegex(
+        self.assertRaisesRegex(
             NotImplementedError,
-            re.escape(
-                "Root inverse config is not implemented! Specified root inverse config is root_inv_config=InvalidRootInvConfig()."
-            ),
-        ):
-            matrix_inverse_root(
-                A=A,
-                root=root,
-                root_inv_config=InvalidRootInvConfig(),  # type: ignore[abstract]
-                is_diagonal=False,
-            )
+            r"Root inverse config is not implemented! Specified root inverse config is root_inv_config=.*\.NotSupportedRootInvConfig\(.*\)\.",
+            matrix_inverse_root,
+            A=A,
+            root=root,
+            root_inv_config=NotSupportedRootInvConfig(),
+            is_diagonal=False,
+        )
 
 
 class MatrixRootDiagonalTest(unittest.TestCase):
