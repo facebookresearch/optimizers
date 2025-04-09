@@ -65,6 +65,7 @@ SHAMPOO_PRECONDITIONER_LIST = "shampoo_preconditioner_list"
 
 
 ###### ENUM CLASSES ######
+@enum.unique
 class CommunicationDType(enum.Enum):
     DEFAULT = enum.auto()
     FP16 = enum.auto()

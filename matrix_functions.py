@@ -33,6 +33,7 @@ from torch import Tensor
 logger: logging.Logger = logging.getLogger(__name__)
 
 
+@enum.unique
 class NewtonConvergenceFlag(enum.Enum):
     """
     Enum class for the state of the Newton / higher-order iteration method.
