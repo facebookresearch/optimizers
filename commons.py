@@ -55,7 +55,6 @@ class AbstractDataclass(ABC):
     @abstractmethod
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         """An abstract method that must be implemented by all subclasses."""
-        ...
 
 
 SubclassesType = TypeVar("SubclassesType")
