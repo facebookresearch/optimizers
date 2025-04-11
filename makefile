@@ -1,10 +1,3 @@
-lint:
-	-ruff check --fix
-
-format:
-	@usort format .
-	@ruff format
-
 type-check:
 	@mypy .
 
