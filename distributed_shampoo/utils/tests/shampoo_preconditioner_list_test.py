@@ -277,6 +277,7 @@ class BaseShampooPreconditionerListTest(unittest.TestCase):
         # Disable the abstract methods check from the interface so it is possible to instantiate BaseShampooPreconditionerList.
         BaseShampooPreconditionerList.__abstractmethods__ = frozenset()
 
+        # fmt: off
         with mock.patch.object(
             # Mock compress_list() to enable the instantiation of BaseShampooPreconditionerList.
             shampoo_preconditioner_list,
@@ -493,6 +494,7 @@ class AbstractTest:
             )
             all_fail = (fail,) * NUM_AMORTIZED_COMPUTATION_CALLS
             all_success = (success,) * NUM_AMORTIZED_COMPUTATION_CALLS
+            # fmt: off
             with mock.patch.object(
                 shampoo_preconditioner_list,
                 self._amortized_computation_properties.amortized_computation_function_name,
