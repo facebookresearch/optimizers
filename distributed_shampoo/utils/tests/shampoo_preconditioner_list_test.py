@@ -277,19 +277,16 @@ class BaseShampooPreconditionerListTest(unittest.TestCase):
         # Disable the abstract methods check from the interface so it is possible to instantiate BaseShampooPreconditionerList.
         BaseShampooPreconditionerList.__abstractmethods__ = frozenset()
 
-        with (
-            mock.patch.object(
-                # Mock compress_list() to enable the instantiation of BaseShampooPreconditionerList.
-                shampoo_preconditioner_list,
-                "compress_list",
-                return_value=(True,) * max(param.dim(), 1),
-            ) as mock_compress_list,
-            mock.patch.object(
-                # Mock _update_factor_matrices() otherwise the access of factor_matrices will throw errors.
-                BaseShampooPreconditionerList,
-                "_update_factor_matrices",
-            ) as mock_update_factor_matrices,
-        ):
+        with mock.patch.object(
+            # Mock compress_list() to enable the instantiation of BaseShampooPreconditionerList.
+            shampoo_preconditioner_list,
+            "compress_list",
+            return_value=(True,) * max(param.dim(), 1),
+        ) as mock_compress_list, mock.patch.object(
+            # Mock _update_factor_matrices() otherwise the access of factor_matrices will throw errors.
+            BaseShampooPreconditionerList,
+            "_update_factor_matrices",
+        ) as mock_update_factor_matrices:
             # Test the abstract methods _create_preconditioned_dims_selector(), _create_kronecker_factors_state_for_block(), _create_kronecker_factors_list(), and _get_inverse_roots_from_override().
             preconditioner_list = BaseShampooPreconditionerList(  # type: ignore
                 block_list=(param,),
@@ -496,27 +493,25 @@ class AbstractTest:
             )
             all_fail = (fail,) * NUM_AMORTIZED_COMPUTATION_CALLS
             all_success = (success,) * NUM_AMORTIZED_COMPUTATION_CALLS
-            with (
-                mock.patch.object(
-                    shampoo_preconditioner_list,
-                    self._amortized_computation_properties.amortized_computation_function_name,
-                    # Note that the cases causally depend on each other.
-                    side_effect=[
-                        # Case 1: amortized computation fails less often than tolerance.
-                        *all_but_one_fail,  # Success for a single Kronecker factor is not enough to reset counter.
-                        # Case 2: amortized computation fails exactly as often as tolerance (3).
-                        *all_fail,
-                        *all_fail,
-                        # Case 3: amortized computation succeeds after tolerance hit (counter is reset).
-                        *all_success,
-                        # Case 4: amortized computation fails more often than tolerance.
-                        *all_fail,
-                        *all_fail,
-                        *all_fail,
-                        fail,  # One failure is enough to raise an exception in this case.
-                    ],
-                ) as mock_amortized_computation
-            ):
+            with mock.patch.object(
+                shampoo_preconditioner_list,
+                self._amortized_computation_properties.amortized_computation_function_name,
+                # Note that the cases causally depend on each other.
+                side_effect=[
+                    # Case 1: amortized computation fails less often than tolerance.
+                    *all_but_one_fail,  # Success for a single Kronecker factor is not enough to reset counter.
+                    # Case 2: amortized computation fails exactly as often as tolerance (3).
+                    *all_fail,
+                    *all_fail,
+                    # Case 3: amortized computation succeeds after tolerance hit (counter is reset).
+                    *all_success,
+                    # Case 4: amortized computation fails more often than tolerance.
+                    *all_fail,
+                    *all_fail,
+                    *all_fail,
+                    fail,  # One failure is enough to raise an exception in this case.
+                ],
+            ) as mock_amortized_computation:
                 # Accumulate factor matrices for valid amortized computation.
                 self._preconditioner_list.update_preconditioners(
                     masked_grad_list=masked_grad_list0,
