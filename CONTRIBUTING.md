@@ -12,7 +12,7 @@ We actively welcome your pull requests for existing optimizers.
 2. If you've added code that should be tested, add tests.
 3. If you've changed APIs, update the documentation.
 4. Ensure the test suite passes. To run the subset of the tests that can be run on CPU use `make test`; to run the tests for a single GPU use `make test-gpu` and to run the subset of tests that require 2-4 GPUs use `make test-multi-gpu`.
-5. Make sure your code lints. You can use `make lint` and `make format` to automatically lint and format the code where possible (will also automatically run on `git commit` if the pre-commit hook was installed; however, this does not guarantee that there are not linting errors left). Use `make type-check` for type checking.
+5. Make sure your code passed pre-commit. You can use `pre-commit run --all-files` to automatically lint and format the code where possible. Use `make type-check` for type checking.
 6. If you haven't already, complete the Contributor License Agreement ("CLA").
 
 > [!NOTE]
