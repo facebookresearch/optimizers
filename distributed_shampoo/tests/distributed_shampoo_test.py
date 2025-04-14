@@ -23,7 +23,6 @@ from distributed_shampoo import distributed_shampoo
 from distributed_shampoo.distributed_shampoo import DistributedShampoo
 from distributed_shampoo.shampoo_types import (
     AdaGradGraftingConfig,
-    DDPShampooConfig,
     DefaultEigenvalueCorrectedShampooConfig,
     DefaultShampooConfig,
     DistributedConfig,
@@ -48,20 +47,19 @@ class DistributedShampooInitTest(unittest.TestCase):
         )
 
     def test_invalid_preconditioner_config(self) -> None:
-        with mock.patch.object(
-            distributed_shampoo,
-            "type",
-            side_effect=lambda object: {
-                ShampooPreconditionerConfig: PreconditionerConfig
-            }.get(type(object), type(object)),
-        ):
-            self.assertRaisesRegex(
-                NotImplementedError,
-                re.escape("group[PRECONDITIONER_CONFIG]=ShampooPreconditionerConfig"),
-                DistributedShampoo,
-                self._model.parameters(),
-                preconditioner_config=DefaultShampooConfig,
-            )
+        @dataclass
+        class NotSupportedPreconditionerConfig(PreconditionerConfig):
+            """A dummy preconditioner config that is not supported."""
+
+        self.assertRaisesRegex(
+            NotImplementedError,
+            r"group\[PRECONDITIONER_CONFIG\]=.*\.NotSupportedPreconditionerConfig\(.*\) not supported!",
+            DistributedShampoo,
+            self._model.parameters(),
+            preconditioner_config=NotSupportedPreconditionerConfig(
+                amortized_computation_config=DefaultEigendecompositionConfig
+            ),
+        )
 
         with mock.patch.object(
             distributed_shampoo,
@@ -192,21 +190,19 @@ class DistributedShampooInitTest(unittest.TestCase):
             )
 
     def test_invalid_distributed_config(self) -> None:
-        with mock.patch.object(
-            distributed_shampoo,
-            "type",
-            side_effect=lambda object: DistributedConfig,
-        ):
-            self.assertRaisesRegex(
-                NotImplementedError,
-                re.escape(
-                    "distributed_config=DDPShampooConfig(communication_dtype=<CommunicationDType.DEFAULT: 1>, "
-                    "num_trainers_per_group=-1, communicate_params=False) not supported!"
-                ),
-                DistributedShampoo,
-                params=self._model.parameters(),
-                distributed_config=DDPShampooConfig(),
-            )
+        @dataclass
+        class NotSupportedDistributedConfig(DistributedConfig):
+            """A dummy distributed config that is not supported."""
+
+            unsupported_field: int = 0
+
+        self.assertRaisesRegex(
+            NotImplementedError,
+            r"distributed_config=.*\.NotSupportedDistributedConfig\(.*\) not supported!",
+            DistributedShampoo,
+            params=self._model.parameters(),
+            distributed_config=NotSupportedDistributedConfig(),
+        )
 
 
 class DistributedShampooTest(unittest.TestCase):
