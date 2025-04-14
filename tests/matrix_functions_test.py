@@ -874,18 +874,15 @@ class MatrixEigendecompositionTest(unittest.TestCase):
                 )
 
         # Tests for `QREigendecompositionConfig`.
-        initialization_strategies_to_functions_atol = {
-            "zero": (lambda A: torch.zeros_like(A), atol),
-            "identity": (
+        for name, initialization_fn, atol in (
+            ("zero", lambda A: torch.zeros_like(A), 1e-4),
+            (
+                "identity",
                 lambda A: torch.eye(A.shape[0], dtype=A.dtype, device=A.device),
                 2e-3,
             ),
-            "exact": (lambda A: matrix_eigendecomposition(A)[1], 2e-3),
-        }
-        for name, (
-            initialization_fn,
-            atol,
-        ) in initialization_strategies_to_functions_atol.items():
+            ("exact", lambda A: matrix_eigendecomposition(A)[1], 2e-3),
+        ):
             with self.subTest(
                 f"Test with QREigendecompositionConfig with {name} initialization."
             ):
