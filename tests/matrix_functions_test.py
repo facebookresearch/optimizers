@@ -917,22 +917,17 @@ class MatrixEigendecompositionTest(unittest.TestCase):
                         rtol=rtol,
                     )
 
-    def test_invalid_eigendecomposition_config(
-        self,
-    ) -> None:
-        with (
-            mock.patch.object(
-                matrix_functions,
-                "type",
-                side_effect=lambda object: EigendecompositionConfig,
-            ),
-            self.assertRaisesRegex(
-                NotImplementedError,
-                re.escape(
-                    "Eigendecomposition config is not implemented! Specified eigendecomposition config is eigendecomposition_config=EighEigendecompositionConfig(retry_double_precision=True, eigendecomposition_offload_device='')."
-                ),
-            ),
-        ):
-            matrix_eigendecomposition(
-                A=torch.tensor([[1.0, 0.0], [0.0, 4.0]]),
-            )
+    def test_invalid_eigendecomposition_config(self) -> None:
+        @dataclass
+        class NotSupportedEigendecompositionConfig(EigendecompositionConfig):
+            """A dummy class eigendecomposition config that is not supported."""
+
+            unsupoorted_field: int = 0
+
+        self.assertRaisesRegex(
+            NotImplementedError,
+            r"Eigendecomposition config is not implemented! Specified eigendecomposition config is eigendecomposition_config=.*\.NotSupportedEigendecompositionConfig\(.*\).",
+            matrix_eigendecomposition,
+            A=torch.tensor([[1.0, 0.0], [0.0, 4.0]]),
+            eigendecomposition_config=NotSupportedEigendecompositionConfig(),
+        )
