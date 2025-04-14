@@ -677,7 +677,7 @@ class BaseShampooPreconditionerList(
 
     def _raise_exception_if_failure_tolerance_exceeded(
         self,
-        success_tracker: list[bool],
+        success_tracker: bool,
         preconditioner_index: int,
         exception: Exception,
     ) -> None:
@@ -686,7 +686,7 @@ class BaseShampooPreconditionerList(
         Resets the counter at the given index when all amortized computations are successful.
 
         Args:
-            success_tracker (list[bool]): A list of booleans indicating whether the amortized computation was successful.
+            success_tracker (bool): A boolean indicating whether the amortized computation was successful.
             preconditioner_index (int): The index of the preconditioner.
             exception (Exception): The exception to raise.
 
@@ -694,7 +694,7 @@ class BaseShampooPreconditionerList(
             exception (Exception): The exception to raise.
 
         """
-        if all(success_tracker):
+        if success_tracker:
             # Reset counter for failed amortized computations.
             self._masked_failed_amortized_computation_counter_list[
                 preconditioner_index
@@ -1011,7 +1011,7 @@ class ShampooPreconditionerList(
                     strict=True,
                 )
             ):
-                success_tracker: list[bool] = []
+                success_tracker: bool = True
                 for (
                     factor_matrix,
                     inv_factor_matrix,
@@ -1048,10 +1048,10 @@ class ShampooPreconditionerList(
                             is_diagonal=False,
                         ).to(dtype=inv_factor_matrix.dtype)
                         # Add success to success tracker.
-                        success_tracker.append(True)
+                        success_tracker &= True
                     except Exception as exception:
                         # Add failure to success tracker.
-                        success_tracker.append(False)
+                        success_tracker &= False
                         logger.warning(
                             f"Matrix computation failed for factor matrix {factor_matrix_index} "
                             f"with {exception=}. Using previous inverted factor matrix and continuing..."
@@ -1221,7 +1221,7 @@ class EigendecomposedShampooPreconditionerList(
             for idx, kronecker_factors in enumerate(
                 self._masked_kronecker_factors_list
             ):
-                success_tracker: list[bool] = []
+                success_tracker: bool = True
                 for (
                     factor_matrix,
                     factor_matrix_eigenvectors,
@@ -1267,10 +1267,10 @@ class EigendecomposedShampooPreconditionerList(
                         computed_eigenvalues.to(dtype=factor_matrix_eigenvalues.dtype)
                         computed_eigenvectors.to(dtype=factor_matrix_eigenvectors.dtype)
                         # Add success to success tracker.
-                        success_tracker.append(True)
+                        success_tracker &= True
                     except Exception as exception:
                         # Add failure to success tracker.
-                        success_tracker.append(False)
+                        success_tracker &= False
                         logger.warning(
                             f"Matrix computation failed for factor matrix {factor_matrix_index} "
                             f"with {exception=}. Using previous inverted factor matrix and continuing..."
@@ -1523,7 +1523,7 @@ class EigenvalueCorrectedShampooPreconditionerList(
             for idx, kronecker_factors in enumerate(
                 self._masked_kronecker_factors_list
             ):
-                success_tracker: list[bool] = []
+                success_tracker: bool = True
                 for (
                     factor_matrix,
                     factor_matrix_eigenvectors,
@@ -1558,10 +1558,10 @@ class EigenvalueCorrectedShampooPreconditionerList(
                             is_diagonal=False,
                         )[1].to(dtype=factor_matrix_eigenvectors.dtype)
                         # Add success to success tracker.
-                        success_tracker.append(True)
+                        success_tracker &= True
                     except Exception as exception:
                         # Add failure to success tracker.
-                        success_tracker.append(False)
+                        success_tracker &= False
                         logger.warning(
                             f"Matrix computation failed for factor matrix {factor_matrix_index} "
                             f"with {exception=}. Using previous factor matrix eigenvectors and continuing..."
