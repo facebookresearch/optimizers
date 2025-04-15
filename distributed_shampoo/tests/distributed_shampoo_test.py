@@ -16,10 +16,8 @@ import unittest
 from dataclasses import dataclass
 from itertools import chain
 from typing import Any
-from unittest import mock
 
 import torch
-from distributed_shampoo import distributed_shampoo
 from distributed_shampoo.distributed_shampoo import DistributedShampoo
 from distributed_shampoo.shampoo_types import (
     AdaGradGraftingConfig,
@@ -31,12 +29,7 @@ from distributed_shampoo.shampoo_types import (
     PreconditionerConfig,
     ShampooPreconditionerConfig,
 )
-from matrix_functions_types import (
-    DefaultEigendecompositionConfig,
-    EigenConfig,
-    EigendecompositionConfig,
-    RootInvConfig,
-)
+from matrix_functions_types import DefaultEigendecompositionConfig, EigenConfig
 from torch import nn
 from torch.testing._internal.common_utils import (
     instantiate_parametrized_tests,
@@ -65,23 +58,6 @@ class DistributedShampooInitTest(unittest.TestCase):
                 amortized_computation_config=DefaultEigendecompositionConfig
             ),
         )
-
-        with mock.patch.object(
-            distributed_shampoo,
-            "isinstance",
-            side_effect=lambda object, classinfo: False
-            if classinfo in (RootInvConfig, EigendecompositionConfig)
-            else None,
-        ):
-            self.assertRaisesRegex(
-                NotImplementedError,
-                re.escape(
-                    "group[PRECONDITIONER_CONFIG].amortized_computation_config=EigenConfig(retry_double_precision=True, eigendecomposition_offload_device='', exponent_multiplier=1.0, enhance_stability=False) not supported!"
-                ),
-                DistributedShampoo,
-                self._model.parameters(),
-                preconditioner_config=DefaultShampooConfig,
-            )
 
     def test_invalid_grafting_config(self) -> None:
         @dataclass

@@ -347,3 +347,25 @@ class ShampooHSDPDistributorTest(FSDPTest):
                 model_factory=ShampooHSDPDistributorTest._model_factory(hsdp_config),
                 device=torch.device("cuda"),
             )
+
+    @skip_if_lt_x_gpu(4)
+    def test_unsupported_communication_dtype(self) -> None:
+        mesh_2d = init_device_mesh("cuda", (2, 2))
+        hsdp_config = HSDPShampooConfig(
+            param_to_metadata={},
+            device_mesh=mesh_2d,
+        )
+
+        with mock.patch.object(CommunicationDType, "__eq__", return_value=False):
+            self.assertRaisesRegex(
+                NotImplementedError,
+                re.escape(
+                    "Unsupported communication dtype: CommunicationDType.DEFAULT"
+                ),
+                ShampooHSDPDistributorTest._train_model,
+                optim_factory=ShampooHSDPDistributorTest._shampoo_optim_factory(
+                    distributed_config=hsdp_config,
+                ),
+                model_factory=ShampooHSDPDistributorTest._model_factory(hsdp_config),
+                device=torch.device("cuda"),
+            )

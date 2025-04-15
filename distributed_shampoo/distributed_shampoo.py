@@ -88,6 +88,7 @@ from distributed_shampoo.utils.shampoo_preconditioner_list import (
     AdagradPreconditionerList,
     EigendecomposedShampooPreconditionerList,
     EigenvalueCorrectedShampooPreconditionerList,
+    PreconditionerList,
     SGDPreconditionerList,
     ShampooPreconditionerList,
 )
@@ -447,26 +448,29 @@ class DistributedShampoo(torch.optim.Optimizer):
     def _instantiate_distributor(
         self, distributed_config: DistributedConfig | None
     ) -> None:
-        if distributed_config is None:
-            distributor: Callable[..., DistributorInterface] = Distributor
-        elif type(distributed_config) is DDPShampooConfig:
-            distributor = partial(DDPDistributor, distributed_config=distributed_config)
-        elif type(distributed_config) is FSDPShampooConfig:
-            distributor = partial(
-                FSDPDistributor, distributed_config=distributed_config
-            )
-        elif type(distributed_config) is FullyShardShampooConfig:
-            distributor = FullyShardDistributor
-        elif type(distributed_config) is HSDPShampooConfig:
-            distributor = partial(
-                HSDPDistributor, distributed_config=distributed_config
-            )
-        elif type(distributed_config) is HybridShardShampooConfig:
-            distributor = partial(
-                HybridShardDistributor, distributed_config=distributed_config
-            )
-        else:
-            raise NotImplementedError(f"{distributed_config=} not supported!")
+        match distributed_config:
+            case None:
+                distributor: Callable[..., DistributorInterface] = Distributor
+            case HSDPShampooConfig():
+                distributor = partial(
+                    HSDPDistributor, distributed_config=distributed_config
+                )
+            case HybridShardShampooConfig():
+                distributor = partial(
+                    HybridShardDistributor, distributed_config=distributed_config
+                )
+            case DDPShampooConfig():
+                distributor = partial(
+                    DDPDistributor, distributed_config=distributed_config
+                )
+            case FSDPShampooConfig():
+                distributor = partial(
+                    FSDPDistributor, distributed_config=distributed_config
+                )
+            case FullyShardShampooConfig():
+                distributor = FullyShardDistributor
+            case _:
+                raise NotImplementedError(f"{distributed_config=} not supported!")
 
         for state_lists, group in zip(
             self._per_group_state_lists, self.param_groups, strict=True
@@ -493,30 +497,25 @@ class DistributedShampoo(torch.optim.Optimizer):
         for state_lists, group in zip(
             self._per_group_state_lists, self.param_groups, strict=True
         ):
-            if type(group[PRECONDITIONER_CONFIG]) is ShampooPreconditionerConfig:
-                if isinstance(
-                    group[PRECONDITIONER_CONFIG].amortized_computation_config,
-                    RootInvConfig,
+            match group[PRECONDITIONER_CONFIG]:
+                case ShampooPreconditionerConfig(
+                    amortized_computation_config=RootInvConfig()
                 ):
-                    preconditioner_list_cls = ShampooPreconditionerList
-                elif isinstance(
-                    group[PRECONDITIONER_CONFIG].amortized_computation_config,
-                    EigendecompositionConfig,
-                ):
-                    preconditioner_list_cls = EigendecomposedShampooPreconditionerList  # type: ignore[assignment]
-                else:
-                    raise NotImplementedError(
-                        f"{group[PRECONDITIONER_CONFIG].amortized_computation_config=} not supported!"
+                    preconditioner_list_cls: Callable[..., PreconditionerList] = (
+                        ShampooPreconditionerList
                     )
-            elif (
-                type(group[PRECONDITIONER_CONFIG])
-                is EigenvalueCorrectedShampooPreconditionerConfig
-            ):
-                preconditioner_list_cls = EigenvalueCorrectedShampooPreconditionerList  # type: ignore[assignment]
-            else:
-                raise NotImplementedError(
-                    f"{group[PRECONDITIONER_CONFIG]=} not supported!"
-                )
+                case ShampooPreconditionerConfig(
+                    amortized_computation_config=EigendecompositionConfig()
+                ):
+                    preconditioner_list_cls = EigendecomposedShampooPreconditionerList
+                case EigenvalueCorrectedShampooPreconditionerConfig():
+                    preconditioner_list_cls = (
+                        EigenvalueCorrectedShampooPreconditionerList
+                    )
+                case _:
+                    raise NotImplementedError(
+                        f"{group[PRECONDITIONER_CONFIG]=} not supported!"
+                    )
 
             state_lists[SHAMPOO_PRECONDITIONER_LIST] = preconditioner_list_cls(
                 block_list=state_lists[DISTRIBUTOR].local_blocked_params,
@@ -534,32 +533,39 @@ class DistributedShampoo(torch.optim.Optimizer):
         for state_lists, group in zip(
             self._per_group_state_lists, self.param_groups, strict=True
         ):
-            if group[GRAFTING_CONFIG] is None:
-                state_lists[GRAFTING_PRECONDITIONER_LIST] = None
-            elif type(group[GRAFTING_CONFIG]) is SGDGraftingConfig:
-                state_lists[GRAFTING_PRECONDITIONER_LIST] = SGDPreconditionerList(
-                    block_list=state_lists[DISTRIBUTOR].local_blocked_params,
-                )
-            elif type(group[GRAFTING_CONFIG]) in (
-                AdaGradGraftingConfig,
-                RMSpropGraftingConfig,
-                AdamGraftingConfig,
-            ):
-                state_lists[GRAFTING_PRECONDITIONER_LIST] = AdagradPreconditionerList(
-                    block_list=state_lists[DISTRIBUTOR].local_blocked_params,
-                    state=self.state,
-                    block_info_list=state_lists[DISTRIBUTOR].local_block_info_list,
-                    beta2=(
-                        1.0
-                        if type(group[GRAFTING_CONFIG]) is AdaGradGraftingConfig
-                        else group[GRAFTING_CONFIG].beta2
-                    ),
-                    epsilon=group[GRAFTING_CONFIG].epsilon,
-                    use_bias_correction=type(group[GRAFTING_CONFIG])
-                    is AdamGraftingConfig,
-                )
-            else:
-                raise NotImplementedError(f"{group[GRAFTING_CONFIG]=} not supported!")
+            match group[GRAFTING_CONFIG]:
+                case None:
+                    state_lists[GRAFTING_PRECONDITIONER_LIST] = None
+                case SGDGraftingConfig():
+                    state_lists[GRAFTING_PRECONDITIONER_LIST] = SGDPreconditionerList(
+                        block_list=state_lists[DISTRIBUTOR].local_blocked_params,
+                    )
+                case (
+                    AdaGradGraftingConfig()
+                    | RMSpropGraftingConfig()
+                    | AdamGraftingConfig()
+                ):
+                    state_lists[GRAFTING_PRECONDITIONER_LIST] = (
+                        AdagradPreconditionerList(
+                            block_list=state_lists[DISTRIBUTOR].local_blocked_params,
+                            state=self.state,
+                            block_info_list=state_lists[
+                                DISTRIBUTOR
+                            ].local_block_info_list,
+                            beta2=(
+                                1.0
+                                if type(group[GRAFTING_CONFIG]) is AdaGradGraftingConfig
+                                else group[GRAFTING_CONFIG].beta2
+                            ),
+                            epsilon=group[GRAFTING_CONFIG].epsilon,
+                            use_bias_correction=type(group[GRAFTING_CONFIG])
+                            is AdamGraftingConfig,
+                        )
+                    )
+                case _:
+                    raise NotImplementedError(
+                        f"{group[GRAFTING_CONFIG]=} not supported!"
+                    )
 
     @torch.no_grad()
     def _instantiate_steps(self) -> None:
