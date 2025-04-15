@@ -15,6 +15,7 @@ from fractions import Fraction
 from functools import reduce
 
 from itertools import chain
+from operator import attrgetter
 from typing import Any, cast, Generic, TypeVar
 
 import torch
@@ -40,6 +41,7 @@ logger: logging.Logger = logging.getLogger(__name__)
 
 ADAGRAD = "adagrad"
 SHAMPOO = "shampoo"
+INVERSE_EXPONENT_OVERRIDE = "inverse_exponent_override"
 
 
 class PreconditionerList(ABC):
@@ -633,21 +635,20 @@ class BaseShampooPreconditionerList(
 
     @abstractmethod
     def _get_inverse_roots_from_override(
-        self,
-        preconditioned_dims_selector_list: tuple[tuple[bool, ...], ...],
-    ) -> tuple[tuple[float, ...], ...]:
+        self, preconditioned_dims_selector: tuple[bool, ...]
+    ) -> tuple[float, ...]:
         """
-        Retrieves the inverse roots from the override parameter for each block.
+        Retrieves the inverse roots from the override parameter for a block.
 
-        For each block, we compute the inverse root from the inverse exponent override parameter according to its order.
+        For a block, we compute the inverse root from the inverse exponent override parameter according to its order.
         If the order is not present in the inverse exponent override parameter, the default value is used for the inverse exponent override.
         The inverse root is then computed as 1 / inverse exponent override.
 
         Args:
-            preconditioned_dims_selector_list (tuple[tuple[bool, ...], ...]): A list of selectors indicating which dimensions are preconditioned for each block.
+            preconditioned_dims_selector (tuple[bool, ...]): A selector indicating which dimensions are preconditioned for a block.
 
         Returns:
-            inverse_roots (tuple[tuple[float, ...], ...]): A list of inverse roots for each tensor in the preconditioner.
+            inverse_roots (tuple[float, ...]): Inverse roots for each preconditioner of a block.
         """
         ...
 
@@ -761,8 +762,10 @@ class BaseShampooPreconditionerList(
         self._local_order_list: tuple[int, ...] = tuple(
             block.dim() for block in block_list
         )
-        self._local_roots_list: tuple[tuple[float, ...], ...] = (
-            self._get_inverse_roots_from_override(preconditioned_dims_selector_list)
+        self._local_roots_list: tuple[tuple[float, ...], ...] = tuple(
+            self._get_inverse_roots_from_override(preconditioned_dims_selector)
+            # Traverse through each block's preconditioned_dims_selector_list.
+            for preconditioned_dims_selector in preconditioned_dims_selector_list
         )
         self._local_failed_amortized_computation_counter_list: list[int] = [0] * len(
             self._local_kronecker_factors_list
@@ -924,9 +927,9 @@ class ShampooPreconditionerList(
         self, dims: torch.Size
     ) -> tuple[bool, ...]:
         return tuple(
-            getattr(self._preconditioner_config, "inverse_exponent_override", {})
-            .get(len(dims), {})
-            .get(d, 1 / (2 * len(dims)))
+            attrgetter(INVERSE_EXPONENT_OVERRIDE)(self._preconditioner_config)
+            .get((order := len(dims)), {})
+            .get(d, 1 / (2 * order))
             != 0.0
             # Traverse through each dim of a block.
             for d in range(len(dims))
@@ -950,21 +953,17 @@ class ShampooPreconditionerList(
         )
 
     def _get_inverse_roots_from_override(
-        self, preconditioned_dims_selector_list: tuple[tuple[bool, ...], ...]
-    ) -> tuple[tuple[float, ...], ...]:
+        self, preconditioned_dims_selector: tuple[bool, ...]
+    ) -> tuple[float, ...]:
         return tuple(
-            tuple(
-                # Compute the inverse root, 1 / inverse_exponent{_override}, accordingly for each required dim.
-                1
-                / getattr(self._preconditioner_config, "inverse_exponent_override", {})
-                .get(len(preconditioned_dims_selector), {})
-                .get(k, 1 / (2 * len(preconditioned_dims_selector)))
-                # Traverse through each dim of a block that requires precondition.
-                for k, should_precondition in enumerate(preconditioned_dims_selector)
-                if should_precondition
-            )
-            # Traverse through each block's preconditioned_dims_selector.
-            for preconditioned_dims_selector in preconditioned_dims_selector_list
+            # Compute the inverse root, 1 / inverse_exponent{_override}, accordingly for each required dim.
+            1
+            / attrgetter(INVERSE_EXPONENT_OVERRIDE)(self._preconditioner_config)
+            .get((order := len(preconditioned_dims_selector)), {})
+            .get(k, 1 / (2 * order))
+            # Traverse through each dim of a block that requires precondition.
+            for k, should_precondition in enumerate(preconditioned_dims_selector)
+            if should_precondition
         )
 
     def precondition(self, masked_grad_list: tuple[Tensor, ...]) -> tuple[Tensor, ...]:
@@ -1123,9 +1122,9 @@ class EigendecomposedShampooPreconditionerList(
         self, dims: torch.Size
     ) -> tuple[bool, ...]:
         return tuple(
-            getattr(self._preconditioner_config, "inverse_exponent_override", {})
-            .get(len(dims), {})
-            .get(d, 1 / (2 * len(dims)))
+            attrgetter(INVERSE_EXPONENT_OVERRIDE)(self._preconditioner_config)
+            .get((order := len(dims)), {})
+            .get(d, 1 / (2 * order))
             != 0.0
             # Traverse through each dim of a block.
             for d in range(len(dims))
@@ -1153,21 +1152,17 @@ class EigendecomposedShampooPreconditionerList(
         )
 
     def _get_inverse_roots_from_override(
-        self, preconditioned_dims_selector_list: tuple[tuple[bool, ...], ...]
-    ) -> tuple[tuple[float, ...], ...]:
+        self, preconditioned_dims_selector: tuple[bool, ...]
+    ) -> tuple[float, ...]:
         return tuple(
-            tuple(
-                # Compute the inverse root, 1 / inverse_exponent{_override}, accordingly for each required dim.
-                1
-                / getattr(self._preconditioner_config, "inverse_exponent_override", {})
-                .get(len(preconditioned_dims_selector), {})
-                .get(k, 1 / (2 * len(preconditioned_dims_selector)))
-                # Traverse through each dim of a block that requires precondition.
-                for k, should_precondition in enumerate(preconditioned_dims_selector)
-                if should_precondition
-            )
-            # Traverse through each block's preconditioned_dims_selector.
-            for preconditioned_dims_selector in preconditioned_dims_selector_list
+            # Compute the inverse root, 1 / inverse_exponent{_override}, accordingly for each required dim.
+            1
+            / attrgetter(INVERSE_EXPONENT_OVERRIDE)(self._preconditioner_config)
+            .get((order := len(preconditioned_dims_selector)), {})
+            .get(k, 1 / (2 * order))
+            # Traverse through each dim of a block that requires precondition.
+            for k, should_precondition in enumerate(preconditioned_dims_selector)
+            if should_precondition
         )
 
     def precondition(self, masked_grad_list: tuple[Tensor, ...]) -> tuple[Tensor, ...]:
@@ -1348,10 +1343,8 @@ class EigenvalueCorrectedShampooPreconditionerList(
     ) -> tuple[bool, ...]:
         return tuple(
             d
-            not in getattr(
-                self._preconditioner_config,
-                "ignored_basis_change_dims",
-                {},
+            not in attrgetter("ignored_basis_change_dims")(
+                self._preconditioner_config
             ).get(len(dims), [])
             # Traverse through each dim of a block.
             for d in range(len(dims))
@@ -1378,21 +1371,15 @@ class EigenvalueCorrectedShampooPreconditionerList(
         )
 
     def _get_inverse_roots_from_override(
-        self, preconditioned_dims_selector_list: tuple[tuple[bool, ...], ...]
-    ) -> tuple[tuple[float, ...], ...]:
+        self, preconditioned_dims_selector: tuple[bool, ...]
+    ) -> tuple[float, ...]:
         # NOTE: In eigenvalue-corrected Shampoo, there is only a single inverse root that is applied to the corrected eigenvalues.
-        return tuple(
-            (
-                # Compute the inverse root, 1 / eigenvalue_inverse_exponent{_override}, for each block.
-                1
-                / getattr(
-                    self._preconditioner_config,
-                    "inverse_exponent_override",
-                    {},
-                ).get(len(preconditioned_dims_selector), 1 / 2),
-            )
-            # Traverse through each block's preconditioned_dims_selector.
-            for preconditioned_dims_selector in preconditioned_dims_selector_list
+        return (
+            # Compute the inverse root, 1 / eigenvalue_inverse_exponent{_override}.
+            1
+            / attrgetter(INVERSE_EXPONENT_OVERRIDE)(self._preconditioner_config).get(
+                len(preconditioned_dims_selector), 1 / 2
+            ),
         )
 
     def update_preconditioners(
