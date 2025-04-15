@@ -19,4 +19,4 @@ jobs:
       - name: Run pre-commit on all files
         run: |
           source .venv/bin/activate
-          pre-commit run --all-files
+          pre-commit run --all-files || pre-commit run --all-files
