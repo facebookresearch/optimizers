@@ -10,7 +10,6 @@ repos:
     # Run the formatter.
     - id: ruff-format
       types_or: [ python, pyi ]
-      args: [ --exit-zero ]
 - repo: https://github.com/facebook/usort
   rev: v1.0.8
   hooks:
