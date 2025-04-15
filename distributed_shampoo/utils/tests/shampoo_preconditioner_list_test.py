@@ -496,7 +496,6 @@ class AbstractTest:
             )
             all_fail = (fail,) * NUM_AMORTIZED_COMPUTATION_CALLS
             all_success = (success,) * NUM_AMORTIZED_COMPUTATION_CALLS
-            # fmt: off
             with mock.patch.object(
                 shampoo_preconditioner_list,
                 self._amortized_computation_properties.amortized_computation_function_name,
