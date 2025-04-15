@@ -62,6 +62,7 @@ class FullyShardDistributor(Distributor):
             tuple[int, str]: Composable block id tuple containing global block index and local block name.
                 The latter will be used to identify blocks in the masked tensor.
         """
+        assert rank is not None, "Rank must be provided in fully shard setting."
         return (param_index, f"rank_{rank}-block_{block_index}")
 
     @torch.no_grad()
