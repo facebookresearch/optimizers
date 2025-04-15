@@ -23,7 +23,6 @@ from distributed_shampoo import distributed_shampoo
 from distributed_shampoo.distributed_shampoo import DistributedShampoo
 from distributed_shampoo.shampoo_types import (
     AdaGradGraftingConfig,
-    DDPShampooConfig,
     DefaultEigenvalueCorrectedShampooConfig,
     DefaultShampooConfig,
     DistributedConfig,
@@ -39,8 +38,13 @@ from matrix_functions_types import (
     RootInvConfig,
 )
 from torch import nn
+from torch.testing._internal.common_utils import (
+    instantiate_parametrized_tests,
+    parametrize,
+)
 
 
+@instantiate_parametrized_tests
 class DistributedShampooInitTest(unittest.TestCase):
     def setUp(self) -> None:
         self._model = nn.Sequential(
@@ -48,20 +52,19 @@ class DistributedShampooInitTest(unittest.TestCase):
         )
 
     def test_invalid_preconditioner_config(self) -> None:
-        with mock.patch.object(
-            distributed_shampoo,
-            "type",
-            side_effect=lambda object: {
-                ShampooPreconditionerConfig: PreconditionerConfig
-            }.get(type(object), type(object)),
-        ):
-            self.assertRaisesRegex(
-                NotImplementedError,
-                re.escape("group[PRECONDITIONER_CONFIG]=ShampooPreconditionerConfig"),
-                DistributedShampoo,
-                self._model.parameters(),
-                preconditioner_config=DefaultShampooConfig,
-            )
+        @dataclass
+        class NotSupportedPreconditionerConfig(PreconditionerConfig):
+            """A dummy preconditioner config that is not supported."""
+
+        self.assertRaisesRegex(
+            NotImplementedError,
+            r"group\[PRECONDITIONER_CONFIG\]=.*\.NotSupportedPreconditionerConfig\(.*\) not supported!",
+            DistributedShampoo,
+            self._model.parameters(),
+            preconditioner_config=NotSupportedPreconditionerConfig(
+                amortized_computation_config=DefaultEigendecompositionConfig
+            ),
+        )
 
         with mock.patch.object(
             distributed_shampoo,
@@ -95,10 +98,9 @@ class DistributedShampooInitTest(unittest.TestCase):
             grafting_config=NotSupportedGraftingConfig(),
         )
 
-    def test_invalid_with_incorrect_hyperparameter_setting(self) -> None:
-        incorrect_hyperparameter_setting_and_expected_error_msg: list[
-            tuple[dict[str, Any], str]
-        ] = [
+    @parametrize(
+        "incorrect_hyperparameter_setting, expected_error_msg",
+        [
             (
                 {"lr": -0.1},
                 "Invalid learning rate: -0.1. Must be >= 0.0.",
@@ -157,23 +159,18 @@ class DistributedShampooInitTest(unittest.TestCase):
                 },
                 "preconditioner_config.amortized_computation_config.exponent_multiplier is not supported. Please use PreconditionerConfig.inverse_exponent_override instead.",
             ),
-        ]
-
-        for (
-            incorrect_hyperparameter_setting,
-            expected_error_msg,
-        ) in incorrect_hyperparameter_setting_and_expected_error_msg:
-            with self.subTest(
-                incorrect_hyperparameter_setting=incorrect_hyperparameter_setting,
-                expected_error_msg=expected_error_msg,
-            ):
-                self.assertRaisesRegex(
-                    ValueError,
-                    re.escape(expected_error_msg),
-                    DistributedShampoo,
-                    self._model.parameters(),
-                    **incorrect_hyperparameter_setting,
-                )
+        ],
+    )
+    def test_invalid_with_incorrect_hyperparameter_setting(
+        self, incorrect_hyperparameter_setting: dict[str, Any], expected_error_msg: str
+    ) -> None:
+        self.assertRaisesRegex(
+            ValueError,
+            re.escape(expected_error_msg),
+            DistributedShampoo,
+            self._model.parameters(),
+            **incorrect_hyperparameter_setting,
+        )
 
     def test_nesterov_and_zero_momentum(self) -> None:
         with self.assertLogs(
@@ -192,21 +189,19 @@ class DistributedShampooInitTest(unittest.TestCase):
             )
 
     def test_invalid_distributed_config(self) -> None:
-        with mock.patch.object(
-            distributed_shampoo,
-            "type",
-            side_effect=lambda object: DistributedConfig,
-        ):
-            self.assertRaisesRegex(
-                NotImplementedError,
-                re.escape(
-                    "distributed_config=DDPShampooConfig(communication_dtype=<CommunicationDType.DEFAULT: 1>, "
-                    "num_trainers_per_group=-1, communicate_params=False) not supported!"
-                ),
-                DistributedShampoo,
-                params=self._model.parameters(),
-                distributed_config=DDPShampooConfig(),
-            )
+        @dataclass
+        class NotSupportedDistributedConfig(DistributedConfig):
+            """A dummy distributed config that is not supported."""
+
+            unsupported_field: int = 0
+
+        self.assertRaisesRegex(
+            NotImplementedError,
+            r"distributed_config=.*\.NotSupportedDistributedConfig\(.*\) not supported!",
+            DistributedShampoo,
+            params=self._model.parameters(),
+            distributed_config=NotSupportedDistributedConfig(),
+        )
 
 
 class DistributedShampooTest(unittest.TestCase):
