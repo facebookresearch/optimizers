@@ -428,6 +428,20 @@ class AbstractTest:
             else:
                 mock_step.assert_not_called()
 
+        def test_unsupported_communication_dtype(self) -> None:
+            self._init_distributed()
+
+            with mock.patch.object(CommunicationDType, "__eq__", return_value=False):
+                self.assertRaisesRegex(
+                    NotImplementedError,
+                    re.escape(
+                        "Unsupported communication dtype: CommunicationDType.DEFAULT"
+                    ),
+                    AbstractTest.ShampooDDPDistributorDeviceTest._train_model,
+                    self._shampoo_optim_factory(distributed_config=DDPShampooConfig()),
+                    device=self._device,
+                )
+
 
 class ShampooDDPDistributorCPUTest(AbstractTest.ShampooDDPDistributorDeviceTest):
     @property

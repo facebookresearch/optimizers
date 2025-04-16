@@ -78,16 +78,17 @@ class DDPDistributor(DistributorInterface):
         self._communicate_params: bool = distributed_config.communicate_params
 
         # Determine communication type.
-        if distributed_config.communication_dtype == CommunicationDType.BF16:
-            communication_dtype = torch.bfloat16
-        elif distributed_config.communication_dtype == CommunicationDType.FP16:
-            communication_dtype = torch.float16
-        else:
-            assert distributed_config.communication_dtype in [
-                CommunicationDType.FP32,
-                CommunicationDType.DEFAULT,
-            ]
-            communication_dtype = torch.float32
+        match distributed_config.communication_dtype:
+            case CommunicationDType.BF16:
+                communication_dtype = torch.bfloat16
+            case CommunicationDType.FP16:
+                communication_dtype = torch.float16
+            case CommunicationDType.FP32 | CommunicationDType.DEFAULT:
+                communication_dtype = torch.float32
+            case _:
+                raise NotImplementedError(
+                    f"Unsupported communication dtype: {distributed_config.communication_dtype}"
+                )
 
         # Initialize _dist_group and _group_rank.
         self._dist_group: dist.ProcessGroup | None = (

@@ -95,52 +95,54 @@ def matrix_inverse_root(
         raise ValueError("Matrix is not square!")
 
     if is_diagonal:
-        X = _matrix_inverse_root_diagonal(
+        return _matrix_inverse_root_diagonal(
             A=A,
             root=root,
             epsilon=epsilon,
         )
-    elif type(root_inv_config) is EigenConfig:
-        X, _, _ = _matrix_inverse_root_eigen(
-            A=A,
-            root=root,
-            epsilon=epsilon,
-            retry_double_precision=root_inv_config.retry_double_precision,
-            enhance_stability=root_inv_config.enhance_stability,
-            eigendecomposition_offload_device=root_inv_config.eigendecomposition_offload_device,
-        )
-    elif type(root_inv_config) is CoupledNewtonConfig:
-        # NOTE: Use Fraction.is_integer() instead when downstream applications are Python 3.12+ available
-        if root.denominator != 1:
-            raise ValueError(
-                f"{root.denominator=} must be equal to 1 to use coupled inverse Newton iteration!"
-            )
 
-        X, _, termination_flag, _, _ = _matrix_inverse_root_newton(
-            A=A,
-            root=root.numerator,
-            epsilon=epsilon,
-            **asdict(root_inv_config),
-        )
-        if termination_flag == NewtonConvergenceFlag.REACHED_MAX_ITERS:
-            logging.warning(
-                "Newton did not converge and reached maximum number of iterations!"
+    match root_inv_config:
+        case EigenConfig():
+            X, _, _ = _matrix_inverse_root_eigen(
+                A=A,
+                root=root,
+                epsilon=epsilon,
+                retry_double_precision=root_inv_config.retry_double_precision,
+                enhance_stability=root_inv_config.enhance_stability,
+                eigendecomposition_offload_device=root_inv_config.eigendecomposition_offload_device,
             )
-    elif type(root_inv_config) is CoupledHigherOrderConfig:
-        X, _, termination_flag, _, _ = _matrix_inverse_root_higher_order(
-            A=A,
-            root=root,
-            abs_epsilon=epsilon,
-            **asdict(root_inv_config),
-        )
-        if termination_flag == NewtonConvergenceFlag.REACHED_MAX_ITERS:
-            logging.warning(
-                "Higher order method did not converge and reached maximum number of iterations!"
+        case CoupledNewtonConfig():
+            # NOTE: Use Fraction.is_integer() instead when downstream applications are Python 3.12+ available
+            if root.denominator != 1:
+                raise ValueError(
+                    f"{root.denominator=} must be equal to 1 to use coupled inverse Newton iteration!"
+                )
+
+            X, _, termination_flag, _, _ = _matrix_inverse_root_newton(
+                A=A,
+                root=root.numerator,
+                epsilon=epsilon,
+                **asdict(root_inv_config),
             )
-    else:
-        raise NotImplementedError(
-            f"Root inverse config is not implemented! Specified root inverse config is {root_inv_config=}."
-        )
+            if termination_flag == NewtonConvergenceFlag.REACHED_MAX_ITERS:
+                logging.warning(
+                    "Newton did not converge and reached maximum number of iterations!"
+                )
+        case CoupledHigherOrderConfig():
+            X, _, termination_flag, _, _ = _matrix_inverse_root_higher_order(
+                A=A,
+                root=root,
+                abs_epsilon=epsilon,
+                **asdict(root_inv_config),
+            )
+            if termination_flag == NewtonConvergenceFlag.REACHED_MAX_ITERS:
+                logging.warning(
+                    "Higher order method did not converge and reached maximum number of iterations!"
+                )
+        case _:
+            raise NotImplementedError(
+                f"Root inverse config is not implemented! Specified root inverse config is {root_inv_config=}."
+            )
 
     return X
 
@@ -201,20 +203,21 @@ def matrix_eigendecomposition(
             device=A.device,
         )
 
-    if type(eigendecomposition_config) is EighEigendecompositionConfig:
-        return _eigh_eigenvalue_decomposition(
-            A,
-            **asdict(eigendecomposition_config),
-        )
-    elif type(eigendecomposition_config) is QREigendecompositionConfig:
-        return _qr_algorithm(
-            A,
-            **asdict(eigendecomposition_config),
-        )
-    else:
-        raise NotImplementedError(
-            f"Eigendecomposition config is not implemented! Specified eigendecomposition config is {eigendecomposition_config=}."
-        )
+    match eigendecomposition_config:
+        case EighEigendecompositionConfig():
+            return _eigh_eigenvalue_decomposition(
+                A,
+                **asdict(eigendecomposition_config),
+            )
+        case QREigendecompositionConfig():
+            return _qr_algorithm(
+                A,
+                **asdict(eigendecomposition_config),
+            )
+        case _:
+            raise NotImplementedError(
+                f"Eigendecomposition config is not implemented! Specified eigendecomposition config is {eigendecomposition_config=}."
+            )
 
 
 def _eigh_eigenvalue_decomposition(

@@ -465,3 +465,28 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
                 ),
                 device=torch.device("cuda"),
             )
+
+    @with_comms
+    @skip_if_lt_x_gpu(4)
+    def test_unsupported_communication_dtype(self) -> None:
+        mesh_2d = init_device_mesh(
+            "cuda", (2, 2), mesh_dim_names=("replicate", "shard")
+        )
+        hybrid_shard_config = HybridShardShampooConfig(device_mesh=mesh_2d)
+
+        with mock.patch.object(CommunicationDType, "__eq__", return_value=False):
+            self.assertRaisesRegex(
+                NotImplementedError,
+                re.escape(
+                    "Unsupported communication dtype: CommunicationDType.DEFAULT"
+                ),
+                ShampooHybridShardDistributorTest._train_model,
+                optim_factory=ShampooHybridShardDistributorTest._shampoo_optim_factory(
+                    distributed_config=hybrid_shard_config,
+                ),
+                model_factory=ShampooHybridShardDistributorTest._model_factory(
+                    hybrid_shard_config,
+                    device_mesh=mesh_2d,
+                ),
+                device=torch.device("cuda"),
+            )
