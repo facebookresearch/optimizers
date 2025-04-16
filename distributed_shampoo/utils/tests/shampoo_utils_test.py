@@ -23,7 +23,13 @@ from distributed_shampoo.utils.shampoo_utils import (
     ParameterizeEnterExitContext,
 )
 
+from torch.testing._internal.common_utils import (
+    instantiate_parametrized_tests,
+    parametrize,
+)
 
+
+@instantiate_parametrized_tests
 class MergeSmallDimsTest(unittest.TestCase):
     def test_merge_all_small_dims(self) -> None:
         dims = (1, 2, 5, 1)
@@ -43,27 +49,18 @@ class MergeSmallDimsTest(unittest.TestCase):
         threshold = 10
         self.assertEqual(merge_small_dims(dims, threshold), merged_dims)
 
-    def test_merge_small_dims_all_ones(self) -> None:
+    @parametrize("threshold", (10, 1))
+    def test_merge_small_dims_all_ones(self, threshold: int) -> None:
         dims = (1, 1, 1, 1)
         merged_dims = (1,)
-
-        threshold = 10
         self.assertEqual(merge_small_dims(dims, threshold), merged_dims)
 
-        threshold = 1
-        self.assertEqual(merge_small_dims(dims, threshold), merged_dims)
-
-    def test_merge_small_dims_empty(self) -> None:
+    @parametrize("tensor_shape", ((0,), (0, 1), (0, 1, 5, 10, 20)))
+    def test_merge_small_dims_empty(self, tensor_shape: tuple[int, ...]) -> None:
         merged_dims = (0,)
         threshold = 10
         self.assertEqual(
-            merge_small_dims(tensor_shape=(0,), threshold=threshold), merged_dims
-        )
-        self.assertEqual(
-            merge_small_dims(tensor_shape=(0, 1), threshold=threshold), merged_dims
-        )
-        self.assertEqual(
-            merge_small_dims(tensor_shape=(0, 1, 5, 10, 20), threshold=threshold),
+            merge_small_dims(tensor_shape=tensor_shape, threshold=threshold),
             merged_dims,
         )
 
@@ -103,11 +100,22 @@ class MultiDimSplitTest(unittest.TestCase):
         )
 
 
+@instantiate_parametrized_tests
 class CompressListTest(unittest.TestCase):
-    def test_compress_list(self) -> None:
-        self.assertTupleEqual(compress_list([1, 2, 3], (True, True, False)), (1, 2))
-        self.assertTupleEqual(compress_list([1, 2, 3], (False, True, True)), (2, 3))
-        self.assertTupleEqual(compress_list([1, 2, 3], (True, False, True)), (1, 3))
+    @parametrize(
+        "selector, compressed_tuple",
+        (
+            ((True, True, False), (1, 2)),
+            ((False, True, True), (2, 3)),
+            ((True, False, True), (1, 3)),
+        ),
+    )
+    def test_compress_list(
+        self, selector: tuple[bool, ...], compressed_tuple: tuple[int,]
+    ) -> None:
+        self.assertEqual(
+            compress_list(complete_list=[1, 2, 3], selector=selector), compressed_tuple
+        )
 
     def test_compress_list_with_different_size(self) -> None:
         self.assertRaisesRegex(
@@ -119,12 +127,14 @@ class CompressListTest(unittest.TestCase):
         )
 
 
+@instantiate_parametrized_tests
 class GetDTypeSizeTest(unittest.TestCase):
-    def test_get_dtype_size(self) -> None:
-        self.assertEqual(get_dtype_size(torch.int64), 8)
-        self.assertEqual(get_dtype_size(torch.float32), 4)
-        self.assertEqual(get_dtype_size(torch.bfloat16), 2)
-        self.assertEqual(get_dtype_size(torch.bool), 1)
+    @parametrize(
+        "dtype, size",
+        ((torch.int64, 8), (torch.float32, 4), (torch.bfloat16, 2), (torch.bool, 1)),
+    )
+    def test_get_dtype_size(self, dtype: torch.dtype, size: int) -> None:
+        self.assertEqual(get_dtype_size(dtype), size)
 
 
 class GeneratePairwiseIndicesTest(unittest.TestCase):
@@ -188,48 +198,46 @@ class ParameterizeEnterExitContextTest(unittest.TestCase):
         self.assertEqual(test_class.test_var, -1)
 
 
+@instantiate_parametrized_tests
 class DistributeBufferSizesTest(unittest.TestCase):
-    def test_distribute_buffer_sizes(self) -> None:
-        # Test case 1: Even distribution of buffer sizes
-        buffer_sizes = (128, 64, 500, 256)
-        group_size = 2
-        expected_result = (
-            (128, 1),
-            (64, 1),
-            (512, 0),
-            (256, 1),
-        )
+    @parametrize(
+        "buffer_sizes, group_size, expected_result",
+        (
+            # Test case 1: Even distribution of buffer sizes
+            (
+                (128, 64, 500, 256),
+                2,
+                (
+                    (128, 1),
+                    (64, 1),
+                    (512, 0),
+                    (256, 1),
+                ),
+            ),
+            # Test case 2: Single group
+            (
+                (128, 64, 500, 256),
+                1,
+                (
+                    (128, 0),
+                    (64, 0),
+                    (512, 0),
+                    (256, 0),
+                ),
+            ),
+            # Test case 3: More groups than buffers
+            ((128, 64), 4, ((128, 0), (64, 1))),
+            # Test case 4: Empty buffer sizes
+            ((), 2, ()),
+        ),
+    )
+    def test_distribute_buffer_sizes(
+        self,
+        buffer_sizes: tuple[int, ...],
+        group_size: int,
+        expected_result: tuple[tuple[int, int], ...],
+    ) -> None:
         self.assertEqual(
-            distribute_buffer_sizes(buffer_sizes, group_size), expected_result
-        )
-
-        # Test case 2: Single group
-        buffer_sizes = (128, 64, 500, 256)
-        group_size = 1
-        expected_result_single = (
-            (128, 0),
-            (64, 0),
-            (512, 0),
-            (256, 0),
-        )
-        self.assertEqual(
-            distribute_buffer_sizes(buffer_sizes, group_size), expected_result_single
-        )
-
-        # Test case 3: More groups than buffers
-        buffer_sizes_small = (128, 64)
-        group_size = 4
-        expected_result_small: tuple[tuple[int, int], ...] = ((128, 0), (64, 1))
-        self.assertEqual(
-            distribute_buffer_sizes(buffer_sizes_small, group_size),
-            expected_result_small,
-        )
-
-        # Test case 4: Empty buffer sizes
-        buffer_sizes_empty = ()
-        group_size = 2
-        expected_result_empty = ()
-        self.assertEqual(
-            distribute_buffer_sizes(buffer_sizes_empty, group_size),
-            expected_result_empty,
+            distribute_buffer_sizes(buffer_sizes=buffer_sizes, group_size=group_size),
+            expected_result,
         )
