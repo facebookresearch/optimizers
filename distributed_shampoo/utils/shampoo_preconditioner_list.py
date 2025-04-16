@@ -1430,15 +1430,17 @@ class EigenvalueCorrectedShampooPreconditionerList(
                         preconditioned_dims_selector=preconditioned_dims_selector,
                         preconditioner_list=factor_eigenvectors,
                     )
-                # Scale corrected eigenvalues.
-                # NOTE: The case when self._beta2 == 1.0 is not well tested and might not be stable.
+                # Update corrected eigenvalues (squared gradient in eigenbasis of Shampoo preconditioner).
                 if self._beta2 != 1.0:
                     kronecker_factors.corrected_eigenvalues.mul_(self._beta2)
-                # Update corrected eigenvalues (squared gradient in eigenbasis of Shampoo preconditioner).
-                kronecker_factors.corrected_eigenvalues.add_(
-                    grad.square(),
-                    alpha=1 - self._beta2 if self._beta2 != 1.0 else 1.0,
-                )
+                    kronecker_factors.corrected_eigenvalues.addcmul_(
+                        grad,
+                        grad,
+                        value=1 - self._beta2,
+                    )
+                else:
+                    # NOTE: The case when self._beta2 == 1.0 is not well tested and might not be stable.
+                    kronecker_factors.corrected_eigenvalues.addcmul_(grad, grad)
 
     def precondition(self, masked_grad_list: tuple[Tensor, ...]) -> tuple[Tensor, ...]:
         """
