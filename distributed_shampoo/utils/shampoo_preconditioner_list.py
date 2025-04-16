@@ -840,7 +840,7 @@ class BaseShampooPreconditionerList(
                 self._masked_kronecker_factors_list,
                 strict=True,
             ):
-                # Skip if there is no Scale Kronecker factor
+                # Because of preconditioned_dims_selector, we may have no factor matrices to update.
                 if not kronecker_factors.factor_matrices:
                     continue
 
@@ -855,7 +855,7 @@ class BaseShampooPreconditionerList(
                     for k in compress_list(range(order), preconditioned_dims_selector)
                 )
 
-                # Scale and add in a single operation if beta2 is not 1.0
+                # Scale Kronecker factors as a list if beta2 is not 1.0
                 if self._beta2 != 1.0:
                     alpha = 1 - self._beta2
                     # Update Kronecker factors.
@@ -866,7 +866,7 @@ class BaseShampooPreconditionerList(
                         alpha=alpha,
                     )
                 else:
-                    # Simply add if beta2 is 1.0
+                    # Update Kronecker factors without scaling.
                     torch._foreach_add_(
                         kronecker_factors.factor_matrices, outer_product_list, alpha=1.0
                     )
