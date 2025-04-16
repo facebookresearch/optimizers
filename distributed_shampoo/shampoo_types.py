@@ -106,48 +106,51 @@ class ShampooPreconditionerConfig(PreconditionerConfig):
     Attributes:
         amortized_computation_config (RootInvConfig | EigendecompositionConfig): Configuration for the inverse-root computation. (Default: DefaultEigenConfig)
         num_tolerated_failed_amortized_computations (int): Number of failed amortized computations to tolerate before raising an error. (Default: 3)
-        inverse_exponent_override (dict[int, dict[int, float]]): The inverse_exponent_override attribute is a dictionary that allows for customizing the inverse exponent used in the Shampoo preconditioner computation.
-            The keys of the dictionary represent the order of the tensor, and the values are dictionaries with dimension indices as keys and override values as values. All unspecified dimensions use a default exponent of 1/(2*max(o,1)), where o is the order of the tensor. (Default: {})
+        inverse_exponent_override (dict[int, dict[int, float] | float]): The inverse_exponent_override attribute is a dictionary that allows for customizing the inverse exponent used in the Shampoo preconditioner computation.
+            The keys of the dictionary represent the order of the tensor, and the values are either dictionaries with dimension indices as keys and override values as values, or a single float value for all dimensions. All unspecified dimensions use a default exponent of 1/(2*max(o,1)), where o is the order of the tensor. (Default: {})
 
-            As an example, suppose inverse_exponent_override={2: {0: 0.5, 1: 0.2}, 3: {0: 0.0, 1: 0.25}}. In this case, all 1-D tensors will use the default exponent of 0.5 for preconditioning the first (and only) dimension. All 2-D tensors will be preconditioned with an exponent of 0.5 on the first dimension and 0.2 on the second dimension. All 3-D tensors will have the first dimension be preconditioned with an exponent of 0.5, the second dimension not preconditioned, and the third dimension preconditioned with the default exponent 0.1667.
+            As an example, suppose inverse_exponent_override={2: 0.2, 3: {0: 0.0, 1: 0.25}}. In this case, all 1-D tensors will use the default exponent of 0.5 for preconditioning the first (and only) dimension. All 2-D tensors will be preconditioned with an exponent of 0.2 on all dimensions. All 3-D tensors will have the first dimension be preconditioned with an exponent of 0.5, the second dimension not preconditioned, and the third dimension preconditioned with the default exponent 0.1667.
             A visualization of this example can be seen below:
             1-D:
                             +-------x-------+
                                     |
                                     |
-                            (^0.5), the default inverse exponent 1/(2*1)
+                            (^0.5), the default inverse exponent 1/(2*1) since inverse_exponent_override[1] is not specified
             2-D:
                             +-----------+
                             |           |
                             |           |
-                   (^0.2)---|           |
+                            |           |-----(^0.2), as specified by inverse_exponent_override[2]=0.2
                             |           |
                             |           |
                             +-----------+
                                   |
                                   |
-                                (^0.5)
+                                (^0.2), as specified by inverse_exponent_override[2]=0.2
             3-D:
                                +---------------+
                               /               /|
                              /               / |
                             +---------------+  |
                             |               |  |
-                            |               |  |
-                  (^0.25)---|               |  +
+                            |               | -|---(^0.25), as specified by inverse_exponent_override[3][1]=0.25
+                            |               |  +
                             |               | /
                             |               |/\
                             +---------------+  \
-                                    |          (^0.1667), the default inverse exponent 1/(2*3)
-                                    |
-                            no preconditioning
+                                    |          (^0.1667), the default inverse exponent 1/(2*3) since inverse_exponent_override[3][2] is not specified
+                                    |          
+                            no preconditioning since inverse_exponent_override[3][0]=0.0
+
 
     """
 
     amortized_computation_config: RootInvConfig | EigendecompositionConfig = field(
         default_factory=lambda: DefaultEigenConfig
     )
-    inverse_exponent_override: dict[int, dict[int, float]] = field(default_factory=dict)
+    inverse_exponent_override: dict[int, dict[int, float] | float] = field(
+        default_factory=dict
+    )
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -159,19 +162,33 @@ class ShampooPreconditionerConfig(PreconditionerConfig):
                 f"Invalid orders in {self.inverse_exponent_override=}: {non_positive_orders}. All orders must be >= 0."
             )
 
-        for order, dim_and_override in self.inverse_exponent_override.items():
-            if illegal_dimensions := [
-                dim for dim in dim_and_override if not (0 <= dim <= max(order - 1, 0))
-            ]:
-                raise ValueError(
-                    f"Invalid dimensions in {self.inverse_exponent_override[order]=}: {illegal_dimensions}. All dimensions must be within [0, {max(order - 1, 0)}]."
-                )
-            if non_positive_overrides := [
-                override for override in dim_and_override.values() if override < 0
-            ]:
-                raise ValueError(
-                    f"Invalid override value in {self.inverse_exponent_override[order]=}: {non_positive_overrides}. All overrides must be >= 0."
-                )
+        for (
+            order,
+            dim_override_or_universal_override,
+        ) in self.inverse_exponent_override.items():
+            if isinstance(dim_override_or_universal_override, dict):
+                if illegal_dimensions := [
+                    dim
+                    for dim in dim_override_or_universal_override
+                    if not (0 <= dim <= max(order - 1, 0))
+                ]:
+                    raise ValueError(
+                        f"Invalid dimensions in self.inverse_exponent_override[{order}]={self.inverse_exponent_override[order]}: {illegal_dimensions}. All dimensions must be within [0, {max(order - 1, 0)}]."
+                    )
+                if non_positive_overrides := [
+                    override
+                    for override in dim_override_or_universal_override.values()
+                    if override < 0
+                ]:
+                    raise ValueError(
+                        f"Invalid override value in self.inverse_exponent_override[{order}]={self.inverse_exponent_override[order]}: {non_positive_overrides}. All overrides must be >= 0."
+                    )
+            else:
+                assert isinstance(dim_override_or_universal_override, float)
+                if dim_override_or_universal_override < 0:
+                    raise ValueError(
+                        f"Invalid override value in self.inverse_exponent_override[{order}]={self.inverse_exponent_override[order]}: {dim_override_or_universal_override}. All overrides must be >= 0."
+                    )
 
 
 DefaultShampooConfig = ShampooPreconditionerConfig()
@@ -197,15 +214,15 @@ class EigenvalueCorrectedShampooPreconditionerConfig(PreconditionerConfig):
                             +-------x-------+
                                     |
                                     |
-                             no change basis
+                             no change basis, as specified by 0 in ignored_basis_change_dims[1]
             2-D:
-                                +-----------+
-                                |           |
-                                |           |
-             no change basis ---|           |
-                                |           |
-                                |           |
-                                +-----------+
+                            +-----------+
+                            |           |
+                            |           |
+                            |           |-----no change basis, as specified by 1 in ignored_basis_change_dims[2]
+                            |           |
+                            |           |
+                            +-----------+
             3-D:
                                +---------------+
                               /               /|
@@ -217,9 +234,9 @@ class EigenvalueCorrectedShampooPreconditionerConfig(PreconditionerConfig):
                             |               | /
                             |               |/\
                             +---------------+  \
-                                    |        no change basis
+                                    |        no change basis, as specified by 2 in ignored_basis_change_dims[3]
                                     |
-                             no change basis
+                             no change basis, as specified by 0 in ignored_basis_change_dims[3]
 
         inverse_exponent_override (dict[int, float]): The inverse_exponent_override attribute is a dictionary that allows for customizing the inverse exponent used in eigenvalue correction.
             The keys of the dictionary represent the order of the tensor, and the values are the exponent override values. For example, if we want to use a custom inverse exponent for 3-D tensors, we can set inverse_exponent_override as inverse_exponent_override={3: 0.25}.

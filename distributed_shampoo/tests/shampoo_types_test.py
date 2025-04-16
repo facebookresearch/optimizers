@@ -81,12 +81,13 @@ class PreconditionerConfigSubclassesTest(unittest.TestCase):
 @instantiate_parametrized_tests
 class ShampooPreconditionerConfigSubclassesTest(unittest.TestCase):
     @parametrize(  # type: ignore
-        "cls", get_all_subclasses(ShampooPreconditionerConfig, include_cls_self=True)
+        "cls",
+        get_all_subclasses(ShampooPreconditionerConfig, include_cls_self=True),
     )
     def test_illegal_inverse_exponent_override(
         self, cls: type[ShampooPreconditionerConfig]
     ) -> None:
-        non_positive_orders_config: dict[int, dict[int, float]] = {
+        non_positive_orders_config: dict[int, dict[int, float] | float] = {
             -1: {},
             -2: {},
         }
@@ -100,31 +101,44 @@ class ShampooPreconditionerConfigSubclassesTest(unittest.TestCase):
         )
 
         # illegal_dimensions_config[1] is the problematic one.
-        illegal_dimensions_config: dict[int, dict[int, float]] = {
-            0: {0: 0.2},
+        illegal_dimensions_config: dict[int, dict[int, float] | float] = {
+            0: 0.2,
             1: {0: 0.3, 1: 0.2},
         }
         self.assertRaisesRegex(
             ValueError,
             re.escape(
-                f"Invalid dimensions in self.inverse_exponent_override[order]={illegal_dimensions_config[1]}: [1]. All dimensions must be within [0, 0]."
+                f"Invalid dimensions in self.inverse_exponent_override[1]={illegal_dimensions_config[1]}: [1]. All dimensions must be within [0, 0]."
             ),
             cls,
             inverse_exponent_override=illegal_dimensions_config,
         )
 
-        # non_positive_overrides_config[1] is the problematic one.
-        non_positive_overrides_config: dict[int, dict[int, float]] = {
+        # non_positive_dim_overrides_config[1] is the problematic one.
+        non_positive_dim_overrides_config: dict[int, dict[int, float] | float] = {
             1: {0: -0.3},
-            2: {0: 0.2, 1: 0.5},
+            2: 0.2,
         }
         self.assertRaisesRegex(
             ValueError,
             re.escape(
-                f"Invalid override value in self.inverse_exponent_override[order]={non_positive_overrides_config[1]}: [-0.3]. All overrides must be >= 0."
+                f"Invalid override value in self.inverse_exponent_override[1]={non_positive_dim_overrides_config[1]}: [-0.3]. All overrides must be >= 0."
             ),
             cls,
-            inverse_exponent_override=non_positive_overrides_config,
+            inverse_exponent_override=non_positive_dim_overrides_config,
+        )
+
+        non_positive_universal_overrides_config: dict[int, dict[int, float] | float] = {
+            1: -0.2,
+            2: {0: 0.3, 1: 0.2},
+        }
+        self.assertRaisesRegex(
+            ValueError,
+            re.escape(
+                f"Invalid override value in self.inverse_exponent_override[1]={non_positive_universal_overrides_config[1]}: {non_positive_universal_overrides_config[1]}. All overrides must be >= 0."
+            ),
+            cls,
+            inverse_exponent_override=non_positive_universal_overrides_config,
         )
 
 
