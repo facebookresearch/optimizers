@@ -843,9 +843,9 @@ class BaseShampooPreconditionerList(
                 self._masked_kronecker_factors_list,
                 strict=True,
             ):
-                # Scale Kronecker factors as a list.
-                if self._beta2 != 1.0 and kronecker_factors.factor_matrices:
-                    torch._foreach_mul_(kronecker_factors.factor_matrices, self._beta2)
+                # Because of preconditioned_dims_selector, we may have no factor matrices to update.
+                if not kronecker_factors.factor_matrices:
+                    continue
 
                 # Construct outer product list for updating Kronecker factors.
                 outer_product_list = tuple(
@@ -858,13 +858,20 @@ class BaseShampooPreconditionerList(
                     for k in compress_list(range(order), preconditioned_dims_selector)
                 )
 
-                # Because of preconditioned_dims_selector, we may have no factor matrices to update.
-                if kronecker_factors.factor_matrices:
+                # Scale Kronecker factors as a list if beta2 is not 1.0
+                if self._beta2 != 1.0:
+                    alpha = 1 - self._beta2
                     # Update Kronecker factors.
+                    torch._foreach_mul_(kronecker_factors.factor_matrices, self._beta2)
                     torch._foreach_add_(
                         kronecker_factors.factor_matrices,
                         outer_product_list,
-                        alpha=1 - self._beta2 if self._beta2 != 1.0 else 1.0,
+                        alpha=alpha,
+                    )
+                else:
+                    # Update Kronecker factors without scaling.
+                    torch._foreach_add_(
+                        kronecker_factors.factor_matrices, outer_product_list, alpha=1.0
                     )
 
     @staticmethod
