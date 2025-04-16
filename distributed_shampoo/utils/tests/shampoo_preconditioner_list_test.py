@@ -178,6 +178,7 @@ class AdagradPreconditionerListTest(PreconditionerListTest):
         return (
             self._params[0],
             *torch.split(self._params[1], 2, dim=0),
+            self._params[2],
         )
 
     def _instantiate_preconditioner_list(
@@ -195,10 +196,12 @@ class AdagradPreconditionerListTest(PreconditionerListTest):
         self._params = (
             torch.tensor([1.0, 2.0]),
             torch.arange(6, dtype=torch.float).reshape(3, 2),
+            torch.tensor(1.0),  # a 0D tensor
         )
         self._state = {  # type: ignore[var-annotated]
             self._params[0]: {},
             self._params[1]: {},
+            self._params[2]: {},
         }
         # Because maximum_preconditioner_dim = 2, self._params[0] forms a block by itself,
         # and self._params[1] are split into two blocks.
@@ -215,6 +218,10 @@ class AdagradPreconditionerListTest(PreconditionerListTest):
                 param=self._params[1],
                 composable_block_ids=(1, "block_1"),
             ),
+            BlockInfo(
+                param=self._params[2],
+                composable_block_ids=(2, "block_0"),
+            ),
         )
         super().setUp()
 
@@ -223,6 +230,7 @@ class AdagradPreconditionerListTest(PreconditionerListTest):
             torch.tensor([1.0, 1.0]),
             torch.tensor([[1.0, 2.0], [3.0, 4.0]]),
             torch.tensor([[5.0, 6.0]]),
+            torch.tensor(1.0),
         )
 
         self._test_update_preconditioners_and_precondition(
@@ -242,28 +250,33 @@ class AdagradPreconditionerListTest(PreconditionerListTest):
             ),
             masked_grad_lists=[grad_list],
             masked_expected_preconditioned_grad_list=torch._foreach_mul(
-                [torch.tensor(10.0), torch.tensor(10.0), torch.tensor(10.0)],
+                [
+                    torch.tensor(10.0),
+                    torch.tensor(10.0),
+                    torch.tensor(10.0),
+                    torch.tensor(10.0),
+                ],
                 torch._foreach_sign(grad_list),
             ),
         )
 
     def test_numel_list(self) -> None:
-        self.assertEqual(self._preconditioner_list.numel_list, (2, 4, 2))
+        self.assertEqual(self._preconditioner_list.numel_list, (2, 4, 2, 1))
 
     def test_dims_list(self) -> None:
         self.assertEqual(
             self._preconditioner_list.dims_list,
-            (torch.Size([2]), torch.Size([2, 2]), torch.Size([1, 2])),
+            (torch.Size([2]), torch.Size([2, 2]), torch.Size([1, 2]), torch.Size([])),
         )
 
     def test_num_bytes_list(self) -> None:
-        self.assertEqual(self._preconditioner_list.num_bytes_list, (8, 16, 8))
+        self.assertEqual(self._preconditioner_list.num_bytes_list, (8, 16, 8, 4))
 
     def test_numel(self) -> None:
-        self.assertEqual(self._preconditioner_list.numel(), 8)
+        self.assertEqual(self._preconditioner_list.numel(), 9)
 
     def test_num_bytes(self) -> None:
-        self.assertEqual(self._preconditioner_list.num_bytes(), 32)
+        self.assertEqual(self._preconditioner_list.num_bytes(), 36)
 
     def test_compress_preconditioner_list(self) -> None:
         self._test_compress_preconditioner_list(expected_compress_list_call_count=1)
@@ -397,6 +410,7 @@ class AbstractTest:
                     torch.tensor([invalid_value, invalid_value]),
                     torch.eye(2) / torch.tensor(2.0).sqrt(),
                     torch.tensor([[invalid_value, invalid_value]]),
+                    torch.tensor(invalid_value),
                 ),
                 step=torch.tensor(1),
                 perform_amortized_computation=True,
@@ -430,6 +444,7 @@ class AbstractTest:
                             torch.tensor([1.0, 0.0]),
                             torch.eye(2) / torch.tensor(2.0).sqrt(),
                             torch.tensor([[1.0, 0.0]]),
+                            torch.tensor(1.0),
                         ),
                         step=torch.tensor(1),
                         perform_amortized_computation=True,
@@ -449,6 +464,7 @@ class AbstractTest:
                             torch.tensor([1.0, 0.0]),
                             torch.eye(2) / torch.tensor(2.0).sqrt(),
                             torch.tensor([[1.0, 0.0]]),
+                            torch.tensor(1.0),
                         ),
                         step=torch.tensor(1),
                         perform_amortized_computation=True,
@@ -473,11 +489,13 @@ class AbstractTest:
                 torch.tensor([1.0, 0.0]),
                 torch.eye(2) / torch.tensor(2.0).sqrt(),
                 torch.tensor([[1.0, 0.0]]),
+                torch.tensor(1.0),
             )
             masked_grad_list = (
                 torch.tensor([0.0, 1.0]),
                 torch.eye(2) / torch.tensor(2.0).sqrt(),
                 torch.tensor([[0.0, 1.0]]),
+                torch.tensor(1.0),
             )
 
             # Number of calls to the amortized computation function per update.
@@ -671,16 +689,21 @@ class AbstractTest:
                     )
 
         def test_numel_list(self) -> None:
-            self.assertEqual(self._preconditioner_list.numel_list, (8, 16, 10))
+            self.assertEqual(self._preconditioner_list.numel_list, (8, 16, 10, 0))
 
         def test_dims_list(self) -> None:
             self.assertEqual(
                 self._preconditioner_list.dims_list,
-                (torch.Size([2]), torch.Size([2, 2]), torch.Size([1, 2])),
+                (
+                    torch.Size([2]),
+                    torch.Size([2, 2]),
+                    torch.Size([1, 2]),
+                    torch.Size([]),
+                ),
             )
 
         def test_num_bytes_list(self) -> None:
-            self.assertEqual(self._preconditioner_list.num_bytes_list, (48, 96, 60))
+            self.assertEqual(self._preconditioner_list.num_bytes_list, (48, 96, 60, 0))
 
         def test_numel(self) -> None:
             self.assertEqual(self._preconditioner_list.numel(), 34)
@@ -737,16 +760,25 @@ class ShampooPreconditionerListTest(AbstractTest.BaseShampooPreconditionerListTe
             R = G1^T * G1 + G2^T * G2 = [[1, 0], [0, 1]]
             P = L^{-1/4} G2 R^{-1/4} = 2^{-1/4} * [[0, 1]] = 2^{-1/4} G2
 
+        (4) Tensor of Size 0
+            G1 = 1
+            G2 = 2
+
+            L = [1] due to 0D tensor
+            P = L^{-1/2} G2 = 2
+
         """
         masked_grad_list1 = (
             torch.tensor([1.0, 0.0]),
             torch.eye(2) / torch.tensor(2.0).sqrt(),
             torch.tensor([[1.0, 0.0]]),
+            torch.tensor(1.0),
         )
         masked_grad_list2 = (
             torch.tensor([0.0, 1.0]),
             torch.eye(2) / torch.tensor(2.0).sqrt(),
             torch.tensor([[0.0, 1.0]]),
+            torch.tensor(2.0),
         )
 
         masked_expected_preconditioned_grad_list = [
@@ -876,22 +908,32 @@ class ShampooPreconditionerListTest(AbstractTest.BaseShampooPreconditionerListTe
             R = G1^T * G1 + G2^T * G2 = [[4, 0], [0, 4]]
             P = L^{-1/4} G2 R^{-1/4} = 8^{-1/4} G2 [[1/sqrt(2), 0], [0, 1/sqrt(2)]] = G2 / (sqrt(2 * sqrt(8)))
 
+        (4) Tensor of Size 0
+            G1 = 1
+            G2 = 2
+
+            L = [1] due to 0D tensor
+            P = L^{-1} G2 = 2
+
         """
         masked_grad_list1 = (
             torch.tensor([4.0, 0.0]),
             torch.eye(2) * 3,
             torch.tensor([[2.0, 0.0]]),
+            torch.tensor(1.0),
         )
         masked_grad_list2 = (
             torch.tensor([0.0, 4.0]),
             torch.eye(2) * 4,
             torch.tensor([[0.0, 2.0]]),
+            torch.tensor(2.0),
         )
 
         masked_expected_preconditioned_grad_list = [
             torch.tensor([0.0, 1.0]),
             masked_grad_list2[1] / 5,
             masked_grad_list2[2] / math.sqrt(2 * math.sqrt(8)),
+            torch.tensor(2.0),
         ]
 
         # The default case where we do not ignore any dimensions.
@@ -951,6 +993,13 @@ class ShampooPreconditionerListTest(AbstractTest.BaseShampooPreconditionerListTe
             R = G1^T * G1 + G2^T * G2 = [[1, 0], [0, 4]]
             P = L^{-1} G2 R^{-1} =  [[0, 0.1]]
 
+        (4) Tensor of Size 0
+            G1 = 1
+            G2 = 2
+
+            L = [1] due to 0D tensor
+            P = L^{-1} G2 = 2
+
         """
 
         preconditioner_config = replace(
@@ -966,17 +1015,20 @@ class ShampooPreconditionerListTest(AbstractTest.BaseShampooPreconditionerListTe
             torch.tensor([1.0, 0.0]),
             torch.eye(2) / torch.tensor(2.0).sqrt(),
             torch.tensor([[1.0, 0.0]]),
+            torch.tensor(1.0),
         )
         masked_grad_list2 = (
             torch.tensor([0.0, 2.0]),
             torch.eye(2) / torch.tensor(2.0).sqrt(),
             torch.tensor([[0.0, 2.0]]),
+            torch.tensor(2.0),
         )
 
         masked_expected_preconditioned_grad_list = (
             torch.tensor([0, 0.5]),
             torch.eye(2) / torch.tensor(2.0).sqrt(),
             torch.tensor([[0, 0.1]]),
+            torch.tensor(2.0),
         )
 
         self._test_update_preconditioners_and_precondition(
@@ -1063,22 +1115,34 @@ class EigenvalueCorrectedShampooPreconditionerListTest(
             E = G1^2 + (B_L G2 B_R)^2  # corrected eigenvalues
             P = B_L ((B_L G2 B_R) / sqrt(E + eps) B_R = G2 / sqrt(E + eps)
 
+        (4) Tensor of Size 0
+            G1 = 1
+            G2 = 2
+
+            L = [1] due to 0D tensor
+            B = [1]               # eigenvectors of L
+            E = G1^2 + (B G2)^2   # corrected eigenvalues
+            P = B ((B G2) / sqrt(E + eps)) = G2 / sqrt(E + eps)
+
         """
         masked_grad_list1 = (
             torch.tensor([1.0, 0.0]),
             torch.eye(2) / torch.tensor(2.0).sqrt(),
             torch.tensor([[1.0, 0.0]]),
+            torch.tensor(1.0),
         )
         masked_grad_list2 = (
             torch.tensor([0.0, 2.0]),
             torch.eye(2) / torch.tensor(2.0).sqrt(),
             torch.tensor([[0.0, 2.0]]),
+            torch.tensor(2.0),
         )
 
         masked_expected_preconditioned_grad_list = (
             torch.tensor([0.0, 1.0]),
             torch.eye(2) / torch.tensor(2.0).sqrt(),
             torch.tensor([[0.0, 1.0]]),
+            torch.tensor(2 / math.sqrt(5)),
         )
         self._test_update_preconditioners_and_precondition(
             preconditioner_list=self._instantiate_preconditioner_list(
@@ -1115,6 +1179,7 @@ class EigenvalueCorrectedShampooPreconditionerListTest(
             torch.tensor([0.0, 1.0]),
             torch.eye(2) / torch.tensor(2.0).sqrt(),
             torch.tensor([[0.0, 1.0]]),
+            torch.tensor(2 / math.sqrt(5)),
         )
         # Fix scaling due to EMA.
         torch._foreach_div_(
@@ -1214,6 +1279,15 @@ class EigenvalueCorrectedShampooPreconditionerListTest(
             E = G1^2 + (B_L G2 B_R)^2  # corrected eigenvalues
             P = B_L ((B_L G2 B_R) / (E + eps)) B_R = G2 / (E + eps) ≈ [[0, 0.5]]
 
+        (4) Tensor of Size 0
+            G1 = 1
+            G2 = 2
+
+            L = G1 * G1^T + G2 * G2^T = 5
+            B = [1]               # eigenvectors of L
+            E = G1^2 + (B G2)^2   # corrected eigenvalues
+            P = B ((B G2) / (E + eps) = G2 / (E + eps) ≈ 0.4
+
         """
 
         preconditioner_config = EigenvalueCorrectedShampooPreconditionerConfig(
@@ -1224,17 +1298,20 @@ class EigenvalueCorrectedShampooPreconditionerListTest(
             torch.tensor([1.0, 0.0]),
             torch.eye(2) / torch.tensor(2.0).sqrt(),
             torch.tensor([[1.0, 0.0]]),
+            torch.tensor(1.0),
         )
         masked_grad_list2 = (
             torch.tensor([0.0, 2.0]),
             torch.eye(2) / torch.tensor(2.0).sqrt(),
             torch.tensor([[0.0, 2.0]]),
+            torch.tensor(2.0),
         )
 
         masked_expected_preconditioned_grad_list = (
             torch.tensor([0, 0.5]),
             torch.eye(2) / torch.tensor(2.0).sqrt(),
             torch.tensor([[0, 0.5]]),
+            torch.tensor(0.4),
         )
 
         self._test_update_preconditioners_and_precondition(

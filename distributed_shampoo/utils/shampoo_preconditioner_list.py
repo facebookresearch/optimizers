@@ -936,7 +936,7 @@ class ShampooPreconditionerList(
         return tuple(
             attrgetter(INVERSE_EXPONENT_OVERRIDE)(self._preconditioner_config)
             .get((order := len(dims)), {})
-            .get(d, 1 / (2 * order))
+            .get(d, 1 / (2 * max(order, 1)))
             != 0.0
             # Traverse through each dim of a block.
             for d in range(len(dims))
@@ -967,7 +967,7 @@ class ShampooPreconditionerList(
             1
             / attrgetter(INVERSE_EXPONENT_OVERRIDE)(self._preconditioner_config)
             .get((order := len(preconditioned_dims_selector)), {})
-            .get(k, 1 / (2 * order))
+            .get(k, 1 / (2 * max(order, 1)))
             # Traverse through each dim of a block that requires precondition.
             for k, should_precondition in enumerate(preconditioned_dims_selector)
             if should_precondition
