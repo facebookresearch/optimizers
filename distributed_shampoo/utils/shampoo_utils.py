@@ -93,9 +93,10 @@ def get_dtype_size(dtype: torch.dtype) -> int:
     """Return the size (bytes) of a given data type."""
     if dtype is torch.bool:
         return 1
-    return math.ceil(
-        (torch.finfo if dtype.is_floating_point else torch.iinfo)(dtype).bits / 8.0
-    )
+    # Fast ceiling of bits/8 using (bits + 7) // 8
+    return (
+        (torch.finfo if dtype.is_floating_point else torch.iinfo)(dtype).bits + 7
+    ) // 8
 
 
 def generate_pairwise_indices(input_list: Sequence[int]) -> Iterator[tuple[int, int]]:
