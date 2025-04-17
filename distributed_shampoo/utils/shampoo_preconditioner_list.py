@@ -252,7 +252,7 @@ class AdagradPreconditionerList(PreconditionerList):
             masked_grad_list (tuple[Tensor, ...]): A tuple of gradients with None values removed.
 
         Returns:
-            tuple[Tensor, ...]: A tuple of preconditioned gradients.
+            preconditioned_grads (tuple[Tensor, ...]): A list of preconditioned gradients.
         """
         with profiler.record_function(
             f"## {self.__class__.__name__}:{self.precondition.__name__} ##"
@@ -1180,7 +1180,7 @@ class EigendecomposedShampooPreconditionerList(
             masked_grad_list (tuple[Tensor, ...]): A list of gradients with their corresponding masks.
 
         Returns:
-            tuple[Tensor, ...]: A list of preconditioned gradients.
+            preconditioned_grads (tuple[Tensor, ...]): A list of preconditioned gradients.
         """
         with profiler.record_function(
             f"## {self.__class__.__name__}:{self.precondition.__name__} ##"
