@@ -183,7 +183,7 @@ class AdagradPreconditionerListTest(PreconditionerListTest):
     def _instantiate_preconditioner_list(
         self, **kwargs: Any
     ) -> AdagradPreconditionerList:  # type: ignore[override]
-        kwargs = {"beta2": 1.0, "epsilon": 0.0, "use_bias_correction": True} | kwargs
+        kwargs = {"epsilon": 0.0} | kwargs
         return AdagradPreconditionerList(
             block_list=self._block_list,
             state=self._state,
@@ -373,10 +373,7 @@ class AbstractTest:
 
         def _instantiate_preconditioner_list(self, **kwargs: Any) -> PreconditionerList:  # type: ignore[override]
             kwargs = {
-                "beta2": 1.0,
-                "epsilon": 1e-12,
-                "use_bias_correction": True,
-                "preconditioner_config": self._default_preconditioner_config,
+                "preconditioner_config": self._default_preconditioner_config
             } | kwargs
             return self._preconditioner_list_factory(
                 block_list=self._block_list,
