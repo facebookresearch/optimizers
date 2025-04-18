@@ -14,12 +14,11 @@ from collections.abc import Callable
 from functools import partial
 
 import torch
-from distributed_shampoo.distributed_shampoo import DistributedShampoo
-from distributed_shampoo.shampoo_types import (
-    AdaGradGraftingConfig,
-    FullyShardShampooConfig,
-)
+from distributed_shampoo.shampoo_types import FullyShardShampooConfig
 from distributed_shampoo.tests.shampoo_test_utils import construct_training_problem
+from distributed_shampoo.utils.gpu_tests.shampoo_distributor_test_utils import (
+    shampoo_optim_factory,
+)
 
 from torch import nn
 from torch.distributed._composable.fsdp import fully_shard
@@ -175,22 +174,7 @@ class ShampooFullyShardDistributorTest(FSDPTest):
         [ParamsT],
         torch.optim.Optimizer,
     ]:
-        return partial(
-            DistributedShampoo,
-            lr=0.001,
-            betas=(0.9, 1.0),
-            epsilon=1e-8,
-            momentum=0.0,
-            weight_decay=0.0,
-            max_preconditioner_dim=4,
-            precondition_frequency=1,
-            start_preconditioning_step=2,
-            use_decoupled_weight_decay=True,
-            grafting_config=AdaGradGraftingConfig(
-                epsilon=1e-8,
-            ),
-            distributed_config=distributed_config,
-        )
+        return shampoo_optim_factory(distributed_config)
 
     @staticmethod
     def _model_factory(
