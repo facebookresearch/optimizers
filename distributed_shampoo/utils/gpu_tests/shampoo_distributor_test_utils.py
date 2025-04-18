@@ -15,10 +15,7 @@ from typing import TypeVar
 
 import torch
 from distributed_shampoo.distributed_shampoo import DistributedShampoo
-from distributed_shampoo.shampoo_types import (
-    AdaGradGraftingConfig,
-    DistributedShampooConfig,
-)
+from distributed_shampoo.shampoo_types import AdaGradGraftingConfig, DistributedConfig
 
 from torch import nn
 from torch.optim.optimizer import ParamsT
@@ -34,11 +31,12 @@ ModelFactoryReturnT = TypeVar(
 TrainModelReturnT = TypeVar(
     "TrainModelReturnT",
     tuple[list[torch.Tensor], torch.Tensor],
+    tuple[list[torch.Tensor], torch.Tensor, torch.Tensor],
 )
 
 
 def shampoo_optim_factory(
-    distributed_config: DistributedShampooConfig | None,
+    distributed_config: DistributedConfig | None,
 ) -> Callable[
     [ParamsT],
     torch.optim.Optimizer,
@@ -110,15 +108,15 @@ def test_two_configs(
         atol: Absolute tolerance for tensor comparison.
         rtol: Relative tolerance for tensor comparison.
     """
-    params1, loss1 = train_model_func(
+    params1, loss1, *_ = train_model_func(
         optim_factory1,
         model_factory1,
-        device=device,
+        device,
     )
-    params2, loss2 = train_model_func(
+    params2, loss2, *_ = train_model_func(
         optim_factory2,
         model_factory2,
-        device=device,
+        device,
     )
 
     torch.testing.assert_close(loss1, loss2, atol=atol, rtol=rtol)
