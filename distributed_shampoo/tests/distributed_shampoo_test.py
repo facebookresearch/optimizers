@@ -28,6 +28,7 @@ from distributed_shampoo.shampoo_types import (
     GraftingConfig,
     PreconditionerConfig,
     ShampooPreconditionerConfig,
+    ShampooPT2CompileConfig,
 )
 from matrix_functions_types import DefaultEigendecompositionConfig, EigenConfig
 from torch import nn
@@ -978,6 +979,9 @@ class DistributedShampooNoneGradTest(unittest.TestCase):
             max_preconditioner_dim=5,
             precondition_frequency=1,
             start_preconditioning_step=1,
+            shampoo_pt2_compile_config=ShampooPT2CompileConfig(
+                pytorch_compile_backend="eager"
+            ),
             distributed_config=None,
             # Explicity set grafting_config=None to test the case that no grafting is used.
             grafting_config=None,

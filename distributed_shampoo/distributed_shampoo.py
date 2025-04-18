@@ -429,6 +429,11 @@ class DistributedShampoo(torch.optim.Optimizer):
             },
         )
 
+        # Initialize non-group-related fields.
+        self._shampoo_pt2_compile_config: ShampooPT2CompileConfig | None = (
+            shampoo_pt2_compile_config
+        )
+
         # Initialize list containing group state dictionaries.
         self._per_group_state_lists: list[dict[str, Any]] = [
             {} for _ in self.param_groups
@@ -442,7 +447,9 @@ class DistributedShampoo(torch.optim.Optimizer):
         self._instantiate_momentum()
         self._instantiate_filtered_grads()
         self._instantiate_device()
-        self._instantiate_per_group_step(shampoo_pt2_compile_config)
+        self._instantiate_per_group_step(
+            shampoo_pt2_compile_config=shampoo_pt2_compile_config
+        )
 
     @torch.no_grad()
     def _instantiate_distributor(
@@ -705,7 +712,11 @@ class DistributedShampoo(torch.optim.Optimizer):
 
     @staticmethod
     @torch.no_grad()
-    def _mask_state_lists(state_lists: dict[str, Any], group: dict[str, Any]) -> None:
+    def _mask_state_lists(
+        state_lists: dict[str, Any],
+        group: dict[str, Any],
+        shampoo_pt2_enabled: bool = False,
+    ) -> None:
         if (
             state_lists[DISTRIBUTOR].local_grad_selector
             == state_lists[PREVIOUS_GRAD_SELECTOR]
@@ -714,7 +725,7 @@ class DistributedShampoo(torch.optim.Optimizer):
 
         # Warning for potential PT2 recompile due to gradient selector change.
         # This warning is expected in either training from scratch or reloading from a checkpoint, as state_lists[PREVIOUS_GRAD_SELECTOR] is initialized to `None`, triggering this warning.
-        if state_lists[PREVIOUS_GRAD_SELECTOR] is not None:
+        if state_lists[PREVIOUS_GRAD_SELECTOR] is not None and shampoo_pt2_enabled:
             grad_selector_different = [
                 a ^ b
                 for a, b in zip(
@@ -1054,7 +1065,11 @@ class DistributedShampoo(torch.optim.Optimizer):
             ].merge_and_block_gradients()
 
             # Based on the current block selector, mask lists of parameters and optimizer states.
-            DistributedShampoo._mask_state_lists(state_lists, group)
+            DistributedShampoo._mask_state_lists(
+                state_lists=state_lists,
+                group=group,
+                shampoo_pt2_enabled=self._shampoo_pt2_compile_config is not None,
+            )
 
             # Check if gradient list is empty. If so, continue.
             if not state_lists[MASKED_BLOCKED_GRADS]:
