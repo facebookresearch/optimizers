@@ -49,7 +49,18 @@ class NewtonConvergenceFlag(enum.Enum):
 
 
 def check_diagonal(A: Tensor) -> bool:
-    """Checks if symmetric matrix is diagonal. Throw if the input is not a square matrix."""
+    """Checks if symmetric matrix is diagonal. Throw if the input is not a square matrix.
+
+    Args:
+        A (Tensor): The input matrix.
+
+    Returns:
+        is_diagonal (bool): True if the matrix is diagonal, False otherwise.
+
+    Raises:
+        ValueError: If the matrix is not 2-dimensional or not square.
+
+    """
 
     A_shape = A.shape
     if len(A_shape) != 2:
@@ -81,6 +92,10 @@ def matrix_inverse_root(
 
     Returns:
         X (Tensor): Inverse root of matrix A.
+
+    Raises:
+        ValueError: If the matrix is not 2-dimensional or not square, or if the root denominator is not 1 for CoupledNewtonConfig.
+        NotImplementedError: If the root inverse config is not implemented.
 
     """
 
@@ -162,6 +177,9 @@ def _matrix_inverse_root_diagonal(
     Returns:
         X (Tensor): Inverse root of diagonal entries.
 
+    Raises:
+        ValueError: If the root is not a positive integer.
+
     """
     # check if root is positive integer
     if root <= 0:
@@ -183,7 +201,13 @@ def matrix_eigendecomposition(
         is_diagonal (bool): Whether A is diagonal. (Default: False)
 
     Returns:
-        tuple[Tensor, Tensor]: A tuple containing the eigenvalues and eigenvectors of the input matrix.
+        eigenvalues (Tensor): The eigenvalues of the input matrix.
+        eigenvectors (Tensor): The eigenvectors of the input matrix.
+
+    Raises:
+        ValueError: If the matrix is not 2-dimensional or not square.
+        NotImplementedError: If the eigendecomposition config is not implemented.
+
     """
     # check if matrix is scalar
     if torch.numel(A) == 1:
@@ -236,6 +260,9 @@ def _eigh_eigenvalue_decomposition(
         eigenvalues (Tensor): The eigenvalues of the input matrix A.
         eigenvectors (Tensor): The eigenvectors of the input matrix A.
 
+    Raises:
+        Exception: If the eigendecomposition fails and retry_double_precision is False or fails in double precision.
+
     """
 
     current_device = A.device
@@ -279,7 +306,7 @@ def _estimated_eigenvalues_criterion_below_or_equal_tolerance(
         tolerance (float): The tolerance for the criterion.
 
     Returns:
-        bool: True if the criterion is below or equal to the tolerance, False otherwise.
+        is_below_tolerance (bool): True if the criterion is below or equal to the tolerance, False otherwise.
 
     """
     norm = torch.linalg.norm(estimated_eigenvalues)
@@ -309,7 +336,11 @@ def _qr_algorithm(
             (Default: 0.01)
 
     Returns:
-        tuple[Tensor, Tensor]: The estimated eigenvalues and eigenvectors of the input matrix A.
+        estimated_eigenvalues (Tensor): The estimated eigenvalues of the input matrix A.
+        estimated_eigenvectors (Tensor): The estimated eigenvectors of the input matrix A.
+
+    Raises:
+        AssertionError: If the data types of Q and A do not match.
 
     """
     if not eigenvectors_estimate.any():
@@ -371,6 +402,9 @@ def _matrix_inverse_root_eigen(
         X (Tensor): (Inverse) root of matrix. Same dimensions as A.
         L (Tensor): Eigenvalues of A.
         Q (Tensor): Orthogonal matrix consisting of eigenvectors of A.
+
+    Raises:
+        ValueError: If the root is not a positive integer.
 
     """
 
@@ -522,14 +556,16 @@ def _matrix_inverse_root_higher_order(
         disable_tf32 (bool): Whether to disable tf32 matmuls or not internally. Highly recommend keeping True, since tf32 is challenging numerically here. (Default: True)
 
     Returns:
-        A_root (Tensor): Inverse root of matrix (A^{-1/root})
+        A_root (Tensor): Inverse root of matrix (A^{-1/root}).
         M (Tensor): Coupled matrix.
         termination_flag (NewtonConvergenceFlag): Specifies convergence.
         iteration (int): Number of iterations.
         error (Tensor): Final error, measured as |A * A_root^(p/q) - I|_Inf, where root = -q/p.
 
-    Exceptions:
-        Method throws an ArithmeticError if the computed result is inaccurate, i.e., error > 1e-1 or if there is an internal error
+    Raises:
+        ArithmeticError: If the computed result is inaccurate, i.e., error > 1e-1 or if there is an internal error.
+        ArithmeticError: If the input matrix has entries close to infinity.
+        ArithmeticError: If NaN/Inf is found in the matrix inverse root after powering for fractions.
 
     """
 
@@ -705,15 +741,18 @@ def compute_matrix_root_inverse_residuals(
 
     Args:
         A (Tensor): Matrix of interest.
-        X (Tensor): Computed matrix root inverse.
+        X_hat (Tensor): Computed matrix root inverse.
         root (Fraction): Root of interest. Any rational number.
         epsilon (float): Adds epsilon * I to matrix.
         root_inv_config (RootInvConfig): Configuration for root inverse computation (only supports EigenConfig for now). (Default: DefaultEigenConfig)
 
     Returns:
-        absolute_error (Tensor): absolute error of matrix root inverse
-        relative_error (Tensor): relative error of matrix root inverse
-        residual (Tensor): residual of matrix root inverse
+        relative_error (Tensor): Relative error of matrix root inverse.
+        relative_residual (Tensor): Residual of matrix root inverse.
+
+    Raises:
+        AssertionError: If the root_inv_config is not of type EigenConfig.
+        ValueError: If the matrix is not 2-dimensional, not square, or if the shapes of A and X_hat do not match.
 
     """
     # only do root inverse residual computation for EigenConfig
