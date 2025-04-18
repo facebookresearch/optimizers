@@ -4,7 +4,7 @@ on: [push, pull_request]
 
 jobs:
   examples:
-    name: "Python 3.10"
+    name: "Python 3.12"
     runs-on: 4-core-ubuntu-gpu-t4
     steps:
         - uses: actions/checkout@v4
@@ -14,24 +14,28 @@ jobs:
             source $HOME/.local/bin/env
             uv self update
         - name: Install Python.
-          run: uv python install 3.10
+          run: uv python install 3.12
         - name: Create venv and install the package.
           run: |
             uv venv && source .venv/bin/activate
             uv pip install ".[examples]"
+        - name: Run default example with Adam to serve as a baseline.
+          run: |
+            source .venv/bin/activate
+            CUDA_VISIBLE_DEVICES="" python -m distributed_shampoo.examples.default_cifar10_example --optimizer-type ADAM --batch-size 1024
         - name: Run default example on CPU.
           run: |
             source .venv/bin/activate
-            CUDA_VISIBLE_DEVICES="" python -m distributed_shampoo.examples.default_cifar10_example --optimizer-type DISTRIBUTED_SHAMPOO --precondition-frequency 30 --grafting-type ADAM --use-bias-correction --use-decoupled-weight-decay --use-merge-dims --epochs 1 --batch-size 1024 --momentum=0.9
+            CUDA_VISIBLE_DEVICES="" python -m distributed_shampoo.examples.default_cifar10_example --optimizer-type DISTRIBUTED_SHAMPOO --precondition-frequency 30 --grafting-type ADAM --use-bias-correction --use-decoupled-weight-decay --use-merge-dims --epochs 1 --batch-size 1024
         - name: Run default example on GPU.
           run: |
             source .venv/bin/activate
-            python -m distributed_shampoo.examples.default_cifar10_example --optimizer-type DISTRIBUTED_SHAMPOO --precondition-frequency 30 --grafting-type ADAM --use-bias-correction --use-decoupled-weight-decay --use-merge-dims --epochs 1 --batch-size 1024 --momentum=0.9
+            python -m distributed_shampoo.examples.default_cifar10_example --optimizer-type DISTRIBUTED_SHAMPOO --precondition-frequency 30 --grafting-type ADAM --use-bias-correction --use-decoupled-weight-decay --use-merge-dims --epochs 1 --batch-size 1024
         - name: Run DDP example on CPU.
           run: |
             source .venv/bin/activate
-            CUDA_VISIBLE_DEVICES="" torchrun --standalone --nnodes=1 --nproc_per_node=2 -m distributed_shampoo.examples.ddp_cifar10_example --optimizer-type DISTRIBUTED_SHAMPOO --precondition-frequency 15 --grafting-type ADAM --use-bias-correction --use-decoupled-weight-decay --use-merge-dims --epochs 1 --local-batch-size 1024 --backend gloo --momentum=0.9
+            CUDA_VISIBLE_DEVICES="" torchrun --standalone --nnodes=1 --nproc_per_node=2 -m distributed_shampoo.examples.ddp_cifar10_example --optimizer-type DISTRIBUTED_SHAMPOO --precondition-frequency 15 --grafting-type ADAM --use-bias-correction --use-decoupled-weight-decay --use-merge-dims --epochs 1 --local-batch-size 1024 --backend gloo
         - name: Run DDP example on GPU.
           run: |
             source .venv/bin/activate
-            torchrun --standalone --nnodes=1 --nproc_per_node=1 -m distributed_shampoo.examples.ddp_cifar10_example --optimizer-type DISTRIBUTED_SHAMPOO --precondition-frequency 30 --grafting-type ADAM --use-bias-correction --use-decoupled-weight-decay --use-merge-dims --epochs 1 --local-batch-size 1024 --momentum=0.9
+            torchrun --standalone --nnodes=1 --nproc_per_node=1 -m distributed_shampoo.examples.ddp_cifar10_example --optimizer-type DISTRIBUTED_SHAMPOO --precondition-frequency 30 --grafting-type ADAM --use-bias-correction --use-decoupled-weight-decay --use-merge-dims --epochs 1 --local-batch-size 1024

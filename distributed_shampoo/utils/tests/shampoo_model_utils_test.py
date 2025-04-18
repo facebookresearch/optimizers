@@ -7,7 +7,6 @@ LICENSE file in the root directory of this source tree.
 
 """
 
-import itertools
 import unittest
 from math import sqrt
 from typing import cast
@@ -17,7 +16,13 @@ import torch.nn as nn
 
 from distributed_shampoo.utils.shampoo_model_utils import CombinedLinear
 
+from torch.testing._internal.common_utils import (
+    instantiate_parametrized_tests,
+    parametrize,
+)
 
+
+@instantiate_parametrized_tests
 class CombinedLinearTest(unittest.TestCase):
     def _init_weights(self, m: nn.Linear | CombinedLinear, seed: int) -> None:
         torch.random.manual_seed(seed)
@@ -88,51 +93,43 @@ class CombinedLinearTest(unittest.TestCase):
                     cast(torch.Tensor, combined_linear.combined_weight.grad),
                 )
 
-    def test_linear_forward_backward(self) -> None:
-        dims = [2, 10]
-        biases = [False, True]
-        seeds = [920, 2022]
+    @parametrize("seed", [920, 2022])
+    @parametrize("bias", [False, True])
+    @parametrize("out_features", [2, 10])
+    @parametrize("in_features", [2, 10])
+    def test_linear_forward_backward(
+        self, in_features: int, out_features: int, bias: bool, seed: int
+    ) -> None:
+        torch.random.manual_seed(seed)
+        feature_vector = torch.rand(in_features)
+        self._test_linear_forward_backward(
+            feature_vector, in_features, out_features, bias, seed
+        )
 
-        for in_features, out_features, bias, seed in itertools.product(
-            dims, dims, biases, seeds
-        ):
-            with self.subTest(
-                f"Test with in_features = {in_features}, out_features = {out_features}, bias = {bias}, seed = {seed}"
-            ):
-                torch.random.manual_seed(seed)
-                feature_vector = torch.rand(in_features)
-                self._test_linear_forward_backward(
-                    feature_vector, in_features, out_features, bias, seed
-                )
-
-    def test_initialization(self) -> None:
+    @parametrize("seed", [920, 2022])
+    @parametrize("bias", [False, True])
+    def test_initialization(self, bias: bool, seed: int) -> None:
         in_features = 10
         out_features = 20
-        biases = [False, True]
-        seeds = [920, 2022]
 
-        for bias, seed in itertools.product(biases, seeds):
-            with self.subTest(
-                f"Test with in_features = {in_features}, out_features = {out_features}, bias = {bias}, seed = {seed}"
-            ):
-                # generate linear layers and initialize
-                torch.random.manual_seed(seed)
-                original_linear = nn.Linear(in_features, out_features, bias=bias)
-                torch.random.manual_seed(seed)
-                combined_linear = CombinedLinear(in_features, out_features, bias=bias)
+        # generate linear layers and initialize
+        torch.random.manual_seed(seed)
+        original_linear = nn.Linear(in_features, out_features, bias=bias)
+        torch.random.manual_seed(seed)
+        combined_linear = CombinedLinear(in_features, out_features, bias=bias)
 
-                # confirm weights are initialized equally
-                if bias:
-                    torch.testing.assert_close(
-                        original_linear.weight, combined_linear.combined_weight[:, :-1]
-                    )
-                    torch.testing.assert_close(
-                        original_linear.bias, combined_linear.combined_weight[:, -1]
-                    )
-                else:
-                    torch.testing.assert_close(
-                        original_linear.weight, combined_linear.combined_weight
-                    )
+        # confirm weights are initialized equally
+        if bias:
+            torch.testing.assert_close(
+                original_linear.weight, combined_linear.combined_weight[:, :-1]
+            )
+            torch.testing.assert_close(
+                original_linear.bias, combined_linear.combined_weight[:, -1]
+            )
+        else:
+            torch.testing.assert_close(
+                original_linear.weight, combined_linear.combined_weight
+            )
 
     def test_extra_repr(self) -> None:
         in_features = 10

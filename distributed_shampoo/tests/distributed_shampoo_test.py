@@ -9,30 +9,35 @@ LICENSE file in the root directory of this source tree.
 
 #!/usr/bin/env python3
 
+import abc
 import copy
 import re
 import unittest
+from dataclasses import dataclass
 from itertools import chain
 from typing import Any
-from unittest import mock
 
 import torch
-from distributed_shampoo import distributed_shampoo
 from distributed_shampoo.distributed_shampoo import DistributedShampoo
 from distributed_shampoo.shampoo_types import (
     AdaGradGraftingConfig,
-    DDPShampooConfig,
+    DefaultEigenvalueCorrectedShampooConfig,
     DefaultShampooConfig,
     DistributedConfig,
+    EigenvalueCorrectedShampooPreconditionerConfig,
     GraftingConfig,
     PreconditionerConfig,
-    SGDGraftingConfig,
     ShampooPreconditionerConfig,
-    ShampooPT2CompileConfig,
 )
+from matrix_functions_types import DefaultEigendecompositionConfig, EigenConfig
 from torch import nn
+from torch.testing._internal.common_utils import (
+    instantiate_parametrized_tests,
+    parametrize,
+)
 
 
+@instantiate_parametrized_tests
 class DistributedShampooInitTest(unittest.TestCase):
     def setUp(self) -> None:
         self._model = nn.Sequential(
@@ -40,41 +45,38 @@ class DistributedShampooInitTest(unittest.TestCase):
         )
 
     def test_invalid_preconditioner_config(self) -> None:
-        with mock.patch.object(
-            distributed_shampoo,
-            "type",
-            side_effect=lambda object: {
-                ShampooPreconditionerConfig: PreconditionerConfig
-            }.get(type(object), type(object)),
-        ):
-            self.assertRaisesRegex(
-                NotImplementedError,
-                re.escape("group[PRECONDITIONER_CONFIG]=ShampooPreconditionerConfig"),
-                DistributedShampoo,
-                self._model.parameters(),
-                preconditioner_config=DefaultShampooConfig,
-            )
+        @dataclass
+        class NotSupportedPreconditionerConfig(PreconditionerConfig):
+            """A dummy preconditioner config that is not supported."""
+
+        self.assertRaisesRegex(
+            NotImplementedError,
+            r"group\[PRECONDITIONER_CONFIG\]=.*\.NotSupportedPreconditionerConfig\(.*\) not supported!",
+            DistributedShampoo,
+            self._model.parameters(),
+            preconditioner_config=NotSupportedPreconditionerConfig(
+                amortized_computation_config=DefaultEigendecompositionConfig
+            ),
+        )
 
     def test_invalid_grafting_config(self) -> None:
-        with mock.patch.object(
-            distributed_shampoo,
-            "type",
-            side_effect=lambda object: {SGDGraftingConfig: GraftingConfig}.get(
-                type(object), type(object)
-            ),
-        ):
-            self.assertRaisesRegex(
-                NotImplementedError,
-                re.escape("group[GRAFTING_CONFIG]=SGDGraftingConfig"),
-                DistributedShampoo,
-                self._model.parameters(),
-                grafting_config=SGDGraftingConfig(),  # type: ignore[abstract]
-            )
+        @dataclass
+        class NotSupportedGraftingConfig(GraftingConfig):
+            """A dummy grafting config that is not supported."""
 
-    def test_invalid_with_incorrect_hyperparameter_setting(self) -> None:
-        incorrect_hyperparameter_setting_and_expected_error_msg: list[
-            tuple[dict[str, Any], str]
-        ] = [
+            unsupported_epsilon: float = 1e-7
+
+        self.assertRaisesRegex(
+            NotImplementedError,
+            r"group\[GRAFTING_CONFIG\]=.*\.NotSupportedGraftingConfig\(unsupported_epsilon=1e-07\) not supported!",
+            DistributedShampoo,
+            self._model.parameters(),
+            grafting_config=NotSupportedGraftingConfig(),
+        )
+
+    @parametrize(
+        "incorrect_hyperparameter_setting, expected_error_msg",
+        [
             (
                 {"lr": -0.1},
                 "Invalid learning rate: -0.1. Must be >= 0.0.",
@@ -120,46 +122,31 @@ class DistributedShampooInitTest(unittest.TestCase):
                 "Invalid start preconditioning step: -2. Must be >= -1.",
             ),
             (
-                {"inv_root_override": [-1, 2, 3]},
-                "Invalid exponent override list: [-1, 2, 3]. All values must be >= 0.",
-            ),
-            (
-                {"inv_root_override": -1},
-                "Invalid exponent override: -1. Must be >= 0.",
-            ),
-            (
                 {"start_preconditioning_step": 10, "precondition_frequency": 100},
                 "Invalid start_preconditioning_step value: 10. Must be >= precondition_frequency=100.",
             ),
-        ]
-
-        for (
-            incorrect_hyperparameter_setting,
-            expected_error_msg,
-        ) in incorrect_hyperparameter_setting_and_expected_error_msg:
-            with self.subTest(
-                incorrect_hyperparameter_setting=incorrect_hyperparameter_setting,
-                expected_error_msg=expected_error_msg,
-            ):
-                self.assertRaisesRegex(
-                    ValueError,
-                    re.escape(expected_error_msg),
-                    DistributedShampoo,
-                    self._model.parameters(),
-                    **incorrect_hyperparameter_setting,
-                )
-
-    def test_invalid_cuda_pytorch_compile_setting(self) -> None:
-        with mock.patch.object(torch.cuda, "is_available", return_value=False):
-            self.assertRaisesRegex(
-                ValueError,
-                re.escape(
-                    "Backend does NOT support Pytorch 2.0 compile. Switch to shampoo_pt2_compile_config=None."
-                ),
-                DistributedShampoo,
-                self._model.parameters(),
-                shampoo_pt2_compile_config=ShampooPT2CompileConfig(),
-            )
+            (
+                {
+                    "preconditioner_config": ShampooPreconditionerConfig(
+                        amortized_computation_config=EigenConfig(
+                            exponent_multiplier=0.5
+                        )
+                    )
+                },
+                "preconditioner_config.amortized_computation_config.exponent_multiplier is not supported. Please use PreconditionerConfig.inverse_exponent_override instead.",
+            ),
+        ],
+    )
+    def test_invalid_with_incorrect_hyperparameter_setting(
+        self, incorrect_hyperparameter_setting: dict[str, Any], expected_error_msg: str
+    ) -> None:
+        self.assertRaisesRegex(
+            ValueError,
+            re.escape(expected_error_msg),
+            DistributedShampoo,
+            self._model.parameters(),
+            **incorrect_hyperparameter_setting,
+        )
 
     def test_nesterov_and_zero_momentum(self) -> None:
         with self.assertLogs(
@@ -178,39 +165,19 @@ class DistributedShampooInitTest(unittest.TestCase):
             )
 
     def test_invalid_distributed_config(self) -> None:
-        with mock.patch.object(
-            distributed_shampoo,
-            "type",
-            side_effect=lambda object: DistributedConfig,
-        ):
-            self.assertRaisesRegex(
-                NotImplementedError,
-                re.escape(
-                    "distributed_config=DDPShampooConfig(communication_dtype=<CommunicationDType.DEFAULT: 0>, "
-                    "num_trainers_per_group=-1, communicate_params=False) not supported!"
-                ),
-                DistributedShampoo,
-                params=self._model.parameters(),
-                distributed_config=DDPShampooConfig(),
-            )
+        @dataclass
+        class NotSupportedDistributedConfig(DistributedConfig):
+            """A dummy distributed config that is not supported."""
 
-    def test_setting_exponent_multiplier_with_eigen_config(self) -> None:
-        with self.assertLogs(
-            level="WARNING",
-        ) as cm:
-            DistributedShampoo(
-                self._model.parameters(),
-                lr=0.01,
-                start_preconditioning_step=1,
-                exponent_multiplier=2.0,
-                preconditioner_config=DefaultShampooConfig,
-            )
-            self.assertCountEqual(
-                [r.msg for r in cm.records],
-                [
-                    "exponent_multiplier=2.0 is deprecating. Please consider using EigenConfig.exponent_multiplier directly and setting exponent_multipler=None instead in the future."
-                ],
-            )
+            unsupported_field: int = 0
+
+        self.assertRaisesRegex(
+            NotImplementedError,
+            r"distributed_config=.*\.NotSupportedDistributedConfig\(.*\) not supported!",
+            DistributedShampoo,
+            params=self._model.parameters(),
+            distributed_config=NotSupportedDistributedConfig(),
+        )
 
 
 class DistributedShampooTest(unittest.TestCase):
@@ -236,13 +203,13 @@ class DistributedShampooTest(unittest.TestCase):
     def test_step_with_closure(self) -> None:
         # Test the case without closure, the loss returned by step() is None.
         self._optimizer.zero_grad()
-        self._model[0].weight.grad = torch.rand(10, 5)
+        self._model[0].weight.grad = torch.rand_like(self._model[0].weight)
         self.assertIsNone(self._optimizer.step(closure=None))
 
         # Test the case that the closure returns a scalar.
         def closure() -> float:
             self._optimizer.zero_grad()
-            self._model[0].weight.grad = torch.rand(10, 5)
+            self._model[0].weight.grad = torch.rand_like(self._model[0].weight)
             return 1.0
 
         self.assertEqual(self._optimizer.step(closure=closure), 1.0)
@@ -265,27 +232,214 @@ class DistributedShampooTest(unittest.TestCase):
         )
 
 
-class DistributedShampooStateDictTest(unittest.TestCase):
-    def setUp(self) -> None:
-        self._model = nn.Sequential(
-            nn.Linear(5, 10, bias=False),
-        )
-        self._optimizer = DistributedShampoo(
-            self._model.parameters(),
-            lr=0.01,
-            betas=(0.9, 1.0),
-            epsilon=1e-12,
-            momentum=0.0,
-            weight_decay=0.0,
-            max_preconditioner_dim=5,
-            precondition_frequency=1,
-            start_preconditioning_step=-1,
-            distributed_config=None,
-            grafting_config=AdaGradGraftingConfig(
-                epsilon=0.001,
-            ),
-        )
-        self._distributed_state_dict: dict[str, Any] = {
+class AbstractTest:
+    class ShampooDistributedStateDictTestBase(abc.ABC, unittest.TestCase):
+        @property
+        @abc.abstractmethod
+        def _preconditioner_config(self) -> PreconditionerConfig: ...
+
+        @property
+        @abc.abstractmethod
+        def _distributed_state_dict(self) -> dict[str, Any]: ...
+
+        def setUp(self) -> None:
+            self._model = nn.Sequential(
+                nn.Linear(5, 10, bias=False),
+            )
+            self._optimizer = DistributedShampoo(
+                self._model.parameters(),
+                lr=0.01,
+                betas=(0.9, 1.0),
+                epsilon=1e-12,
+                momentum=0.9,
+                weight_decay=0.0,
+                max_preconditioner_dim=5,
+                precondition_frequency=1,
+                start_preconditioning_step=-1,
+                distributed_config=None,
+                grafting_config=AdaGradGraftingConfig(
+                    epsilon=0.001,
+                ),
+                preconditioner_config=self._preconditioner_config,
+            )
+
+        def test_state_dict(self) -> None:
+            self.assertRaisesRegex(
+                NotImplementedError,
+                re.escape(
+                    "Distributed Shampoo does not support the standard state_dict() method for checkpointing!"
+                ),
+                self._optimizer.state_dict,
+            )
+
+        def test_load_state_dict(self) -> None:
+            self.assertRaisesRegex(
+                NotImplementedError,
+                re.escape(
+                    "Distributed Shampoo does not support the standard load_state_dict() method for checkpointing!"
+                ),
+                self._optimizer.load_state_dict,
+                state_dict={},
+            )
+
+        def test_distributed_state_dict(self) -> None:
+            state_dict_with_param_groups = self._optimizer.distributed_state_dict(
+                key_to_param=self._model.named_parameters(),
+                save_param_groups=True,
+            )
+            self.assertEqual(
+                state_dict_with_param_groups.keys(), {"state", "param_groups"}
+            )
+
+            torch.testing.assert_close(
+                state_dict_with_param_groups["state"],
+                self._distributed_state_dict["state"],
+            )
+            self.assertEqual(
+                state_dict_with_param_groups["param_groups"],
+                self._distributed_state_dict["param_groups"],
+            )
+
+            state_dict_without_param_groups = self._optimizer.distributed_state_dict(
+                key_to_param=self._model.named_parameters(),
+                save_param_groups=False,
+            )
+            self.assertEqual(state_dict_without_param_groups.keys(), {"state"})
+
+            torch.testing.assert_close(
+                state_dict_without_param_groups["state"],
+                self._distributed_state_dict["state"],
+            )
+
+        def test_load_distributed_state_dict(self) -> None:
+            expected_distributed_state_dict = copy.deepcopy(
+                self._distributed_state_dict
+            )
+
+            self._optimizer.load_distributed_state_dict(
+                state_dict=self._distributed_state_dict,
+                key_to_param=self._model.named_parameters(),
+                save_param_groups=True,
+            )
+
+            actual_state_dict = self._optimizer.distributed_state_dict(
+                key_to_param=self._model.named_parameters(),
+                save_param_groups=True,
+            )
+
+            self.assertEqual(
+                actual_state_dict.keys(), expected_distributed_state_dict.keys()
+            )
+            torch.testing.assert_close(
+                actual_state_dict["state"], expected_distributed_state_dict["state"]
+            )
+            self.assertEqual(
+                actual_state_dict["param_groups"],
+                expected_distributed_state_dict["param_groups"],
+            )
+
+        def test_load_distributed_state_dict_with_mismatch_param_groups(self) -> None:
+            # Add "1.weight" so param_groups_to_load has two fields (i.e., "0.weight" and "1.weight")
+            # but param_groups only needs one (i.e., "0.weight").
+            distributed_state_dict_copy = copy.deepcopy(self._distributed_state_dict)
+            distributed_state_dict_copy["param_groups"]["1.weight"] = {}
+
+            self.assertRaisesRegex(
+                ValueError,
+                re.escape("Different param_groups count: 1 vs 2"),
+                self._optimizer.load_distributed_state_dict,
+                state_dict=distributed_state_dict_copy,
+                key_to_param=self._model.named_parameters(),
+                save_param_groups=True,
+            )
+
+            # Remove "0.weight" so param_groups_to_load has "1.weight" only but param_groups needs "0.weight".
+            del distributed_state_dict_copy["param_groups"]["0.weight"]
+
+            self.assertRaisesRegex(
+                ValueError,
+                re.escape("Param group 0.weight not found in param_groups_to_load!"),
+                self._optimizer.load_distributed_state_dict,
+                state_dict=distributed_state_dict_copy,
+                key_to_param=self._model.named_parameters(),
+                save_param_groups=True,
+            )
+
+        def test_load_distributed_state_dict_with_missing_param_key(self) -> None:
+            self.assertRaisesRegex(
+                KeyError,
+                re.escape("Parameter key 0.weight not found in key_to_param mapping!"),
+                self._optimizer.load_distributed_state_dict,
+                state_dict=self._distributed_state_dict,
+                # Instead of providing self._model.named_parameters(), we provide an empty list
+                # to trigger the missing key check error.
+                key_to_param=iter([]),
+                save_param_groups=False,
+                enable_missing_key_check=True,
+            )
+
+            with self.assertLogs(
+                level="WARNING",
+            ) as cm:
+                self._optimizer.load_distributed_state_dict(
+                    state_dict=self._distributed_state_dict,
+                    # Instead of providing self._model.named_parameters(), we provide an empty list
+                    # to trigger the missing key check warning.
+                    key_to_param=iter([]),
+                    save_param_groups=False,
+                    enable_missing_key_check=False,
+                )
+                self.assertCountEqual(
+                    [r.msg for r in cm.records],
+                    ["Parameter key 0.weight not found in key_to_param mapping!"],
+                )
+
+        def test_load_distributed_state_dict_with_missing_param(self) -> None:
+            # Instead of providing self._distributed_state_dict and self._model.named_parameters()
+            # (which contains parameter "0.weight"), we provide an additional param (i.e., "1.weight")
+            # to trigger the missing key error and warning.
+            state_dict_to_load_copy = copy.deepcopy(self._distributed_state_dict)
+            state_dict_to_load_copy["state"]["1.weight"] = torch.tensor(0)
+            key_to_param_copy = chain(
+                self._model.named_parameters(), iter([("1.weight", torch.tensor(1))])
+            )
+            self.assertRaisesRegex(
+                KeyError,
+                re.escape("Parameter 1 not found in state!"),
+                self._optimizer.load_distributed_state_dict,
+                state_dict=state_dict_to_load_copy,
+                key_to_param=key_to_param_copy,
+                save_param_groups=False,
+                enable_missing_key_check=True,
+            )
+
+            # Re-populate key_to_param_copy because it is an iterator that was consumed by the previous call.
+            key_to_param_copy = chain(
+                self._model.named_parameters(), iter([("1.weight", torch.tensor(1))])
+            )
+            with self.assertLogs(
+                level="WARNING",
+            ) as cm:
+                self._optimizer.load_distributed_state_dict(
+                    state_dict=state_dict_to_load_copy,
+                    key_to_param=key_to_param_copy,
+                    save_param_groups=False,
+                    enable_missing_key_check=False,
+                )
+                self.assertCountEqual(
+                    [r.msg for r in cm.records],
+                    ["Parameter 1 not found in state!"],
+                )
+
+
+class ShampooDistributedStateDictTest(AbstractTest.ShampooDistributedStateDictTestBase):
+    @property
+    def _preconditioner_config(self) -> ShampooPreconditionerConfig:
+        return DefaultShampooConfig
+
+    @property
+    def _distributed_state_dict(self) -> dict[str, Any]:
+        return {
             "state": {
                 "0.weight": {
                     '["step"]': torch.tensor(0),
@@ -309,27 +463,21 @@ class DistributedShampooStateDictTest(unittest.TestCase):
                     ),
                     '["block_0", "shampoo", "inv_factor_matrices", 0]': torch.tensor(
                         [
-                            [0.0, 0.0, 0.0, 0.0, 0.0],
-                            [0.0, 0.0, 0.0, 0.0, 0.0],
-                            [0.0, 0.0, 0.0, 0.0, 0.0],
-                            [0.0, 0.0, 0.0, 0.0, 0.0],
-                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [1.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 1.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 1.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 1.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 1.0],
                         ]
                     ),
                     '["block_0", "shampoo", "inv_factor_matrices", 1]': torch.tensor(
                         [
-                            [0.0, 0.0, 0.0, 0.0, 0.0],
-                            [0.0, 0.0, 0.0, 0.0, 0.0],
-                            [0.0, 0.0, 0.0, 0.0, 0.0],
-                            [0.0, 0.0, 0.0, 0.0, 0.0],
-                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [1.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 1.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 1.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 1.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 1.0],
                         ]
-                    ),
-                    '["block_0", "shampoo", "is_factor_matrices_diagonal", 0]': torch.tensor(
-                        True
-                    ),
-                    '["block_0", "shampoo", "is_factor_matrices_diagonal", 1]': torch.tensor(
-                        True
                     ),
                     '["block_1", "shampoo", "factor_matrices", 0]': torch.tensor(
                         [
@@ -351,27 +499,21 @@ class DistributedShampooStateDictTest(unittest.TestCase):
                     ),
                     '["block_1", "shampoo", "inv_factor_matrices", 0]': torch.tensor(
                         [
-                            [0.0, 0.0, 0.0, 0.0, 0.0],
-                            [0.0, 0.0, 0.0, 0.0, 0.0],
-                            [0.0, 0.0, 0.0, 0.0, 0.0],
-                            [0.0, 0.0, 0.0, 0.0, 0.0],
-                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [1.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 1.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 1.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 1.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 1.0],
                         ]
                     ),
                     '["block_1", "shampoo", "inv_factor_matrices", 1]': torch.tensor(
                         [
-                            [0.0, 0.0, 0.0, 0.0, 0.0],
-                            [0.0, 0.0, 0.0, 0.0, 0.0],
-                            [0.0, 0.0, 0.0, 0.0, 0.0],
-                            [0.0, 0.0, 0.0, 0.0, 0.0],
-                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [1.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 1.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 1.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 1.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 1.0],
                         ]
-                    ),
-                    '["block_1", "shampoo", "is_factor_matrices_diagonal", 0]': torch.tensor(
-                        True
-                    ),
-                    '["block_1", "shampoo", "is_factor_matrices_diagonal", 1]': torch.tensor(
-                        True
                     ),
                     '["block_0", "adagrad"]': torch.tensor(
                         [
@@ -383,6 +525,24 @@ class DistributedShampooStateDictTest(unittest.TestCase):
                         ]
                     ),
                     '["block_1", "adagrad"]': torch.tensor(
+                        [
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                        ]
+                    ),
+                    '["block_0", "momentum"]': torch.tensor(
+                        [
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                        ]
+                    ),
+                    '["block_1", "momentum"]': torch.tensor(
                         [
                             [0.0, 0.0, 0.0, 0.0, 0.0],
                             [0.0, 0.0, 0.0, 0.0, 0.0],
@@ -417,13 +577,12 @@ class DistributedShampooStateDictTest(unittest.TestCase):
                     "betas": (0.9, 1.0),
                     "beta3": 0.9,
                     "epsilon": 1e-12,
-                    "momentum": 0.0,
+                    "momentum": 0.9,
                     "dampening": 0.0,
                     "weight_decay": 0.0,
                     "max_preconditioner_dim": 5,
                     "precondition_frequency": 1,
                     "start_preconditioning_step": 1,
-                    "inv_root_override": 0,
                     "use_nesterov": False,
                     "use_bias_correction": True,
                     "use_decoupled_weight_decay": True,
@@ -432,172 +591,376 @@ class DistributedShampooStateDictTest(unittest.TestCase):
                     ),
                     "use_merge_dims": True,
                     "preconditioner_dtype": torch.float32,
-                    "preconditioner_config": DefaultShampooConfig,
+                    "preconditioner_config": self._preconditioner_config,
                 }
             },
         }
 
-    def test_state_dict(self) -> None:
-        self.assertRaisesRegex(
-            NotImplementedError,
-            re.escape(
-                "Distributed Shampoo does not support the standard state_dict() method for checkpointing!"
-            ),
-            self._optimizer.state_dict,
+
+class EigendecomposedShampooDistributedStateDictTest(
+    AbstractTest.ShampooDistributedStateDictTestBase
+):
+    @property
+    def _preconditioner_config(self) -> ShampooPreconditionerConfig:
+        return ShampooPreconditionerConfig(
+            amortized_computation_config=DefaultEigendecompositionConfig
         )
 
-    def test_load_state_dict(self) -> None:
-        self.assertRaisesRegex(
-            NotImplementedError,
-            re.escape(
-                "Distributed Shampoo does not support the standard load_state_dict() method for checkpointing!"
-            ),
-            self._optimizer.load_state_dict,
-            state_dict={},
-        )
+    @property
+    def _distributed_state_dict(self) -> dict[str, Any]:
+        return {
+            "state": {
+                "0.weight": {
+                    '["step"]': torch.tensor(0),
+                    '["block_0", "shampoo", "factor_matrices", 0]': torch.tensor(
+                        [
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                        ]
+                    ),
+                    '["block_0", "shampoo", "factor_matrices", 1]': torch.tensor(
+                        [
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                        ]
+                    ),
+                    '["block_0", "shampoo", "factor_matrices_eigenvectors", 0]': torch.tensor(
+                        [
+                            [1.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 1.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 1.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 1.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 1.0],
+                        ]
+                    ),
+                    '["block_0", "shampoo", "factor_matrices_eigenvectors", 1]': torch.tensor(
+                        [
+                            [1.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 1.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 1.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 1.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 1.0],
+                        ]
+                    ),
+                    '["block_0", "shampoo", "factor_matrices_eigenvalues", 0]': torch.tensor(
+                        [1.0, 1.0, 1.0, 1.0, 1.0],
+                    ),
+                    '["block_0", "shampoo", "factor_matrices_eigenvalues", 1]': torch.tensor(
+                        [1.0, 1.0, 1.0, 1.0, 1.0],
+                    ),
+                    '["block_1", "shampoo", "factor_matrices", 0]': torch.tensor(
+                        [
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                        ]
+                    ),
+                    '["block_1", "shampoo", "factor_matrices", 1]': torch.tensor(
+                        [
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                        ]
+                    ),
+                    '["block_1", "shampoo", "factor_matrices_eigenvectors", 0]': torch.tensor(
+                        [
+                            [1.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 1.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 1.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 1.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 1.0],
+                        ]
+                    ),
+                    '["block_1", "shampoo", "factor_matrices_eigenvectors", 1]': torch.tensor(
+                        [
+                            [1.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 1.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 1.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 1.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 1.0],
+                        ]
+                    ),
+                    '["block_1", "shampoo", "factor_matrices_eigenvalues", 0]': torch.tensor(
+                        [1.0, 1.0, 1.0, 1.0, 1.0],
+                    ),
+                    '["block_1", "shampoo", "factor_matrices_eigenvalues", 1]': torch.tensor(
+                        [1.0, 1.0, 1.0, 1.0, 1.0],
+                    ),
+                    '["block_0", "adagrad"]': torch.tensor(
+                        [
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                        ]
+                    ),
+                    '["block_1", "adagrad"]': torch.tensor(
+                        [
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                        ]
+                    ),
+                    '["block_0", "momentum"]': torch.tensor(
+                        [
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                        ]
+                    ),
+                    '["block_1", "momentum"]': torch.tensor(
+                        [
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                        ]
+                    ),
+                    '["block_0", "filtered_grad"]': torch.tensor(
+                        [
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                        ]
+                    ),
+                    '["block_1", "filtered_grad"]': torch.tensor(
+                        [
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                        ]
+                    ),
+                },
+            },
+            "param_groups": {
+                "0.weight": {
+                    "lr": 0.01,
+                    "betas": (0.9, 1.0),
+                    "beta3": 0.9,
+                    "epsilon": 1e-12,
+                    "momentum": 0.9,
+                    "dampening": 0.0,
+                    "weight_decay": 0.0,
+                    "max_preconditioner_dim": 5,
+                    "precondition_frequency": 1,
+                    "start_preconditioning_step": 1,
+                    "use_nesterov": False,
+                    "use_bias_correction": True,
+                    "use_decoupled_weight_decay": True,
+                    "grafting_config": AdaGradGraftingConfig(
+                        epsilon=0.001,
+                    ),
+                    "use_merge_dims": True,
+                    "preconditioner_dtype": torch.float32,
+                    "preconditioner_config": self._preconditioner_config,
+                }
+            },
+        }
 
-    def test_distributed_state_dict(self) -> None:
-        state_dict_with_param_groups = self._optimizer.distributed_state_dict(
-            key_to_param=self._model.named_parameters(),
-            save_param_groups=True,
-        )
-        self.assertEqual(state_dict_with_param_groups.keys(), {"state", "param_groups"})
 
-        torch.testing.assert_close(
-            state_dict_with_param_groups["state"], self._distributed_state_dict["state"]
-        )
-        self.assertEqual(
-            state_dict_with_param_groups["param_groups"],
-            self._distributed_state_dict["param_groups"],
-        )
+class EigenvalueCorrectedShampooDistributedStateDictTest(
+    AbstractTest.ShampooDistributedStateDictTestBase
+):
+    @property
+    def _preconditioner_config(self) -> EigenvalueCorrectedShampooPreconditionerConfig:
+        return DefaultEigenvalueCorrectedShampooConfig
 
-        state_dict_without_param_groups = self._optimizer.distributed_state_dict(
-            key_to_param=self._model.named_parameters(),
-            save_param_groups=False,
-        )
-        self.assertEqual(state_dict_without_param_groups.keys(), {"state"})
-
-        torch.testing.assert_close(
-            state_dict_without_param_groups["state"],
-            self._distributed_state_dict["state"],
-        )
-
-    def test_load_distributed_state_dict(self) -> None:
-        expected_distributed_state_dict = copy.deepcopy(self._distributed_state_dict)
-
-        self._optimizer.load_distributed_state_dict(
-            state_dict=self._distributed_state_dict,
-            key_to_param=self._model.named_parameters(),
-            save_param_groups=True,
-        )
-
-        actual_state_dict = self._optimizer.distributed_state_dict(
-            key_to_param=self._model.named_parameters(),
-            save_param_groups=True,
-        )
-
-        self.assertEqual(
-            actual_state_dict.keys(), expected_distributed_state_dict.keys()
-        )
-        torch.testing.assert_close(
-            actual_state_dict["state"], expected_distributed_state_dict["state"]
-        )
-        self.assertEqual(
-            actual_state_dict["param_groups"],
-            expected_distributed_state_dict["param_groups"],
-        )
-
-    def test_load_distributed_state_dict_with_mismatch_param_groups(self) -> None:
-        # Add "1.weight" so param_groups_to_load has two fields (i.e., "0.weight" and "1.weight")
-        # but param_groups only needs one (i.e., "0.weight").
-        self._distributed_state_dict["param_groups"]["1.weight"] = {}
-
-        self.assertRaisesRegex(
-            ValueError,
-            re.escape("Different param_groups count: 1 vs 2"),
-            self._optimizer.load_distributed_state_dict,
-            state_dict=self._distributed_state_dict,
-            key_to_param=self._model.named_parameters(),
-            save_param_groups=True,
-        )
-
-        # Remove "0.weight" so param_groups_to_load has "1.weight" only but param_groups needs "0.weight".
-        del self._distributed_state_dict["param_groups"]["0.weight"]
-
-        self.assertRaisesRegex(
-            ValueError,
-            re.escape("Param group 0.weight not found in param_groups_to_load!"),
-            self._optimizer.load_distributed_state_dict,
-            state_dict=self._distributed_state_dict,
-            key_to_param=self._model.named_parameters(),
-            save_param_groups=True,
-        )
-
-    def test_load_distributed_state_dict_with_missing_param_key(self) -> None:
-        self.assertRaisesRegex(
-            KeyError,
-            re.escape("Parameter key 0.weight not found in key_to_param mapping!"),
-            self._optimizer.load_distributed_state_dict,
-            state_dict=self._distributed_state_dict,
-            # Instead of providing self._model.named_parameters(), we provide an empty list
-            # to trigger the missing key check error.
-            key_to_param=iter([]),
-            save_param_groups=False,
-            enable_missing_key_check=True,
-        )
-
-        with self.assertLogs(
-            level="WARNING",
-        ) as cm:
-            self._optimizer.load_distributed_state_dict(
-                state_dict=self._distributed_state_dict,
-                # Instead of providing self._model.named_parameters(), we provide an empty list
-                # to trigger the missing key check warning.
-                key_to_param=iter([]),
-                save_param_groups=False,
-                enable_missing_key_check=False,
-            )
-            self.assertCountEqual(
-                [r.msg for r in cm.records],
-                ["Parameter key 0.weight not found in key_to_param mapping!"],
-            )
-
-    def test_load_distributed_state_dict_with_missing_param(self) -> None:
-        # Instead of providing self._distributed_state_dict and self._model.named_parameters()
-        # (which contains parameter "0.weight"), we provide an additional param (i.e., "1.weight")
-        # to trigger the missing key error and warning.
-        state_dict_to_load_copy = copy.deepcopy(self._distributed_state_dict)
-        state_dict_to_load_copy["state"]["1.weight"] = torch.tensor(0)
-        key_to_param_copy = chain(
-            self._model.named_parameters(), iter([("1.weight", torch.tensor(1))])
-        )
-        self.assertRaisesRegex(
-            KeyError,
-            re.escape("Parameter 1 not found in state!"),
-            self._optimizer.load_distributed_state_dict,
-            state_dict=state_dict_to_load_copy,
-            key_to_param=key_to_param_copy,
-            save_param_groups=False,
-            enable_missing_key_check=True,
-        )
-
-        # Re-populate key_to_param_copy because it is an iterator that was consumed by the previous call.
-        key_to_param_copy = chain(
-            self._model.named_parameters(), iter([("1.weight", torch.tensor(1))])
-        )
-        with self.assertLogs(
-            level="WARNING",
-        ) as cm:
-            self._optimizer.load_distributed_state_dict(
-                state_dict=state_dict_to_load_copy,
-                key_to_param=key_to_param_copy,
-                save_param_groups=False,
-                enable_missing_key_check=False,
-            )
-            self.assertCountEqual(
-                [r.msg for r in cm.records],
-                ["Parameter 1 not found in state!"],
-            )
+    @property
+    def _distributed_state_dict(self) -> dict[str, Any]:
+        return {
+            "state": {
+                "0.weight": {
+                    '["step"]': torch.tensor(0),
+                    '["block_0", "shampoo", "factor_matrices", 0]': torch.tensor(
+                        [
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                        ]
+                    ),
+                    '["block_0", "shampoo", "factor_matrices", 1]': torch.tensor(
+                        [
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                        ]
+                    ),
+                    '["block_0", "shampoo", "factor_matrices_eigenvectors", 0]': torch.tensor(
+                        [
+                            [1.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 1.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 1.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 1.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 1.0],
+                        ]
+                    ),
+                    '["block_0", "shampoo", "factor_matrices_eigenvectors", 1]': torch.tensor(
+                        [
+                            [1.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 1.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 1.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 1.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 1.0],
+                        ]
+                    ),
+                    '["block_0", "shampoo", "corrected_eigenvalues"]': torch.tensor(
+                        [
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                        ]
+                    ),
+                    '["block_1", "shampoo", "factor_matrices", 0]': torch.tensor(
+                        [
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                        ]
+                    ),
+                    '["block_1", "shampoo", "factor_matrices", 1]': torch.tensor(
+                        [
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                        ]
+                    ),
+                    '["block_1", "shampoo", "factor_matrices_eigenvectors", 0]': torch.tensor(
+                        [
+                            [1.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 1.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 1.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 1.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 1.0],
+                        ]
+                    ),
+                    '["block_1", "shampoo", "factor_matrices_eigenvectors", 1]': torch.tensor(
+                        [
+                            [1.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 1.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 1.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 1.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 1.0],
+                        ]
+                    ),
+                    '["block_1", "shampoo", "corrected_eigenvalues"]': torch.tensor(
+                        [
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                        ]
+                    ),
+                    '["block_0", "adagrad"]': torch.tensor(
+                        [
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                        ]
+                    ),
+                    '["block_1", "adagrad"]': torch.tensor(
+                        [
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                        ]
+                    ),
+                    '["block_0", "momentum"]': torch.tensor(
+                        [
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                        ]
+                    ),
+                    '["block_1", "momentum"]': torch.tensor(
+                        [
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                        ]
+                    ),
+                    '["block_0", "filtered_grad"]': torch.tensor(
+                        [
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                        ]
+                    ),
+                    '["block_1", "filtered_grad"]': torch.tensor(
+                        [
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                        ]
+                    ),
+                },
+            },
+            "param_groups": {
+                "0.weight": {
+                    "lr": 0.01,
+                    "betas": (0.9, 1.0),
+                    "beta3": 0.9,
+                    "epsilon": 1e-12,
+                    "momentum": 0.9,
+                    "dampening": 0.0,
+                    "weight_decay": 0.0,
+                    "max_preconditioner_dim": 5,
+                    "precondition_frequency": 1,
+                    "start_preconditioning_step": 1,
+                    "use_nesterov": False,
+                    "use_bias_correction": True,
+                    "use_decoupled_weight_decay": True,
+                    "grafting_config": AdaGradGraftingConfig(
+                        epsilon=0.001,
+                    ),
+                    "use_merge_dims": True,
+                    "preconditioner_dtype": torch.float32,
+                    "preconditioner_config": self._preconditioner_config,
+                }
+            },
+        }
 
 
 class DistributedShampooNoneGradTest(unittest.TestCase):
@@ -623,11 +986,11 @@ class DistributedShampooNoneGradTest(unittest.TestCase):
     def test_step_with_consistent_grads(self) -> None:
         with self.assertNoLogs(level="WARNING"):
             self._optimizer.zero_grad()
-            self._model[0].weight.grad = torch.rand(10, 5)
+            self._model[0].weight.grad = torch.rand_like(self._model[0].weight)
             self._optimizer.step()
 
             self._optimizer.zero_grad()
-            self._model[0].weight.grad = torch.rand(10, 5)
+            self._model[0].weight.grad = torch.rand_like(self._model[0].weight)
             self._optimizer.step()
 
     def test_step_with_none_grads(self) -> None:
@@ -635,7 +998,7 @@ class DistributedShampooNoneGradTest(unittest.TestCase):
         ending_msg = "Changed gradient selector indices: [0, 1]"
         with self.assertLogs(level="WARNING") as cm:
             self._optimizer.zero_grad()
-            self._model[0].weight.grad = torch.rand(10, 5)
+            self._model[0].weight.grad = torch.rand_like(self._model[0].weight)
             self._optimizer.step()
 
             self._optimizer.zero_grad()  # Implicitly set grad=None in second step

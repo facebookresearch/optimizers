@@ -9,7 +9,9 @@ LICENSE file in the root directory of this source tree.
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any
+from functools import reduce
+from operator import methodcaller, or_
+from typing import Any, TypeVar
 
 
 @dataclass(init=False)
@@ -53,4 +55,34 @@ class AbstractDataclass(ABC):
     @abstractmethod
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         """An abstract method that must be implemented by all subclasses."""
-        ...
+
+
+SubclassesType = TypeVar("SubclassesType")
+
+
+def get_all_subclasses(
+    cls: SubclassesType, include_cls_self: bool = True
+) -> list[SubclassesType]:
+    """
+    Retrieves all subclasses of a given class, optionally including the class itself.
+
+    This function uses a helper function to recursively find all unique subclasses
+    of the specified class.
+
+    Args:
+        cls (SubclassesType): The class for which to find subclasses.
+        include_cls_self (bool): Whether to include the class itself in the result. (Default: True)
+
+    Returns:
+        list[SubclassesType]: A list of all unique subclasses of the given class.
+    """
+
+    def get_all_unique_subclasses(cls: SubclassesType) -> set[SubclassesType]:
+        """Gets all unique subclasses of a given class recursively."""
+        return reduce(
+            or_,
+            map(get_all_unique_subclasses, methodcaller("__subclasses__")(cls)),
+            {cls},
+        )
+
+    return list(get_all_unique_subclasses(cls) - (set() if include_cls_self else {cls}))

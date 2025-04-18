@@ -1,0 +1,22 @@
+name: pre-commit
+
+on: [push, pull_request]
+jobs:
+  pre-commit-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up and update uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          uv self update
+      - name: Install Python
+        run: uv python install 3.12
+      - name: Create venv and install the package
+        run: |
+          uv venv && source .venv/bin/activate
+          uv pip install ".[dev]"
+      - name: Run pre-commit on all files
+        run: |
+          source .venv/bin/activate
+          pre-commit run --all-files || pre-commit run --all-files

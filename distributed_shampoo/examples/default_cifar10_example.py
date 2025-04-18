@@ -73,7 +73,7 @@ if __name__ == "__main__":
     Trains a simple convolutional network with a single GPU.
 
     Requirements:
-        - Python 3.10 or above
+        - Python 3.12 or above
         - PyTorch / TorchVision
 
     To run this simple training script, one can run from the optimizers directory:
@@ -122,7 +122,6 @@ if __name__ == "__main__":
         max_preconditioner_dim=args.max_preconditioner_dim,
         precondition_frequency=args.precondition_frequency,
         start_preconditioning_step=args.start_preconditioning_step,
-        inv_root_override=args.inv_root_override,
         exponent_multiplier=args.exponent_multiplier,
         use_nesterov=args.use_nesterov,
         use_bias_correction=args.use_bias_correction,

@@ -7,9 +7,7 @@ LICENSE file in the root directory of this source tree.
 
 """
 
-import heapq
 import logging
-import operator
 from functools import partial
 from itertools import islice
 from typing import Any
@@ -21,11 +19,12 @@ from distributed_shampoo.shampoo_types import (
     DDPShampooConfig,
     PARAMS,
 )
-from distributed_shampoo.utils.shampoo_block_info import DDPBlockInfo
+from distributed_shampoo.utils.shampoo_block_info import DTensorBlockInfo
 from distributed_shampoo.utils.shampoo_dist_utils import get_device_mesh
 from distributed_shampoo.utils.shampoo_distributor import DistributorInterface
 from distributed_shampoo.utils.shampoo_utils import (
     compress_list,
+    distribute_buffer_sizes,
     generate_pairwise_indices,
     get_dtype_size,
 )
@@ -79,16 +78,17 @@ class DDPDistributor(DistributorInterface):
         self._communicate_params: bool = distributed_config.communicate_params
 
         # Determine communication type.
-        if distributed_config.communication_dtype == CommunicationDType.BF16:
-            communication_dtype = torch.bfloat16
-        elif distributed_config.communication_dtype == CommunicationDType.FP16:
-            communication_dtype = torch.float16
-        else:
-            assert distributed_config.communication_dtype in [
-                CommunicationDType.FP32,
-                CommunicationDType.DEFAULT,
-            ]
-            communication_dtype = torch.float32
+        match distributed_config.communication_dtype:
+            case CommunicationDType.BF16:
+                communication_dtype = torch.bfloat16
+            case CommunicationDType.FP16:
+                communication_dtype = torch.float16
+            case CommunicationDType.FP32 | CommunicationDType.DEFAULT:
+                communication_dtype = torch.float32
+            case _:
+                raise NotImplementedError(
+                    f"Unsupported communication dtype: {distributed_config.communication_dtype}"
+                )
 
         # Initialize _dist_group and _group_rank.
         self._dist_group: dist.ProcessGroup | None = (
@@ -99,22 +99,26 @@ class DDPDistributor(DistributorInterface):
         group_rank: int = dist.get_rank(group=self._dist_group)
 
         # Assign ranks to blocks with their respective buffer size.
-        buffer_size_ranks = self._distribute_buffer_sizes(
+        buffer_size_ranks = distribute_buffer_sizes(
             buffer_sizes=tuple(
                 blocked_param.numel() * get_dtype_size(communication_dtype)
                 for blocked_param in self._global_blocked_params
-            )
+            ),
+            group_size=self._group_size,
         )
 
-        global_block_info_list = self._construct_global_block_info_list(
-            group_source_ranks=tuple(
-                group_source_rank for _, group_source_rank in buffer_size_ranks
+        self._local_block_info_list: tuple[DTensorBlockInfo, ...] = (
+            self._construct_local_block_info_list(
+                group_source_ranks=tuple(
+                    group_source_rank for _, group_source_rank in buffer_size_ranks
+                ),
+                group_rank=group_rank,
             )
         )
         # Initialize selectors and local blocked (masked) parameters.
         self._distributor_selector: tuple[bool, ...] = tuple(
-            block_info.group_source_rank == group_rank
-            for block_info in global_block_info_list
+            group_source_rank == group_rank
+            for _, group_source_rank in buffer_size_ranks
         )
         self._local_blocked_params: tuple[Tensor, ...] = compress_list(
             self._global_blocked_params, self._distributor_selector
@@ -124,9 +128,6 @@ class DDPDistributor(DistributorInterface):
         )
         self._local_grad_selector: tuple[bool, ...] = (True,) * len(
             self._local_blocked_params
-        )
-        self._local_block_info_list: tuple[DDPBlockInfo, ...] = compress_list(
-            global_block_info_list, self._distributor_selector
         )
 
         self._construct_distributed_buffers(
@@ -195,92 +196,24 @@ class DDPDistributor(DistributorInterface):
                 self._global_masked_dist_blocked_buffers,
             )
 
-    def _distribute_buffer_sizes(
-        self,
-        buffer_sizes: tuple[int, ...],
-    ) -> tuple[tuple[int, int], ...]:
-        """Distribute given buffer sizes across ranks in a group.
-
-        Buffer sizes will be rounded up for memory allocation. Buffers are distributed such that
-        total buffer sizes of each rank are as even as possible. This is currently performed
-        using a greedy algorithm. We do not currently consider computational cost
-        or kernel launching overheads.
-
-        Note: A better distribution strategy should try to minimize the delta of buffer sizes
-        between the most and the least allocated groups.
-
-        Args:
-            buffer_sizes (tuple[int, ...]): Buffer sizes of blocks to be distributed.
-
-        Returns:
-            buffer_size_ranks (tuple[tuple[int, int], ...]): A list of tuples containing the
-                buffer size for each block and its assigned rank.
-
-        Example:
-            Assuming ALIGNMENT_BYTES = 64, given buffer_sizes = [128, 64, 500, 256], group_size = 2
-            -> buffer_size_ranks = [(128, 1), (64, 1), (512, 0), (256, 1)]
-
-        """
-
-        ALIGNMENT_BYTES = (
-            64  # necessary for determining buffer size, possibly hardware-dependent
-        )
-
-        # Convert each of buffer_sizes into smallest multiple of ALIGNMENT_BYTES that is >= buffer size.
-        aligned_buffer_sizes = [
-            (buffer_size + ALIGNMENT_BYTES - 1) // ALIGNMENT_BYTES * ALIGNMENT_BYTES
-            for buffer_size in buffer_sizes
-        ]
-        buffer_size_ranks = [(-1, -1)] * len(buffer_sizes)
-        allocated_buffer_sizes = [
-            (0, group_index) for group_index in range(self._group_size)
-        ]
-        heapq.heapify(allocated_buffer_sizes)
-
-        for index, aligned_buffer_size in sorted(
-            enumerate(aligned_buffer_sizes),
-            key=operator.itemgetter(1),
-            reverse=True,
-        ):
-            # Greedily find the group with the least allocated buffer size and its group index
-            # in order to allocate buffers on that group.
-            (
-                min_allocated_buffer_size,
-                min_allocated_buffer_size_group_index,
-            ) = heapq.heappop(allocated_buffer_sizes)
-
-            heapq.heappush(
-                allocated_buffer_sizes,
-                (
-                    min_allocated_buffer_size + aligned_buffer_size,
-                    min_allocated_buffer_size_group_index,
-                ),
-            )
-            buffer_size_ranks[index] = (
-                aligned_buffer_size,
-                min_allocated_buffer_size_group_index,
-            )
-
-        return tuple(buffer_size_ranks)
-
     @torch.no_grad()
-    def _construct_global_block_info_list(
-        self, group_source_ranks: tuple[int, ...]
-    ) -> tuple[DDPBlockInfo, ...]:
-        """Construct the global block info list.
+    def _construct_local_block_info_list(
+        self, group_source_ranks: tuple[int, ...], group_rank: int
+    ) -> tuple[DTensorBlockInfo, ...]:
+        """Construct the local block info list.
 
-        This method creates a list of DDPBlockInfo objects, which contain information
-        about each parameter block, including its composable block IDs, a function to
-        allocate zero tensors, a method to retrieve tensors, and the group source rank.
+        This method creates a list of DTensorBlockInfo objects, which contain information about each parameter block,
+        including its composable block IDs, functions to allocate tensors, and a method to retrieve tensors.
 
         Args:
             group_source_ranks (tuple[int, ...]): A list of assigned ranks for each block.
+            group_rank (int): Rank of the current process group.
 
         Returns:
-            tuple[DDPBlockInfo, ...]: A tuple of DDPBlockInfo objects for each parameter block.
+            tuple[DTensorBlockInfo, ...]: A tuple of DTensorBlockInfo objects for each parameter block.
         """
         return tuple(
-            DDPBlockInfo(
+            DTensorBlockInfo(
                 param=param,
                 composable_block_ids=self._construct_composable_block_ids(
                     param_index=param_index, block_index=block_index
@@ -290,12 +223,6 @@ class DDPDistributor(DistributorInterface):
                     self._allocate_zeros_distributed_tensor,
                     group_source_rank=group_source_rank,
                 ),
-                get_tensor=lambda input_tensor: (
-                    input_tensor.to_local()
-                    if isinstance(input_tensor, dtensor.DTensor)
-                    else input_tensor
-                ),
-                group_source_rank=group_source_rank,
             )
             for (
                 (param_index, param),
@@ -310,6 +237,7 @@ class DDPDistributor(DistributorInterface):
                     group_source_ranks, buffer_size_ranks_start, buffer_size_ranks_end
                 )
             )
+            if group_source_rank == group_rank
         )
 
     @staticmethod

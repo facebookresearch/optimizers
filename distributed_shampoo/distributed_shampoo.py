@@ -7,9 +7,8 @@ LICENSE file in the root directory of this source tree.
 
 """
 
-import dataclasses
 import logging
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator
 from copy import deepcopy
 from functools import partial
 from typing import Any
@@ -37,7 +36,6 @@ from distributed_shampoo.shampoo_types import (
     GraftingConfig,
     HSDPShampooConfig,
     HybridShardShampooConfig,
-    INV_ROOT_OVERRIDE,
     LR,
     MASKED_BLOCKED_GRADS,
     MASKED_BLOCKED_PARAMS,
@@ -73,7 +71,10 @@ from distributed_shampoo.utils.shampoo_checkpoint_utils import (
     update_param_state_dict_object,
 )
 from distributed_shampoo.utils.shampoo_ddp_distributor import DDPDistributor
-from distributed_shampoo.utils.shampoo_distributor import Distributor
+from distributed_shampoo.utils.shampoo_distributor import (
+    Distributor,
+    DistributorInterface,
+)
 from distributed_shampoo.utils.shampoo_fsdp_distributor import FSDPDistributor
 from distributed_shampoo.utils.shampoo_fully_shard_distributor import (
     FullyShardDistributor,
@@ -85,13 +86,15 @@ from distributed_shampoo.utils.shampoo_hybrid_shard_distributor import (
 
 from distributed_shampoo.utils.shampoo_preconditioner_list import (
     AdagradPreconditionerList,
+    EigendecomposedShampooPreconditionerList,
     EigenvalueCorrectedShampooPreconditionerList,
+    PreconditionerList,
     SGDPreconditionerList,
     ShampooPreconditionerList,
 )
 from distributed_shampoo.utils.shampoo_utils import compress_list
+from matrix_functions_types import EigendecompositionConfig, RootInvConfig
 
-from matrix_functions_types import EigenConfig
 from torch.optim.optimizer import ParamsT, StateDict
 
 logger: logging.Logger = logging.getLogger(__name__)
@@ -115,7 +118,7 @@ class DistributedShampoo(torch.optim.Optimizer):
             - GraftingType.NONE: Performs no grafting.
             - GraftingType.SGD: Grafts the stochastic gradient method.
             - GraftingType.ADAGRAD: Grafts the Adagrad method.
-            - GraftingType.RMSPROP: Grafts the RMSProp method.
+            - GraftingType.RMSPROP: Grafts the RMSprop method.
             - GraftingType.ADAM: Grafts the Adam method.
 
         NOTE: These methods do not graft the first-moment component - it is entirely based upon grafting using the
@@ -205,13 +208,33 @@ class DistributedShampoo(torch.optim.Optimizer):
             Requirements:
                 - torch.distributed must be initialized in advance.
                 - One must enable the option use_orig_params = True in HSDP.
+                - Only works with the option sharding_strategy=ShardingStrategy.HYBRID_SHARD.
                 - Within data parallelism process groups, only supports homogeneous hardware architectures.
 
-        - FullyShardShampooConfig: Supports per-parameter FSDP training, a.k.a. FSDPv2, or "fully_shard" api in torch.distributed. Please see
-            README for more detailed introduction on Shampoo FSDPv2.
+        - FullyShardShampooConfig: Supports per-parameter FSDP training, a.k.a. FSDP2, or "fully_shard" api in torch.distributed. Please see
+            README for more detailed introduction on Shampoo FSDP2.
 
             Requirements:
                 - torch.distributed must be initialized in advance.
+
+        - HybridShardShampooConfig: Supports hierarchical parallelism approach that combines DDP and FSDP to scale up training on large models
+            for FSDP2. Please see README for more detailed introduction.
+
+            Distributed Training Specific Fields:
+                - device_mesh: A 2D device mesh that specifies the layout of the model parallelism and data parallelism.
+                - communication_dtype: We can specify the communication dtype used for the AllGather communication in order to
+                    reduce communication overhead per-iteration.
+                - num_trainers_per_group: Specifies the number of GPUs used per distributed group. This enables us to only
+                    distribute computation across a subset of GPUs, and replicate the same computation across different distributed
+                    groups. This is useful for performance by trading off communication costs vs. computational costs.
+                - communicate_params: We offer the option to communicate the parameter updates or the updated parameters. Enabling
+                    this option specifically communicates the updated parameters. Note that using a lower-precision
+                    communication_dtype is more amenable to the case where this option is disabled (i.e., we are communicating the
+                    parameter updates).
+
+            Requirements:
+                - torch.distributed must be initialized in advance.
+                - Within data parallelism process groups, only supports homogeneous hardware architectures.
 
     4. PyTorch 2.0 Compile Support: Shampoo supports PyTorch 2.0's compilation feature to speed up model training. This is enabled by
         setting up the shampoo_pt2_compile_config arg for Shampoo PyTorch 2.0 compilation.
@@ -266,14 +289,6 @@ class DistributedShampoo(torch.optim.Optimizer):
             (Default: 1)
         start_preconditioning_step (int): Iteration to start computing inverse preconditioner. If -1, uses
             the same value as precondition_frequency. (Default: -1)
-        inv_root_override (int, Sequence[int]): Inverse root to use in Shampoo. If a list [l1, l2, ..., lp], then we will
-            use -1 / l1 for 1-D tensor (vectors), -1 / l2 for 2-D tensors (matrices), and so on. If the order of the
-            tensor exceeds the order of the tensor, reverts to the default value. If 0 is used, uses the default inverse
-            root -1 / (2 * o), where o is the order of the tensor. If preconditioner_config is an instance of
-            EigenvalueCorrectedShampooPreconditionerConfig, the default is -1 / 2.
-            (Default: 0)
-        exponent_multiplier (float | None): **DEPRECATING** Number to be multiplied to the numerator of the inverse root, i.e., eta where the
-            exponent is -eta / (2 * p). (Default: None)
         use_nesterov (bool): Flag for using Nesterov momentum. (default: False)
         use_bias_correction (bool): Flag for using bias correction. (Default: True)
         use_decoupled_weight_decay (bool): Flag for using AdamW-style decoupled weight decay. (Default: True)
@@ -306,8 +321,6 @@ class DistributedShampoo(torch.optim.Optimizer):
         max_preconditioner_dim: int = 1024,
         precondition_frequency: int = 1,
         start_preconditioning_step: int = -1,
-        inv_root_override: int | Sequence[int] = 0,
-        exponent_multiplier: float | None = None,
         use_nesterov: bool = False,
         use_bias_correction: bool = True,
         use_decoupled_weight_decay: bool = True,
@@ -361,16 +374,6 @@ class DistributedShampoo(torch.optim.Optimizer):
             raise ValueError(
                 f"Invalid start preconditioning step: {start_preconditioning_step}. Must be >= -1."
             )
-        if isinstance(inv_root_override, Sequence):
-            if not all(e >= 0 for e in inv_root_override):
-                raise ValueError(
-                    f"Invalid exponent override list: {inv_root_override}. All values must be >= 0."
-                )
-        else:
-            if not inv_root_override >= 0:
-                raise ValueError(
-                    f"Invalid exponent override: {inv_root_override}. Must be >= 0."
-                )
 
         # Provide warning/error for start_preconditioning_step.
         if start_preconditioning_step == -1:
@@ -391,26 +394,17 @@ class DistributedShampoo(torch.optim.Optimizer):
                 "Continuing without using momentum or Nesterov acceleration..."
             )
 
-        # Provide error for system Pytorch compile availability
-        if shampoo_pt2_compile_config is not None and not torch.cuda.is_available():
-            raise ValueError(
-                "Backend does NOT support Pytorch 2.0 compile. Switch to shampoo_pt2_compile_config=None."
-            )
-
-        amortized_computation_config = (
-            preconditioner_config.amortized_computation_config
-        )
-        # Set exponent multiplier if this is not provided.
+        # No use of preconditioner_config.amortized_computation_config.exponent_multiplier.
         if (
-            isinstance(amortized_computation_config, EigenConfig)
-            and exponent_multiplier is not None
-        ):
-            logger.warning(
-                f"{exponent_multiplier=} is deprecating. Please consider using EigenConfig.exponent_multiplier directly and setting exponent_multipler=None instead in the future."
+            getattr(
+                preconditioner_config.amortized_computation_config,
+                "exponent_multiplier",
+                1.0,
             )
-            amortized_computation_config = dataclasses.replace(
-                amortized_computation_config,
-                exponent_multiplier=exponent_multiplier,
+            != 1.0
+        ):
+            raise ValueError(
+                "preconditioner_config.amortized_computation_config.exponent_multiplier is not supported. Please use PreconditionerConfig.inverse_exponent_override instead."
             )
 
         super().__init__(
@@ -426,7 +420,6 @@ class DistributedShampoo(torch.optim.Optimizer):
                 MAX_PRECONDITIONER_DIM: max_preconditioner_dim,
                 PRECONDITION_FREQUENCY: precondition_frequency,
                 START_PRECONDITIONING_STEP: start_preconditioning_step,
-                INV_ROOT_OVERRIDE: inv_root_override,
                 USE_NESTEROV: use_nesterov,
                 USE_BIAS_CORRECTION: use_bias_correction,
                 USE_DECOUPLED_WEIGHT_DECAY: use_decoupled_weight_decay,
@@ -456,28 +449,29 @@ class DistributedShampoo(torch.optim.Optimizer):
     def _instantiate_distributor(
         self, distributed_config: DistributedConfig | None
     ) -> None:
-        if distributed_config is None:
-            distributor = Distributor
-        elif type(distributed_config) is DDPShampooConfig:
-            distributor = partial(DDPDistributor, distributed_config=distributed_config)  # type: ignore[assignment]
-        elif type(distributed_config) is FSDPShampooConfig:
-            distributor = partial(
-                FSDPDistributor, distributed_config=distributed_config
-            )  # type: ignore[assignment]
-        elif type(distributed_config) is FullyShardShampooConfig:
-            distributor = FullyShardDistributor
-        elif type(distributed_config) is HSDPShampooConfig:
-            distributor = partial(
-                HSDPDistributor,
-                distributed_config=distributed_config,
-            )  # type: ignore[assignment]
-        elif type(distributed_config) is HybridShardShampooConfig:
-            distributor = partial(
-                HybridShardDistributor,
-                distributed_config=distributed_config,
-            )  # type: ignore[assignment]
-        else:
-            raise NotImplementedError(f"{distributed_config=} not supported!")
+        match distributed_config:
+            case None:
+                distributor: Callable[..., DistributorInterface] = Distributor
+            case HSDPShampooConfig():
+                distributor = partial(
+                    HSDPDistributor, distributed_config=distributed_config
+                )
+            case HybridShardShampooConfig():
+                distributor = partial(
+                    HybridShardDistributor, distributed_config=distributed_config
+                )
+            case DDPShampooConfig():
+                distributor = partial(
+                    DDPDistributor, distributed_config=distributed_config
+                )
+            case FSDPShampooConfig():
+                distributor = partial(
+                    FSDPDistributor, distributed_config=distributed_config
+                )
+            case FullyShardShampooConfig():
+                distributor = FullyShardDistributor
+            case _:
+                raise NotImplementedError(f"{distributed_config=} not supported!")
 
         for state_lists, group in zip(
             self._per_group_state_lists, self.param_groups, strict=True
@@ -504,17 +498,25 @@ class DistributedShampoo(torch.optim.Optimizer):
         for state_lists, group in zip(
             self._per_group_state_lists, self.param_groups, strict=True
         ):
-            if type(group[PRECONDITIONER_CONFIG]) is ShampooPreconditionerConfig:
-                preconditioner_list_cls = ShampooPreconditionerList
-            elif (
-                type(group[PRECONDITIONER_CONFIG])
-                is EigenvalueCorrectedShampooPreconditionerConfig
-            ):
-                preconditioner_list_cls = EigenvalueCorrectedShampooPreconditionerList  # type: ignore[assignment]
-            else:
-                raise NotImplementedError(
-                    f"{group[PRECONDITIONER_CONFIG]=} not supported!"
-                )
+            match group[PRECONDITIONER_CONFIG]:
+                case ShampooPreconditionerConfig(
+                    amortized_computation_config=RootInvConfig()
+                ):
+                    preconditioner_list_cls: Callable[..., PreconditionerList] = (
+                        ShampooPreconditionerList
+                    )
+                case ShampooPreconditionerConfig(
+                    amortized_computation_config=EigendecompositionConfig()
+                ):
+                    preconditioner_list_cls = EigendecomposedShampooPreconditionerList
+                case EigenvalueCorrectedShampooPreconditionerConfig():
+                    preconditioner_list_cls = (
+                        EigenvalueCorrectedShampooPreconditionerList
+                    )
+                case _:
+                    raise NotImplementedError(
+                        f"{group[PRECONDITIONER_CONFIG]=} not supported!"
+                    )
 
             state_lists[SHAMPOO_PRECONDITIONER_LIST] = preconditioner_list_cls(
                 block_list=state_lists[DISTRIBUTOR].local_blocked_params,
@@ -523,7 +525,6 @@ class DistributedShampoo(torch.optim.Optimizer):
                 preconditioner_config=group[PRECONDITIONER_CONFIG],
                 beta2=group[BETAS][1],
                 epsilon=group[EPSILON],
-                inv_root_override=group[INV_ROOT_OVERRIDE],
                 use_bias_correction=group[USE_BIAS_CORRECTION],
                 factor_matrix_dtype=group[PRECONDITIONER_DTYPE],
             )
@@ -533,36 +534,45 @@ class DistributedShampoo(torch.optim.Optimizer):
         for state_lists, group in zip(
             self._per_group_state_lists, self.param_groups, strict=True
         ):
-            if group[GRAFTING_CONFIG] is None:
-                state_lists[GRAFTING_PRECONDITIONER_LIST] = None
-            elif type(group[GRAFTING_CONFIG]) is SGDGraftingConfig:
-                state_lists[GRAFTING_PRECONDITIONER_LIST] = SGDPreconditionerList(
-                    block_list=state_lists[DISTRIBUTOR].local_blocked_params,
-                )
-            elif type(group[GRAFTING_CONFIG]) in (
-                AdaGradGraftingConfig,
-                RMSpropGraftingConfig,
-                AdamGraftingConfig,
-            ):
-                state_lists[GRAFTING_PRECONDITIONER_LIST] = AdagradPreconditionerList(
-                    block_list=state_lists[DISTRIBUTOR].local_blocked_params,
-                    state=self.state,
-                    block_info_list=state_lists[DISTRIBUTOR].local_block_info_list,
-                    beta2=(
-                        1.0
-                        if type(group[GRAFTING_CONFIG]) is AdaGradGraftingConfig
-                        else group[GRAFTING_CONFIG].beta2
-                    ),
-                    epsilon=group[GRAFTING_CONFIG].epsilon,
-                    use_bias_correction=type(group[GRAFTING_CONFIG])
-                    is AdamGraftingConfig,
-                )
-            else:
-                raise NotImplementedError(f"{group[GRAFTING_CONFIG]=} not supported!")
+            match group[GRAFTING_CONFIG]:
+                case None:
+                    state_lists[GRAFTING_PRECONDITIONER_LIST] = None
+                case SGDGraftingConfig():
+                    state_lists[GRAFTING_PRECONDITIONER_LIST] = SGDPreconditionerList(
+                        block_list=state_lists[DISTRIBUTOR].local_blocked_params,
+                    )
+                case (
+                    AdaGradGraftingConfig()
+                    | RMSpropGraftingConfig()
+                    | AdamGraftingConfig()
+                ):
+                    state_lists[GRAFTING_PRECONDITIONER_LIST] = (
+                        AdagradPreconditionerList(
+                            block_list=state_lists[DISTRIBUTOR].local_blocked_params,
+                            state=self.state,
+                            block_info_list=state_lists[
+                                DISTRIBUTOR
+                            ].local_block_info_list,
+                            beta2=(
+                                1.0
+                                if type(group[GRAFTING_CONFIG]) is AdaGradGraftingConfig
+                                else group[GRAFTING_CONFIG].beta2
+                            ),
+                            epsilon=group[GRAFTING_CONFIG].epsilon,
+                            use_bias_correction=type(group[GRAFTING_CONFIG])
+                            is AdamGraftingConfig,
+                        )
+                    )
+                case _:
+                    raise NotImplementedError(
+                        f"{group[GRAFTING_CONFIG]=} not supported!"
+                    )
 
     @torch.no_grad()
     def _instantiate_steps(self) -> None:
-        for state_lists in self._per_group_state_lists:
+        for state_lists, group in zip(
+            self._per_group_state_lists, self.param_groups, strict=True
+        ):
             assert (
                 len(state_lists[DISTRIBUTOR].local_block_info_list) > 0
             ), "There is no params in your param_group. Please check the instantiation of DistributedShampoo "
@@ -574,8 +584,7 @@ class DistributedShampoo(torch.optim.Optimizer):
 
             # In order to ensure that the step counter is checkpointed correctly, we store it
             # as a tensor (which is replicated across all devices) under the first parameter's state.
-            block_info = state_lists[DISTRIBUTOR].local_block_info_list[0]
-            self.state[block_info.param][STEP] = state_lists[STEP]
+            self.state[group[PARAMS][0]][STEP] = state_lists[STEP]
 
     @torch.no_grad()
     def _instantiate_momentum(self) -> None:

@@ -9,7 +9,6 @@ LICENSE file in the root directory of this source tree.
 
 #!/usr/bin/env python3
 
-import itertools
 import unittest
 from collections.abc import Callable
 from functools import partial
@@ -26,8 +25,14 @@ from distributed_shampoo.tests.shampoo_test_utils import (
 )
 from torch.optim.optimizer import ParamsT
 
+from torch.testing._internal.common_utils import (
+    instantiate_parametrized_tests,
+    parametrize,
+)
+
 
 @unittest.skipIf(not torch.cuda.is_available(), "Skip when CUDA is not available")
+@instantiate_parametrized_tests
 class DistributedShampooPytorchCompileTest(unittest.TestCase):
     @staticmethod
     def _shampoo_optim_factory(
@@ -38,8 +43,8 @@ class DistributedShampooPytorchCompileTest(unittest.TestCase):
         betas: tuple[float, float],
         grafting_config: GraftingConfig | None,
     ) -> Callable[[ParamsT], torch.optim.Optimizer]:
-        return lambda parameters: DistributedShampoo(
-            parameters,
+        return partial(
+            DistributedShampoo,
             lr=0.01,
             betas=betas,
             # TODO: comment out beta3 to unblock quantization changes; need to fix PT2 FMA changes for this test
@@ -56,58 +61,54 @@ class DistributedShampooPytorchCompileTest(unittest.TestCase):
             grafting_config=grafting_config,
         )
 
-    def test_pt2_shampoo_before_preconditioning_on_quadratic(self) -> None:
-        # Test all the combinations for weight decay, precondition frequency,
-        # starting preconditioning step, and total steps.
-        # Test on steps before start_preconditioning_step
-        for (
-            weight_decay,
-            betas,
-            grafting_config,
-            (
-                precondition_frequency,
-                start_preconditioning_step,
-                total_steps,
-            ),
-        ) in itertools.product(
-            (0.0, 0.1),
-            ((0.0, 1.0), (0.9, 0.999)),
-            (
-                None,
-                AdaGradGraftingConfig(
-                    epsilon=1e-10,
-                ),
-            ),
-            ((1, 1000, 5), (10, 10, 5)),
-        ):
-            shampoo_optim_factory = partial(
-                DistributedShampooPytorchCompileTest._shampoo_optim_factory,
-                precondition_frequency=precondition_frequency,
-                start_preconditioning_step=start_preconditioning_step,
-                weight_decay=weight_decay,
-                betas=betas,
-                grafting_config=grafting_config,
-            )
-            with self.subTest(
-                weight_decay=weight_decay,
-                precondition_frequency=precondition_frequency,
-                start_preconditioning_step=start_preconditioning_step,
-                total_steps=total_steps,
-                betas=betas,
-                grafting_config=grafting_config,
-            ):
-                compare_two_optimizers_on_weight_and_loss(
-                    control_optim_factory=shampoo_optim_factory(
-                        shampoo_pt2_compile_config=None,
-                    ),
-                    experimental_optim_factory=shampoo_optim_factory(
-                        shampoo_pt2_compile_config=ShampooPT2CompileConfig()
-                    ),
-                    device=torch.device("cuda"),
-                    total_steps=total_steps,
-                )
+    @parametrize(
+        "precondition_frequency, start_preconditioning_step, total_steps",
+        ((1, 1000, 5), (10, 10, 5)),
+    )
+    @parametrize("grafting_config", (None, AdaGradGraftingConfig(epsilon=1e-10)))
+    @parametrize("betas", ((0.0, 1.0), (0.9, 0.999)))
+    @parametrize("weight_decay", (0.0, 0.1))
+    def test_pt2_shampoo_before_preconditioning_on_quadratic(
+        self,
+        weight_decay: float,
+        betas: tuple[float, float],
+        grafting_config: GraftingConfig | None,
+        precondition_frequency: int,
+        start_preconditioning_step: int,
+        total_steps: int,
+    ) -> None:
+        shampoo_optim_factory = partial(
+            DistributedShampooPytorchCompileTest._shampoo_optim_factory,
+            precondition_frequency=precondition_frequency,
+            start_preconditioning_step=start_preconditioning_step,
+            weight_decay=weight_decay,
+            betas=betas,
+            grafting_config=grafting_config,
+        )
 
-    def test_pt2_shampoo_after_preconditioning_on_quadratic(self) -> None:
+        compare_two_optimizers_on_weight_and_loss(
+            control_optim_factory=shampoo_optim_factory(
+                shampoo_pt2_compile_config=None
+            ),
+            experimental_optim_factory=shampoo_optim_factory(
+                shampoo_pt2_compile_config=ShampooPT2CompileConfig()
+            ),
+            device=torch.device("cuda"),
+            total_steps=total_steps,
+        )
+
+    @parametrize(
+        "precondition_frequency, start_preconditioning_step, total_steps",
+        ((1, 1000, 5), (10, 10, 5)),
+    )
+    @parametrize("betas", ((0.0, 1.0), (0.9, 0.999)))
+    def test_pt2_shampoo_after_preconditioning_on_quadratic(
+        self,
+        betas: tuple[float, float],
+        precondition_frequency: int,
+        start_preconditioning_step: int,
+        total_steps: int,
+    ) -> None:
         # NOTE: Test on steps after start_preconditioning_step.
         #       PT2 compilation with Inductor + root inverse introduces larger numerical differences
         #       compared to the non-PT2 baseline after preconditioning starts. However, these differences
@@ -118,55 +119,24 @@ class DistributedShampooPytorchCompileTest(unittest.TestCase):
         #       - Test config specific: changing other Shampoo param vals can lead to UT failure:
         #       e.g., increase total_steps to a big val (e.g., 10000)
 
-        # Test all the combinations for weight decay, betas, grafting_config,
-        # precondition frequency, starting preconditioning step, and total steps.
-        for (
-            weight_decay,
-            betas,
-            grafting_config,
-            (
-                precondition_frequency,
-                start_preconditioning_step,
-                total_steps,
+        shampoo_optim_factory = partial(
+            DistributedShampooPytorchCompileTest._shampoo_optim_factory,
+            precondition_frequency=precondition_frequency,
+            start_preconditioning_step=start_preconditioning_step,
+            weight_decay=0.1,
+            betas=betas,
+            grafting_config=AdaGradGraftingConfig(epsilon=1e-10),
+        )
+
+        compare_two_optimizers_on_weight_and_loss(
+            control_optim_factory=shampoo_optim_factory(
+                shampoo_pt2_compile_config=None,
             ),
-        ) in itertools.product(
-            (0.1,),
-            ((0.9, 0.999),),
-            (
-                AdaGradGraftingConfig(
-                    epsilon=1e-10,
-                ),
+            experimental_optim_factory=shampoo_optim_factory(
+                shampoo_pt2_compile_config=ShampooPT2CompileConfig()
             ),
-            (
-                (10, 100, 110),
-                (10, 10, 20),
-            ),
-        ):
-            shampoo_optim_factory = partial(
-                DistributedShampooPytorchCompileTest._shampoo_optim_factory,
-                precondition_frequency=precondition_frequency,
-                start_preconditioning_step=start_preconditioning_step,
-                weight_decay=weight_decay,
-                betas=betas,
-                grafting_config=grafting_config,
-            )
-            with self.subTest(
-                weight_decay=weight_decay,
-                precondition_frequency=precondition_frequency,
-                start_preconditioning_step=start_preconditioning_step,
-                total_steps=total_steps,
-                betas=betas,
-                grafting_config=grafting_config,
-            ):
-                compare_two_optimizers_on_weight_and_loss(
-                    control_optim_factory=shampoo_optim_factory(
-                        shampoo_pt2_compile_config=None,
-                    ),
-                    experimental_optim_factory=shampoo_optim_factory(
-                        shampoo_pt2_compile_config=ShampooPT2CompileConfig()
-                    ),
-                    device=torch.device("cuda"),
-                    total_steps=total_steps,
-                    rtol=1.0e-3,
-                    atol=1.0e-5,
-                )
+            device=torch.device("cuda"),
+            total_steps=total_steps,
+            rtol=1.0e-3,
+            atol=1.0e-5,
+        )

@@ -7,7 +7,9 @@ LICENSE file in the root directory of this source tree.
 
 """
 
+import heapq
 import math
+import operator
 from collections.abc import Callable, Iterator, Sequence
 from functools import partial, reduce
 from itertools import accumulate, chain, compress, pairwise
@@ -91,9 +93,10 @@ def get_dtype_size(dtype: torch.dtype) -> int:
     """Return the size (bytes) of a given data type."""
     if dtype is torch.bool:
         return 1
-    return math.ceil(
-        (torch.finfo if dtype.is_floating_point else torch.iinfo)(dtype).bits / 8.0
-    )
+    # Fast ceiling of bits/8 using (bits + 7) // 8
+    return (
+        (torch.finfo if dtype.is_floating_point else torch.iinfo)(dtype).bits + 7
+    ) // 8
 
 
 def generate_pairwise_indices(input_list: Sequence[int]) -> Iterator[tuple[int, int]]:
@@ -104,7 +107,7 @@ def generate_pairwise_indices(input_list: Sequence[int]) -> Iterator[tuple[int, 
     number of blocks within each parameter.
 
     Args:
-        input_list (Sequence[int]): A list of intergers specifying the number of elements within each partition.
+        input_list (Sequence[int]): A list of integers specifying the number of elements within each partition.
 
     Returns:
         partition_indices: Iterator[tuple[int, int]]: An iterator containing pairs of indices which specify
@@ -151,3 +154,69 @@ class ParameterizeEnterExitContext:
         exc_tb: TracebackType | None,
     ) -> None:
         self._exit_method()
+
+
+def distribute_buffer_sizes(
+    buffer_sizes: tuple[int, ...],
+    group_size: int,
+) -> tuple[tuple[int, int], ...]:
+    """Distribute given buffer sizes across ranks in a group.
+
+    Buffer sizes will be rounded up for memory allocation. Buffers are distributed such that
+    total buffer sizes of each rank are as even as possible. This is currently performed
+    using a greedy algorithm. We do not currently consider computational cost
+    or kernel launching overheads.
+
+    Note: A better distribution strategy should try to minimize the delta of buffer sizes
+    between the most and the least allocated groups.
+
+    Args:
+        buffer_sizes (tuple[int, ...]): Buffer sizes of blocks to be distributed.
+        group_size (int): Number of groups to distribute across.
+
+    Returns:
+        buffer_size_ranks (tuple[tuple[int, int], ...]): A list of tuples containing the
+            buffer size for each block and its assigned rank.
+
+    Example:
+        Assuming ALIGNMENT_BYTES = 64, given buffer_sizes = [128, 64, 500, 256], group_size = 2
+        -> buffer_size_ranks = [(128, 1), (64, 1), (512, 0), (256, 1)]
+    """
+    ALIGNMENT_BYTES = (
+        64  # necessary for determining buffer size, possibly hardware-dependent
+    )
+
+    # Convert each of buffer_sizes into smallest multiple of ALIGNMENT_BYTES that is >= buffer size.
+    aligned_buffer_sizes = [
+        (buffer_size + ALIGNMENT_BYTES - 1) // ALIGNMENT_BYTES * ALIGNMENT_BYTES
+        for buffer_size in buffer_sizes
+    ]
+    buffer_size_ranks = [(-1, -1)] * len(buffer_sizes)
+    allocated_buffer_sizes = [(0, group_index) for group_index in range(group_size)]
+    heapq.heapify(allocated_buffer_sizes)
+
+    for index, aligned_buffer_size in sorted(
+        enumerate(aligned_buffer_sizes),
+        key=operator.itemgetter(1),
+        reverse=True,
+    ):
+        # Greedily find the group with the least allocated buffer size and its group index
+        # in order to allocate buffers on that group.
+        (
+            min_allocated_buffer_size,
+            min_allocated_buffer_size_group_index,
+        ) = heapq.heappop(allocated_buffer_sizes)
+
+        heapq.heappush(
+            allocated_buffer_sizes,
+            (
+                min_allocated_buffer_size + aligned_buffer_size,
+                min_allocated_buffer_size_group_index,
+            ),
+        )
+        buffer_size_ranks[index] = (
+            aligned_buffer_size,
+            min_allocated_buffer_size_group_index,
+        )
+
+    return tuple(buffer_size_ranks)

@@ -14,7 +14,7 @@ import torch
 import torch.distributed as dist
 import torch.distributed.checkpoint as dist_checkpoint
 
-from distributed_shampoo import DistributedShampoo, FullyShardShampooConfig
+from distributed_shampoo import DistributedShampoo, HybridShardShampooConfig
 from distributed_shampoo.examples.trainer_utils import (
     get_data_loader_and_sampler,
     get_model_and_loss_fn,
@@ -27,6 +27,7 @@ from distributed_shampoo.examples.trainer_utils import (
 
 from torch import nn
 from torch.distributed._composable.fsdp import fully_shard
+from torch.distributed.device_mesh import init_device_mesh
 
 logging.basicConfig(
     format="[%(filename)s:%(lineno)d] %(levelname)s: %(message)s",
@@ -43,7 +44,7 @@ WORLD_RANK = int(os.environ["RANK"])
 WORLD_SIZE = int(os.environ["WORLD_SIZE"])
 
 
-def train_fully_shard_model(
+def train_hybrid_shard_model(
     model: nn.Module,
     world_size: int,
     loss_function: nn.Module,
@@ -105,11 +106,11 @@ def train_fully_shard_model(
     )
 
 
-def create_model_and_optimizer_and_loss_fn(args, device):
+def create_model_and_optimizer_and_loss_fn(args, device, device_mesh):
     # instantiate model and loss function
     model, loss_function = get_model_and_loss_fn(device)
 
-    model = fully_shard(model)
+    model = fully_shard(model, mesh=device_mesh)
     # instantiate optimizer (SGD, Adam, DistributedShampoo)
     optimizer = instantiate_optimizer(
         args.optimizer_type,
@@ -132,7 +133,10 @@ def create_model_and_optimizer_and_loss_fn(args, device):
         grafting_epsilon=args.grafting_epsilon,
         grafting_beta2=args.grafting_beta2,
         use_merge_dims=args.use_merge_dims,
-        distributed_config=FullyShardShampooConfig(),
+        distributed_config=HybridShardShampooConfig(
+            device_mesh=device_mesh,
+            num_trainers_per_group=args.num_trainers_per_group,
+        ),
         preconditioner_dtype=args.preconditioner_dtype,
         preconditioner_computation_type=args.preconditioner_computation_type,
     )
@@ -140,7 +144,7 @@ def create_model_and_optimizer_and_loss_fn(args, device):
 
 
 if __name__ == "__main__":
-    """Multi-GPU CIFAR-10 Per-parameter Fully Sharded Data Parallel (a.k.a FSDP2) Training Example Script
+    """Multi-GPU CIFAR-10 Per-parameter Hybrid Sharded Data Parallel (a.k.a HSDP2) Training Example Script
 
     Uses torch.distributed to launch distributed training run.
 
@@ -151,13 +155,13 @@ if __name__ == "__main__":
     To run this training script with a single node, one can run from the optimizers directory:
 
     SGD (with learning rate = 1e-2, momentum = 0.9):
-        torchrun --standalone --nnodes=1 --nproc_per_node=$NUM_TRAINERS -m distributed_shampoo.examples.fully_shard_cifar10_example --optimizer-type SGD --lr 1e-2 --momentum 0.9
+        torchrun --standalone --nnodes=1 --nproc_per_node=$NUM_TRAINERS -m distributed_shampoo.examples.hybrid_shard_cifar10_example --optimizer-type SGD --lr 1e-2 --momentum 0.9
 
     Adam (with default parameters):
-        torchrun --standalone --nnodes=1 --nproc_per_node=$NUM_TRAINERS -m distributed_shampoo.examples.fully_shard_cifar10_example --optimizer-type ADAM
+        torchrun --standalone --nnodes=1 --nproc_per_node=$NUM_TRAINERS -m distributed_shampoo.examples.hybrid_shard_cifar10_example --optimizer-type ADAM
 
     Distributed Shampoo (with default Adam grafting, precondition frequency = 100):
-        torchrun --standalone --nnodes=1 --nproc_per_node=$NUM_TRAINERS -m distributed_shampoo.examples.fully_shard_cifar10_example --optimizer-type DISTRIBUTED_SHAMPOO --precondition-frequency 100 --grafting-type ADAM --num-trainers-per-group -1 --use-bias-correction --use-decoupled-weight-decay --use-merge-dims
+        torchrun --standalone --nnodes=1 --nproc_per_node=$NUM_TRAINERS -m distributed_shampoo.examples.hybrid_shard_cifar10_example --optimizer-type DISTRIBUTED_SHAMPOO --precondition-frequency 100 --grafting-type ADAM --num-trainers-per-group -1 --use-bias-correction --use-decoupled-weight-decay --use-merge-dims --dp-replicate-degree 2 
 
     To use distributed checkpointing, append the flag --use-distributed-checkpoint with optional --checkpoint-dir argument.
 
@@ -179,7 +183,16 @@ if __name__ == "__main__":
         local_rank=LOCAL_RANK,
     )
 
-    model, optimizer, loss_fn = create_model_and_optimizer_and_loss_fn(args, device)
+    # initialize device_mesh for hybrid shard data parallel
+    device_mesh = init_device_mesh(
+        "cuda",
+        (args.dp_replicate_degree, WORLD_RANK // args.dp_replicate_degree),
+        mesh_dim_names=("dp_replicate", "dp_shard"),
+    )
+
+    model, optimizer, loss_fn = create_model_and_optimizer_and_loss_fn(
+        args, device, device_mesh
+    )
 
     # instantiate data loader
     data_loader, sampler = get_data_loader_and_sampler(
@@ -187,7 +200,7 @@ if __name__ == "__main__":
     )
 
     # train model
-    train_fully_shard_model(
+    train_hybrid_shard_model(
         model,
         WORLD_SIZE,
         loss_fn,

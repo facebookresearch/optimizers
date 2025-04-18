@@ -25,10 +25,10 @@ from distributed_shampoo import (
     CoupledHigherOrderConfig,
     CoupledNewtonConfig,
     DefaultEigenvalueCorrectedShampooConfig,
-    DefaultShampooConfig,
     DefaultSOAPConfig,
     DistributedConfig,
     DistributedShampoo,
+    EigenConfig,
     GraftingConfig,
     PreconditionerConfig,
     RMSpropGraftingConfig,
@@ -279,6 +279,12 @@ class Parser:
             default="./checkpoints",
             help="Directory to save checkpoints and logs.",
         )
+        parser.add_argument(
+            "--dp-replicate-degree",
+            type=int,
+            default=2,
+            help="Default HSDP replicate degree.",
+        )
 
         return parser.parse_args()
 
@@ -371,7 +377,6 @@ def instantiate_optimizer(
     max_preconditioner_dim: int,
     precondition_frequency: int,
     start_preconditioning_step: int,
-    inv_root_override: int,
     exponent_multiplier: float,
     use_nesterov: bool,
     use_bias_correction: bool,
@@ -423,8 +428,6 @@ def instantiate_optimizer(
             max_preconditioner_dim=max_preconditioner_dim,
             precondition_frequency=precondition_frequency,
             start_preconditioning_step=start_preconditioning_step,
-            inv_root_override=inv_root_override,
-            exponent_multiplier=exponent_multiplier,
             use_nesterov=use_nesterov,
             use_bias_correction=use_bias_correction,
             use_decoupled_weight_decay=use_decoupled_weight_decay,
@@ -435,7 +438,8 @@ def instantiate_optimizer(
             distributed_config=distributed_config,
             preconditioner_dtype=preconditioner_dtype.value,
             preconditioner_config=instantiate_preconditioner_config(
-                preconditioner_computation_type
+                preconditioner_computation_type=preconditioner_computation_type,
+                exponent_multiplier=exponent_multiplier,
             ),
         )  # type: ignore[assignment]
     else:
@@ -476,9 +480,19 @@ def instantiate_grafting_config(
 
 def instantiate_preconditioner_config(
     preconditioner_computation_type: PreconditionerComputationType,
+    exponent_multiplier: float,
 ) -> PreconditionerConfig:
+    assert (
+        exponent_multiplier == 1.0
+        or preconditioner_computation_type
+        == PreconditionerComputationType.EIGEN_ROOT_INV
+    ), "Exponent multiplier is only supported for EIGH root inverse computation."
     if preconditioner_computation_type == PreconditionerComputationType.EIGEN_ROOT_INV:
-        return DefaultShampooConfig
+        return ShampooPreconditionerConfig(
+            amortized_computation_config=EigenConfig(
+                exponent_multiplier=exponent_multiplier
+            )
+        )
     elif (
         preconditioner_computation_type
         == PreconditionerComputationType.COUPLED_NEWTON_ROOT_INV

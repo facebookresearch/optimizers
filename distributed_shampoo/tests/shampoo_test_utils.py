@@ -68,7 +68,7 @@ def construct_training_problem(
         target (torch.Tensor): A target tensor of zeros corresponding to the output dimension.
     """
     data = torch.arange(model_linear_layers_dims[0], dtype=torch.float, device=device)
-    data /= torch.norm(data)
+    data /= torch.linalg.norm(data)
 
     model = _ModelWithLinearAndDeadLayers(
         model_linear_layers_dims=model_linear_layers_dims,
@@ -90,28 +90,29 @@ def construct_training_problem(
     return model, loss, data, target
 
 
-def compare_two_optimizers_on_weight_and_loss(
+def compare_two_optimizers_devices_on_weight_and_loss(
     control_optim_factory: Callable[[ParamsT], torch.optim.Optimizer],
+    control_device: torch.device | None,
     experimental_optim_factory: Callable[[ParamsT], torch.optim.Optimizer],
+    experimental_device: torch.device | None,
     model_linear_layers_dims: tuple[int, ...] = (10, 1, 1),
     model_dead_layer_dims: tuple[int, ...] | None = None,
-    device: torch.device | None = None,
     fill: float | tuple[float, ...] = 1.0,
     total_steps: int = 5,
     rtol: float | None = None,
     atol: float | None = None,
 ) -> None:
     """
-    Compare the performance of two optimizers on a simple neural network.
-    This function trains two identical neural networks using different optimizers and compares their weights and losses after training.
+    Compare the performance of two optimizers on a simple neural network across different devices.
 
     Args:
         control_optim_factory (Callable[[ParamsT], torch.optim.Optimizer]): A factory function that returns an instance of the control optimizer.
+        control_device (torch.device | None): The device to use for the control optimizer.
         experimental_optim_factory (Callable[[ParamsT], torch.optim.Optimizer]): A factory function that returns an instance of the experimental optimizer.
+        experimental_device (torch.device | None): The device to use for the experimental optimizer.
         model_linear_layers_dims (tuple[int, ...]): The dimensions of the linear layers in the neural network. (Defaults: (10, 1, 1))
         model_dead_layer_dims (tuple[int, ...] | None): The dimensions of the dead layers in the neural network. (Defaults: None)
-        device (torch.device | None): The device to use for training. (Defaults: None)
-        fill (float | tuple[float, ...]): The value(s) to fill the model parameters. If a tuple, each element should correspond to one layer. (Default: 0.0)
+        fill (float | tuple[float, ...]): The value(s) to fill the model parameters. If a tuple, each element should correspond to one layer. (Default: 1.0)
         total_steps (int): The number of training steps. (Defaults: 5)
         rtol (float | None): The relative tolerance for comparing weights and losses. (Defaults: None)
         atol (float | None): The absolute tolerance for comparing weights and losses. (Defaults: None)
@@ -122,16 +123,8 @@ def compare_two_optimizers_on_weight_and_loss(
 
     def train(
         optim_factory: Callable[[ParamsT], torch.optim.Optimizer],
+        device: torch.device | None,
     ) -> tuple[list[Parameter], torch.Tensor]:
-        """
-        Train a neural network using the given optimizer.
-
-        Args:
-            optim_factory (Callable[[ParamsT], torch.optim.Optimizer]): A factory function that returns an instance of the optimizer.
-
-        Returns:
-            weight_and_loss (tuple[list[torch.Tensor], torch.Tensor]): A tuple containing the trained weight and loss.
-        """
         model, loss, data, target = construct_training_problem(
             model_linear_layers_dims=model_linear_layers_dims,
             model_dead_layer_dims=model_dead_layer_dims,
@@ -145,14 +138,109 @@ def compare_two_optimizers_on_weight_and_loss(
             objective.backward()
             optimizer.step()
 
-        # Retrun the weight of linear_layers (i.e., non-dead layers) only because dead layers weights are random and never-changed.
         return list(
             model.get_submodule("linear_layers").parameters()
         ), objective.detach()
 
-    control_params, control_loss = train(control_optim_factory)
-    experimental_params, experimental_loss = train(experimental_optim_factory)
-    torch.testing.assert_close(experimental_loss, control_loss, rtol=rtol, atol=atol)
+    control_params, control_loss = train(
+        optim_factory=control_optim_factory, device=control_device
+    )
+    experimental_params, experimental_loss = train(
+        optim_factory=experimental_optim_factory, device=experimental_device
+    )
     torch.testing.assert_close(
-        experimental_params, control_params, rtol=rtol, atol=atol
+        actual=experimental_loss,
+        expected=control_loss,
+        rtol=rtol,
+        atol=atol,
+        check_device=control_device == experimental_device,
+    )
+    torch.testing.assert_close(
+        actual=experimental_params,
+        expected=control_params,
+        rtol=rtol,
+        atol=atol,
+        check_device=control_device == experimental_device,
+    )
+
+
+def compare_two_optimizers_on_weight_and_loss(
+    control_optim_factory: Callable[[ParamsT], torch.optim.Optimizer],
+    experimental_optim_factory: Callable[[ParamsT], torch.optim.Optimizer],
+    model_linear_layers_dims: tuple[int, ...] = (10, 1, 1),
+    model_dead_layer_dims: tuple[int, ...] | None = None,
+    device: torch.device | None = None,
+    fill: float | tuple[float, ...] = 1.0,
+    total_steps: int = 5,
+    rtol: float | None = None,
+    atol: float | None = None,
+) -> None:
+    """
+    Compare the performance of two optimizers on a simple neural network using the same device.
+
+    Args:
+        control_optim_factory (Callable[[ParamsT], torch.optim.Optimizer]): A factory function that returns an instance of the control optimizer.
+        experimental_optim_factory (Callable[[ParamsT], torch.optim.Optimizer]): A factory function that returns an instance of the experimental optimizer.
+        model_linear_layers_dims (tuple[int, ...]): The dimensions of the linear layers in the neural network. (Defaults: (10, 1, 1))
+        model_dead_layer_dims (tuple[int, ...] | None): The dimensions of the dead layers in the neural network. (Defaults: None)
+        device (torch.device | None): The device to use for training. (Defaults: None)
+        fill (float | tuple[float, ...]): The value(s) to fill the model parameters. If a tuple, each element should correspond to one layer. (Default: 1.0)
+        total_steps (int): The number of training steps. (Defaults: 5)
+        rtol (float | None): The relative tolerance for comparing weights and losses. (Defaults: None)
+        atol (float | None): The absolute tolerance for comparing weights and losses. (Defaults: None)
+
+    Returns:
+        None
+    """
+    compare_two_optimizers_devices_on_weight_and_loss(
+        control_optim_factory=control_optim_factory,
+        control_device=device,
+        experimental_optim_factory=experimental_optim_factory,
+        experimental_device=device,
+        model_linear_layers_dims=model_linear_layers_dims,
+        model_dead_layer_dims=model_dead_layer_dims,
+        fill=fill,
+        total_steps=total_steps,
+        rtol=rtol,
+        atol=atol,
+    )
+
+
+def compare_optimizer_on_cpu_and_device(
+    optim_factory: Callable[[ParamsT], torch.optim.Optimizer],
+    device: torch.device,
+    model_linear_layers_dims: tuple[int, ...] = (10, 1, 1),
+    model_dead_layer_dims: tuple[int, ...] | None = None,
+    fill: float | tuple[float, ...] = 1.0,
+    total_steps: int = 5,
+    rtol: float | None = None,
+    atol: float | None = None,
+) -> None:
+    """
+    Compare the performance of the same optimizer on a simple neural network across CPU and another device.
+
+    Args:
+        optim_factory (Callable[[ParamsT], torch.optim.Optimizer]): A factory function that returns an instance of the optimizer.
+        device (torch.device): The other experimental device to use for the training.
+        model_linear_layers_dims (tuple[int, ...]): The dimensions of the linear layers in the neural network. (Defaults: (10, 1, 1))
+        model_dead_layer_dims (tuple[int, ...] | None): The dimensions of the dead layers in the neural network. (Defaults: None)
+        fill (float | tuple[float, ...]): The value(s) to fill the model parameters. If a tuple, each element should correspond to one layer. (Default: 1.0)
+        total_steps (int): The number of training steps. (Defaults: 5)
+        rtol (float | None): The relative tolerance for comparing weights and losses. (Defaults: None)
+        atol (float | None): The absolute tolerance for comparing weights and losses. (Defaults: None)
+
+    Returns:
+        None
+    """
+    compare_two_optimizers_devices_on_weight_and_loss(
+        control_optim_factory=optim_factory,
+        control_device=torch.device("cpu"),
+        experimental_optim_factory=optim_factory,
+        experimental_device=device,
+        model_linear_layers_dims=model_linear_layers_dims,
+        model_dead_layer_dims=model_dead_layer_dims,
+        fill=fill,
+        total_steps=total_steps,
+        rtol=rtol,
+        atol=atol,
     )

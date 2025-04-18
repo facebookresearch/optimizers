@@ -167,25 +167,21 @@ class ShampooHSDPDistributorTest(FSDPTest):
         [ParamsT],
         torch.optim.Optimizer,
     ]:
-        return lambda parameters: (
-            lambda distributed_config: DistributedShampoo(
-                parameters,
-                lr=0.001,
-                betas=(0.9, 1.0),
+        return partial(
+            DistributedShampoo,
+            lr=0.001,
+            betas=(0.9, 1.0),
+            epsilon=1e-8,
+            momentum=0.0,
+            weight_decay=0.0,
+            max_preconditioner_dim=4,
+            precondition_frequency=1,
+            start_preconditioning_step=2,
+            use_decoupled_weight_decay=True,
+            grafting_config=AdaGradGraftingConfig(
                 epsilon=1e-8,
-                momentum=0.0,
-                weight_decay=0.0,
-                max_preconditioner_dim=4,
-                precondition_frequency=1,
-                start_preconditioning_step=2,
-                use_decoupled_weight_decay=True,
-                grafting_config=AdaGradGraftingConfig(
-                    epsilon=1e-8,
-                ),
-                distributed_config=distributed_config,
-            )
-        )(
-            distributed_config,
+            ),
+            distributed_config=distributed_config,
         )
 
     @staticmethod
@@ -343,6 +339,28 @@ class ShampooHSDPDistributorTest(FSDPTest):
                 ValueError,
                 re.escape(
                     "distributed_config.num_trainers_per_group=3 must divide self._replicated_group_size=4!"
+                ),
+                ShampooHSDPDistributorTest._train_model,
+                optim_factory=ShampooHSDPDistributorTest._shampoo_optim_factory(
+                    distributed_config=hsdp_config,
+                ),
+                model_factory=ShampooHSDPDistributorTest._model_factory(hsdp_config),
+                device=torch.device("cuda"),
+            )
+
+    @skip_if_lt_x_gpu(4)
+    def test_unsupported_communication_dtype(self) -> None:
+        mesh_2d = init_device_mesh("cuda", (2, 2))
+        hsdp_config = HSDPShampooConfig(
+            param_to_metadata={},
+            device_mesh=mesh_2d,
+        )
+
+        with mock.patch.object(CommunicationDType, "__eq__", return_value=False):
+            self.assertRaisesRegex(
+                NotImplementedError,
+                re.escape(
+                    "Unsupported communication dtype: CommunicationDType.DEFAULT"
                 ),
                 ShampooHSDPDistributorTest._train_model,
                 optim_factory=ShampooHSDPDistributorTest._shampoo_optim_factory(
