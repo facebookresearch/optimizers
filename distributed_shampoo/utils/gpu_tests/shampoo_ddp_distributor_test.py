@@ -410,13 +410,16 @@ class ShampooDDPDistributorDeviceTest(DynamoDistributedMultiProcTestCase):
 
         # The test setting is only rank 0 has params, so all other ranks have no parameters to work on.
         has_blocked_params = dist.get_rank() == 0
-        with mock.patch.object(DistributedShampoo, "step") as mock_step, (
-            contextlib.nullcontext()
-            if has_blocked_params
-            else self.assertRaisesRegex(
-                AssertionError,
-                re.escape("Some workers have no parameters to work on."),
-            )
+        with (
+            mock.patch.object(DistributedShampoo, "step") as mock_step,
+            (
+                contextlib.nullcontext()
+                if has_blocked_params
+                else self.assertRaisesRegex(
+                    AssertionError,
+                    re.escape("Some workers have no parameters to work on."),
+                )
+            ),
         ):
             self._train_model(
                 self._shampoo_optim_factory(distributed_config=DDPShampooConfig()),

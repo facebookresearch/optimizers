@@ -27,7 +27,11 @@ from distributed_shampoo.shampoo_types import (
 )
 from distributed_shampoo.utils.shampoo_block_info import BlockInfo
 from distributed_shampoo.utils.shampoo_utils import compress_list, get_dtype_size
-from matrix_functions import matrix_eigendecomposition, matrix_inverse_root
+from matrix_functions import (
+    estimated_eigenvalues_criterion_below_or_equal_tolerance,
+    matrix_eigendecomposition,
+    matrix_inverse_root,
+)
 
 from matrix_functions_types import (
     EigendecompositionConfig,
@@ -1508,32 +1512,6 @@ class EigenvalueCorrectedShampooPreconditionerList(
                 preconditioned_grad_list.append(grad)
             return tuple(preconditioned_grad_list)
 
-    @staticmethod
-    def _adaptive_amortized_computation_frequency_criterion_below_or_equal_tolerance(
-        factor_matrix: Tensor,
-        factor_matrix_eigenvectors: Tensor,
-        tolerance: float,
-    ) -> bool:
-        """Evaluates whether the criterion for adaptive amortized computation frequency is below or equal to the tolerance.
-
-        Args:
-            factor_matrix (Tensor): The factor matrix.
-            factor_matrix_eigenvectors (Tensor): The eigenvectors of the factor matrix.
-            tolerance (float): The tolerance for the criterion.
-
-        Returns:
-            bool: Whether the criterion is below or equal to the tolerance
-        """
-        # TODO: Potentially improve the criterion.
-        squared_approximate_eigenvalues = (
-            factor_matrix_eigenvectors.T @ factor_matrix @ factor_matrix_eigenvectors
-        ).square_()
-        diagonal_summed = squared_approximate_eigenvalues.diag().sum()
-        off_diagonal_summed = squared_approximate_eigenvalues.fill_diagonal_(0.0).sum()
-        norm = torch.sqrt(diagonal_summed + off_diagonal_summed)
-        off_diagonal_norm = torch.sqrt(off_diagonal_summed)
-        return bool(off_diagonal_norm <= tolerance * norm)
-
     @torch.compiler.disable
     def _amortized_computation(self) -> None:
         # NOTE: This function currently only computes the preconditioner eigenvectors based on
@@ -1567,14 +1545,21 @@ class EigenvalueCorrectedShampooPreconditionerList(
                         factor_matrix_index=factor_matrix_index,
                     )
 
+                    # The eigenvectors need to have the same dtype as the factor matrix,
+                    # because we might want to compute matrix products with them, e.g.,
+                    # to estimate the eigenvalues.
+                    factor_matrix_eigenvectors = factor_matrix_eigenvectors.to(
+                        dtype=factor_matrix.dtype
+                    )
                     if (
                         type(
                             preconditioner_config.amortized_computation_frequency_config
                         )
                         is AdaptiveAmortizedComputationFrequencyConfig
-                        and EigenvalueCorrectedShampooPreconditionerList._adaptive_amortized_computation_frequency_criterion_below_or_equal_tolerance(
-                            factor_matrix,
-                            factor_matrix_eigenvectors,
+                        and estimated_eigenvalues_criterion_below_or_equal_tolerance(
+                            factor_matrix_eigenvectors.T
+                            @ factor_matrix
+                            @ factor_matrix_eigenvectors,
                             preconditioner_config.amortized_computation_frequency_config.tolerance,
                         )
                     ):
@@ -1590,10 +1575,10 @@ class EigenvalueCorrectedShampooPreconditionerList(
                     if isinstance(
                         eigendecomposition_config, QREigendecompositionConfig
                     ):
-                        # Due to the use of QR algorithm, we need to pass in the previous eigenvectors with the same dtype as the input matrix, i.e., factor_matrix.
+                        # To warm-start the QR iterations, we need to pass in the previous eigenvectors.
                         eigendecomposition_config.eigenvectors_estimate = (
                             factor_matrix_eigenvectors
-                        ).to(dtype=factor_matrix.dtype)
+                        )
                     try:
                         computed_eigenvectors = matrix_eigendecomposition(
                             A=factor_matrix,

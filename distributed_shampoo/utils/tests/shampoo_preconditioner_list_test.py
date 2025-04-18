@@ -1253,64 +1253,6 @@ class EigenvalueCorrectedShampooPreconditionerListTest(
             masked_expected_preconditioned_grad_list=masked_expected_preconditioned_grad_list,
         )
 
-    def test_adaptive_amortized_computation_frequency_criterion_below_tolerance(
-        self,
-    ) -> None:
-        """Test adaptive amortized computation frequency criterion."""
-        # Compute eigenvectors of test factor matrix and its update.
-        factor_matrix_triu = torch.tensor(
-            [
-                [0.1728, 0.7989, -1.3391, -0.2319, -0.6411],
-                [1.5930, 0.1929, -0.3534, 0.9371, -1.7551],
-                [1.4669, -0.2361, 0.5761, 0.6107, 0.6555],
-                [0.2715, -1.1916, 0.8504, -0.2460, 1.0288],
-                [-0.1769, 1.0129, 0.1652, -0.7164, -1.2969],
-            ],
-        ).triu()
-        factor_matrix = factor_matrix_triu + factor_matrix_triu.T
-        factor_matrix_eigenvectors: Tensor = torch.linalg.eigh(
-            factor_matrix
-        ).eigenvectors
-        factor_matrix_update_triu = torch.tensor(
-            [
-                [-0.8827, 1.2911, -0.4566, 0.1625, -1.2519],
-                [0.6686, -0.7227, -1.2207, 1.7725, -1.3521],
-                [1.8282, 1.9725, -0.2588, -1.5672, 1.7999],
-                [0.5266, 0.1947, 0.2391, 0.4987, 0.4350],
-                [-0.5272, -0.5767, -0.3799, -0.0934, -0.3282],
-            ]
-        ).triu()
-        factor_matrix_update = factor_matrix_update_triu + factor_matrix_update_triu.T
-        updated_factor_matrix = 0.9 * factor_matrix + 0.1 * factor_matrix_update
-
-        # Compute the norm of the approximate eigenvalues of the updated factor matrix and their off-diagonal.
-        approximate_eigenvalues = (
-            factor_matrix_eigenvectors.T
-            @ updated_factor_matrix
-            @ factor_matrix_eigenvectors
-        )
-        norm = torch.linalg.matrix_norm(approximate_eigenvalues)
-        off_diagonal_norm = torch.linalg.matrix_norm(
-            approximate_eigenvalues.fill_diagonal_(0.0)  # Off-diagonal elements only.
-        )
-        # off_diagonal_norm / norm = 0.10319291055202484.
-
-        # Above tolerance.
-        TOLERANCE_LOW = 0.1
-        criterion_low = EigenvalueCorrectedShampooPreconditionerList._adaptive_amortized_computation_frequency_criterion_below_or_equal_tolerance(
-            updated_factor_matrix, factor_matrix_eigenvectors, TOLERANCE_LOW
-        )
-        assert not criterion_low
-        assert not (off_diagonal_norm <= TOLERANCE_LOW * norm)
-
-        # Below tolerance.
-        TOLERANCE_HIGH = 0.11
-        criterion_high = EigenvalueCorrectedShampooPreconditionerList._adaptive_amortized_computation_frequency_criterion_below_or_equal_tolerance(
-            updated_factor_matrix, factor_matrix_eigenvectors, TOLERANCE_HIGH
-        )
-        assert criterion_high
-        assert off_diagonal_norm <= TOLERANCE_HIGH * norm
-
     def test_adaptive_amortized_computation_frequency(self):
         # Setup the preconditioner list with the adaptive amortized computation frequency.
         self._preconditioner_list = self._instantiate_preconditioner_list(
@@ -1365,8 +1307,8 @@ class EigenvalueCorrectedShampooPreconditionerListTest(
                 side_effect=[*(torch.tensor([1.0]),) * NUM_AMORTIZED_COMPUTATION_CALLS],
             ) as mock_amortized_computation,
             mock.patch.object(
-                EigenvalueCorrectedShampooPreconditionerList,
-                "_adaptive_amortized_computation_frequency_criterion_below_or_equal_tolerance",
+                shampoo_preconditioner_list,
+                "estimated_eigenvalues_criterion_below_or_equal_tolerance",
                 side_effect=CRITERION_RESULTS_STEP_ONE + CRITERION_RESULTS_STEP_TWO,
             ) as mock_criterion,
         ):
