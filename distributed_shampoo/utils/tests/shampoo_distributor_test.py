@@ -32,7 +32,7 @@ class DistributorInterfaceTest(unittest.TestCase):
 
     def setUp(self) -> None:
         self._model, _, _, _ = construct_training_problem(
-            (10, 5), model_dead_layer_dims=None, bias=True, fill=0.0
+            (10, 5), model_dead_layers_dims=None, bias=True, fill=0.0
         )
         self._param_group = DistributedShampoo(
             self._model.parameters(),

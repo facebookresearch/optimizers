@@ -21,7 +21,7 @@ class _ModelWithLinearAndDeadLayers(nn.Module):
     def __init__(
         self,
         model_linear_layers_dims: tuple[int, ...],
-        model_dead_layer_dims: tuple[int, ...] | None,
+        model_dead_layers_dims: tuple[int, ...] | None,
         bias: bool = False,
     ) -> None:
         super().__init__()
@@ -32,11 +32,11 @@ class _ModelWithLinearAndDeadLayers(nn.Module):
                 for a, b in itertools.pairwise(model_linear_layers_dims)
             )
         )
-        if model_dead_layer_dims is not None:
+        if model_dead_layers_dims is not None:
             self.dead_layers: nn.Sequential = nn.Sequential(
                 *(
                     nn.Linear(a, b, bias=False)
-                    for a, b in itertools.pairwise(model_dead_layer_dims)
+                    for a, b in itertools.pairwise(model_dead_layers_dims)
                 )
             )
 
@@ -46,7 +46,7 @@ class _ModelWithLinearAndDeadLayers(nn.Module):
 
 def construct_training_problem(
     model_linear_layers_dims: tuple[int, ...],
-    model_dead_layer_dims: tuple[int, ...] | None = (10, 10),
+    model_dead_layers_dims: tuple[int, ...] | None = (10, 10),
     device: torch.device | None = None,
     bias: bool = False,
     fill: float | tuple[float, ...] = 0.0,
@@ -56,7 +56,7 @@ def construct_training_problem(
 
     Args:
         model_linear_layers_dims (tuple[int, ...]): The dimensions of the model linear layers.
-        model_dead_layer_dims (tuple[int, ...] | None): The dimensions of the model dead linear layers. (Default: (10, 10))
+        model_dead_layers_dims (tuple[int, ...] | None): The dimensions of the model dead linear layers. (Default: (10, 10))
         device (torch.device | None): The device to use. (Default: None)
         bias (bool): Whether to use bias in the linear (non-dead) layers. (Default: False)
         fill (float | tuple[float, ...]): The value(s) to fill the model parameters. If a tuple, each element should correspond to one layer. (Default: 0.0)
@@ -72,7 +72,7 @@ def construct_training_problem(
 
     model = _ModelWithLinearAndDeadLayers(
         model_linear_layers_dims=model_linear_layers_dims,
-        model_dead_layer_dims=model_dead_layer_dims,
+        model_dead_layers_dims=model_dead_layers_dims,
         bias=bias,
     ).to(device=device)
 
@@ -96,7 +96,7 @@ def compare_two_optimizers_devices_on_weight_and_loss(
     experimental_optim_factory: Callable[[ParamsT], torch.optim.Optimizer],
     experimental_device: torch.device | None,
     model_linear_layers_dims: tuple[int, ...] = (10, 1, 1),
-    model_dead_layer_dims: tuple[int, ...] | None = None,
+    model_dead_layers_dims: tuple[int, ...] | None = None,
     fill: float | tuple[float, ...] = 1.0,
     total_steps: int = 5,
     rtol: float | None = None,
@@ -111,7 +111,7 @@ def compare_two_optimizers_devices_on_weight_and_loss(
         experimental_optim_factory (Callable[[ParamsT], torch.optim.Optimizer]): A factory function that returns an instance of the experimental optimizer.
         experimental_device (torch.device | None): The device to use for the experimental optimizer.
         model_linear_layers_dims (tuple[int, ...]): The dimensions of the linear layers in the neural network. (Defaults: (10, 1, 1))
-        model_dead_layer_dims (tuple[int, ...] | None): The dimensions of the dead layers in the neural network. (Defaults: None)
+        model_dead_layers_dims (tuple[int, ...] | None): The dimensions of the dead layers in the neural network. (Defaults: None)
         fill (float | tuple[float, ...]): The value(s) to fill the model parameters. If a tuple, each element should correspond to one layer. (Default: 1.0)
         total_steps (int): The number of training steps. (Defaults: 5)
         rtol (float | None): The relative tolerance for comparing weights and losses. (Defaults: None)
@@ -127,7 +127,7 @@ def compare_two_optimizers_devices_on_weight_and_loss(
     ) -> tuple[list[Parameter], torch.Tensor]:
         model, loss, data, target = construct_training_problem(
             model_linear_layers_dims=model_linear_layers_dims,
-            model_dead_layer_dims=model_dead_layer_dims,
+            model_dead_layers_dims=model_dead_layers_dims,
             device=device,
             fill=fill,
         )
@@ -168,7 +168,7 @@ def compare_two_optimizers_on_weight_and_loss(
     control_optim_factory: Callable[[ParamsT], torch.optim.Optimizer],
     experimental_optim_factory: Callable[[ParamsT], torch.optim.Optimizer],
     model_linear_layers_dims: tuple[int, ...] = (10, 1, 1),
-    model_dead_layer_dims: tuple[int, ...] | None = None,
+    model_dead_layers_dims: tuple[int, ...] | None = None,
     device: torch.device | None = None,
     fill: float | tuple[float, ...] = 1.0,
     total_steps: int = 5,
@@ -182,7 +182,7 @@ def compare_two_optimizers_on_weight_and_loss(
         control_optim_factory (Callable[[ParamsT], torch.optim.Optimizer]): A factory function that returns an instance of the control optimizer.
         experimental_optim_factory (Callable[[ParamsT], torch.optim.Optimizer]): A factory function that returns an instance of the experimental optimizer.
         model_linear_layers_dims (tuple[int, ...]): The dimensions of the linear layers in the neural network. (Defaults: (10, 1, 1))
-        model_dead_layer_dims (tuple[int, ...] | None): The dimensions of the dead layers in the neural network. (Defaults: None)
+        model_dead_layers_dims (tuple[int, ...] | None): The dimensions of the dead layers in the neural network. (Defaults: None)
         device (torch.device | None): The device to use for training. (Defaults: None)
         fill (float | tuple[float, ...]): The value(s) to fill the model parameters. If a tuple, each element should correspond to one layer. (Default: 1.0)
         total_steps (int): The number of training steps. (Defaults: 5)
@@ -198,7 +198,7 @@ def compare_two_optimizers_on_weight_and_loss(
         experimental_optim_factory=experimental_optim_factory,
         experimental_device=device,
         model_linear_layers_dims=model_linear_layers_dims,
-        model_dead_layer_dims=model_dead_layer_dims,
+        model_dead_layers_dims=model_dead_layers_dims,
         fill=fill,
         total_steps=total_steps,
         rtol=rtol,
@@ -210,7 +210,7 @@ def compare_optimizer_on_cpu_and_device(
     optim_factory: Callable[[ParamsT], torch.optim.Optimizer],
     device: torch.device,
     model_linear_layers_dims: tuple[int, ...] = (10, 1, 1),
-    model_dead_layer_dims: tuple[int, ...] | None = None,
+    model_dead_layers_dims: tuple[int, ...] | None = None,
     fill: float | tuple[float, ...] = 1.0,
     total_steps: int = 5,
     rtol: float | None = None,
@@ -223,7 +223,7 @@ def compare_optimizer_on_cpu_and_device(
         optim_factory (Callable[[ParamsT], torch.optim.Optimizer]): A factory function that returns an instance of the optimizer.
         device (torch.device): The other experimental device to use for the training.
         model_linear_layers_dims (tuple[int, ...]): The dimensions of the linear layers in the neural network. (Defaults: (10, 1, 1))
-        model_dead_layer_dims (tuple[int, ...] | None): The dimensions of the dead layers in the neural network. (Defaults: None)
+        model_dead_layers_dims (tuple[int, ...] | None): The dimensions of the dead layers in the neural network. (Defaults: None)
         fill (float | tuple[float, ...]): The value(s) to fill the model parameters. If a tuple, each element should correspond to one layer. (Default: 1.0)
         total_steps (int): The number of training steps. (Defaults: 5)
         rtol (float | None): The relative tolerance for comparing weights and losses. (Defaults: None)
@@ -238,7 +238,7 @@ def compare_optimizer_on_cpu_and_device(
         experimental_optim_factory=optim_factory,
         experimental_device=device,
         model_linear_layers_dims=model_linear_layers_dims,
-        model_dead_layer_dims=model_dead_layer_dims,
+        model_dead_layers_dims=model_dead_layers_dims,
         fill=fill,
         total_steps=total_steps,
         rtol=rtol,

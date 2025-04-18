@@ -8,7 +8,6 @@ LICENSE file in the root directory of this source tree.
 """
 
 import heapq
-import math
 import operator
 from collections.abc import Callable, Iterator, Sequence
 from functools import partial, reduce

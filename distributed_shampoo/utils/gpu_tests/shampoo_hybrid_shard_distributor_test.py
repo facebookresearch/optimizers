@@ -86,10 +86,10 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
 
         model_linear_layers_dims = (IN_DIM, 8, 1)
         # model dead layers won't parpicipate in the training and thus don't have grads.
-        model_dead_layer_dims = (4, 1)
+        model_dead_layers_dims = (4, 1)
         model, loss, data, target = construct_training_problem(
             model_linear_layers_dims=model_linear_layers_dims,
-            model_dead_layer_dims=model_dead_layer_dims,
+            model_dead_layers_dims=model_dead_layers_dims,
             device=device,
             fill=0.1,
         )
