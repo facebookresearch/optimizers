@@ -107,7 +107,7 @@ class ShampooPreconditionerConfig(PreconditionerConfig):
         amortized_computation_config (RootInvConfig | EigendecompositionConfig): Configuration for the inverse-root computation. (Default: DefaultEigenConfig)
         num_tolerated_failed_amortized_computations (int): Number of failed amortized computations to tolerate before raising an error. (Default: 3)
         inverse_exponent_override (dict[int, dict[int, float]]): The inverse_exponent_override attribute is a dictionary that allows for customizing the inverse exponent used in the Shampoo preconditioner computation.
-            The keys of the dictionary represent the order of the tensor, and the values are dictionaries with dimension indices as keys and override values as values. All unspecified dimensions use a default exponent of 1/(2*o), where o is the order of the tensor. (Default: {})
+            The keys of the dictionary represent the order of the tensor, and the values are dictionaries with dimension indices as keys and override values as values. All unspecified dimensions use a default exponent of 1/(2*max(o,1)), where o is the order of the tensor. (Default: {})
 
             As an example, suppose inverse_exponent_override={2: {0: 0.5, 1: 0.2}, 3: {0: 0.0, 1: 0.25}}. In this case, all 1-D tensors will use the default exponent of 0.5 for preconditioning the first (and only) dimension. All 2-D tensors will be preconditioned with an exponent of 0.5 on the first dimension and 0.2 on the second dimension. All 3-D tensors will have the first dimension be preconditioned with an exponent of 0.5, the second dimension not preconditioned, and the third dimension preconditioned with the default exponent 0.1667.
             A visualization of this example can be seen below:
