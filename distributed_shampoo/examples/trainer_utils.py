@@ -505,7 +505,9 @@ def instantiate_preconditioner_config(
         == PreconditionerComputationType.COUPLED_HIGHER_ORDER_ROOT_INV
     ):
         return ShampooPreconditionerConfig(
-            amortized_computation_config=CoupledHigherOrderConfig(),
+            amortized_computation_config=CoupledHigherOrderConfig(
+                rel_epsilon=0.0, abs_epsilon=0.0
+            ),
         )
     elif (
         preconditioner_computation_type
