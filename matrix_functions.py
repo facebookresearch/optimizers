@@ -147,7 +147,6 @@ def matrix_inverse_root(
             X, _, termination_flag, _, _ = _matrix_inverse_root_higher_order(
                 A=A,
                 root=root,
-                abs_epsilon=epsilon,
                 **asdict(root_inv_config),
             )
             if termination_flag == NewtonConvergenceFlag.REACHED_MAX_ITERS:

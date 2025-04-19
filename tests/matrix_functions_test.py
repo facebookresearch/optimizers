@@ -120,7 +120,10 @@ class MatrixInverseRootTest(unittest.TestCase):
             CoupledNewtonConfig(),
             EigenConfig(enhance_stability=True),
             EigenConfig(eigendecomposition_offload_device="cpu"),
-            *(CoupledHigherOrderConfig(order=order) for order in range(2, 7)),
+            *(
+                CoupledHigherOrderConfig(rel_epsilon=0.0, abs_epsilon=0.0, order=order)
+                for order in range(2, 7)
+            ),
         ),
     )
     @parametrize("exp", (1, 2))
@@ -173,7 +176,7 @@ class MatrixInverseRootTest(unittest.TestCase):
             matrix_inverse_root,
             A=A,
             root=Fraction(1, 20),
-            root_inv_config=CoupledHigherOrderConfig(),
+            root_inv_config=CoupledHigherOrderConfig(rel_epsilon=0.0, abs_epsilon=0.0),
         )
 
     def test_matrix_inverse_root_with_no_effect_exponent_multiplier(self) -> None:
@@ -195,7 +198,7 @@ class MatrixInverseRootTest(unittest.TestCase):
         [
             (CoupledNewtonConfig(), "_matrix_inverse_root_newton", "Newton"),
             (
-                CoupledHigherOrderConfig(),
+                CoupledHigherOrderConfig(rel_epsilon=0.0, abs_epsilon=0.0),
                 "_matrix_inverse_root_higher_order",
                 "Higher order method",
             ),
@@ -239,7 +242,7 @@ class MatrixInverseRootTest(unittest.TestCase):
             matrix_inverse_root,
             A=A,
             root=root,
-            root_inv_config=CoupledHigherOrderConfig(),
+            root_inv_config=CoupledHigherOrderConfig(rel_epsilon=0.0, abs_epsilon=0.0),
         )
         tf32_flag_after = torch.backends.cuda.matmul.allow_tf32
         self.assertEqual(tf32_flag_before, tf32_flag_after)
@@ -257,7 +260,9 @@ class MatrixInverseRootTest(unittest.TestCase):
             A=A,
             root=root,
             # Set max_iterations to 0 to fast forward to the error check before powering.
-            root_inv_config=CoupledHigherOrderConfig(max_iterations=0),
+            root_inv_config=CoupledHigherOrderConfig(
+                rel_epsilon=0.0, abs_epsilon=0.0, max_iterations=0
+            ),
         )
 
     def test_matrix_inverse_root_with_invalid_root_inv_config(self) -> None:
@@ -592,7 +597,9 @@ class CoupledHigherOrderRootInverseTest(unittest.TestCase):
             matrix_inverse_root(
                 A=A,
                 root=root,
-                root_inv_config=CoupledHigherOrderConfig(),
+                root_inv_config=CoupledHigherOrderConfig(
+                    rel_epsilon=0.0, abs_epsilon=0.0
+                ),
             )
         self.assertIn(
             "abs(root.numerator)=13 and abs(root.denominator)=15 are probably too big for best performance.",
