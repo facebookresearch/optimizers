@@ -678,25 +678,7 @@ class DistributedShampoo(torch.optim.Optimizer):
         self, shampoo_pt2_compile_config: ShampooPT2CompileConfig | None
     ) -> None:
         # Use PT2 to compile the step function for each parameter group.
-        self._per_group_step: Callable[
-            [
-                dict[str, Any],
-                torch.Tensor,
-                torch.Tensor,
-                float,
-                float,
-                float,
-                float,
-                float,
-                bool,
-                bool,
-                bool,
-                bool,
-                bool,
-                bool,
-            ],
-            None,
-        ] = (
+        self._per_group_step: Callable[..., None] = (
             torch.compile(
                 self._per_group_step_impl,
                 backend=shampoo_pt2_compile_config.pytorch_compile_backend,
@@ -944,7 +926,7 @@ class DistributedShampoo(torch.optim.Optimizer):
                 )
 
     @torch.no_grad()
-    def _per_group_step_impl(
+    def _compute_search_directions(
         self,
         state_lists: dict[str, Any],
         step: torch.Tensor,
@@ -960,7 +942,7 @@ class DistributedShampoo(torch.optim.Optimizer):
         use_bias_correction: bool,
         use_grafting_method: bool,
         use_nesterov: bool,
-    ) -> None:
+    ) -> tuple[torch.Tensor, ...]:
         # Incorporate L2-regularization or (coupled) weight decay if enabled.
         #   G <- G + lr * weight_decay * W
         self._add_l2_regularization(
@@ -1035,11 +1017,56 @@ class DistributedShampoo(torch.optim.Optimizer):
             use_nesterov,
         )
 
-        # Updates parameters in distributed fashion.
-        # If DDP, executes AllGather communication to ensure all parameters are updated after local updates.
         torch._foreach_mul_(masked_blocked_search_directions, -lr)
+
+        return masked_blocked_search_directions
+
+    @torch.no_grad()
+    def _per_group_step_impl(
+        self,
+        state_lists: dict[str, Any],
+        step: torch.Tensor,
+        lr: torch.Tensor,
+        beta1: float,
+        beta3: float,
+        weight_decay: float,
+        momentum_param: float,
+        dampening: float,
+        grafting_config_not_none: bool,
+        perform_amortized_computation: bool,
+        use_decoupled_weight_decay: bool,
+        use_bias_correction: bool,
+        use_grafting_method: bool,
+        use_nesterov: bool,
+    ) -> None:
+        # This method computes search directions and updates parameters in one step
+        # It's designed to be compiled with PyTorch 2.0 for performance optimization
+
+        # Call update_params on the distributor with the computed search directions
+        # The distributor is responsible for applying updates to the actual parameters
         state_lists[DISTRIBUTOR].update_params(
-            masked_blocked_search_directions=masked_blocked_search_directions
+            # Compute search directions based on current state and optimization parameters
+            # This returns the directions in which parameters should be updated
+            masked_blocked_search_directions=self._compute_search_directions(
+                state_lists=state_lists,
+                step=step,
+                lr=lr,
+                beta1=beta1,
+                beta3=beta3,
+                weight_decay=weight_decay,
+                momentum_param=momentum_param,
+                dampening=dampening,
+                grafting_config_not_none=grafting_config_not_none,
+                perform_amortized_computation=perform_amortized_computation,
+                use_decoupled_weight_decay=use_decoupled_weight_decay,
+                use_bias_correction=use_bias_correction,
+                use_grafting_method=use_grafting_method,
+                use_nesterov=use_nesterov,
+            )
+            # Only update parameters if there are gradients to use
+            # Otherwise, return an empty tuple to avoid unnecessary computation
+            if state_lists[MASKED_BLOCKED_GRADS]
+            else ()
         )
 
     @torch.no_grad()
@@ -1070,10 +1097,6 @@ class DistributedShampoo(torch.optim.Optimizer):
                 group=group,
                 shampoo_pt2_enabled=self._shampoo_pt2_compile_config is not None,
             )
-
-            # Check if gradient list is empty. If so, continue.
-            if not state_lists[MASKED_BLOCKED_GRADS]:
-                continue
 
             # Iterate group step counter and define Python scalar step.
             step = state_lists[STEP].add_(1)

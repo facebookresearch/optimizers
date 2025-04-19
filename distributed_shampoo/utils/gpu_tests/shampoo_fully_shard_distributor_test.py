@@ -21,7 +21,7 @@ from distributed_shampoo.shampoo_types import (
 )
 from distributed_shampoo.tests.shampoo_test_utils import construct_training_problem
 
-from torch import nn
+from torch import distributed as dist, nn
 from torch.distributed._composable.fsdp import fully_shard
 from torch.distributed.tensor import DTensor
 from torch.optim.optimizer import ParamsT
@@ -208,6 +208,40 @@ class ShampooFullyShardDistributorTest(FSDPTest):
         return partial(
             ShampooFullyShardDistributorTest._construct_model,
             distributed_config=distributed_config,
+        )
+
+    @skip_if_lt_x_gpu(2)
+    def test_fsdp_shampoo_some_workers_with_no_grads(self) -> None:
+        fully_shard_config = FullyShardShampooConfig()  # type: ignore[abstract]
+        model, loss, data, target, _ = (
+            ShampooFullyShardDistributorTest._construct_model(
+                distributed_config=fully_shard_config,
+                device=torch.device("cuda"),
+            )
+        )
+        optimizer = ShampooFullyShardDistributorTest._shampoo_optim_factory(
+            distributed_config=fully_shard_config,
+        )(model.parameters())
+
+        num_steps = 3
+        for _ in range(num_steps):
+            optimizer.zero_grad()
+            objective = loss(model(data), target)
+            objective.backward()
+
+            # Experiment setup: only rank 0 has gradients so other ranks should not have any gradients.
+            if dist.get_rank() != 0:
+                optimizer.zero_grad()
+
+            optimizer.step()
+
+        assert isinstance(optimizer, DistributedShampoo)
+        # For each rank, no matter getting gradients or not, the step should be updated.
+        self.assertEqual(
+            optimizer.distributed_state_dict(key_to_param=model.named_parameters())[
+                "state"
+            ]["linear_layers.0.weight"]['["step"]'].item(),
+            num_steps,
         )
 
     @skip_if_lt_x_gpu(2)

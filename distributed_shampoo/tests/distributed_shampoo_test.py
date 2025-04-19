@@ -215,23 +215,6 @@ class DistributedShampooTest(unittest.TestCase):
 
         self.assertEqual(self._optimizer.step(closure=closure), 1.0)
 
-    def test_step_with_empty_grad_list(self) -> None:
-        # Because the grad_list is empty, after taking five steps, the internal step should be 0.
-        for _ in range(5):
-            self._optimizer.zero_grad()
-            self._optimizer.step()
-
-        actual_step = self._optimizer.distributed_state_dict(
-            key_to_param=self._model.named_parameters(),
-            save_param_groups=True,
-        )["state"]["0.weight"]['["step"]']
-        torch.testing.assert_close(
-            actual_step,
-            torch.as_tensor(0),
-            rtol=0,
-            atol=0,
-        )
-
 
 class AbstractTest:
     class ShampooDistributedStateDictTestBase(abc.ABC, unittest.TestCase):
