@@ -18,12 +18,12 @@ from unittest import mock
 
 import torch
 from distributed_shampoo.distributed_shampoo import DistributedShampoo
-from distributed_shampoo.shampoo_types import (
-    AdaGradGraftingConfig,
-    CommunicationDType,
-    HSDPShampooConfig,
-)
+from distributed_shampoo.shampoo_types import CommunicationDType, HSDPShampooConfig
 from distributed_shampoo.tests.shampoo_test_utils import construct_training_problem
+from distributed_shampoo.utils.gpu_tests.shampoo_distributor_test_utils import (
+    shampoo_optim_factory,
+    test_two_configs,
+)
 from distributed_shampoo.utils.shampoo_fsdp_utils import compile_fsdp_parameter_metadata
 from distributed_shampoo.utils.shampoo_preconditioner_list import SHAMPOO
 
@@ -147,18 +147,16 @@ class ShampooHSDPDistributorTest(FSDPTest):
         ],
         device: torch.device,
     ) -> None:
-        params1, loss1 = ShampooHSDPDistributorTest._train_model(
+        test_two_configs(
+            ShampooHSDPDistributorTest._train_model,
             optim_factory1,
             model_factory1,
-            device=device,
-        )
-        params2, loss2 = ShampooHSDPDistributorTest._train_model(
             optim_factory2,
             model_factory2,
             device=device,
+            atol=1e-5,
+            rtol=1e-5,
         )
-        torch.testing.assert_close(loss1, loss2, atol=1e-5, rtol=1e-5)
-        torch.testing.assert_close(params1, params2)
 
     @staticmethod
     def _shampoo_optim_factory(
@@ -167,22 +165,7 @@ class ShampooHSDPDistributorTest(FSDPTest):
         [ParamsT],
         torch.optim.Optimizer,
     ]:
-        return partial(
-            DistributedShampoo,
-            lr=0.001,
-            betas=(0.9, 1.0),
-            epsilon=1e-8,
-            momentum=0.0,
-            weight_decay=0.0,
-            max_preconditioner_dim=4,
-            precondition_frequency=1,
-            start_preconditioning_step=2,
-            use_decoupled_weight_decay=True,
-            grafting_config=AdaGradGraftingConfig(
-                epsilon=1e-8,
-            ),
-            distributed_config=distributed_config,
-        )
+        return shampoo_optim_factory(distributed_config)
 
     @staticmethod
     def _model_factory(
