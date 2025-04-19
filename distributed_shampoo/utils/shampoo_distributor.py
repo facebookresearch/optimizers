@@ -273,12 +273,20 @@ class Distributor(DistributorInterface):
 
         Args:
             masked_blocked_search_directions (tuple[Tensor, ...]): Search directions for each local blocked parameter.
+            This tuple might be empty if the parameters are not receiving gradients.
 
         """
-        torch._foreach_add_(
-            self._local_masked_blocked_params,
-            masked_blocked_search_directions,
-        )
+        assert (
+            len(masked_blocked_search_directions)
+            == len(self._local_masked_blocked_params)
+        ), f"Expected {len(masked_blocked_search_directions)=} to be equal to {len(self._local_masked_blocked_params)=}."
+
+        # torch._foreach only accepts non-empty list
+        if masked_blocked_search_directions:
+            torch._foreach_add_(
+                self._local_masked_blocked_params,
+                masked_blocked_search_directions,
+            )
 
     @torch.no_grad()
     def _construct_local_block_info_list(

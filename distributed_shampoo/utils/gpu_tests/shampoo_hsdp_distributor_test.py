@@ -13,7 +13,7 @@ import re
 import unittest
 from collections.abc import Callable
 from functools import partial
-from itertools import pairwise, product
+from itertools import pairwise
 from unittest import mock
 
 import torch
@@ -27,16 +27,21 @@ from distributed_shampoo.tests.shampoo_test_utils import construct_training_prob
 from distributed_shampoo.utils.shampoo_fsdp_utils import compile_fsdp_parameter_metadata
 from distributed_shampoo.utils.shampoo_preconditioner_list import SHAMPOO
 
-from torch import nn
+from torch import distributed as dist, nn
 from torch.distributed.checkpoint._nested_dict import flatten_state_dict
 from torch.distributed.device_mesh import init_device_mesh
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP, ShardingStrategy
 from torch.optim.optimizer import ParamsT
 from torch.testing._internal.common_distributed import skip_if_lt_x_gpu
 from torch.testing._internal.common_fsdp import FSDPTest
+from torch.testing._internal.common_utils import (
+    instantiate_parametrized_tests,
+    parametrize,
+)
 
 
 @unittest.skipIf(not torch.cuda.is_available(), "Skip when CUDA is not available")
+@instantiate_parametrized_tests
 class ShampooHSDPDistributorTest(FSDPTest):
     @property
     def world_size(self) -> int:
@@ -202,48 +207,46 @@ class ShampooHSDPDistributorTest(FSDPTest):
         )
 
     @skip_if_lt_x_gpu(4)
-    def test_hsdp_shampoo_against_default_shampoo(self) -> None:
+    @parametrize(
+        "communication_dtype, communicate_params",
+        (
+            (CommunicationDType.DEFAULT, False),
+            (CommunicationDType.DEFAULT, True),
+            (CommunicationDType.FP16, False),
+            (CommunicationDType.BF16, False),
+        ),
+    )
+    @parametrize("num_trainers_per_group", (-1, 1, 2))
+    def test_hsdp_shampoo_against_default_shampoo(
+        self,
+        num_trainers_per_group: int,
+        communication_dtype: CommunicationDType,
+        communicate_params: bool,
+    ) -> None:
         mesh_2d = init_device_mesh("cuda", (2, 2))
-        for num_trainers_per_group, (
-            communication_dtype,
-            communicate_params,
-        ) in product(
-            (-1, 1, 2),
-            (
-                (CommunicationDType.DEFAULT, False),
-                (CommunicationDType.DEFAULT, True),
-                (CommunicationDType.FP16, False),
-                (CommunicationDType.BF16, False),
-            ),
-        ):
-            hsdp_config = HSDPShampooConfig(
-                param_to_metadata={},
-                device_mesh=mesh_2d,
-                communication_dtype=communication_dtype,
-                num_trainers_per_group=num_trainers_per_group,
-                communicate_params=communicate_params,
-            )
+        hsdp_config = HSDPShampooConfig(
+            param_to_metadata={},
+            device_mesh=mesh_2d,
+            communication_dtype=communication_dtype,
+            num_trainers_per_group=num_trainers_per_group,
+            communicate_params=communicate_params,
+        )
 
-            with self.subTest(
-                communication_dtype=communication_dtype,
-                num_trainers_per_group=num_trainers_per_group,
-                communicate_params=communicate_params,
-            ):
-                ShampooHSDPDistributorTest._test_two_configs(
-                    ShampooHSDPDistributorTest._shampoo_optim_factory(
-                        None,
-                    ),
-                    ShampooHSDPDistributorTest._model_factory(
-                        None,
-                    ),
-                    ShampooHSDPDistributorTest._shampoo_optim_factory(
-                        distributed_config=hsdp_config,
-                    ),
-                    ShampooHSDPDistributorTest._model_factory(
-                        hsdp_config,
-                    ),
-                    device=torch.device("cuda"),
-                )
+        ShampooHSDPDistributorTest._test_two_configs(
+            ShampooHSDPDistributorTest._shampoo_optim_factory(
+                None,
+            ),
+            ShampooHSDPDistributorTest._model_factory(
+                None,
+            ),
+            ShampooHSDPDistributorTest._shampoo_optim_factory(
+                distributed_config=hsdp_config,
+            ),
+            ShampooHSDPDistributorTest._model_factory(
+                hsdp_config,
+            ),
+            device=torch.device("cuda"),
+        )
 
     @skip_if_lt_x_gpu(4)
     def test_hsdp_shampoo_block_index(self) -> None:
@@ -277,6 +280,44 @@ class ShampooHSDPDistributorTest(FSDPTest):
                     self.assertIn(f"rank_{rank}-block_", key)
                     matches += 1
         self.assertGreater(matches, 0)
+
+    @skip_if_lt_x_gpu(4)
+    @parametrize("communicate_params", (False, True))
+    def test_some_workers_with_no_grads(self, communicate_params: bool) -> None:
+        mesh_2d = init_device_mesh("cuda", (2, 2))
+        hsdp_config = HSDPShampooConfig(
+            param_to_metadata={},
+            device_mesh=mesh_2d,
+            communicate_params=communicate_params,
+        )
+        model, loss, data, target = ShampooHSDPDistributorTest._construct_model(
+            distributed_config=hsdp_config,
+            device=torch.device("cuda"),
+        )
+        optimizer = ShampooHSDPDistributorTest._shampoo_optim_factory(
+            distributed_config=hsdp_config
+        )(model.parameters())
+
+        num_steps = 3
+        for _ in range(num_steps):
+            optimizer.zero_grad()
+            objective = loss(model(data), target)
+            objective.backward()
+
+            # Experiment setup: only rank 0 has gradients so other ranks should not have any gradients.
+            if dist.get_rank() != 0:
+                optimizer.zero_grad()
+
+            optimizer.step()
+
+        assert isinstance(optimizer, DistributedShampoo)
+        # For each rank, no matter getting gradients or not, the step should be updated.
+        self.assertEqual(
+            optimizer.distributed_state_dict(key_to_param=model.named_parameters())[
+                "state"
+            ]["_fsdp_wrapped_module.linear_layers.0.weight"]['["step"]'].item(),
+            num_steps,
+        )
 
     @skip_if_lt_x_gpu(4)
     def test_number_of_trainers_per_group_out_of_range(self) -> None:
