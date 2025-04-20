@@ -129,7 +129,8 @@ class CoupledHigherOrderConfig(RootInvConfig):
 
     Attributes:
         rel_epsilon (float): Relative epsilon for coupled higher order method. Adds epsilon * lambda_max * I to matrix
-            before taking matrix root, where lambda_max is an upper bound on maximum eigenvalue. (Default: 0.0)
+            before taking matrix root, where lambda_max is an upper bound on maximum eigenvalue.
+        abs_epsilon (float): Absolute epsilon for coupled higher order method. Adds epsilon * I to matrix before taking matrix root. When both "abs_epsilon" and "rel_epsilon" are specified, max(rel_epsilon * lambda_max, abs_epsilon) * I is added to the matrix.
         max_iterations (int): Maximum number of iterations for coupled higher order method. (Default: 100)
         tolerance (float): Tolerance for computing root inverse using coupled higher order method. (Default: 1e-8)
         order (int): Order of the method. Order must be >= 2.  Higher order methods accelerate convergence (fewer iterations),
@@ -139,7 +140,8 @@ class CoupledHigherOrderConfig(RootInvConfig):
 
     """
 
-    rel_epsilon: float = 0.0
+    rel_epsilon: float
+    abs_epsilon: float
     max_iterations: int = 100
     tolerance: float = 1e-8
     order: int = 3

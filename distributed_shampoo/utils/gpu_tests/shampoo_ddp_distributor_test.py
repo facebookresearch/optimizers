@@ -72,14 +72,14 @@ class AbstractTest:
                 PRECONDITIONER_DIM * 2,
                 1,
             ),
-            model_dead_layer_dims: tuple[int, ...] | None = (
+            model_dead_layers_dims: tuple[int, ...] | None = (
                 PRECONDITIONER_DIM,
                 PRECONDITIONER_DIM,
             ),
         ) -> tuple[torch.Tensor, torch.Tensor]:
             model, loss, data, target = construct_training_problem(
                 model_linear_layers_dims=model_linear_layers_dims,
-                model_dead_layer_dims=model_dead_layer_dims,
+                model_dead_layers_dims=model_dead_layers_dims,
                 device=device,
                 fill=0.01,
             )
@@ -190,7 +190,7 @@ class AbstractTest:
                     PRECONDITIONER_DIM * 2,
                     1,
                 ),
-                model_dead_layer_dims=(PRECONDITIONER_DIM, PRECONDITIONER_DIM),
+                model_dead_layers_dims=(PRECONDITIONER_DIM, PRECONDITIONER_DIM),
                 device=self._device,
                 fill=0.01,
                 rtol=rtol,
@@ -204,7 +204,7 @@ class AbstractTest:
                 # Setting model_linear_layers_dims to creates an model with one linear layer with (PRECONDITIONER_DIM * 2)xPRECONDITIONER_DIM weight.
                 # Because Shampoo's max_preconditioner_dim = PRECONDITIONER_DIM, there will be two blocks; rank 0 has block 0 and rank 1 has block 1.
                 model_linear_layers_dims=(PRECONDITIONER_DIM * 2, PRECONDITIONER_DIM),
-                model_dead_layer_dims=None,
+                model_dead_layers_dims=None,
                 device=self._device,
                 fill=0.01,
             )
@@ -441,7 +441,7 @@ class AbstractTest:
                     # Because Shampoo's max_preconditioner_dim = PRECONDITIONER_DIM, there will be only one block.
                     # In the case of two trainers per group, there will be one trainer has no params to work on.
                     model_linear_layers_dims=(PRECONDITIONER_DIM, 1),
-                    model_dead_layer_dims=None,
+                    model_dead_layers_dims=None,
                 )
 
             if has_blocked_params:

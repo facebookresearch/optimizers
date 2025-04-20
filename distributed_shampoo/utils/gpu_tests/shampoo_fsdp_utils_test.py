@@ -33,7 +33,7 @@ def _create_model_and_params(
     model_linear_layers_dims: tuple[int, ...] = (2, 5, 3),
 ) -> tuple[nn.Module, list[Parameter]]:
     model, _, _, _ = construct_training_problem(
-        model_linear_layers_dims, model_dead_layer_dims=None, fill=(1.0, 2.0)
+        model_linear_layers_dims, model_dead_layers_dims=None, fill=(1.0, 2.0)
     )
     return model, list(model.parameters())
 

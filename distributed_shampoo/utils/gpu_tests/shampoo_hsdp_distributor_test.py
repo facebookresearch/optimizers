@@ -66,7 +66,7 @@ class ShampooHSDPDistributorTest(FSDPTest):
         model_linear_layers_dims = (16 * 4, 8, 9, 16 * 4, 1)
         model, loss, data, target = construct_training_problem(
             model_linear_layers_dims=model_linear_layers_dims,
-            model_dead_layer_dims=None,
+            model_dead_layers_dims=None,
             device=device,
             fill=0.01,
         )
