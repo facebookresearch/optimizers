@@ -33,8 +33,7 @@ disclosure of security bugs. In those cases, please go through the process
 outlined on that page and do not file a public issue.
 
 ## Coding Style
-* 4 spaces for indentation rather than tabs
-* 80 character line length
+* Use [`ruff`](https://docs.astral.sh/ruff/) for linting and formatting
 * Please maintain a consistent style with the rest of the code
 
 ## License

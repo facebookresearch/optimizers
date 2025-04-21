@@ -1,5 +1,8 @@
 # PyTorch Distributed Shampoo
 
+[![arXiv](https://img.shields.io/badge/arXiv-2309.06497-b31b1b.svg)](https://arxiv.org/abs/2309.06497)
+
+
 Distributed Shampoo is a preconditioned stochastic gradient optimizer in the adaptive gradient (Adagrad) family of methods [1, 2]. It converges faster by leveraging neural network-specific structures to achieve comparable model quality/accuracy in fewer iterations or epochs at the cost of additional FLOPs and memory, or achieve higher model quality in the same number of iterations or epochs. Our implementation offers specialized support for serial, [Distributed Data Parallel (DDP)](https://pytorch.org/tutorials/intermediate/ddp_tutorial.html), [Fully Sharded Data Parallel (FSDP)](https://pytorch.org/tutorials/intermediate/FSDP_tutorial.html), [Hybrid Sharding Data Parallel (HSDP)](https://pytorch.org/tutorials/recipes/distributed_device_mesh.html#how-to-use-devicemesh-with-hsdp), [Per-parameter Fully Sharded Data Parallel (FSDP2)](#fsdp2-training-support), and [Per-parameter Hybrid Sharded Data Parallel (HSDP2)](#hsdp2-training-support) training.
 
 Distributed Shampoo currently only supports dense parameters.
