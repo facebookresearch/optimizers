@@ -9,10 +9,13 @@ LICENSE file in the root directory of this source tree.
 
 import itertools
 from collections.abc import Callable
-from functools import reduce
+from functools import partial, reduce
 
 import torch
 from torch import nn
+from torch.distributed._composable.fsdp.fully_shard import FSDPModule as FSDP2
+from torch.distributed.fsdp import FullyShardedDataParallel as FSDP1
+from torch.distributed.tensor import DTensor
 from torch.nn.parameter import Parameter
 from torch.optim.optimizer import ParamsT
 
@@ -50,6 +53,7 @@ def construct_training_problem(
     device: torch.device | None = None,
     bias: bool = False,
     fill: float | tuple[float, ...] = 0.0,
+    post_model_decoration: Callable[[nn.Module], nn.Module] = lambda x: x,
 ) -> tuple[nn.Module, nn.Module, torch.Tensor, torch.Tensor]:
     """
     Constructs a training problem (model, loss, data, target) with the given model dimensions and attributes.
@@ -60,6 +64,8 @@ def construct_training_problem(
         device (torch.device | None): The device to use. (Default: None)
         bias (bool): Whether to use bias in the linear (non-dead) layers. (Default: False)
         fill (float | tuple[float, ...]): The value(s) to fill the model parameters. If a tuple, each element should correspond to one layer. (Default: 0.0)
+        post_model_decoration (Callable[[nn.Module], nn.Module]): A function to apply additional modifications to the model, useful for FSDP1 and FSDP2. (Default: identity function)
+
 
     Returns:
         model (nn.Module): The model as specified from the input arguments.
@@ -87,7 +93,150 @@ def construct_training_problem(
 
     target = torch.tensor([0.0] * model_linear_layers_dims[-1]).to(device=device)
 
-    return model, loss, data, target
+    return post_model_decoration(model), loss, data, target
+
+
+def train_model(
+    optim_factory: Callable[[ParamsT], torch.optim.Optimizer],
+    model_factory: Callable[
+        [], tuple[nn.Module, nn.Module, torch.Tensor, torch.Tensor]
+    ],
+    num_steps: int = 5,
+) -> tuple[nn.Module, nn.Module, torch.Tensor, torch.Tensor, torch.optim.Optimizer]:
+    """
+    Trains a model using the specified optimizer and model factories for a given number of steps.
+
+    This function is useful for pre-training a model and optimizer for a specified number of steps.
+    Users can use the outputs to continue training or testing the model further.
+    This is particularly beneficial when users want to initialize a model with pre-trained weights and optimizer state before fine-tuning or evaluating on a different dataset or task.
+
+    Args:
+        optim_factory (Callable[[ParamsT], torch.optim.Optimizer]): A factory function that returns an optimizer instance.
+        model_factory (Callable[[], tuple[nn.Module, nn.Module, torch.Tensor, torch.Tensor]]): A factory function that returns a tuple containing the model, loss function, input data, and target data.
+        num_steps (int): The number of training steps to perform. (Default: 5)
+
+    Returns:
+        model (nn.Module): The trained model.
+        loss (nn.Module): The loss function used during training.
+        data (torch.Tensor): The input data used for training.
+        target (torch.Tensor): The target data used for training.
+        optimizer (torch.optim.Optimizer): The optimizer used for training.
+    """
+    model, loss, data, target = model_factory()
+    optimizer = optim_factory(model.parameters())
+
+    for _ in range(num_steps):
+        optimizer.zero_grad()
+        objective = loss(model(data), target)
+        objective.backward()
+        optimizer.step()
+
+    return model, loss, data, target, optimizer
+
+
+def compare_two_optimizers_models_devices_on_weight_and_loss(
+    control_optim_factory: Callable[[ParamsT], torch.optim.Optimizer],
+    control_model_factory: Callable[
+        [], tuple[nn.Module, nn.Module, torch.Tensor, torch.Tensor]
+    ],
+    experimental_optim_factory: Callable[[ParamsT], torch.optim.Optimizer],
+    experimental_model_factory: Callable[
+        [], tuple[nn.Module, nn.Module, torch.Tensor, torch.Tensor]
+    ],
+    control_and_experimental_same_device: bool = True,
+    total_steps: int = 5,
+    rtol: float | None = None,
+    atol: float | None = None,
+) -> None:
+    """
+    Compare the performance of two optimizers on models across different devices by evaluating their weights and loss.
+
+    Args:
+        control_optim_factory (Callable[[ParamsT], torch.optim.Optimizer]): Factory function for the control optimizer.
+        control_model_factory (Callable[[], tuple[nn.Module, nn.Module, torch.Tensor, torch.Tensor]]): Factory function for the control model.
+        experimental_optim_factory (Callable[[ParamsT], torch.optim.Optimizer]): Factory function for the experimental optimizer.
+        experimental_model_factory (Callable[[], tuple[nn.Module, nn.Module, torch.Tensor, torch.Tensor]]): Factory function for the experimental model.
+        control_and_experimental_same_device (bool): Whether both models are on the same device. (Default: True)
+        total_steps (int): Number of training steps. (Default: 5)
+        rtol (float | None): Relative tolerance for comparing weights and losses. (Default: None)
+        atol (float | None): Absolute tolerance for comparing weights and losses. (Default: None)
+
+    Returns:
+        None
+    """
+
+    def generated_comparable_trained_weights_and_final_loss(
+        optim_factory: Callable[[ParamsT], torch.optim.Optimizer],
+        model_factory: Callable[
+            [], tuple[nn.Module, nn.Module, torch.Tensor, torch.Tensor]
+        ],
+    ) -> tuple[list[Parameter], torch.Tensor]:
+        """
+        Trains a model and returns the trained weights and final loss.
+
+        Args:
+            optim_factory (Callable[[ParamsT], torch.optim.Optimizer]): A factory function to create an optimizer.
+            model_factory (Callable[[], tuple[nn.Module, nn.Module, torch.Tensor, torch.Tensor]]): A factory function to create a model, loss, data, and target.
+
+        Returns:
+            trained_weights (list[Parameter]): A list of trained model parameters.
+            final_loss (torch.Tensor): The final loss value after training.
+        """
+        model, loss, data, target, _ = train_model(
+            optim_factory=optim_factory,
+            model_factory=model_factory,
+            num_steps=total_steps,
+        )
+
+        # We only care model_linear_layers_dim params, not model_dead_layer params.
+        linear_layers = model.get_submodule("linear_layers")
+        match model:
+            case FSDP2():
+                # When FullyShard or Hybrid Shard is used, model parameters are DTensors. We obtain the full value of
+                # parameters from DTensors.
+                trained_weights = []
+                for param in linear_layers.parameters():
+                    # Need this assertion to get pass type-checking test.
+                    assert isinstance(param, DTensor)
+                    trained_weights.append(param.full_tensor().view(-1).detach().cpu())
+            case FSDP1():
+                with FSDP1.summon_full_params(model):
+                    trained_weights = [
+                        param.view(-1).detach().cpu()
+                        for param in linear_layers.parameters()
+                    ]
+            case _:
+                trained_weights = [
+                    param.view(-1).detach().cpu()
+                    for param in linear_layers.parameters()
+                ]
+
+        return trained_weights, loss(model(data), target).detach()
+
+    control_params, control_loss = generated_comparable_trained_weights_and_final_loss(
+        optim_factory=control_optim_factory,
+        model_factory=control_model_factory,
+    )
+    experimental_params, experimental_loss = (
+        generated_comparable_trained_weights_and_final_loss(
+            optim_factory=experimental_optim_factory,
+            model_factory=experimental_model_factory,
+        )
+    )
+    torch.testing.assert_close(
+        actual=experimental_loss,
+        expected=control_loss,
+        rtol=rtol,
+        atol=atol,
+        check_device=control_and_experimental_same_device,
+    )
+    torch.testing.assert_close(
+        actual=experimental_params,
+        expected=control_params,
+        rtol=rtol,
+        atol=atol,
+        check_device=control_and_experimental_same_device,
+    )
 
 
 def compare_two_optimizers_devices_on_weight_and_loss(
@@ -121,46 +270,25 @@ def compare_two_optimizers_devices_on_weight_and_loss(
         None
     """
 
-    def train(
-        optim_factory: Callable[[ParamsT], torch.optim.Optimizer],
-        device: torch.device | None,
-    ) -> tuple[list[Parameter], torch.Tensor]:
-        model, loss, data, target = construct_training_problem(
-            model_linear_layers_dims=model_linear_layers_dims,
-            model_dead_layers_dims=model_dead_layers_dims,
-            device=device,
-            fill=fill,
-        )
-        optimizer = optim_factory(model.parameters())
-        for _ in range(total_steps):
-            optimizer.zero_grad()
-            objective = loss(model(data), target)
-            objective.backward()
-            optimizer.step()
-
-        return list(
-            model.get_submodule("linear_layers").parameters()
-        ), objective.detach()
-
-    control_params, control_loss = train(
-        optim_factory=control_optim_factory, device=control_device
+    device_aware_training_problem_factory = partial(
+        construct_training_problem,
+        model_linear_layers_dims=model_linear_layers_dims,
+        model_dead_layers_dims=model_dead_layers_dims,
+        fill=fill,
     )
-    experimental_params, experimental_loss = train(
-        optim_factory=experimental_optim_factory, device=experimental_device
-    )
-    torch.testing.assert_close(
-        actual=experimental_loss,
-        expected=control_loss,
+    compare_two_optimizers_models_devices_on_weight_and_loss(
+        control_optim_factory=control_optim_factory,
+        control_model_factory=partial(
+            device_aware_training_problem_factory, device=control_device
+        ),
+        experimental_optim_factory=experimental_optim_factory,
+        experimental_model_factory=partial(
+            device_aware_training_problem_factory, device=experimental_device
+        ),
+        control_and_experimental_same_device=control_device == experimental_device,
+        total_steps=total_steps,
         rtol=rtol,
         atol=atol,
-        check_device=control_device == experimental_device,
-    )
-    torch.testing.assert_close(
-        actual=experimental_params,
-        expected=control_params,
-        rtol=rtol,
-        atol=atol,
-        check_device=control_device == experimental_device,
     )
 
 
