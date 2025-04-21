@@ -33,6 +33,7 @@ from distributed_shampoo.shampoo_types import (
 from distributed_shampoo.tests.shampoo_test_utils import (
     compare_two_optimizers_on_weight_and_loss,
     construct_training_problem,
+    train_model,
 )
 from matrix_functions_types import DefaultEigendecompositionConfig
 
@@ -61,38 +62,6 @@ class AbstractTest:
         @property
         @abc.abstractmethod
         def _device(self) -> torch.device: ...
-
-        @staticmethod
-        def _train_model(
-            optim_factory: Callable[
-                [ParamsT],
-                torch.optim.Optimizer,
-            ],
-            device: torch.device,
-            model_linear_layers_dims: tuple[int, ...] = (
-                PRECONDITIONER_DIM * 4,
-                PRECONDITIONER_DIM * 2,
-                1,
-            ),
-            model_dead_layers_dims: tuple[int, ...] | None = (
-                PRECONDITIONER_DIM,
-                PRECONDITIONER_DIM,
-            ),
-        ) -> tuple[torch.Tensor, torch.Tensor]:
-            model, loss, data, target = construct_training_problem(
-                model_linear_layers_dims=model_linear_layers_dims,
-                model_dead_layers_dims=model_dead_layers_dims,
-                device=device,
-                fill=0.01,
-            )
-            params = list(model.parameters())
-            optimizer = optim_factory(params)
-            for _ in range(5):
-                optimizer.zero_grad()
-                objective = loss(model(data), target)
-                objective.backward()
-                optimizer.step()
-            return params[0], objective.detach()
 
         def _init_distributed(self) -> None:
             if not dist.is_initialized():
@@ -127,9 +96,7 @@ class AbstractTest:
                 precondition_frequency=1,
                 start_preconditioning_step=2,
                 use_decoupled_weight_decay=True,
-                grafting_config=AdaGradGraftingConfig(
-                    epsilon=1e-8,
-                ),
+                grafting_config=AdaGradGraftingConfig(epsilon=1e-8),
                 distributed_config=distributed_config,
                 preconditioner_config=preconditioner_config,
             )
@@ -205,25 +172,27 @@ class AbstractTest:
         def test_distributed_state_dict(self) -> None:
             self._init_distributed()
 
-            model, loss, data, target = construct_training_problem(
+            num_steps = 3
+            model, _, _, _, optimizer = train_model(
+                optim_factory=AbstractTest.ShampooDDPDistributorDeviceTest._shampoo_optim_factory(
+                    distributed_config=DDPShampooConfig()
+                ),
                 # Setting model_linear_layers_dims to creates an model with one linear layer with (PRECONDITIONER_DIM * 2)xPRECONDITIONER_DIM weight.
                 # Because Shampoo's max_preconditioner_dim = PRECONDITIONER_DIM, there will be two blocks; rank 0 has block 0 and rank 1 has block 1.
-                model_linear_layers_dims=(PRECONDITIONER_DIM * 2, PRECONDITIONER_DIM),
-                model_dead_layers_dims=None,
-                device=self._device,
-                fill=0.01,
+                model_factory=partial(
+                    construct_training_problem,
+                    model_linear_layers_dims=(
+                        PRECONDITIONER_DIM * 2,
+                        PRECONDITIONER_DIM,
+                    ),
+                    model_dead_layers_dims=None,
+                    device=self._device,
+                    fill=0.01,
+                ),
+                num_steps=num_steps,
             )
-            params = list(model.parameters())
-            optimizer = self._shampoo_optim_factory(
-                distributed_config=DDPShampooConfig()
-            )(params)
-            assert isinstance(optimizer, DistributedShampoo)
-            for _ in range(3):
-                optimizer.zero_grad()
-                objective = loss(model(data), target)
-                objective.backward()
-                optimizer.step()
 
+            assert isinstance(optimizer, DistributedShampoo)
             # Retrieve the distributed state dictionary of the first layer (i.e., the only layer) from the optimizer.
             distributed_state_dict = optimizer.distributed_state_dict(
                 key_to_param=model.named_parameters(), save_param_groups=False
@@ -309,7 +278,7 @@ class AbstractTest:
                         device_mesh=DeviceMesh(str(self._device), [1]),
                         placements=(Replicate(),),
                     ),
-                    '["step"]': tensor(3),
+                    '["step"]': tensor(num_steps),
                 },
                 0: {
                     '["block_0", "shampoo", "factor_matrices", 0]': DTensor.from_local(
@@ -389,7 +358,7 @@ class AbstractTest:
                         device_mesh=DeviceMesh(str(self._device), [0]),
                         placements=(Replicate(),),
                     ),
-                    '["step"]': tensor(3),
+                    '["step"]': tensor(num_steps),
                 },
             }
 
@@ -426,24 +395,28 @@ class AbstractTest:
         def test_all_ranks_with_no_grads(self, communicate_params: bool) -> None:
             self._init_distributed()
 
-            model, loss, data, target = construct_training_problem(
-                # 4 * 2 blocks in total. Rank 0 and Rank 1 have 4 blocks each.
-                model_linear_layers_dims=(
-                    PRECONDITIONER_DIM * 4,
-                    PRECONDITIONER_DIM * 2,
+            steps_with_gradients = 2
+            model, loss, data, target, optimizer = train_model(
+                optim_factory=AbstractTest.ShampooDDPDistributorDeviceTest._shampoo_optim_factory(
+                    distributed_config=DDPShampooConfig(
+                        communicate_params=communicate_params
+                    )
                 ),
-                model_dead_layers_dims=None,
-                device=self._device,
-                fill=0.01,
+                # 4 * 2 blocks in total. Rank 0 and Rank 1 have 4 blocks each.
+                model_factory=partial(
+                    construct_training_problem,
+                    model_linear_layers_dims=(
+                        PRECONDITIONER_DIM * 4,
+                        PRECONDITIONER_DIM * 2,
+                    ),
+                    model_dead_layers_dims=None,
+                    device=self._device,
+                ),
+                num_steps=steps_with_gradients,
             )
-            optimizer = self._shampoo_optim_factory(
-                distributed_config=DDPShampooConfig(
-                    communicate_params=communicate_params
-                )
-            )(model.parameters())
 
-            num_steps = 3
-            for _ in range(num_steps):
+            steps_without_gradients = 3
+            for _ in range(steps_without_gradients):
                 objective = loss(model(data), target)
                 objective.backward()
 
@@ -458,7 +431,7 @@ class AbstractTest:
                 optimizer.distributed_state_dict(key_to_param=model.named_parameters())[
                     "state"
                 ]["linear_layers.0.weight"]['["step"]'].item(),
-                num_steps,
+                steps_with_gradients + steps_without_gradients,
             )
 
         @parametrize("communicate_params", (False, True))
@@ -467,25 +440,22 @@ class AbstractTest:
         ) -> None:
             self._init_distributed()
 
-            model, loss, data, target = construct_training_problem(
-                # Experiment setup: only two blocks in total, one rank gets one block with gradients and the other rank gets one block without gradients due to dead layer.
-                model_linear_layers_dims=(PRECONDITIONER_DIM, 1),
-                model_dead_layers_dims=(PRECONDITIONER_DIM, 1),
-                device=self._device,
-                fill=0.01,
-            )
-            optimizer = self._shampoo_optim_factory(
-                distributed_config=DDPShampooConfig(
-                    communicate_params=communicate_params
-                )
-            )(model.parameters())
-
             num_steps = 3
-            for _ in range(num_steps):
-                optimizer.zero_grad()
-                objective = loss(model(data), target)
-                objective.backward()
-                optimizer.step()
+            model, _, _, _, optimizer = train_model(
+                optim_factory=AbstractTest.ShampooDDPDistributorDeviceTest._shampoo_optim_factory(
+                    distributed_config=DDPShampooConfig(
+                        communicate_params=communicate_params
+                    )
+                ),
+                # Experiment setup: only two blocks in total, one rank gets one block with gradients and the other rank gets one block without gradients due to dead layer.
+                model_factory=partial(
+                    construct_training_problem,
+                    model_linear_layers_dims=(PRECONDITIONER_DIM, 1),
+                    model_dead_layers_dims=(PRECONDITIONER_DIM, 1),
+                    device=self._device,
+                ),
+                num_steps=num_steps,
+            )
 
             assert isinstance(optimizer, DistributedShampoo)
             # For each rank, no matter getting gradients or not, the step should be updated.
@@ -513,14 +483,19 @@ class AbstractTest:
                     re.escape("Some workers have no parameters to work on."),
                 )
             ):
-                AbstractTest.ShampooDDPDistributorDeviceTest._train_model(
-                    self._shampoo_optim_factory(distributed_config=DDPShampooConfig()),
-                    device=self._device,
+                train_model(
+                    optim_factory=AbstractTest.ShampooDDPDistributorDeviceTest._shampoo_optim_factory(
+                        distributed_config=DDPShampooConfig()
+                    ),
                     # Setting model_linear_layers_dims to (PRECONDITIONER_DIM, 1) creates an model with one linear layer with PRECONDITIONER_DIMx1 weight.
                     # Because Shampoo's max_preconditioner_dim = PRECONDITIONER_DIM, there will be only one block.
                     # In the case of two trainers per group, there will be one trainer has no params to work on.
-                    model_linear_layers_dims=(PRECONDITIONER_DIM, 1),
-                    model_dead_layers_dims=None,
+                    model_factory=partial(
+                        construct_training_problem,
+                        model_linear_layers_dims=(PRECONDITIONER_DIM, 1),
+                        model_dead_layers_dims=None,
+                        device=self._device,
+                    ),
                 )
 
             if has_blocked_params:
@@ -537,9 +512,16 @@ class AbstractTest:
                     re.escape(
                         "Unsupported communication dtype: CommunicationDType.DEFAULT"
                     ),
-                    AbstractTest.ShampooDDPDistributorDeviceTest._train_model,
-                    self._shampoo_optim_factory(distributed_config=DDPShampooConfig()),
-                    device=self._device,
+                    train_model,
+                    optim_factory=AbstractTest.ShampooDDPDistributorDeviceTest._shampoo_optim_factory(
+                        distributed_config=DDPShampooConfig()
+                    ),
+                    model_factory=partial(
+                        construct_training_problem,
+                        model_linear_layers_dims=(PRECONDITIONER_DIM, 1),
+                        model_dead_layers_dims=None,
+                        device=self._device,
+                    ),
                 )
 
 
