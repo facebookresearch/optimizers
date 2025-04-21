@@ -88,7 +88,6 @@ class HybridShardDistributor(DistributorInterface):
         self._hybrid_shard_device_mesh: torch.distributed.device_mesh.DeviceMesh = (
             distributed_config.device_mesh
         )
-        self._global_num_blocks_per_param: tuple[int, ...] = ()
 
         super().__init__(param_group)
         if not dist.is_initialized():
