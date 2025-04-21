@@ -417,6 +417,80 @@ class AbstractTest:
                         rtol=2e-1,
                     )
 
+        @parametrize("communicate_params", (False, True))
+        def test_all_ranks_with_no_grads(self, communicate_params: bool) -> None:
+            self._init_distributed()
+
+            model, loss, data, target = construct_training_problem(
+                # 4 * 2 blocks in total. Rank 0 and Rank 1 have 4 blocks each.
+                model_linear_layers_dims=(
+                    PRECONDITIONER_DIM * 4,
+                    PRECONDITIONER_DIM * 2,
+                ),
+                model_dead_layers_dims=None,
+                device=self._device,
+                fill=0.01,
+            )
+            optimizer = self._shampoo_optim_factory(
+                distributed_config=DDPShampooConfig(
+                    communicate_params=communicate_params
+                )
+            )(model.parameters())
+
+            num_steps = 3
+            for _ in range(num_steps):
+                objective = loss(model(data), target)
+                objective.backward()
+
+                # Experiment setup: all ranks get no gradients.
+                optimizer.zero_grad()
+
+                optimizer.step()
+
+            assert isinstance(optimizer, DistributedShampoo)
+            # For each rank, no matter getting gradients or not, the step should be updated.
+            self.assertEqual(
+                optimizer.distributed_state_dict(key_to_param=model.named_parameters())[
+                    "state"
+                ]["linear_layers.0.weight"]['["step"]'].item(),
+                num_steps,
+            )
+
+        @parametrize("communicate_params", (False, True))
+        def test_some_ranks_with_no_grads_due_to_dead_layers(
+            self, communicate_params: bool
+        ) -> None:
+            self._init_distributed()
+
+            model, loss, data, target = construct_training_problem(
+                # Experiment setup: only two blocks in total, one rank gets one block with gradients and the other rank gets one block without gradients due to dead layer.
+                model_linear_layers_dims=(PRECONDITIONER_DIM, 1),
+                model_dead_layers_dims=(PRECONDITIONER_DIM, 1),
+                device=self._device,
+                fill=0.01,
+            )
+            optimizer = self._shampoo_optim_factory(
+                distributed_config=DDPShampooConfig(
+                    communicate_params=communicate_params
+                )
+            )(model.parameters())
+
+            num_steps = 3
+            for _ in range(num_steps):
+                optimizer.zero_grad()
+                objective = loss(model(data), target)
+                objective.backward()
+                optimizer.step()
+
+            assert isinstance(optimizer, DistributedShampoo)
+            # For each rank, no matter getting gradients or not, the step should be updated.
+            self.assertEqual(
+                optimizer.distributed_state_dict(key_to_param=model.named_parameters())[
+                    "state"
+                ]["linear_layers.0.weight"]['["step"]'].item(),
+                num_steps,
+            )
+
         # This mock is used to catch the number of calls to Shampoo's step(), which happened after __init__().
         # If there is no blocked params, __init__() will raise and step() should not be called.
         # Otherwise, step() will be called.

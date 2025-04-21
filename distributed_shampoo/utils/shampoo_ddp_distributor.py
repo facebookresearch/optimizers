@@ -155,46 +155,61 @@ class DDPDistributor(DistributorInterface):
 
         Args:
             masked_blocked_search_directions (tuple[Tensor, ...]): Search directions for each local blocked parameter.
-
-        See the comment in the parent class for details.
+            This tuple might be empty if the parameters are not receiving gradients.
 
         """
         if self._communicate_params:
-            # Perform your update to your local masked parameters and copy into buffers.
-            torch._foreach_add_(
-                self._local_masked_blocked_params,
-                masked_blocked_search_directions,
-            )
-            torch._foreach_copy_(
-                self._local_masked_dist_blocked_buffers,
-                self._local_masked_blocked_params,
-            )
+            assert (
+                len(self._local_masked_blocked_params)
+                == len(masked_blocked_search_directions)
+            ), f"Expected {len(self._local_masked_blocked_params)=} to be equal to {len(masked_blocked_search_directions)=}."
+
+            # torch._foreach only accepts non-empty list
+            if masked_blocked_search_directions:
+                # Perform your update to your local masked parameters and copy into buffers.
+                torch._foreach_add_(
+                    self._local_masked_blocked_params,
+                    masked_blocked_search_directions,
+                )
+                torch._foreach_copy_(
+                    self._local_masked_dist_blocked_buffers,
+                    self._local_masked_blocked_params,
+                )
 
             self.all_gather_into_tensor()
 
-            # Copy updated blocked params in global_masked_dist_blocked_buffers
-            # into global_masked_blocked_params.
-            torch._foreach_copy_(
-                self._global_masked_blocked_params,
-                self._global_masked_dist_blocked_buffers,
-            )
+            # torch._foreach only accepts non-empty list
+            if self._global_masked_blocked_params:
+                # Copy updated blocked params in global_masked_dist_blocked_buffers into global_masked_blocked_params.
+                torch._foreach_copy_(
+                    self._global_masked_blocked_params,
+                    self._global_masked_dist_blocked_buffers,
+                )
 
         else:
-            # Search directions multiplied by alpha are distributed.
-            # Copy the local search directions to the communication buffer.
-            torch._foreach_copy_(
-                self._local_masked_dist_blocked_buffers,
-                masked_blocked_search_directions,
-            )
+            assert (
+                len(self._local_masked_dist_blocked_buffers)
+                == len(masked_blocked_search_directions)
+            ), f"Expected {len(self._local_masked_dist_blocked_buffers)=} to be equal to {len(masked_blocked_search_directions)=}."
+
+            # torch._foreach only accepts non-empty list
+            if masked_blocked_search_directions:
+                # Search directions multiplied by alpha are distributed.
+                # Copy the local search directions to the communication buffer.
+                torch._foreach_copy_(
+                    self._local_masked_dist_blocked_buffers,
+                    masked_blocked_search_directions,
+                )
 
             self.all_gather_into_tensor()
 
-            # Add search directions in global_masked_dist_blocked_buffers
-            # to global_masked_blocked_params.
-            torch._foreach_add_(
-                self._global_masked_blocked_params,
-                self._global_masked_dist_blocked_buffers,
-            )
+            # torch._foreach only accepts non-empty list
+            if self._global_masked_blocked_params:
+                # Add search directions in global_masked_dist_blocked_buffers to global_masked_blocked_params.
+                torch._foreach_add_(
+                    self._global_masked_blocked_params,
+                    self._global_masked_dist_blocked_buffers,
+                )
 
     @torch.no_grad()
     def _construct_local_block_info_list(

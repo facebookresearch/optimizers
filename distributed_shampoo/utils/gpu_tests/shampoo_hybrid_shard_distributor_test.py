@@ -13,7 +13,6 @@ import re
 import unittest
 from collections.abc import Callable
 from functools import partial
-from itertools import product
 from unittest import mock
 
 import torch
@@ -34,6 +33,10 @@ from torch.distributed.device_mesh import DeviceMesh, init_device_mesh
 from torch.distributed.tensor import DTensor
 from torch.optim.optimizer import ParamsT
 from torch.testing._internal.common_distributed import skip_if_lt_x_gpu
+from torch.testing._internal.common_utils import (
+    instantiate_parametrized_tests,
+    parametrize,
+)
 from torch.testing._internal.distributed._tensor.common_dtensor import (
     DTensorTestBase,
     with_comms,
@@ -41,6 +44,7 @@ from torch.testing._internal.distributed._tensor.common_dtensor import (
 
 
 @unittest.skipIf(not torch.cuda.is_available(), "Skip when CUDA is not available")
+@instantiate_parametrized_tests
 class ShampooHybridShardDistributorTest(DTensorTestBase):
     @property
     def world_size(self) -> int:
@@ -241,103 +245,137 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
 
     @with_comms
     @skip_if_lt_x_gpu(4)
-    def test_hybrid_shard_shampoo_against_default_shampoo(self) -> None:
-        mesh_2d = init_device_mesh(
-            "cuda", (2, 2), mesh_dim_names=("replicate", "shard")
-        )
-        for num_trainers_per_group, (
-            communication_dtype,
-            communicate_params,
-        ) in product(
-            (-1, 1, 2),
-            (
-                (CommunicationDType.DEFAULT, False),
-                (CommunicationDType.DEFAULT, True),
-                (CommunicationDType.FP16, False),
-                (CommunicationDType.BF16, False),
-            ),
-        ):
-            hybrid_shard_config = HybridShardShampooConfig(
-                device_mesh=mesh_2d,
-                communication_dtype=communication_dtype,
-                num_trainers_per_group=num_trainers_per_group,
-                communicate_params=communicate_params,
-            )
-
-            with self.subTest(
-                communication_dtype=communication_dtype,
-                num_trainers_per_group=num_trainers_per_group,
-                communicate_params=communicate_params,
-            ):
-                ShampooHybridShardDistributorTest._test_two_configs(
-                    ShampooHybridShardDistributorTest._shampoo_optim_factory(
-                        None,
-                    ),
-                    ShampooHybridShardDistributorTest._model_factory(
-                        None,
-                        None,
-                    ),
-                    ShampooHybridShardDistributorTest._shampoo_optim_factory(
-                        distributed_config=hybrid_shard_config,
-                    ),
-                    ShampooHybridShardDistributorTest._model_factory(
-                        hybrid_shard_config,
-                        mesh_2d,
-                    ),
-                    device=torch.device("cuda"),
-                )
-
-    @with_comms
-    @skip_if_lt_x_gpu(4)
-    def test_hybrid_shard_shampoo_config_against_fully_shard_shampoo_config(
+    @parametrize(
+        "communication_dtype, communicate_params",
+        (
+            (CommunicationDType.DEFAULT, False),
+            (CommunicationDType.DEFAULT, True),
+            (CommunicationDType.FP16, False),
+            (CommunicationDType.BF16, False),
+        ),
+    )
+    @parametrize("num_trainers_per_group", (-1, 1, 2))
+    def test_hybrid_shard_shampoo_against_default_shampoo(
         self,
+        num_trainers_per_group: int,
+        communication_dtype: CommunicationDType,
+        communicate_params: bool,
     ) -> None:
         mesh_2d = init_device_mesh(
             "cuda", (2, 2), mesh_dim_names=("replicate", "shard")
         )
-        for num_trainers_per_group, (
-            communication_dtype,
-            communicate_params,
-        ) in product(
-            (-1, 1, 2),
-            (
-                (CommunicationDType.DEFAULT, False),
-                (CommunicationDType.DEFAULT, True),
-                (CommunicationDType.FP16, False),
-                (CommunicationDType.BF16, False),
+        hybrid_shard_config = HybridShardShampooConfig(
+            device_mesh=mesh_2d,
+            communication_dtype=communication_dtype,
+            num_trainers_per_group=num_trainers_per_group,
+            communicate_params=communicate_params,
+        )
+
+        ShampooHybridShardDistributorTest._test_two_configs(
+            ShampooHybridShardDistributorTest._shampoo_optim_factory(
+                None,
             ),
-        ):
-            hybrid_shard_config = HybridShardShampooConfig(
+            ShampooHybridShardDistributorTest._model_factory(
+                None,
+                None,
+            ),
+            ShampooHybridShardDistributorTest._shampoo_optim_factory(
+                distributed_config=hybrid_shard_config,
+            ),
+            ShampooHybridShardDistributorTest._model_factory(
+                hybrid_shard_config,
+                mesh_2d,
+            ),
+            device=torch.device("cuda"),
+        )
+
+    @with_comms
+    @skip_if_lt_x_gpu(4)
+    @parametrize(
+        "communication_dtype, communicate_params",
+        (
+            (CommunicationDType.DEFAULT, False),
+            (CommunicationDType.DEFAULT, True),
+            (CommunicationDType.FP16, False),
+            (CommunicationDType.BF16, False),
+        ),
+    )
+    @parametrize("num_trainers_per_group", (-1, 1, 2))
+    def test_hybrid_shard_shampoo_config_against_fully_shard_shampoo_config(
+        self,
+        num_trainers_per_group: int,
+        communication_dtype: CommunicationDType,
+        communicate_params: bool,
+    ) -> None:
+        mesh_2d = init_device_mesh(
+            "cuda", (2, 2), mesh_dim_names=("replicate", "shard")
+        )
+        hybrid_shard_config = HybridShardShampooConfig(
+            device_mesh=mesh_2d,
+            communication_dtype=communication_dtype,
+            num_trainers_per_group=num_trainers_per_group,
+            communicate_params=communicate_params,
+        )
+        fully_shard_config = FullyShardShampooConfig()  # type: ignore[abstract]
+
+        ShampooHybridShardDistributorTest._test_two_configs(
+            ShampooHybridShardDistributorTest._shampoo_optim_factory(
+                distributed_config=fully_shard_config,
+            ),
+            ShampooHybridShardDistributorTest._model_factory(
+                fully_shard_config,
+                mesh_2d,
+            ),
+            ShampooHybridShardDistributorTest._shampoo_optim_factory(
+                distributed_config=hybrid_shard_config,
+            ),
+            ShampooHybridShardDistributorTest._model_factory(
+                hybrid_shard_config,
+                mesh_2d,
+            ),
+            device=torch.device("cuda"),
+        )
+
+    @with_comms
+    @skip_if_lt_x_gpu(4)
+    @parametrize("communicate_params", (False, True))
+    def test_all_ranks_with_no_grads(self, communicate_params: bool) -> None:
+        mesh_2d = init_device_mesh(
+            "cuda", (2, 2), mesh_dim_names=("replicate", "shard")
+        )
+        hybrid_shard_config = HybridShardShampooConfig(
+            device_mesh=mesh_2d,
+            communicate_params=communicate_params,
+        )
+        model, loss, data, target, _ = (
+            ShampooHybridShardDistributorTest._construct_model(
+                distributed_config=hybrid_shard_config,
                 device_mesh=mesh_2d,
-                communication_dtype=communication_dtype,
-                num_trainers_per_group=num_trainers_per_group,
-                communicate_params=communicate_params,
+                device=torch.device("cuda"),
             )
+        )
+        optimizer = ShampooHybridShardDistributorTest._shampoo_optim_factory(
+            distributed_config=hybrid_shard_config
+        )(model.parameters())
 
-            fully_shard_config = FullyShardShampooConfig()  # type: ignore[abstract]
+        num_steps = 3
+        for _ in range(num_steps):
+            objective = loss(model(data), target)
+            objective.backward()
 
-            with self.subTest(
-                communication_dtype=communication_dtype,
-                num_trainers_per_group=num_trainers_per_group,
-                communicate_params=communicate_params,
-            ):
-                ShampooHybridShardDistributorTest._test_two_configs(
-                    ShampooHybridShardDistributorTest._shampoo_optim_factory(
-                        distributed_config=fully_shard_config,
-                    ),
-                    ShampooHybridShardDistributorTest._model_factory(
-                        fully_shard_config,
-                        mesh_2d,
-                    ),
-                    ShampooHybridShardDistributorTest._shampoo_optim_factory(
-                        distributed_config=hybrid_shard_config,
-                    ),
-                    ShampooHybridShardDistributorTest._model_factory(
-                        hybrid_shard_config,
-                        mesh_2d,
-                    ),
-                    device=torch.device("cuda"),
-                )
+            # Experiment setup: all ranks get no gradients.
+            optimizer.zero_grad()
+
+            optimizer.step()
+
+        assert isinstance(optimizer, DistributedShampoo)
+        # For each rank, no matter getting gradients or not, the step should be updated.
+        self.assertEqual(
+            optimizer.distributed_state_dict(key_to_param=model.named_parameters())[
+                "state"
+            ]["linear_layers.0.weight"]['["step"]'].item(),
+            num_steps,
+        )
 
     @with_comms
     @skip_if_lt_x_gpu(4)
