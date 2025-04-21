@@ -13,6 +13,7 @@ import re
 import unittest
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
+from operator import methodcaller
 from typing import Any
 from unittest import mock
 
@@ -288,7 +289,8 @@ class BaseShampooPreconditionerListTest(unittest.TestCase):
             "_update_factor_matrices",
         ) as mock_update_factor_matrices:
             # Test the abstract methods _create_preconditioned_dims_selector(), _create_kronecker_factors_state_for_block(), _create_kronecker_factors_list(), and _get_inverse_roots_from_override().
-            preconditioner_list = BaseShampooPreconditionerList(  # type: ignore
+            preconditioner_list = methodcaller(
+                "__call__",
                 block_list=(param,),
                 state={param: {}},
                 block_info_list=(
@@ -299,7 +301,7 @@ class BaseShampooPreconditionerListTest(unittest.TestCase):
                 ),
                 preconditioner_config=DefaultShampooConfig,
                 beta2=1.0,
-            )
+            )(BaseShampooPreconditionerList)
 
             # Test the abstract_method _amortized_computation().
             preconditioner_list.update_preconditioners(
