@@ -28,11 +28,13 @@ from distributed_shampoo.shampoo_types import (
     DefaultShampooConfig,
     DefaultSOAPConfig,
     PreconditionerConfig,
+    ShampooPreconditionerConfig,
 )
 from distributed_shampoo.tests.shampoo_test_utils import (
     compare_two_optimizers_on_weight_and_loss,
     construct_training_problem,
 )
+from matrix_functions_types import DefaultEigendecompositionConfig
 
 from torch import distributed as dist, tensor
 from torch.distributed.device_mesh import DeviceMesh
@@ -136,6 +138,9 @@ class AbstractTest:
             "preconditioner_config",
             (
                 DefaultShampooConfig,
+                ShampooPreconditionerConfig(
+                    amortized_computation_config=DefaultEigendecompositionConfig
+                ),
                 DefaultEigenvalueCorrectedShampooConfig,
                 DefaultSOAPConfig,
             ),
