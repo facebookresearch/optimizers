@@ -211,6 +211,38 @@ class ShampooFullyShardDistributorTest(FSDPTest):
         )
 
     @skip_if_lt_x_gpu(2)
+    def test_all_ranks_with_no_grads(self) -> None:
+        fully_shard_config = FullyShardShampooConfig()  # type: ignore[abstract]
+        model, loss, data, target, _ = (
+            ShampooFullyShardDistributorTest._construct_model(
+                distributed_config=fully_shard_config,
+                device=torch.device("cuda"),
+            )
+        )
+        optimizer = ShampooFullyShardDistributorTest._shampoo_optim_factory(
+            distributed_config=fully_shard_config,
+        )(model.parameters())
+
+        num_steps = 3
+        for _ in range(num_steps):
+            objective = loss(model(data), target)
+            objective.backward()
+
+            # Experiment setup: all ranks get no gradients.
+            optimizer.zero_grad()
+
+            optimizer.step()
+
+        assert isinstance(optimizer, DistributedShampoo)
+        # For each rank, no matter getting gradients or not, the step should be updated.
+        self.assertEqual(
+            optimizer.distributed_state_dict(key_to_param=model.named_parameters())[
+                "state"
+            ]["linear_layers.0.weight"]['["step"]'].item(),
+            num_steps,
+        )
+
+    @skip_if_lt_x_gpu(2)
     def test_fully_shard_shampoo_against_default_shampoo(self) -> None:
         fully_shard_config = FullyShardShampooConfig()  # type: ignore[abstract]
         ShampooFullyShardDistributorTest._test_two_configs(
