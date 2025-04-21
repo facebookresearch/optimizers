@@ -23,14 +23,17 @@ from distributed_shampoo.shampoo_types import (
     FullyShardShampooConfig,
     HybridShardShampooConfig,
 )
-from distributed_shampoo.tests.shampoo_test_utils import construct_training_problem
+from distributed_shampoo.tests.shampoo_test_utils import (
+    compare_two_optimizers_models_devices_on_weight_and_loss,
+    construct_training_problem,
+    train_model,
+)
 from distributed_shampoo.utils.shampoo_preconditioner_list import SHAMPOO
 
 from torch import nn
 from torch.distributed._composable.fsdp import fully_shard
 from torch.distributed.checkpoint._nested_dict import flatten_state_dict
-from torch.distributed.device_mesh import DeviceMesh, init_device_mesh
-from torch.distributed.tensor import DTensor
+from torch.distributed.device_mesh import init_device_mesh
 from torch.optim.optimizer import ParamsT
 from torch.testing._internal.common_distributed import skip_if_lt_x_gpu
 from torch.testing._internal.common_utils import (
@@ -50,19 +53,10 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
     def world_size(self) -> int:
         return 4
 
-    @property
-    def backend(self) -> str:
-        return "cpu:gloo,cuda:nccl"
-
     @staticmethod
     def _construct_model(
-        device: torch.device,
-        distributed_config: FullyShardShampooConfig | HybridShardShampooConfig | None,
-        device_mesh: DeviceMesh | None,
-    ) -> tuple[nn.Module, nn.Module, torch.Tensor, torch.Tensor, bool]:
-        IN_DIM = 16
-        data = torch.arange(IN_DIM, dtype=torch.float, device=device)
-        data /= torch.norm(data)
+        post_model_decoration: Callable[[nn.Module], nn.Module] = lambda x: x,
+    ) -> tuple[nn.Module, nn.Module, torch.Tensor, torch.Tensor]:
         # NOTE: We construct the model here specifically in order to ensure that HybridShard
         #       Shampoo, and default Shampoo produce equivalent results.
         #       This requires us to construct a model such that FullyShard will split the
@@ -88,124 +82,21 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
         #      Similarly, the second linear layer has a [1, 8] parameter and is split
         #      into two [4] chunks.
 
-        model_linear_layers_dims = (IN_DIM, 8, 1)
+        model_linear_layers_dims = (16, 8, 1)
         # model dead layers won't parpicipate in the training and thus don't have grads.
         model_dead_layers_dims = (4, 1)
-        model, loss, data, target = construct_training_problem(
+        return construct_training_problem(
             model_linear_layers_dims=model_linear_layers_dims,
             model_dead_layers_dims=model_dead_layers_dims,
-            device=device,
+            device=torch.device("cuda"),
             fill=0.1,
+            post_model_decoration=post_model_decoration,
         )
-
-        if use_fsdp2 := (
-            isinstance(
-                distributed_config, (HybridShardShampooConfig, FullyShardShampooConfig)
-            )
-        ):
-            # Need this to get pass type-checking test.
-            assert distributed_config is not None
-            model = fully_shard(model, mesh=device_mesh)
-        return model, loss, data, target, use_fsdp2
-
-    @staticmethod
-    def _train_model(
-        optim_factory: Callable[
-            [ParamsT],
-            torch.optim.Optimizer,
-        ],
-        model_factory: Callable[
-            [torch.device],
-            tuple[
-                nn.Module,
-                nn.Module,
-                torch.Tensor,
-                torch.Tensor,
-                bool,
-            ],
-        ],
-        device: torch.device,
-    ) -> tuple[list[torch.Tensor], torch.Tensor]:
-        model, loss, data, target, uses_hybrid_shard = model_factory(device)
-        params = model.parameters()
-        optimizer = optim_factory(params)
-        for _ in range(5):
-            optimizer.zero_grad()
-            objective = loss(model(data), target)
-            objective.backward()
-            optimizer.step()
-
-        linear_layers = model.get_submodule("linear_layers")
-        # Need this assertion to get pass type-checking test.
-        assert linear_layers is not None
-        if uses_hybrid_shard:
-            # When Hybrid Shard is used, model parameters are DTensors. We obtain the full value of
-            # parameters from DTensors.
-            params_list = []
-            # We only care model_linear_layers_dim params, not model_dead_layer params.
-            for param in linear_layers.parameters():
-                # Need this assertion to get pass type-checking test.
-                assert isinstance(param, DTensor)
-                params_list.append(param.full_tensor().view(-1).detach().cpu())
-        else:
-            params_list = [
-                param.view(-1).detach().cpu() for param in linear_layers.parameters()
-            ]
-
-        return params_list, objective.detach().cpu()
-
-    @staticmethod
-    def _test_two_configs(
-        optim_factory1: Callable[
-            [ParamsT],
-            torch.optim.Optimizer,
-        ],
-        model_factory1: Callable[
-            [torch.device],
-            tuple[
-                nn.Module,
-                nn.Module,
-                torch.Tensor,
-                torch.Tensor,
-                bool,
-            ],
-        ],
-        optim_factory2: Callable[
-            [ParamsT],
-            torch.optim.Optimizer,
-        ],
-        model_factory2: Callable[
-            [torch.device],
-            tuple[
-                nn.Module,
-                nn.Module,
-                torch.Tensor,
-                torch.Tensor,
-                bool,
-            ],
-        ],
-        device: torch.device,
-    ) -> None:
-        params1, loss1 = ShampooHybridShardDistributorTest._train_model(
-            optim_factory1,
-            model_factory1,
-            device=device,
-        )
-        params2, loss2 = ShampooHybridShardDistributorTest._train_model(
-            optim_factory2,
-            model_factory2,
-            device=device,
-        )
-        torch.testing.assert_close(loss1, loss2, atol=1e-5, rtol=1e-5)
-        torch.testing.assert_close(params1, params2)
 
     @staticmethod
     def _shampoo_optim_factory(
         distributed_config: FullyShardShampooConfig | HybridShardShampooConfig | None,
-    ) -> Callable[
-        [ParamsT],
-        torch.optim.Optimizer,
-    ]:
+    ) -> Callable[[ParamsT], torch.optim.Optimizer]:
         return partial(
             DistributedShampoo,
             lr=0.001,
@@ -217,30 +108,8 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
             precondition_frequency=1,
             start_preconditioning_step=2,
             use_decoupled_weight_decay=True,
-            grafting_config=AdaGradGraftingConfig(
-                epsilon=1e-8,
-            ),
+            grafting_config=AdaGradGraftingConfig(epsilon=1e-8),
             distributed_config=distributed_config,
-        )
-
-    @staticmethod
-    def _model_factory(
-        distributed_config: FullyShardShampooConfig | HybridShardShampooConfig | None,
-        device_mesh: DeviceMesh | None,
-    ) -> Callable[
-        [torch.device],
-        tuple[
-            nn.Module,
-            nn.Module,
-            torch.Tensor,
-            torch.Tensor,
-            bool,
-        ],
-    ]:
-        return partial(
-            ShampooHybridShardDistributorTest._construct_model,
-            distributed_config=distributed_config,
-            device_mesh=device_mesh,
         )
 
     @with_comms
@@ -261,32 +130,29 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
         communication_dtype: CommunicationDType,
         communicate_params: bool,
     ) -> None:
-        mesh_2d = init_device_mesh(
-            "cuda", (2, 2), mesh_dim_names=("replicate", "shard")
-        )
         hybrid_shard_config = HybridShardShampooConfig(
-            device_mesh=mesh_2d,
+            device_mesh=init_device_mesh(
+                "cuda", (2, 2), mesh_dim_names=("replicate", "shard")
+            ),
             communication_dtype=communication_dtype,
             num_trainers_per_group=num_trainers_per_group,
             communicate_params=communicate_params,
         )
 
-        ShampooHybridShardDistributorTest._test_two_configs(
-            ShampooHybridShardDistributorTest._shampoo_optim_factory(
-                None,
+        compare_two_optimizers_models_devices_on_weight_and_loss(
+            control_optim_factory=ShampooHybridShardDistributorTest._shampoo_optim_factory(
+                distributed_config=None,
             ),
-            ShampooHybridShardDistributorTest._model_factory(
-                None,
-                None,
-            ),
-            ShampooHybridShardDistributorTest._shampoo_optim_factory(
+            control_model_factory=ShampooHybridShardDistributorTest._construct_model,
+            experimental_optim_factory=ShampooHybridShardDistributorTest._shampoo_optim_factory(
                 distributed_config=hybrid_shard_config,
             ),
-            ShampooHybridShardDistributorTest._model_factory(
-                hybrid_shard_config,
-                mesh_2d,
+            experimental_model_factory=partial(
+                ShampooHybridShardDistributorTest._construct_model,
+                post_model_decoration=partial(
+                    fully_shard, mesh=hybrid_shard_config.device_mesh
+                ),
             ),
-            device=torch.device("cuda"),
         )
 
     @with_comms
@@ -310,56 +176,58 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
         mesh_2d = init_device_mesh(
             "cuda", (2, 2), mesh_dim_names=("replicate", "shard")
         )
+        fully_shard_config = FullyShardShampooConfig()  # type: ignore[abstract]
         hybrid_shard_config = HybridShardShampooConfig(
             device_mesh=mesh_2d,
             communication_dtype=communication_dtype,
             num_trainers_per_group=num_trainers_per_group,
             communicate_params=communicate_params,
         )
-        fully_shard_config = FullyShardShampooConfig()  # type: ignore[abstract]
 
-        ShampooHybridShardDistributorTest._test_two_configs(
-            ShampooHybridShardDistributorTest._shampoo_optim_factory(
-                distributed_config=fully_shard_config,
+        compare_two_optimizers_models_devices_on_weight_and_loss(
+            control_optim_factory=ShampooHybridShardDistributorTest._shampoo_optim_factory(
+                distributed_config=fully_shard_config
             ),
-            ShampooHybridShardDistributorTest._model_factory(
-                fully_shard_config,
-                mesh_2d,
+            control_model_factory=partial(
+                ShampooHybridShardDistributorTest._construct_model,
+                post_model_decoration=partial(fully_shard, mesh=mesh_2d),
             ),
-            ShampooHybridShardDistributorTest._shampoo_optim_factory(
-                distributed_config=hybrid_shard_config,
+            experimental_optim_factory=ShampooHybridShardDistributorTest._shampoo_optim_factory(
+                distributed_config=hybrid_shard_config
             ),
-            ShampooHybridShardDistributorTest._model_factory(
-                hybrid_shard_config,
-                mesh_2d,
+            experimental_model_factory=partial(
+                ShampooHybridShardDistributorTest._construct_model,
+                post_model_decoration=partial(fully_shard, mesh=mesh_2d),
             ),
-            device=torch.device("cuda"),
         )
 
     @with_comms
     @skip_if_lt_x_gpu(4)
     @parametrize("communicate_params", (False, True))
     def test_all_ranks_with_no_grads(self, communicate_params: bool) -> None:
-        mesh_2d = init_device_mesh(
-            "cuda", (2, 2), mesh_dim_names=("replicate", "shard")
-        )
         hybrid_shard_config = HybridShardShampooConfig(
-            device_mesh=mesh_2d,
+            device_mesh=init_device_mesh(
+                "cuda", (2, 2), mesh_dim_names=("replicate", "shard")
+            ),
             communicate_params=communicate_params,
         )
-        model, loss, data, target, _ = (
-            ShampooHybridShardDistributorTest._construct_model(
-                distributed_config=hybrid_shard_config,
-                device_mesh=mesh_2d,
-                device=torch.device("cuda"),
-            )
-        )
-        optimizer = ShampooHybridShardDistributorTest._shampoo_optim_factory(
-            distributed_config=hybrid_shard_config
-        )(model.parameters())
 
-        num_steps = 3
-        for _ in range(num_steps):
+        steps_with_gradients = 2
+        model, loss, data, target, optimizer = train_model(
+            optim_factory=ShampooHybridShardDistributorTest._shampoo_optim_factory(
+                distributed_config=hybrid_shard_config
+            ),
+            model_factory=partial(
+                ShampooHybridShardDistributorTest._construct_model,
+                post_model_decoration=partial(
+                    fully_shard, mesh=hybrid_shard_config.device_mesh
+                ),
+            ),
+            num_steps=steps_with_gradients,
+        )
+
+        steps_without_gradients = 3
+        for _ in range(steps_without_gradients):
             objective = loss(model(data), target)
             objective.backward()
 
@@ -374,7 +242,7 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
             optimizer.distributed_state_dict(key_to_param=model.named_parameters())[
                 "state"
             ]["linear_layers.0.weight"]['["step"]'].item(),
-            num_steps,
+            steps_with_gradients + steps_without_gradients,
         )
 
     @with_comms
@@ -383,19 +251,15 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
         mesh_2d = init_device_mesh(
             "cuda", (2, 2), mesh_dim_names=("replicate", "shard")
         )
-        hybrid_shard_config = HybridShardShampooConfig(
-            device_mesh=mesh_2d,
+        model, _, _, _, optimizer = train_model(
+            optim_factory=ShampooHybridShardDistributorTest._shampoo_optim_factory(
+                distributed_config=HybridShardShampooConfig(device_mesh=mesh_2d)
+            ),
+            model_factory=partial(
+                ShampooHybridShardDistributorTest._construct_model,
+                post_model_decoration=partial(fully_shard, mesh=mesh_2d),
+            ),
         )
-        model_factory = ShampooHybridShardDistributorTest._model_factory(
-            hybrid_shard_config,
-            device_mesh=mesh_2d,
-        )
-        optim_factory = ShampooHybridShardDistributorTest._shampoo_optim_factory(
-            hybrid_shard_config
-        )
-        model, loss, data, target, _ = model_factory(torch.device("cuda"))
-        params = model.parameters()
-        optimizer = optim_factory(params)
         assert isinstance(optimizer, DistributedShampoo)
         state_dict = optimizer.distributed_state_dict(
             key_to_param=model.named_parameters()
@@ -420,39 +284,42 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
     @with_comms
     @skip_if_lt_x_gpu(4)
     def test_number_of_trainers_per_group_out_of_range(self) -> None:
-        mesh_2d = init_device_mesh(
-            "cuda", (2, 2), mesh_dim_names=("replicate", "shard")
-        )
         hybrid_shard_config = HybridShardShampooConfig(
-            device_mesh=mesh_2d,
+            device_mesh=init_device_mesh(
+                "cuda", (2, 2), mesh_dim_names=("replicate", "shard")
+            ),
             num_trainers_per_group=3,
         )
+        model = ShampooHybridShardDistributorTest._construct_model(
+            post_model_decoration=partial(
+                fully_shard, mesh=hybrid_shard_config.device_mesh
+            ),
+        )[0]
 
         self.assertRaisesRegex(
             ValueError,
             re.escape(
                 "Invalid number of trainers per group: 3. Must be between [1, 2] or set to -1."
             ),
-            ShampooHybridShardDistributorTest._train_model,
-            optim_factory=ShampooHybridShardDistributorTest._shampoo_optim_factory(
+            ShampooHybridShardDistributorTest._shampoo_optim_factory(
                 distributed_config=hybrid_shard_config,
             ),
-            model_factory=ShampooHybridShardDistributorTest._model_factory(
-                hybrid_shard_config,
-                device_mesh=mesh_2d,
-            ),
-            device=torch.device("cuda"),
+            model.parameters(),
         )
 
     @with_comms
     @skip_if_lt_x_gpu(4)
     def test_dist_is_initialized(self) -> None:
-        mesh_2d = init_device_mesh(
-            "cuda", (2, 2), mesh_dim_names=("replicate", "shard")
-        )
         hybrid_shard_config = HybridShardShampooConfig(
-            device_mesh=mesh_2d,
+            device_mesh=init_device_mesh(
+                "cuda", (2, 2), mesh_dim_names=("replicate", "shard")
+            )
         )
+        model = ShampooHybridShardDistributorTest._construct_model(
+            post_model_decoration=partial(
+                fully_shard, mesh=hybrid_shard_config.device_mesh
+            ),
+        )[0]
 
         with mock.patch.object(torch.distributed, "is_initialized", return_value=False):
             self.assertRaisesRegex(
@@ -460,15 +327,10 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
                 re.escape(
                     "HybridShardDistributor needs torch.distributed to be initialized!"
                 ),
-                ShampooHybridShardDistributorTest._train_model,
-                optim_factory=ShampooHybridShardDistributorTest._shampoo_optim_factory(
+                ShampooHybridShardDistributorTest._shampoo_optim_factory(
                     distributed_config=hybrid_shard_config,
                 ),
-                model_factory=ShampooHybridShardDistributorTest._model_factory(
-                    hybrid_shard_config,
-                    device_mesh=mesh_2d,
-                ),
-                device=torch.device("cuda"),
+                model.parameters(),
             )
 
     @with_comms
@@ -476,13 +338,17 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
     def test_incompatible_replicated_group_size_and_num_trainers_per_group(
         self,
     ) -> None:
-        mesh_2d = init_device_mesh(
-            "cuda", (2, 2), mesh_dim_names=("replicate", "shard")
-        )
         hybrid_shard_config = HybridShardShampooConfig(
-            device_mesh=mesh_2d,
+            device_mesh=init_device_mesh(
+                "cuda", (2, 2), mesh_dim_names=("replicate", "shard")
+            ),
             num_trainers_per_group=3,
         )
+        model = ShampooHybridShardDistributorTest._construct_model(
+            post_model_decoration=partial(
+                fully_shard, mesh=hybrid_shard_config.device_mesh
+            ),
+        )[0]
 
         # Hijack the DeviceMesh.size() method to return 4 instead of 2 to bypass the check of num_trainers_per_group.
         with mock.patch.object(
@@ -493,24 +359,25 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
                 re.escape(
                     "distributed_config.num_trainers_per_group=3 must divide self._replicated_group_size=4!"
                 ),
-                ShampooHybridShardDistributorTest._train_model,
-                optim_factory=ShampooHybridShardDistributorTest._shampoo_optim_factory(
+                ShampooHybridShardDistributorTest._shampoo_optim_factory(
                     distributed_config=hybrid_shard_config,
                 ),
-                model_factory=ShampooHybridShardDistributorTest._model_factory(
-                    hybrid_shard_config,
-                    device_mesh=mesh_2d,
-                ),
-                device=torch.device("cuda"),
+                model.parameters(),
             )
 
     @with_comms
     @skip_if_lt_x_gpu(4)
     def test_unsupported_communication_dtype(self) -> None:
-        mesh_2d = init_device_mesh(
-            "cuda", (2, 2), mesh_dim_names=("replicate", "shard")
+        hybrid_shard_config = HybridShardShampooConfig(
+            device_mesh=init_device_mesh(
+                "cuda", (2, 2), mesh_dim_names=("replicate", "shard")
+            )
         )
-        hybrid_shard_config = HybridShardShampooConfig(device_mesh=mesh_2d)
+        model = ShampooHybridShardDistributorTest._construct_model(
+            post_model_decoration=partial(
+                fully_shard, mesh=hybrid_shard_config.device_mesh
+            ),
+        )[0]
 
         with mock.patch.object(CommunicationDType, "__eq__", return_value=False):
             self.assertRaisesRegex(
@@ -518,13 +385,8 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
                 re.escape(
                     "Unsupported communication dtype: CommunicationDType.DEFAULT"
                 ),
-                ShampooHybridShardDistributorTest._train_model,
-                optim_factory=ShampooHybridShardDistributorTest._shampoo_optim_factory(
+                ShampooHybridShardDistributorTest._shampoo_optim_factory(
                     distributed_config=hybrid_shard_config,
                 ),
-                model_factory=ShampooHybridShardDistributorTest._model_factory(
-                    hybrid_shard_config,
-                    device_mesh=mesh_2d,
-                ),
-                device=torch.device("cuda"),
+                model.parameters(),
             )
