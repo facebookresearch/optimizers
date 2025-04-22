@@ -407,7 +407,7 @@ class AbstractTest:
                 self._preconditioner_list.update_preconditioners,
                 masked_grad_list=(
                     torch.tensor([invalid_value, invalid_value]),
-                    torch.eye(2) / torch.tensor(2.0).sqrt(),
+                    torch.eye(2) / math.sqrt(2.0),
                     torch.tensor([[invalid_value, invalid_value]]),
                     torch.tensor(invalid_value),
                 ),
@@ -441,7 +441,7 @@ class AbstractTest:
                         self._preconditioner_list.update_preconditioners,
                         masked_grad_list=(
                             torch.tensor([1.0, 0.0]),
-                            torch.eye(2) / torch.tensor(2.0).sqrt(),
+                            torch.eye(2) / math.sqrt(2.0),
                             torch.tensor([[1.0, 0.0]]),
                             torch.tensor(1.0),
                         ),
@@ -461,7 +461,7 @@ class AbstractTest:
                     self._preconditioner_list.update_preconditioners(
                         masked_grad_list=(
                             torch.tensor([1.0, 0.0]),
-                            torch.eye(2) / torch.tensor(2.0).sqrt(),
+                            torch.eye(2) / math.sqrt(2.0),
                             torch.tensor([[1.0, 0.0]]),
                             torch.tensor(1.0),
                         ),
@@ -486,13 +486,13 @@ class AbstractTest:
             self._preconditioner_list = self._instantiate_preconditioner_list()
             masked_grad_list0 = (
                 torch.tensor([1.0, 0.0]),
-                torch.eye(2) / torch.tensor(2.0).sqrt(),
+                torch.eye(2) / math.sqrt(2.0),
                 torch.tensor([[1.0, 0.0]]),
                 torch.tensor(1.0),
             )
             masked_grad_list = (
                 torch.tensor([0.0, 1.0]),
-                torch.eye(2) / torch.tensor(2.0).sqrt(),
+                torch.eye(2) / math.sqrt(2.0),
                 torch.tensor([[0.0, 1.0]]),
                 torch.tensor(1.0),
             )
@@ -768,13 +768,13 @@ class ShampooPreconditionerListTest(AbstractTest.BaseShampooPreconditionerListTe
         """
         masked_grad_list1 = (
             torch.tensor([1.0, 0.0]),
-            torch.eye(2) / torch.tensor(2.0).sqrt(),
+            torch.eye(2) / math.sqrt(2.0),
             torch.tensor([[1.0, 0.0]]),
             torch.tensor(3.0),
         )
         masked_grad_list2 = (
             torch.tensor([0.0, 1.0]),
-            torch.eye(2) / torch.tensor(2.0).sqrt(),
+            torch.eye(2) / math.sqrt(2.0),
             torch.tensor([[0.0, 1.0]]),
             torch.tensor(2.0),
         )
@@ -810,12 +810,10 @@ class ShampooPreconditionerListTest(AbstractTest.BaseShampooPreconditionerListTe
         beta2 = 0.9
 
         beta2_compensated_grad_list1 = torch._foreach_div(
-            masked_grad_list1,
-            torch.tensor(beta2 * (1 - beta2)).sqrt(),
+            masked_grad_list1, math.sqrt(beta2 * (1 - beta2))
         )
         beta2_compensated_grad_list2 = torch._foreach_div(
-            masked_grad_list2,
-            torch.tensor(1 - beta2).sqrt(),
+            masked_grad_list2, math.sqrt(1 - beta2)
         )
 
         masked_expected_preconditioned_grad_list = [
@@ -852,12 +850,10 @@ class ShampooPreconditionerListTest(AbstractTest.BaseShampooPreconditionerListTe
 
         """
         bias_compensated_grad_list1 = torch._foreach_mul(
-            beta2_compensated_grad_list1,
-            torch.tensor(1 - beta2**2).sqrt(),
+            beta2_compensated_grad_list1, math.sqrt(1 - beta2**2)
         )
         bias_compensated_grad_list2 = torch._foreach_mul(
-            beta2_compensated_grad_list2,
-            torch.tensor(1 - beta2**2).sqrt(),
+            beta2_compensated_grad_list2, math.sqrt(1 - beta2**2)
         )
 
         masked_expected_preconditioned_grad_list = [
@@ -1009,20 +1005,20 @@ class ShampooPreconditionerListTest(AbstractTest.BaseShampooPreconditionerListTe
 
         masked_grad_list1 = (
             torch.tensor([1.0, 0.0]),
-            torch.eye(2) / torch.tensor(2.0).sqrt(),
+            torch.eye(2) / math.sqrt(2.0),
             torch.tensor([[1.0, 0.0]]),
             torch.tensor(3.0),
         )
         masked_grad_list2 = (
             torch.tensor([0.0, 2.0]),
-            torch.eye(2) / torch.tensor(2.0).sqrt(),
+            torch.eye(2) / math.sqrt(2.0),
             torch.tensor([[0.0, 2.0]]),
             torch.tensor(2.0),
         )
 
         masked_expected_preconditioned_grad_list = (
             torch.tensor([0, 0.5]),
-            torch.eye(2) / torch.tensor(2.0).sqrt(),
+            torch.eye(2) / math.sqrt(2.0),
             torch.tensor([[0, 0.1]]),
             torch.tensor(2.0),
         )
@@ -1121,20 +1117,20 @@ class EigenvalueCorrectedShampooPreconditionerListTest(
         """
         masked_grad_list1 = (
             torch.tensor([1.0, 0.0]),
-            torch.eye(2) / torch.tensor(2.0).sqrt(),
+            torch.eye(2) / math.sqrt(2.0),
             torch.tensor([[1.0, 0.0]]),
             torch.tensor(1.0),
         )
         masked_grad_list2 = (
             torch.tensor([0.0, 2.0]),
-            torch.eye(2) / torch.tensor(2.0).sqrt(),
+            torch.eye(2) / math.sqrt(2.0),
             torch.tensor([[0.0, 2.0]]),
             torch.tensor(2.0),
         )
 
         masked_expected_preconditioned_grad_list = (
             torch.tensor([0.0, 1.0]),
-            torch.eye(2) / torch.tensor(2.0).sqrt(),
+            torch.eye(2) / math.sqrt(2.0),
             torch.tensor([[0.0, 1.0]]),
             torch.tensor(2 / math.sqrt(5)),
         )
@@ -1161,24 +1157,21 @@ class EigenvalueCorrectedShampooPreconditionerListTest(
         beta2 = 0.9
 
         beta2_compensated_grad_list1 = torch._foreach_div(
-            masked_grad_list1,
-            torch.tensor(beta2 * (1 - beta2)).sqrt(),
+            masked_grad_list1, math.sqrt(beta2 * (1 - beta2))
         )
         beta2_compensated_grad_list2 = torch._foreach_div(
-            masked_grad_list2,
-            torch.tensor(1 - beta2).sqrt(),
+            masked_grad_list2, math.sqrt(1 - beta2)
         )
 
         masked_expected_preconditioned_grad_list = (
             torch.tensor([0.0, 1.0]),
-            torch.eye(2) / torch.tensor(2.0).sqrt(),
+            torch.eye(2) / math.sqrt(2.0),
             torch.tensor([[0.0, 1.0]]),
             torch.tensor(2 / math.sqrt(5)),
         )
         # Fix scaling due to EMA.
         torch._foreach_div_(
-            masked_expected_preconditioned_grad_list,
-            torch.tensor(1 - beta2).sqrt(),
+            masked_expected_preconditioned_grad_list, math.sqrt(1 - beta2)
         )
 
         self._test_update_preconditioners_and_precondition(
@@ -1208,18 +1201,15 @@ class EigenvalueCorrectedShampooPreconditionerListTest(
 
         """
         bias_compensated_grad_list1 = torch._foreach_mul(
-            beta2_compensated_grad_list1,
-            torch.tensor(1 - beta2**2).sqrt(),
+            beta2_compensated_grad_list1, math.sqrt(1 - beta2**2)
         )
         bias_compensated_grad_list2 = torch._foreach_mul(
-            beta2_compensated_grad_list2,
-            torch.tensor(1 - beta2**2).sqrt(),
+            beta2_compensated_grad_list2, math.sqrt(1 - beta2**2)
         )
 
         # Fix scaling due to bias correction.
         torch._foreach_mul_(
-            masked_expected_preconditioned_grad_list,
-            torch.tensor(1 - beta2**2).sqrt(),
+            masked_expected_preconditioned_grad_list, math.sqrt(1 - beta2**2)
         )
 
         self._test_update_preconditioners_and_precondition(
@@ -1288,20 +1278,20 @@ class EigenvalueCorrectedShampooPreconditionerListTest(
 
         masked_grad_list1 = (
             torch.tensor([1.0, 0.0]),
-            torch.eye(2) / torch.tensor(2.0).sqrt(),
+            torch.eye(2) / math.sqrt(2.0),
             torch.tensor([[1.0, 0.0]]),
             torch.tensor(1.0),
         )
         masked_grad_list2 = (
             torch.tensor([0.0, 2.0]),
-            torch.eye(2) / torch.tensor(2.0).sqrt(),
+            torch.eye(2) / math.sqrt(2.0),
             torch.tensor([[0.0, 2.0]]),
             torch.tensor(2.0),
         )
 
         masked_expected_preconditioned_grad_list = (
             torch.tensor([0, 0.5]),
-            torch.eye(2) / torch.tensor(2.0).sqrt(),
+            torch.eye(2) / math.sqrt(2.0),
             torch.tensor([[0, 0.5]]),
             torch.tensor(0.4),
         )
