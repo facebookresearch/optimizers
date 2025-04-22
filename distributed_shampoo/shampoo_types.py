@@ -89,7 +89,8 @@ class PreconditionerConfig(AbstractDataclass):
 
     """
 
-    amortized_computation_config: MatrixFunctionConfig  # type: ignore
+    # repr=False prevents __repr__() from accessing this field to avoid linter complaints
+    amortized_computation_config: MatrixFunctionConfig = field(repr=False)
     num_tolerated_failed_amortized_computations: int = 3
 
     def __post_init__(self) -> None:
