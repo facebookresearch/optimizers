@@ -1277,16 +1277,15 @@ class DistributedShampoo(torch.optim.Optimizer):
         # Load param_groups.
         if save_param_groups:
             param_groups_to_load = state_dict["param_groups"]
-            param_groups = self.param_groups
 
-            if len(param_groups) != len(param_groups_to_load):
+            if len(self.param_groups) != len(param_groups_to_load):
                 raise ValueError(
-                    f"Different param_groups count: {len(param_groups)} vs {len(param_groups_to_load)}"
+                    f"Different param_groups count: {len(self.param_groups)} vs {len(param_groups_to_load)}"
                 )
             param_to_key = {param: key for key, param in key_to_param_mapping.items()}
 
             # Loading the parameter group based on the unique parameter group key.
-            for group in param_groups:
+            for group in self.param_groups:
                 param_group_key = DistributedShampoo._construct_param_group_key(
                     group, param_to_key
                 )
@@ -1294,6 +1293,7 @@ class DistributedShampoo(torch.optim.Optimizer):
                     raise ValueError(
                         f"Param group {param_group_key} not found in param_groups_to_load!"
                     )
-                param_group_to_load = param_groups_to_load[param_group_key]
-                for key, value in param_group_to_load.items():
-                    group[key] = deepcopy(value)
+                group |= {
+                    key: deepcopy(value)
+                    for key, value in param_groups_to_load[param_group_key].items()
+                }
