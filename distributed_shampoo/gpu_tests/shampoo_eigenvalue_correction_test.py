@@ -37,6 +37,10 @@ from torch.testing._internal.common_utils import (
 )
 
 
+available_devices: tuple[torch.device, ...] = (torch.device("cpu"),) + (
+    torch.device("cuda"),
+) * torch.cuda.is_available()
+
 # Note: We have to set the epsilon to a very small value (i.e., 1e-15) due to the
 # the place epsilon is added in the PyTorch optimizers (i.e., AdaGrad, RMSprop, Adam, AdamW)
 # and Distributed Shampoo.
@@ -67,12 +71,7 @@ class DistributedShampooEigenvalueCorrectionTest(unittest.TestCase):
             ),
         ),
     )
-    @parametrize(  # type: ignore
-        "device",
-        (torch.device("cpu"),) + (torch.device("cuda"),)
-        if torch.cuda.is_available()
-        else (),
-    )
+    @parametrize("device", available_devices)
     @parametrize("weight_decay", (0.0, 0.3))
     def test_adagrad_eigenvalue_correction_on_quadratic(
         self,
@@ -123,12 +122,7 @@ class DistributedShampooEigenvalueCorrectionTest(unittest.TestCase):
             ),
         ),
     )
-    @parametrize(  # type: ignore
-        "device",
-        (torch.device("cpu"),) + (torch.device("cuda"),)
-        if torch.cuda.is_available()
-        else (),
-    )
+    @parametrize("device", available_devices)
     @parametrize("weight_decay", (0.0, 0.3))
     def test_adam_eigenvalue_correction_on_quadratic(
         self,
@@ -183,12 +177,7 @@ class DistributedShampooEigenvalueCorrectionTest(unittest.TestCase):
             ),
         ),
     )
-    @parametrize(  # type: ignore
-        "device",
-        (torch.device("cpu"),) + (torch.device("cuda"),)
-        if torch.cuda.is_available()
-        else (),
-    )
+    @parametrize("device", available_devices)
     @parametrize("weight_decay", (0.0, 0.3))
     def test_adamw_eigenvalue_correction_on_quadratic(
         self,
@@ -243,12 +232,7 @@ class DistributedShampooEigenvalueCorrectionTest(unittest.TestCase):
             ),
         ),
     )
-    @parametrize(  # type: ignore
-        "device",
-        (torch.device("cpu"),) + (torch.device("cuda"),)
-        if torch.cuda.is_available()
-        else (),
-    )
+    @parametrize("device", available_devices)
     @parametrize("weight_decay", (0.0, 0.3))
     def test_rmsprop_eigenvalue_correction_on_quadratic(
         self,
