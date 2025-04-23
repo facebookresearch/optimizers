@@ -101,7 +101,7 @@ def matrix_inverse_root(
 
     # check if matrix is scalar
     if torch.numel(A) == 1:
-        return (A + epsilon) ** torch.as_tensor(-1.0 / root)
+        return (A + epsilon).pow_(-1.0 / root)
 
     # check matrix shape
     if len(A.shape) != 2:
@@ -184,7 +184,7 @@ def _matrix_inverse_root_diagonal(
     if root <= 0:
         raise ValueError(f"Root {root} should be positive!")
 
-    return torch.diag((torch.diagonal(A) + epsilon).pow(torch.as_tensor(-1.0 / root)))
+    return torch.diag((torch.diagonal(A) + epsilon).pow_(-1.0 / root))
 
 
 def matrix_eigendecomposition(
