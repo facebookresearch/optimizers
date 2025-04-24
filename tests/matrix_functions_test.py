@@ -314,6 +314,13 @@ class MatrixRootDiagonalTest(unittest.TestCase):
         )
 
 
+feasible_alpha_beta_pairs: tuple[tuple[float, float], ...] = tuple(
+    (alpha, beta)
+    for alpha, beta in itertools.product((0.001, 0.01, 0.1, 1.0, 10.0, 100.0), repeat=2)
+    if 2 * beta <= alpha
+)
+
+
 @instantiate_parametrized_tests
 class EigenRootTest(unittest.TestCase):
     def _test_eigen_root_multi_dim(
@@ -349,16 +356,7 @@ class EigenRootTest(unittest.TestCase):
             eig_sols=torch.ones,
         )
 
-    @parametrize(  # type: ignore
-        "alpha, beta",
-        [
-            (alpha, beta)
-            for alpha, beta in itertools.product(
-                (0.001, 0.01, 0.1, 1.0, 10.0, 100.0), repeat=2
-            )
-            if 2 * beta <= alpha
-        ],
-    )
+    @parametrize("alpha, beta", feasible_alpha_beta_pairs)
     @parametrize("epsilon", [0.0])
     @parametrize("root", [1, 2, 4, 8])
     @parametrize("n", [10, 100])
@@ -527,16 +525,7 @@ class NewtonRootInverseTest(unittest.TestCase):
             M_tol=1e-6,
         )
 
-    @parametrize(  # type: ignore
-        "alpha, beta",
-        [
-            (alpha, beta)
-            for alpha, beta in itertools.product(
-                (0.001, 0.01, 0.1, 1.0, 10.0, 100.0), repeat=2
-            )
-            if 2 * beta <= alpha
-        ],
-    )
+    @parametrize("alpha, beta", feasible_alpha_beta_pairs)
     @parametrize("epsilon", [0.0])
     @parametrize("root", [2, 4, 8])
     @parametrize("n", [10, 100])
