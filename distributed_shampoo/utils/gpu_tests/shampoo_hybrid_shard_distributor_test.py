@@ -264,7 +264,7 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
         state_dict = optimizer.distributed_state_dict(
             key_to_param=model.named_parameters()
         )
-        flattened_state_dict = flatten_state_dict(state_dict)[0]
+        flattened_state_dict = flatten_state_dict(state_dict["state"])[0]
 
         # Note that we get the local rank corresponding to the second mesh dimension
         # because the first mesh dimension corresponds to replication and the second
