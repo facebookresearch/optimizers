@@ -26,6 +26,7 @@ from distributed_shampoo.shampoo_types import (
     DistributedConfig,
     EigenvalueCorrectedShampooPreconditionerConfig,
     GraftingConfig,
+    MASKED_BLOCKED_GRADS,
     PreconditionerConfig,
     ShampooPreconditionerConfig,
     ShampooPT2CompileConfig,
@@ -214,6 +215,24 @@ class DistributedShampooTest(unittest.TestCase):
             return 1.0
 
         self.assertEqual(self._optimizer.step(closure=closure), 1.0)
+
+    def test_optimizer_zero_grad(self) -> None:
+        grad = torch.rand_like(self._model[0].weight)
+        self._model[0].weight.grad = grad
+        self._optimizer.step()
+        self._optimizer.zero_grad(set_to_none=True)
+        self.assertIsNone(self._model[0].weight.grad)
+        # TODO: Figure out a better way to test this because the access of private field.
+        # Ideas tried but not working:
+        #   - sys.getrefcount(grad) with gc.collect():
+        #       - sys.getrefcount(grad) is always 2 and assignment to self._model[0].weight.grad wont change the reference count.
+        #       - Tensor.view(), under the hood how state_list[MASKED_BLOCKED_GRADS] is generated, has its own reference count.
+        #   - memory usage probing:
+        #       - Tried psutil.Process(os.getpid()).memory_info().rss to probe the current memory usage
+        #       - PyTorch pre-allocates memory so it is hard to detect this.
+        self.assertIsNone(
+            self._optimizer._per_group_state_lists[0][MASKED_BLOCKED_GRADS]
+        )
 
 
 class AbstractTest:

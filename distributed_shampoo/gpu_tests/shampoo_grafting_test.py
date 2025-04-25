@@ -12,7 +12,6 @@ LICENSE file in the root directory of this source tree.
 import math
 import unittest
 from functools import partial
-from itertools import product
 from typing import Any, Type
 
 import torch

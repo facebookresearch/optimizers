@@ -1143,6 +1143,9 @@ class DistributedShampoo(torch.optim.Optimizer):
                 use_nesterov,
             )
 
+            # Explicitly set masked blocked gradients to None to save memory so the original param.grad has no pointer to it.
+            state_lists[MASKED_BLOCKED_GRADS] = None
+
         return loss
 
     def state_dict(self) -> StateDict:
