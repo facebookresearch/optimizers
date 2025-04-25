@@ -35,6 +35,7 @@ def _create_model_and_params(
     model, _, _, _ = construct_training_problem(
         model_linear_layers_dims, model_dead_layers_dims=None, fill=(1.0, 2.0)
     )
+    assert isinstance(model, nn.Module)
     return model, list(model.parameters())
 
 

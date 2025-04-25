@@ -13,10 +13,8 @@ from functools import partial, reduce
 
 import torch
 from torch import nn
-from torch.distributed._composable.fsdp.fully_shard import FSDPModule as FSDP2
-from torch.distributed.fsdp import FullyShardedDataParallel as FSDP1
+from torch.distributed.fsdp import FSDPModule, FullyShardedDataParallel
 from torch.distributed.tensor import DTensor
-from torch.nn.parameter import Parameter
 from torch.optim.optimizer import ParamsT
 
 
@@ -53,8 +51,8 @@ def construct_training_problem(
     device: torch.device | None = None,
     bias: bool = False,
     fill: float | tuple[float, ...] = 0.0,
-    post_model_decoration: Callable[[nn.Module], nn.Module] = lambda x: x,
-) -> tuple[nn.Module, nn.Module, torch.Tensor, torch.Tensor]:
+    post_model_decoration: Callable[[nn.Module], nn.Module | FSDPModule] = lambda x: x,
+) -> tuple[nn.Module | FSDPModule, nn.Module, torch.Tensor, torch.Tensor]:
     """
     Constructs a training problem (model, loss, data, target) with the given model dimensions and attributes.
 
@@ -64,11 +62,11 @@ def construct_training_problem(
         device (torch.device | None): The device to use. (Default: None)
         bias (bool): Whether to use bias in the linear (non-dead) layers. (Default: False)
         fill (float | tuple[float, ...]): The value(s) to fill the model parameters. If a tuple, each element should correspond to one layer. (Default: 0.0)
-        post_model_decoration (Callable[[nn.Module], nn.Module]): A function to apply additional modifications to the model, useful for FSDP1 and FSDP2. (Default: identity function)
+        post_model_decoration (Callable[[nn.Module], nn.Module | FSDPModule]): A function to apply additional modifications to the model, useful for FullyShardedDataParallelFully and FSDPModule. (Default: identity function)
 
 
     Returns:
-        model (nn.Module): The model as specified from the input arguments.
+        model (nn.Module | FSDPModule): The model as specified from the input arguments.
         loss (nn.Module): The loss function (currently always set to MSE).
         data (torch.Tensor): A randomly generated input tensor corresponding to the input dimension.
         target (torch.Tensor): A target tensor of zeros corresponding to the output dimension.
@@ -99,10 +97,12 @@ def construct_training_problem(
 def train_model(
     optim_factory: Callable[[ParamsT], torch.optim.Optimizer],
     model_factory: Callable[
-        [], tuple[nn.Module, nn.Module, torch.Tensor, torch.Tensor]
+        [], tuple[nn.Module | FSDPModule, nn.Module, torch.Tensor, torch.Tensor]
     ],
     num_steps: int = 5,
-) -> tuple[nn.Module, nn.Module, torch.Tensor, torch.Tensor, torch.optim.Optimizer]:
+) -> tuple[
+    nn.Module | FSDPModule, nn.Module, torch.Tensor, torch.Tensor, torch.optim.Optimizer
+]:
     """
     Trains a model using the specified optimizer and model factories for a given number of steps.
 
@@ -112,17 +112,18 @@ def train_model(
 
     Args:
         optim_factory (Callable[[ParamsT], torch.optim.Optimizer]): A factory function that returns an optimizer instance.
-        model_factory (Callable[[], tuple[nn.Module, nn.Module, torch.Tensor, torch.Tensor]]): A factory function that returns a tuple containing the model, loss function, input data, and target data.
+        model_factory (Callable[[], tuple[nn.Module | FSDPModule, nn.Module, torch.Tensor, torch.Tensor]]): A factory function that returns a tuple containing the model, loss function, input data, and target data.
         num_steps (int): The number of training steps to perform. (Default: 5)
 
     Returns:
-        model (nn.Module): The trained model.
+        model (nn.Module | FSDPModule): The trained model.
         loss (nn.Module): The loss function used during training.
         data (torch.Tensor): The input data used for training.
         target (torch.Tensor): The target data used for training.
         optimizer (torch.optim.Optimizer): The optimizer used for training.
     """
     model, loss, data, target = model_factory()
+    assert isinstance(model, nn.Module)
     optimizer = optim_factory(model.parameters())
 
     for _ in range(num_steps):
@@ -137,11 +138,11 @@ def train_model(
 def compare_two_optimizers_models_devices_on_weight_and_loss(
     control_optim_factory: Callable[[ParamsT], torch.optim.Optimizer],
     control_model_factory: Callable[
-        [], tuple[nn.Module, nn.Module, torch.Tensor, torch.Tensor]
+        [], tuple[nn.Module | FSDPModule, nn.Module, torch.Tensor, torch.Tensor]
     ],
     experimental_optim_factory: Callable[[ParamsT], torch.optim.Optimizer],
     experimental_model_factory: Callable[
-        [], tuple[nn.Module, nn.Module, torch.Tensor, torch.Tensor]
+        [], tuple[nn.Module | FSDPModule, nn.Module, torch.Tensor, torch.Tensor]
     ],
     control_and_experimental_same_device: bool = True,
     total_steps: int = 5,
@@ -153,9 +154,9 @@ def compare_two_optimizers_models_devices_on_weight_and_loss(
 
     Args:
         control_optim_factory (Callable[[ParamsT], torch.optim.Optimizer]): Factory function for the control optimizer.
-        control_model_factory (Callable[[], tuple[nn.Module, nn.Module, torch.Tensor, torch.Tensor]]): Factory function for the control model.
+        control_model_factory (Callable[[], tuple[nn.Module | FSDPModule, nn.Module, torch.Tensor, torch.Tensor]]): Factory function for the control model.
         experimental_optim_factory (Callable[[ParamsT], torch.optim.Optimizer]): Factory function for the experimental optimizer.
-        experimental_model_factory (Callable[[], tuple[nn.Module, nn.Module, torch.Tensor, torch.Tensor]]): Factory function for the experimental model.
+        experimental_model_factory (Callable[[], tuple[nn.Module | FSDPModule, nn.Module, torch.Tensor, torch.Tensor]]): Factory function for the experimental model.
         control_and_experimental_same_device (bool): Whether both models are on the same device. (Default: True)
         total_steps (int): Number of training steps. (Default: 5)
         rtol (float | None): Relative tolerance for comparing weights and losses. (Default: None)
@@ -168,18 +169,18 @@ def compare_two_optimizers_models_devices_on_weight_and_loss(
     def generated_comparable_trained_weights_and_final_loss(
         optim_factory: Callable[[ParamsT], torch.optim.Optimizer],
         model_factory: Callable[
-            [], tuple[nn.Module, nn.Module, torch.Tensor, torch.Tensor]
+            [], tuple[nn.Module | FSDPModule, nn.Module, torch.Tensor, torch.Tensor]
         ],
-    ) -> tuple[list[Parameter], torch.Tensor]:
+    ) -> tuple[list[torch.Tensor], torch.Tensor]:
         """
         Trains a model and returns the trained weights and final loss.
 
         Args:
             optim_factory (Callable[[ParamsT], torch.optim.Optimizer]): A factory function to create an optimizer.
-            model_factory (Callable[[], tuple[nn.Module, nn.Module, torch.Tensor, torch.Tensor]]): A factory function to create a model, loss, data, and target.
+            model_factory (Callable[[], tuple[nn.Module | FSDPModule, nn.Module, torch.Tensor, torch.Tensor]]): A factory function to create a model, loss, data, and target.
 
         Returns:
-            trained_weights (list[Parameter]): A list of trained model parameters.
+            trained_weights (list[torch.Tensor]): A list of trained model parameters.
             final_loss (torch.Tensor): The final loss value after training.
         """
         model, loss, data, target, _ = train_model(
@@ -189,9 +190,10 @@ def compare_two_optimizers_models_devices_on_weight_and_loss(
         )
 
         # We only care model_linear_layers_dim params, not model_dead_layer params.
+        assert isinstance(model, nn.Module)
         linear_layers = model.get_submodule("linear_layers")
         match model:
-            case FSDP2():
+            case FSDPModule():
                 # When FullyShard or Hybrid Shard is used, model parameters are DTensors. We obtain the full value of
                 # parameters from DTensors.
                 trained_weights = []
@@ -199,8 +201,8 @@ def compare_two_optimizers_models_devices_on_weight_and_loss(
                     # Need this assertion to get pass type-checking test.
                     assert isinstance(param, DTensor)
                     trained_weights.append(param.full_tensor().view(-1).detach().cpu())
-            case FSDP1():
-                with FSDP1.summon_full_params(model):
+            case FullyShardedDataParallel():
+                with FullyShardedDataParallel.summon_full_params(model):
                     trained_weights = [
                         param.view(-1).detach().cpu()
                         for param in linear_layers.parameters()

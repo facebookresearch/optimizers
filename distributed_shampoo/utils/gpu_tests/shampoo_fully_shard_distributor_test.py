@@ -26,7 +26,7 @@ from distributed_shampoo.tests.shampoo_test_utils import (
 )
 
 from torch import nn
-from torch.distributed._composable.fsdp import fully_shard
+from torch.distributed.fsdp import FSDPModule, fully_shard
 from torch.optim.optimizer import ParamsT
 from torch.testing._internal.common_distributed import skip_if_lt_x_gpu
 from torch.testing._internal.common_fsdp import FSDPTest
@@ -40,8 +40,10 @@ class ShampooFullyShardDistributorTest(FSDPTest):
 
     @staticmethod
     def _construct_model(
-        post_model_decoration: Callable[[nn.Module], nn.Module] = lambda x: x,
-    ) -> tuple[nn.Module, nn.Module, torch.Tensor, torch.Tensor]:
+        post_model_decoration: Callable[
+            [nn.Module], nn.Module | FSDPModule
+        ] = lambda x: x,
+    ) -> tuple[nn.Module | FSDPModule, nn.Module, torch.Tensor, torch.Tensor]:
         # NOTE: We construct the model here specifically in order to ensure that
         #       FullyShard Shampoo and default Shampoo produce equivalent results.
         #       This requires us to construct a model such that FullyShard will split the
@@ -102,13 +104,14 @@ class ShampooFullyShardDistributorTest(FSDPTest):
             ),
             model_factory=partial(
                 ShampooFullyShardDistributorTest._construct_model,
-                post_model_decoration=fully_shard,
+                post_model_decoration=partial(fully_shard),
             ),
             num_steps=steps_with_gradients,
         )
 
         steps_without_gradients = 3
         for _ in range(steps_without_gradients):
+            assert isinstance(model, nn.Module)
             objective = loss(model(data), target)
             objective.backward()
 
@@ -117,6 +120,7 @@ class ShampooFullyShardDistributorTest(FSDPTest):
 
             optimizer.step()
 
+        assert isinstance(model, nn.Module)
         assert isinstance(optimizer, DistributedShampoo)
         # For each rank, no matter getting gradients or not, the step should be updated.
         self.assertEqual(
@@ -139,6 +143,6 @@ class ShampooFullyShardDistributorTest(FSDPTest):
             ),
             experimental_model_factory=partial(
                 ShampooFullyShardDistributorTest._construct_model,
-                post_model_decoration=fully_shard,
+                post_model_decoration=partial(fully_shard),
             ),
         )

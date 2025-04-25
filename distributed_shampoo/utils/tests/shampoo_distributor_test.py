@@ -21,6 +21,7 @@ from distributed_shampoo.utils.shampoo_distributor import (
     Distributor,
     DistributorInterface,
 )
+from torch import nn
 
 
 class DistributorInterfaceTest(unittest.TestCase):
@@ -34,6 +35,7 @@ class DistributorInterfaceTest(unittest.TestCase):
         self._model, _, _, _ = construct_training_problem(
             (10, 5), model_dead_layers_dims=None, bias=True, fill=0.0
         )
+        assert isinstance(self._model, nn.Module)
         self._param_group = DistributedShampoo(
             self._model.parameters(),
             lr=0.01,
