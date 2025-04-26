@@ -165,7 +165,7 @@ class ShampooFSDPDistributorTest(FSDPTest):
         state_dict = optimizer.distributed_state_dict(
             key_to_param=model.named_parameters()
         )
-        flattened_state_dict = flatten_state_dict(state_dict)[0]
+        flattened_state_dict = flatten_state_dict(state_dict["state"])[0]
         rank = dist.get_rank()
         matches = 0
         for key in flattened_state_dict.keys():
