@@ -11,6 +11,7 @@ LICENSE file in the root directory of this source tree.
 
 import abc
 import copy
+import gc
 import re
 import unittest
 from dataclasses import dataclass
@@ -26,7 +27,6 @@ from distributed_shampoo.shampoo_types import (
     DistributedConfig,
     EigenvalueCorrectedShampooPreconditionerConfig,
     GraftingConfig,
-    MASKED_BLOCKED_GRADS,
     PreconditionerConfig,
     ShampooPreconditionerConfig,
     ShampooPT2CompileConfig,
@@ -217,21 +217,32 @@ class DistributedShampooTest(unittest.TestCase):
         self.assertEqual(self._optimizer.step(closure=closure), 1.0)
 
     def test_optimizer_zero_grad(self) -> None:
-        grad = torch.rand_like(self._model[0].weight)
-        self._model[0].weight.grad = grad
+        self._model[0].weight.grad = torch.ones_like(self._model[0].weight)
+
+        # Store the data pointer of the current gradient to check if it gets freed later.
+        grad_data_ptr = self._model[0].weight.grad.data_ptr()
+
         self._optimizer.step()
+
+        # Call zero_grad with set_to_none=True to explicitly release gradient memory rather than just zeroing it out.
         self._optimizer.zero_grad(set_to_none=True)
+
+        # Verify that the gradient has been set to None.
         self.assertIsNone(self._model[0].weight.grad)
-        # TODO: Figure out a better way to test this because the access of private field.
-        # Ideas tried but not working:
-        #   - sys.getrefcount(grad) with gc.collect():
-        #       - sys.getrefcount(grad) is always 2 and assignment to self._model[0].weight.grad wont change the reference count.
-        #       - Tensor.view(), under the hood how state_list[MASKED_BLOCKED_GRADS] is generated, has its own reference count.
-        #   - memory usage probing:
-        #       - Tried psutil.Process(os.getpid()).memory_info().rss to probe the current memory usage
-        #       - PyTorch pre-allocates memory so it is hard to detect this.
-        self.assertIsNone(
-            self._optimizer._per_group_state_lists[0][MASKED_BLOCKED_GRADS]
+
+        # Get all tensor objects currently tracked by the garbage collector.
+        all_alive_tensors = tuple(
+            obj
+            for obj in gc.get_objects()
+            # Using type(obj) here to prevent the garbage collector from including non-real tensors like FakeTensor.
+            if type(obj) in (torch.Tensor, nn.Parameter)
+        )
+
+        # Check that the stored gradient data pointer is not in the list of alive tensors, ensuring it was freed.
+        self.assertNotIn(
+            grad_data_ptr,
+            (t.data_ptr() for t in all_alive_tensors),
+            msg="Found gradients space is still not freed, check Shampoo code for properly free gradients pointers.",
         )
 
 
