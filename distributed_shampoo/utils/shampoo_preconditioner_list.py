@@ -1430,13 +1430,12 @@ class EigenvalueCorrectedShampooPreconditionerList(
                 self._masked_kronecker_factors_list,
                 strict=True,
             ):
-                factor_eigenvectors = kronecker_factors.factor_matrices_eigenvectors
-                if factor_eigenvectors and factor_eigenvectors[0].any():
-                    grad = self._precondition_grad(
-                        grad=grad,
-                        preconditioned_dims_selector=preconditioned_dims_selector,
-                        preconditioner_list=factor_eigenvectors,
-                    )
+                # Transform the gradient to eigenbasis of Shampoo's factor matrices.
+                grad = self._precondition_grad(
+                    grad=grad,
+                    preconditioned_dims_selector=preconditioned_dims_selector,
+                    preconditioner_list=kronecker_factors.factor_matrices_eigenvectors,
+                )
                 # Update corrected eigenvalues (squared gradient in eigenbasis of Shampoo preconditioner).
                 if self._beta2 != 1.0:
                     kronecker_factors.corrected_eigenvalues.mul_(self._beta2)
@@ -1475,34 +1474,27 @@ class EigenvalueCorrectedShampooPreconditionerList(
                 self._masked_roots_list,
                 strict=True,
             ):
-                factor_eigenvectors = kronecker_factors.factor_matrices_eigenvectors
-                corrected_eigenvalues = kronecker_factors.corrected_eigenvalues
-                use_eigenbasis = factor_eigenvectors and factor_eigenvectors[0].any()
-                grad = masked_grad.clone()
-                if use_eigenbasis:
-                    # Convert to eigenbasis of Shampoo factor matrices.
-                    grad = self._precondition_grad(
-                        grad=grad,
-                        preconditioned_dims_selector=preconditioned_dims_selector,
-                        preconditioner_list=factor_eigenvectors,
-                    )
-
+                # Transform the gradient to eigenbasis of Shampoo's factor matrices.
+                grad = self._precondition_grad(
+                    grad=masked_grad,
+                    preconditioned_dims_selector=preconditioned_dims_selector,
+                    preconditioner_list=kronecker_factors.factor_matrices_eigenvectors,
+                )
                 # Verify that the number of roots is 1 in Eigenvalue-Corrected Shampoo preconditioner.
                 assert len(roots) == 1, f"{len(roots)=} != 1"
                 # Precondition with inverse root of corrected eigenvalues.
                 grad.div_(
-                    corrected_eigenvalues.div(self._bias_correction2)
+                    kronecker_factors.corrected_eigenvalues.div(self._bias_correction2)
                     .add_(self._epsilon)
                     .pow_(1 / roots[0])
                 )
-                if use_eigenbasis:
-                    # Convert back to basis of the parameters.
-                    grad = self._precondition_grad(
-                        grad=grad,
-                        preconditioned_dims_selector=preconditioned_dims_selector,
-                        preconditioner_list=factor_eigenvectors,
-                        dims=([0], [1]),
-                    )
+                # Convert back to basis of the parameters.
+                grad = self._precondition_grad(
+                    grad=grad,
+                    preconditioned_dims_selector=preconditioned_dims_selector,
+                    preconditioner_list=kronecker_factors.factor_matrices_eigenvectors,
+                    dims=([0], [1]),
+                )
                 preconditioned_grad_list.append(grad)
             return tuple(preconditioned_grad_list)
 
