@@ -68,6 +68,7 @@ class ShampooFSDPDistributorTest(FSDPTest):
             fill=0.01,
             post_model_decoration=post_model_decoration,
         )
+        assert isinstance(model, nn.Module)
         if isinstance(distributed_config, FSDPShampooConfig):
             assert (
                 sum(param.numel() for param in model.parameters())
@@ -113,6 +114,7 @@ class ShampooFSDPDistributorTest(FSDPTest):
             ),
             num_steps=steps_with_gradients,
         )
+        assert isinstance(model, nn.Module)
 
         steps_without_gradients = 3
         for _ in range(steps_without_gradients):

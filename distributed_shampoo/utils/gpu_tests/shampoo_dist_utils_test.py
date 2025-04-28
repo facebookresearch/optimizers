@@ -9,6 +9,8 @@ LICENSE file in the root directory of this source tree.
 
 #!/usr/bin/env python3
 
+from functools import partial
+from operator import attrgetter
 from unittest import mock
 
 import torch
@@ -42,11 +44,12 @@ class ShampooDistUtilsTest(DTensorTestBase):
             (shard_mesh.get_group(), replicate_mesh.get_group()),
         )
 
-    @with_comms  # type: ignore
+    @with_comms
     def test_get_device_mesh(self) -> None:
         mesh = tuple(
             map(
-                tuple,  # type: ignore
+                # Some type-checkers are not able to recognize the `tuple` below as a function. Use `partial` here to explicitly make a Callable for those type-checkers.
+                partial(tuple),
                 torch.tensor(range(self.world_size))
                 .view(-1, self.world_size // 2)
                 .tolist(),
@@ -55,7 +58,7 @@ class ShampooDistUtilsTest(DTensorTestBase):
 
         self._verify_deivce_mesh(
             device_mesh=get_device_mesh(
-                device_type=self.device_type,  # type: ignore
+                device_type=attrgetter("device_type")(self),
                 mesh=mesh,
                 mesh_dim_names=("replicate", "shard"),
             )
@@ -69,7 +72,7 @@ class ShampooDistUtilsTest(DTensorTestBase):
             "__init__",
         ) as mock_device_mesh_init:
             device_mesh = get_device_mesh(
-                device_type=self.device_type,  # type: ignore
+                device_type=attrgetter("device_type")(self),
                 mesh=mesh,
                 mesh_dim_names=("replicate", "shard"),
             )

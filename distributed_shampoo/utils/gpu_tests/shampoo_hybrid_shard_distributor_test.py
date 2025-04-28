@@ -31,9 +31,9 @@ from distributed_shampoo.tests.shampoo_test_utils import (
 from distributed_shampoo.utils.shampoo_preconditioner_list import SHAMPOO
 
 from torch import nn
-from torch.distributed._composable.fsdp import fully_shard
 from torch.distributed.checkpoint._nested_dict import flatten_state_dict
 from torch.distributed.device_mesh import init_device_mesh
+from torch.distributed.fsdp import FSDPModule, fully_shard
 from torch.optim.optimizer import ParamsT
 from torch.testing._internal.common_distributed import skip_if_lt_x_gpu
 from torch.testing._internal.common_utils import (
@@ -55,8 +55,10 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
 
     @staticmethod
     def _construct_model(
-        post_model_decoration: Callable[[nn.Module], nn.Module] = lambda x: x,
-    ) -> tuple[nn.Module, nn.Module, torch.Tensor, torch.Tensor]:
+        post_model_decoration: Callable[
+            [nn.Module], nn.Module | FSDPModule
+        ] = lambda x: x,
+    ) -> tuple[nn.Module | FSDPModule, nn.Module, torch.Tensor, torch.Tensor]:
         # NOTE: We construct the model here specifically in order to ensure that HybridShard
         #       Shampoo, and default Shampoo produce equivalent results.
         #       This requires us to construct a model such that FullyShard will split the
@@ -225,6 +227,7 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
             ),
             num_steps=steps_with_gradients,
         )
+        assert isinstance(model, nn.Module)
 
         steps_without_gradients = 3
         for _ in range(steps_without_gradients):
@@ -260,6 +263,7 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
                 post_model_decoration=partial(fully_shard, mesh=mesh_2d),
             ),
         )
+        assert isinstance(model, nn.Module)
         assert isinstance(optimizer, DistributedShampoo)
         state_dict = optimizer.distributed_state_dict(
             key_to_param=model.named_parameters()
@@ -295,6 +299,7 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
                 fully_shard, mesh=hybrid_shard_config.device_mesh
             ),
         )[0]
+        assert isinstance(model, nn.Module)
 
         self.assertRaisesRegex(
             ValueError,
@@ -320,6 +325,7 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
                 fully_shard, mesh=hybrid_shard_config.device_mesh
             ),
         )[0]
+        assert isinstance(model, nn.Module)
 
         with mock.patch.object(torch.distributed, "is_initialized", return_value=False):
             self.assertRaisesRegex(
@@ -349,6 +355,7 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
                 fully_shard, mesh=hybrid_shard_config.device_mesh
             ),
         )[0]
+        assert isinstance(model, nn.Module)
 
         # Hijack the DeviceMesh.size() method to return 4 instead of 2 to bypass the check of num_trainers_per_group.
         with mock.patch.object(
@@ -378,6 +385,7 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
                 fully_shard, mesh=hybrid_shard_config.device_mesh
             ),
         )[0]
+        assert isinstance(model, nn.Module)
 
         with mock.patch.object(CommunicationDType, "__eq__", return_value=False):
             self.assertRaisesRegex(
