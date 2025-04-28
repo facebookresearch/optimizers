@@ -1,11 +1,11 @@
 # Optimizers
 
 [![Python3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/downloads/)
-[![tests](https://github.com/facebookresearch/optimizers/actions/workflows/tests.yaml/badge.svg)](https://github.com/facebookresearch/optimizers/actions/workflows/tests.yaml)
-[![gpu-tests](https://github.com/facebookresearch/optimizers/actions/workflows/gpu-tests.yaml/badge.svg)](https://github.com/facebookresearch/optimizers/actions/workflows/gpu-tests.yaml)
-[![pre-commit](https://github.com/facebookresearch/optimizers/actions/workflows/pre-commit.yaml/badge.svg)](https://github.com/facebookresearch/optimizers/actions/workflows/pre-commit.yaml)
-[![type-checking](https://github.com/facebookresearch/optimizers/actions/workflows/type-check.yaml/badge.svg)](https://github.com/facebookresearch/optimizers/actions/workflows/type-check.yaml)
-[![examples](https://github.com/facebookresearch/optimizers/actions/workflows/examples.yaml/badge.svg)](https://github.com/facebookresearch/optimizers/actions/workflows/examples.yaml)
+[![tests](https://github.com/facebookresearch/optimizers/actions/workflows/tests.yaml/badge.svg)](https://github.com/facebookresearch/optimizers/actions/workflows/tests.yaml?query=branch%3Amain)
+[![gpu-tests](https://github.com/facebookresearch/optimizers/actions/workflows/gpu-tests.yaml/badge.svg)](https://github.com/facebookresearch/optimizers/actions/workflows/gpu-tests.yaml?query=branch%3Amain)
+[![pre-commit](https://github.com/facebookresearch/optimizers/actions/workflows/pre-commit.yaml/badge.svg)](https://github.com/facebookresearch/optimizers/actions/workflows/pre-commit.yaml?query=branch%3Amain)
+[![type-checking](https://github.com/facebookresearch/optimizers/actions/workflows/type-check.yaml/badge.svg)](https://github.com/facebookresearch/optimizers/actions/workflows/type-check.yaml?query=branch%3Amain)
+[![examples](https://github.com/facebookresearch/optimizers/actions/workflows/examples.yaml/badge.svg)](https://github.com/facebookresearch/optimizers/actions/workflows/examples.yaml?query=branch%3Amain)
 [![license](https://img.shields.io/badge/license-BSD--Clause-lightgrey.svg)](./LICENSE)
 
 
