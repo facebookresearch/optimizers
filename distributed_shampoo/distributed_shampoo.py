@@ -277,7 +277,7 @@ class DistributedShampoo(torch.optim.Optimizer):
             This can be used to replicate a version of NAdam if set appropriately. For example, if beta1 = 0.9, then applying
             beta1 interpolation a second time is equivalent to setting beta3 = 0.9 * 0.9 = 0.81.
             If set to -1.0, will set equal to beta1. (Default: -1.0)
-        epsilon (float): Term added to the denominator to improve numerical stability. (Default: 1e-12)
+        epsilon (float): Term added to the denominator to improve numerical stability, also known as the damping term. (Default: 1e-12)
         momentum (float): Momentum parameter. (Default: 0.)
         dampening (float): Dampening parameter for momentum. (Default: 0.)
         weight_decay (float): Weight decay (L2 penalty). (Default: 0.)
