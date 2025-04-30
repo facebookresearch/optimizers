@@ -29,7 +29,9 @@ from matrix_functions import (
     compute_matrix_root_inverse_residuals,
     matrix_eigendecomposition,
     matrix_inverse_root,
+    matrix_perturbation,
     NewtonConvergenceFlag,
+    stabilize_and_pow_eigenvalues,
 )
 from matrix_functions_types import (
     CoupledHigherOrderConfig,
@@ -38,6 +40,8 @@ from matrix_functions_types import (
     EigenConfig,
     EigendecompositionConfig,
     EighEigendecompositionConfig,
+    PerturbationConfig,
+    PseudoInverseConfig,
     QREigendecompositionConfig,
     RootInvConfig,
 )
@@ -64,6 +68,91 @@ class CheckDiagonalTest(unittest.TestCase):
     def test_check_diagonal_for_diagonal_matrix(self) -> None:
         A = torch.eye(2)
         self.assertTrue(check_diagonal(A))
+
+
+class MatrixPerturbationTest(unittest.TestCase):
+    def test_matrix_perturbation_not_is_eigenvalues_for_not_two_dim_matrix(
+        self,
+    ) -> None:
+        A = torch.zeros((2, 2, 2))
+        self.assertRaisesRegex(
+            ValueError,
+            re.escape("Matrix is not 2-dimensional!"),
+            matrix_perturbation,
+            A,
+            epsilon=0.1,
+            is_eigenvalues=False,
+        )
+
+    def test_matrix_perturbation_not_is_eigenvalues_for_not_square_matrix(
+        self,
+    ) -> None:
+        A = torch.zeros((2, 3))
+        self.assertRaisesRegex(
+            ValueError,
+            re.escape("Matrix is not square!"),
+            matrix_perturbation,
+            A,
+            epsilon=0.1,
+            is_eigenvalues=False,
+        )
+
+    def test_matrix_perturbation_not_is_eigenvalues(self) -> None:
+        A = torch.eye(2)
+        torch.testing.assert_close(
+            A * 1.1, matrix_perturbation(A, epsilon=0.1, is_eigenvalues=False)
+        )
+
+    def test_matrix_perturbation_is_eigenvalues(self) -> None:
+        A = torch.ones(5)
+        torch.testing.assert_close(
+            A + 0.1, matrix_perturbation(A, epsilon=0.1, is_eigenvalues=True)
+        )
+
+    def test_matrix_perturbation_is_eigenvalues_square(self) -> None:
+        A = torch.eye(2)
+        torch.testing.assert_close(
+            A + 0.1, matrix_perturbation(A, epsilon=0.1, is_eigenvalues=True)
+        )
+
+
+class ScaleAndPowEigenvaluesTest(unittest.TestCase):
+    def test_scale_and_pow_eigenvalues_perturb_before(self) -> None:
+        L = torch.tensor([0.1, 3.1])
+        torch.testing.assert_close(
+            torch.tensor([1.0, 0.5]),
+            stabilize_and_pow_eigenvalues(
+                L,
+                root=Fraction(2),
+                epsilon=1.0,
+            ),
+        )
+
+    def test_scale_and_pow_eigenvalues_perturb_after(self) -> None:
+        L = torch.tensor([0.1, 3.1])
+        torch.testing.assert_close(
+            torch.tensor([1.0, 0.5]),
+            stabilize_and_pow_eigenvalues(
+                L,
+                root=Fraction(2),
+                epsilon=0.9,
+                rank_deficient_stability_config=PerturbationConfig(
+                    perturb_before_computation=False
+                ),
+            ),
+        )
+
+    def test_scale_and_pow_eigenvalues_pseudoinverse(self) -> None:
+        L = torch.tensor([1.0, 4.0, 0.0])
+        torch.testing.assert_close(
+            torch.tensor([1.0, 0.5, 0.0]),
+            stabilize_and_pow_eigenvalues(
+                L,
+                root=Fraction(2),
+                epsilon=0.0,
+                rank_deficient_stability_config=PseudoInverseConfig(rank_rtol=None),
+            ),
+        )
 
 
 @instantiate_parametrized_tests
@@ -116,9 +205,16 @@ class MatrixInverseRootTest(unittest.TestCase):
     @parametrize(
         "root_inv_config",
         (
-            EigenConfig(),
+            EigenConfig(),  # perturb_before_computation=True by default
             CoupledNewtonConfig(),
-            EigenConfig(enhance_stability=True),
+            EigenConfig(
+                rank_deficient_stability_config=PerturbationConfig(
+                    perturb_before_computation=False
+                )
+            ),
+            EigenConfig(
+                rank_deficient_stability_config=PseudoInverseConfig(rank_rtol=None)
+            ),  # equivalent behavior when test matrices are full rank
             EigenConfig(eigendecomposition_offload_device="cpu"),
             *(
                 CoupledHigherOrderConfig(rel_epsilon=0.0, abs_epsilon=0.0, order=order)
@@ -417,6 +513,26 @@ class EigenRootTest(unittest.TestCase):
             eig_sols=partial(eig_sols_tridiagonal_2, alpha=alpha, beta=beta),
         )
 
+    def test_eigen_root_nonfull_rank(self) -> None:
+        A = torch.tensor([[2.0, 1.0], [2.0, 1.0]])
+        root = Fraction(2)
+        epsilon = 0.0
+
+        M_default = matrix_inverse_root(
+            A, root=root, root_inv_config=EigenConfig(), epsilon=epsilon
+        )
+        self.assertTrue(torch.all(torch.isinf(M_default)))
+
+        M_pseudoinverse = matrix_inverse_root(
+            A,
+            root=root,
+            root_inv_config=EigenConfig(
+                rank_deficient_stability_config=PseudoInverseConfig(rank_rtol=None)
+            ),
+            epsilon=epsilon,
+        )
+        self.assertTrue(torch.all(torch.isreal(M_pseudoinverse)))
+
     def test_matrix_root_eigen_nonpositive_root(self) -> None:
         A = torch.tensor([[-1.0, 0.0], [0.0, 2.0]])
         root = -1
@@ -426,6 +542,21 @@ class EigenRootTest(unittest.TestCase):
             matrix_inverse_root,
             A=A,
             root=root,
+        )
+
+    def test_pseudoinverse_epsilon_nonzero(self) -> None:
+        A = torch.tensor([[1.0, 0.0], [0.0, 0.0]])
+        epsilon = 1e-8
+        self.assertRaisesRegex(
+            ValueError,
+            re.escape(f"{epsilon=} should be 0.0 when using pseudo-inverse!"),
+            matrix_inverse_root,
+            A=A,
+            root=Fraction(2),
+            epsilon=epsilon,
+            root_inv_config=EigenConfig(
+                rank_deficient_stability_config=PseudoInverseConfig()
+            ),
         )
 
     torch_linalg_module: ModuleType = torch.linalg

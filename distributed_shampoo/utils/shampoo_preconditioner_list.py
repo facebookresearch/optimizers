@@ -25,7 +25,11 @@ from distributed_shampoo.shampoo_types import (
 )
 from distributed_shampoo.utils.shampoo_block_info import BlockInfo
 from distributed_shampoo.utils.shampoo_utils import compress_list, get_dtype_size
-from matrix_functions import matrix_eigendecomposition, matrix_inverse_root
+from matrix_functions import (
+    matrix_eigendecomposition,
+    matrix_inverse_root,
+    stabilize_and_pow_eigenvalues,
+)
 
 from matrix_functions_types import (
     EigendecompositionConfig,
@@ -1185,13 +1189,25 @@ class EigendecomposedShampooPreconditionerList(
         with profiler.record_function(
             f"## {self.__class__.__name__}:{self.precondition.__name__} ##"
         ):
+            # TODO: remove assertion when rank_deficient_stability_config is generalized to MatrixFunctionConfig
+            assert isinstance(
+                self._preconditioner_config.amortized_computation_config,
+                EigendecompositionConfig,
+            )
+            rank_deficient_stability_config = self._preconditioner_config.amortized_computation_config.rank_deficient_stability_config
+
             return tuple(
                 self._precondition_grad(
                     grad=masked_grad,
                     preconditioned_dims_selector=preconditioned_dims_selector,
                     preconditioner_list=tuple(
                         eigenvectors
-                        * eigenvalues.add(self._epsilon).pow_(-1.0 / root).unsqueeze(0)
+                        * stabilize_and_pow_eigenvalues(
+                            eigenvalues,
+                            root=Fraction(root),
+                            epsilon=self._epsilon,
+                            rank_deficient_stability_config=rank_deficient_stability_config,
+                        ).unsqueeze(0)
                         @ eigenvectors.T
                         for eigenvectors, eigenvalues, root in zip(
                             kronecker_factors.factor_matrices_eigenvectors,
@@ -1489,11 +1505,22 @@ class EigenvalueCorrectedShampooPreconditionerList(
 
                 # Verify that the number of roots is 1 in Eigenvalue-Corrected Shampoo preconditioner.
                 assert len(roots) == 1, f"{len(roots)=} != 1"
+                # TODO: remove assertion when rank_deficient_stability_config is generalized to MatrixFunctionConfig
+                assert isinstance(
+                    self._preconditioner_config.amortized_computation_config,
+                    EigendecompositionConfig,
+                )
+                rank_deficient_stability_config = self._preconditioner_config.amortized_computation_config.rank_deficient_stability_config
+
                 # Precondition with inverse root of corrected eigenvalues.
-                grad.div_(
-                    corrected_eigenvalues.div(self._bias_correction2)
-                    .add_(self._epsilon)
-                    .pow_(1 / roots[0])
+                # Note that stabilize_and_pow_eigenvalues() takes the inverse of the root, so the result can be directly multiplied to the gradient.
+                grad.mul_(
+                    stabilize_and_pow_eigenvalues(
+                        corrected_eigenvalues.div(self._bias_correction2),
+                        root=Fraction(roots[0]),
+                        epsilon=self._epsilon,
+                        rank_deficient_stability_config=rank_deficient_stability_config,
+                    )
                 )
                 if use_eigenbasis:
                     # Convert back to basis of the parameters.

@@ -8,12 +8,14 @@ LICENSE file in the root directory of this source tree.
 """
 
 import enum
+import inspect
 import logging
 import math
 import time
-from dataclasses import asdict
+from dataclasses import fields
 from fractions import Fraction
 from math import isfinite
+from typing import Any, Callable
 
 import torch
 from matrix_functions_types import (
@@ -21,10 +23,14 @@ from matrix_functions_types import (
     CoupledNewtonConfig,
     DefaultEigenConfig,
     DefaultEigendecompositionConfig,
+    DefaultPerturbationConfig,
     EigenConfig,
     EigendecompositionConfig,
     EighEigendecompositionConfig,
+    PerturbationConfig,
+    PseudoInverseConfig,
     QREigendecompositionConfig,
+    RankDeficientStabilityConfig,
     RootInvConfig,
 )
 
@@ -46,6 +52,20 @@ class NewtonConvergenceFlag(enum.Enum):
     REACHED_MAX_ITERS = enum.auto()
     CONVERGED = enum.auto()
     EARLY_STOP = enum.auto()
+
+
+def _get_function_args_from_config(
+    func: Callable[..., Any],  # type: ignore
+    config: Any,  # type: ignore
+) -> dict[str, Any]:
+    """
+    Returns a dict of arguments for func that are defined in config. Note that config is not expected to contain all arguments for func, nor are all fields in config expected to be applicable to func.
+    """
+    return {
+        field.name: getattr(config, field.name)
+        for field in fields(config)
+        if field.name in inspect.getfullargspec(func).args
+    }
 
 
 def check_diagonal(A: Tensor) -> bool:
@@ -71,6 +91,119 @@ def check_diagonal(A: Tensor) -> bool:
 
     # Check both upper triangular part and lower triangular part are all zeros.
     return not A.triu(diagonal=1).any() and not A.tril(diagonal=-1).any()
+
+
+def matrix_perturbation(
+    A: Tensor,
+    epsilon: float = 0.0,
+    is_eigenvalues: bool = True,
+) -> Tensor:
+    """Add epsilon * I to matrix (if square) or epsilon (if vector).
+
+    Args:
+        A (Tensor): Matrix of interest.
+        epsilon (float): Value to add to matrix for perturbation/regularization. (Default: 0.0)
+        is_eigenvalues (bool): Whether A is a matrix of eigenvalues (true) or a full matrix (false). In the former case (true), add epsilon to all values; in the latter (false), add epsilon along the diagonal. (Default: True)
+
+    Returns:
+        A_ridge (Tensor): Matrix with perturbation/regularization.
+
+    Raises:
+        ValueError: If the input matrix is not two-dimensional or square when `is_eigenvalues` is False.
+
+    """
+    if not is_eigenvalues:
+        if A.ndim != 2:
+            raise ValueError(f"Matrix is not 2-dimensional! {A.ndim=}")
+        if A.shape[0] != A.shape[1]:
+            raise ValueError(f"Matrix is not square! {A.shape=}")
+        dim = A.shape[0]
+        identity = torch.eye(dim, dtype=A.dtype, device=A.device)
+        return A.add(identity, alpha=epsilon)
+    else:
+        return A + epsilon
+
+
+def truncate_eigenvalues_cutoff(
+    L: Tensor,
+    rank_rtol: float | None = None,
+    rank_atol: float = 0.0,
+) -> float:
+    """Filter the eigenvalues based on the numerical rank of the matrix. The procedure below mimics the steps described in the documentation of https://pytorch.org/docs/stable/generated/torch.linalg.matrix_rank.html.
+
+    Args:
+        L (Tensor): Eigenvalues of matrix.
+        rank_rtol (float): Relative tolerance for determining numerical rank of matrix. (Default: None)
+        rank_atol (float): Absolute tolerance for determining numerical rank of matrix. (Default: 0.0)
+
+    Returns:
+        spectrum_cutoff (float): Cutoff to filter out eigenvalues.
+    """
+    if rank_rtol is None:
+        rtol = L.numel() * torch.finfo(L.dtype).eps
+    else:
+        rtol = rank_rtol
+    return max(rank_atol, rtol * L.max().relu().item())
+
+
+def stabilize_and_pow_eigenvalues(
+    L: Tensor,
+    root: Fraction,
+    epsilon: float = 0.0,
+    rank_deficient_stability_config: RankDeficientStabilityConfig = DefaultPerturbationConfig,
+) -> Tensor:
+    """
+    Stabilize the eigenvalues of a matrix and raise them to a negative fractional power.
+
+    If using epsilon (i.e. rank_deficient_stability_config is a PerturbationConfig), stabilization entails adding epsilon to the eigenvalues, i.e. regularization. See matrix_perturbation() and PerturbationConfig for details.
+
+    If using pseudo-inverse (i.e. rank_deficient_stability_config is a PseudoInverseConfig), stabilization entails ignoring all eigenvalues sufficiently close to zero as determined by some cutoff. See truncate_eigenvalues_cutoff() and PseudoInverseConfig for details.
+
+    Args:
+        L (Tensor): The input matrix.
+        root (Fraction): The fractional power to which the eigenvalues should be raised.
+        epsilon (float, optional): A small value added to the eigenvalues for stability. (Default: 0.0)
+        rank_deficient_stability_config (RankDeficientStabilityConfig, optional): Configuration for handling/stabilizing rank-deficient matrices. (Default: DefaultPerturbationConfig)
+
+    Returns:
+        inv_power_L (Tensor): The resulting matrix with stabilized and powered eigenvalues.
+
+    Raises:
+        ValueError: If epsilon is not 0.0 when using pseudo-inverse.
+        ValueError: If rank_deficient_stability_config is not a supported config type.
+
+    """
+    match rank_deficient_stability_config:
+        case PseudoInverseConfig():
+            if epsilon != 0.0:
+                raise ValueError(f"{epsilon=} should be 0.0 when using pseudo-inverse!")
+
+            spectrum_cutoff = truncate_eigenvalues_cutoff(
+                L,
+                rank_rtol=rank_deficient_stability_config.rank_rtol,
+                rank_atol=rank_deficient_stability_config.rank_atol,
+            )
+            inv_power_L = torch.where(
+                L <= spectrum_cutoff,
+                torch.zeros_like(L),
+                L.pow(torch.as_tensor(-1.0 / root)),
+            )
+        case PerturbationConfig():
+            lambda_min = torch.min(L).item()
+
+            # make eigenvalues > 0 (if necessary)
+            effective_epsilon = (
+                -min(lambda_min - epsilon, 0.0)
+                if rank_deficient_stability_config.perturb_before_computation
+                else (-min(lambda_min, 0.0) + epsilon)
+            )
+            L = matrix_perturbation(L, epsilon=effective_epsilon, is_eigenvalues=True)
+
+            inv_power_L = L.pow(torch.as_tensor(-1.0 / root))
+        case _:
+            raise ValueError(f"{rank_deficient_stability_config=} is not supported.")
+
+    return inv_power_L
 
 
 def matrix_inverse_root(
@@ -122,9 +255,9 @@ def matrix_inverse_root(
                 A=A,
                 root=root,
                 epsilon=epsilon,
-                retry_double_precision=root_inv_config.retry_double_precision,
-                enhance_stability=root_inv_config.enhance_stability,
-                eigendecomposition_offload_device=root_inv_config.eigendecomposition_offload_device,
+                **_get_function_args_from_config(
+                    _matrix_inverse_root_eigen, root_inv_config
+                ),
             )
         case CoupledNewtonConfig():
             # NOTE: Use Fraction.is_integer() instead when downstream applications are Python 3.12+ available
@@ -137,7 +270,9 @@ def matrix_inverse_root(
                 A=A,
                 root=root.numerator,
                 epsilon=epsilon,
-                **asdict(root_inv_config),
+                **_get_function_args_from_config(
+                    _matrix_inverse_root_newton, root_inv_config
+                ),
             )
             if termination_flag == NewtonConvergenceFlag.REACHED_MAX_ITERS:
                 logging.warning(
@@ -147,7 +282,9 @@ def matrix_inverse_root(
             X, _, termination_flag, _, _ = _matrix_inverse_root_higher_order(
                 A=A,
                 root=root,
-                **asdict(root_inv_config),
+                **_get_function_args_from_config(
+                    _matrix_inverse_root_higher_order, root_inv_config
+                ),
             )
             if termination_flag == NewtonConvergenceFlag.REACHED_MAX_ITERS:
                 logging.warning(
@@ -189,6 +326,7 @@ def _matrix_inverse_root_diagonal(
 
 def matrix_eigendecomposition(
     A: Tensor,
+    epsilon: float = 0.0,
     eigendecomposition_config: EigendecompositionConfig = DefaultEigendecompositionConfig,
     is_diagonal: bool = False,
 ) -> tuple[Tensor, Tensor]:
@@ -196,6 +334,7 @@ def matrix_eigendecomposition(
 
     Args:
         A (Tensor): The input symmetric matrix.
+        epsilon (float): Adds epsilon * I to matrix before taking matrix root for numerical stability. See DistributedShampoo.epsilon for details. (Default: 0.0)
         eigendecomposition_config (EigendecompositionConfig): Determines how eigendecomposition is computed.
         is_diagonal (bool): Whether A is diagonal. (Default: False)
 
@@ -205,6 +344,7 @@ def matrix_eigendecomposition(
 
     Raises:
         ValueError: If the matrix is not 2-dimensional or not square.
+        ValueError: If epsilon is 0.0 when using pseudo-inverse.
         NotImplementedError: If the eigendecomposition config is not implemented.
 
     """
@@ -226,16 +366,44 @@ def matrix_eigendecomposition(
             device=A.device,
         )
 
+    # TODO: reduce redundant code when rank_deficient_stability_config is generalized to all methods
+    # check epsilon is 0 when using pseudo-inverse
+    if (
+        isinstance(
+            eigendecomposition_config.rank_deficient_stability_config,
+            PseudoInverseConfig,
+        )
+        and epsilon != 0.0
+    ):
+        raise ValueError(f"{epsilon=} should be 0.0 when using pseudo-inverse!")
+
+    # Add epsilon to the diagonal to help with numerical stability of the eigenvalue decomposition
+    # Only do it when damp_before_computation is True (root_inv_config must be a DampingConfig)
+    if (
+        isinstance(
+            eigendecomposition_config.rank_deficient_stability_config,
+            PerturbationConfig,
+        )
+        and eigendecomposition_config.rank_deficient_stability_config.perturb_before_computation
+    ):
+        A_ridge = matrix_perturbation(A, epsilon=epsilon, is_eigenvalues=False)
+    else:
+        A_ridge = A
+
     match eigendecomposition_config:
         case EighEigendecompositionConfig():
             return _eigh_eigenvalue_decomposition(
-                A,
-                **asdict(eigendecomposition_config),
+                A_ridge,
+                **_get_function_args_from_config(
+                    _eigh_eigenvalue_decomposition, eigendecomposition_config
+                ),
             )
         case QREigendecompositionConfig():
             return _qr_algorithm(
-                A,
-                **asdict(eigendecomposition_config),
+                A_ridge,
+                **_get_function_args_from_config(
+                    _qr_algorithm, eigendecomposition_config
+                ),
             )
         case _:
             raise NotImplementedError(
@@ -378,8 +546,8 @@ def _matrix_inverse_root_eigen(
     A: Tensor,
     root: Fraction,
     epsilon: float = 0.0,
+    rank_deficient_stability_config: RankDeficientStabilityConfig = DefaultPerturbationConfig,
     retry_double_precision: bool = True,
-    enhance_stability: bool = False,
     eigendecomposition_offload_device: torch.device | str = "",
 ) -> tuple[Tensor, Tensor, Tensor]:
     """Compute matrix inverse root using eigendecomposition of symmetric positive (semi-)definite matrix.
@@ -392,9 +560,9 @@ def _matrix_inverse_root_eigen(
         A (Tensor): Square matrix of interest.
         root (Fraction): Root of interest. Any rational number.
         epsilon (float): Adds epsilon * I to matrix before taking matrix root. (Default: 0.0)
+        rank_deficient_stability_config (RankDeficientStabilityConfig): Configuration for handling/stabilizing rank-deficient matrices. (Default: DefaultPerturbationConfig)
         retry_double_precision (bool): Flag for re-trying eigendecomposition with higher precision if lower precision fails due
             to CuSOLVER failure. (Default: True)
-        enhance_stability (bool): Whether to use a (mathematically identical, yet numerically more stable) path for eigendecomposition (Default: False)
         eigendecomposition_offload_device (torch.device | str): Device to offload eigendecomposition computation. If value is empty string, do not perform offloading. (Default: "")
 
     Returns:
@@ -404,6 +572,7 @@ def _matrix_inverse_root_eigen(
 
     Raises:
         ValueError: If the root is not a positive integer.
+        ValueError: If epsilon is 0.0 when using pseudo-inverse.
 
     """
 
@@ -411,12 +580,24 @@ def _matrix_inverse_root_eigen(
     if root <= 0:
         raise ValueError(f"Root {root} should be positive!")
 
+    # TODO: reduce redundant code when rank_deficient_stability_config is generalized to all methods
+    # check epsilon is 0 when using pseudo-inverse
+    if (
+        isinstance(
+            rank_deficient_stability_config,
+            PseudoInverseConfig,
+        )
+        and epsilon != 0.0
+    ):
+        raise ValueError(f"{epsilon=} should be 0.0 when using pseudo-inverse!")
+
     # Add epsilon to the diagonal to help with numerical stability of the eigenvalue decomposition
-    # Only do it when "enhance_stability" is True
-    if enhance_stability:
-        dim = A.shape[0]
-        identity = torch.eye(dim, dtype=A.dtype, device=A.device)
-        A_ridge = A + epsilon * identity
+    # Only do it when damp_before_computation is True (root_inv_config must be a DampingConfig)
+    if (
+        isinstance(rank_deficient_stability_config, PerturbationConfig)
+        and rank_deficient_stability_config.perturb_before_computation
+    ):
+        A_ridge = matrix_perturbation(A, epsilon=epsilon, is_eigenvalues=False)
     else:
         A_ridge = A
 
@@ -426,19 +607,16 @@ def _matrix_inverse_root_eigen(
         retry_double_precision=retry_double_precision,
         eigendecomposition_offload_device=eigendecomposition_offload_device,
     )
-    lambda_min = torch.min(L)
 
-    # make eigenvalues > 0 (if necessary)
-
-    if enhance_stability:
-        L += -torch.minimum(lambda_min - epsilon, torch.as_tensor(0.0))
-    else:
-        L += -torch.minimum(lambda_min, torch.as_tensor(0.0))
-        # and add the epsilon
-        L += epsilon
+    inv_power_L = stabilize_and_pow_eigenvalues(
+        L,
+        root,
+        epsilon=epsilon,
+        rank_deficient_stability_config=rank_deficient_stability_config,
+    )
 
     # compute the matrix inverse root
-    X = Q * L.pow(torch.as_tensor(-1.0 / root)).unsqueeze(0) @ Q.T
+    X = Q * inv_power_L.unsqueeze(0) @ Q.T
 
     return X, L, Q
 
@@ -781,7 +959,8 @@ def compute_matrix_root_inverse_residuals(
         X_hat.double(),
         root=root,
         epsilon=0.0,
-        enhance_stability=root_inv_config.enhance_stability,
+        rank_deficient_stability_config=root_inv_config.rank_deficient_stability_config,
+        retry_double_precision=root_inv_config.retry_double_precision,
         eigendecomposition_offload_device=root_inv_config.eigendecomposition_offload_device,
     )
 
