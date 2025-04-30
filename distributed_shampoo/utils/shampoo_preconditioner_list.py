@@ -298,7 +298,7 @@ class BaseShampooKroneckerFactors(OptimizerModule):
 
 
 @dataclass(kw_only=True)
-class ShampooKroneckerFactorsState(BaseShampooKroneckerFactors):
+class RootInvShampooKroneckerFactorsState(BaseShampooKroneckerFactors):
     """Shampoo Kronecker factors (wrapped) for storing in the optimizer state.
 
     Attributes:
@@ -315,7 +315,7 @@ class ShampooKroneckerFactorsState(BaseShampooKroneckerFactors):
 
 
 @dataclass(kw_only=True)
-class ShampooKroneckerFactorsList(BaseShampooKroneckerFactors):
+class RootInvShampooKroneckerFactorsList(BaseShampooKroneckerFactors):
     """Shampoo Kronecker factors (unwrapped) for operations during optimizer computation.
 
     Attributes:
@@ -417,13 +417,13 @@ class EigenvalueCorrectedShampooKroneckerFactorsList(BaseShampooKroneckerFactors
 
 ShampooKroneckerFactorsStateType = TypeVar(
     "ShampooKroneckerFactorsStateType",
-    ShampooKroneckerFactorsState,
+    RootInvShampooKroneckerFactorsState,
     EigendecomposedShampooKroneckerFactorsState,
     EigenvalueCorrectedShampooKroneckerFactorsState,
 )
 ShampooKroneckerFactorsListType = TypeVar(
     "ShampooKroneckerFactorsListType",
-    ShampooKroneckerFactorsList,
+    RootInvShampooKroneckerFactorsList,
     EigendecomposedShampooKroneckerFactorsList,
     EigenvalueCorrectedShampooKroneckerFactorsList,
 )
@@ -581,7 +581,7 @@ class BaseShampooPreconditionerList(
         block_info: BlockInfo,
     ) -> ShampooKroneckerFactorsListType:
         """
-        Creates a ShampooKroneckerFactorsList object from the given ShampooKroneckerFactorsState.
+        Creates a RootInvShampooKroneckerFactorsList object from the given RootInvShampooKroneckerFactorsState.
 
         Args:
             kronecker_factors_state (ShampooKroneckerFactorsStateType): The state containing the Kronecker factors.
@@ -602,8 +602,8 @@ class BaseShampooPreconditionerList(
     ) -> list[ShampooKroneckerFactorsListType]:
         # Instantiate (blocked) Kronecker factors and construct list of Kronecker factors.
         # NOTE: We need to instantiate the Kronecker factor states within the optimizer's state dictionary,
-        # and do not explicitly store them as ShampooPreconditionerList attributes here.
-        # This is because the optimizer state is defined per-parameter, but ShampooPreconditionerList is defined
+        # and do not explicitly store them as RootInvShampooPreconditionerList attributes here.
+        # This is because the optimizer state is defined per-parameter, but RootInvShampooPreconditionerList is defined
         # across each parameter group (which includes multiple parameters).
         kronecker_factors_list = []
         for block, block_info, dims, preconditioned_dims in zip(
@@ -899,12 +899,12 @@ class BaseShampooPreconditionerList(
         )
 
 
-class ShampooPreconditionerList(
+class RootInvShampooPreconditionerList(
     BaseShampooPreconditionerList[
-        ShampooKroneckerFactorsState, ShampooKroneckerFactorsList
+        RootInvShampooKroneckerFactorsState, RootInvShampooKroneckerFactorsList
     ]
 ):
-    """Shampoo preconditioners for list of parameters."""
+    """Root inverse Shampoo preconditioners for list of parameters."""
 
     def _create_kronecker_factors_state_for_block(
         self,
@@ -912,8 +912,8 @@ class ShampooPreconditionerList(
         block_info: BlockInfo,
         dims: torch.Size,
         preconditioned_dims: tuple[int, ...],
-    ) -> ShampooKroneckerFactorsState:
-        return ShampooKroneckerFactorsState(
+    ) -> RootInvShampooKroneckerFactorsState:
+        return RootInvShampooKroneckerFactorsState(
             **asdict(
                 self._create_base_kronecker_factors(
                     block_info=block_info, preconditioned_dims=preconditioned_dims
@@ -944,10 +944,10 @@ class ShampooPreconditionerList(
 
     def _create_kronecker_factors_list(
         self,
-        kronecker_factors_state: ShampooKroneckerFactorsState,
+        kronecker_factors_state: RootInvShampooKroneckerFactorsState,
         block_info: BlockInfo,
-    ) -> ShampooKroneckerFactorsList:
-        return ShampooKroneckerFactorsList(
+    ) -> RootInvShampooKroneckerFactorsList:
+        return RootInvShampooKroneckerFactorsList(
             factor_matrices=tuple(
                 block_info.get_tensor(t)
                 for t in kronecker_factors_state.factor_matrices

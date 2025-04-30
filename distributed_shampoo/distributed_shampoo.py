@@ -89,8 +89,8 @@ from distributed_shampoo.utils.shampoo_preconditioner_list import (
     EigendecomposedShampooPreconditionerList,
     EigenvalueCorrectedShampooPreconditionerList,
     PreconditionerList,
+    RootInvShampooPreconditionerList,
     SGDPreconditionerList,
-    ShampooPreconditionerList,
 )
 from distributed_shampoo.utils.shampoo_utils import compress_list
 from matrix_functions_types import EigendecompositionConfig, RootInvConfig
@@ -509,7 +509,7 @@ class DistributedShampoo(torch.optim.Optimizer):
                     amortized_computation_config=RootInvConfig()
                 ):
                     preconditioner_list_cls: Callable[..., PreconditionerList] = (
-                        ShampooPreconditionerList
+                        RootInvShampooPreconditionerList
                     )
                 case ShampooPreconditionerConfig(
                     amortized_computation_config=EigendecompositionConfig()

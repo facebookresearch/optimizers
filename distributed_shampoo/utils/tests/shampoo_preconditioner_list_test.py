@@ -36,8 +36,8 @@ from distributed_shampoo.utils.shampoo_preconditioner_list import (
     EigendecomposedShampooPreconditionerList,
     EigenvalueCorrectedShampooPreconditionerList,
     PreconditionerList,
+    RootInvShampooPreconditionerList,
     SGDPreconditionerList,
-    ShampooPreconditionerList,
 )
 from distributed_shampoo.utils.shampoo_utils import compress_list
 from matrix_functions_types import QREigendecompositionConfig
@@ -714,7 +714,9 @@ class AbstractTest:
             self._test_compress_preconditioner_list(expected_compress_list_call_count=5)
 
 
-class ShampooPreconditionerListTest(AbstractTest.BaseShampooPreconditionerListTest):
+class RootInvShampooPreconditionerListTest(
+    AbstractTest.BaseShampooPreconditionerListTest
+):
     @property
     def _amortized_computation_properties(self) -> InverseRootProperties:
         return InverseRootProperties()
@@ -725,7 +727,7 @@ class ShampooPreconditionerListTest(AbstractTest.BaseShampooPreconditionerListTe
 
     @property
     def _preconditioner_list_factory(self) -> Callable[..., PreconditionerList]:
-        return ShampooPreconditionerList
+        return RootInvShampooPreconditionerList
 
     def test_update_preconditioners_and_precondition(self) -> None:
         """
@@ -1034,7 +1036,9 @@ class ShampooPreconditionerListTest(AbstractTest.BaseShampooPreconditionerListTe
         )
 
 
-class EigendecomposedShampooPreconditionerListTest(ShampooPreconditionerListTest):
+class EigendecomposedShampooPreconditionerListTest(
+    RootInvShampooPreconditionerListTest
+):
     @property
     def _amortized_computation_properties(self) -> EigendecompositionProperties:  # type: ignore[override]
         return EigendecompositionProperties()
