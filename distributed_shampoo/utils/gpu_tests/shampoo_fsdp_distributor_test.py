@@ -16,7 +16,11 @@ from itertools import pairwise
 
 import torch
 from distributed_shampoo.distributed_shampoo import DistributedShampoo
-from distributed_shampoo.shampoo_types import AdaGradGraftingConfig, FSDPShampooConfig
+from distributed_shampoo.shampoo_types import (
+    AdaGradGraftingConfig,
+    FSDPShampooConfig,
+    HSDPShampooConfig,
+)
 from distributed_shampoo.tests.shampoo_test_utils import (
     compare_two_optimizers_models_devices_on_weight_and_loss,
     construct_training_problem,
@@ -27,13 +31,19 @@ from distributed_shampoo.utils.shampoo_preconditioner_list import SHAMPOO
 
 from torch import distributed as dist, nn
 from torch.distributed.checkpoint._nested_dict import flatten_state_dict
-from torch.distributed.fsdp import FullyShardedDataParallel as FSDP1
+from torch.distributed.device_mesh import init_device_mesh
+from torch.distributed.fsdp import FullyShardedDataParallel as FSDP1, ShardingStrategy
 from torch.optim.optimizer import ParamsT
 from torch.testing._internal.common_distributed import skip_if_lt_x_gpu
 from torch.testing._internal.common_fsdp import FSDPTest
+from torch.testing._internal.common_utils import (
+    instantiate_parametrized_tests,
+    parametrize,
+)
 
 
 @unittest.skipIf(not torch.cuda.is_available(), "Skip when CUDA is not available")
+@instantiate_parametrized_tests
 class ShampooFSDPDistributorTest(FSDPTest):
     @property
     def world_size(self) -> int:
@@ -176,3 +186,41 @@ class ShampooFSDPDistributorTest(FSDPTest):
                     self.assertIn(f"rank_{rank}-block_", key)
                     matches += 1
         self.assertGreater(matches, 0)
+
+    @skip_if_lt_x_gpu(2)
+    @parametrize("communicate_params", (True, False))
+    def test_fsdp_shampoo_config_against_hsdp_shampoo_config_bitwise_identical(
+        self, communicate_params: bool
+    ) -> None:
+        fsdp_config = FSDPShampooConfig(param_to_metadata={})
+        hsdp_config = HSDPShampooConfig(
+            param_to_metadata={},
+            device_mesh=init_device_mesh("cuda", (1, self.world_size)),
+            communicate_params=communicate_params,
+        )
+
+        compare_two_optimizers_models_devices_on_weight_and_loss(
+            control_optim_factory=ShampooFSDPDistributorTest._shampoo_optim_factory(
+                distributed_config=fsdp_config,
+            ),
+            control_model_factory=partial(
+                ShampooFSDPDistributorTest._construct_model,
+                post_model_decoration=partial(FSDP1, use_orig_params=True),
+                distributed_config=fsdp_config,
+            ),
+            experimental_optim_factory=ShampooFSDPDistributorTest._shampoo_optim_factory(
+                distributed_config=hsdp_config,
+            ),
+            experimental_model_factory=partial(
+                ShampooFSDPDistributorTest._construct_model,
+                post_model_decoration=partial(
+                    FSDP1,
+                    device_mesh=hsdp_config.device_mesh,
+                    sharding_strategy=ShardingStrategy.HYBRID_SHARD,
+                    use_orig_params=True,
+                ),
+                distributed_config=hsdp_config,
+            ),
+            rtol=0.0,
+            atol=0.0,
+        )
