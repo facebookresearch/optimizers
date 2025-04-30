@@ -27,8 +27,12 @@ from torch.testing._internal.common_utils import (
 
 @instantiate_parametrized_tests
 class AdaGradGraftingConfigSubclassesTest(unittest.TestCase):
+    subclasses_types: list[type[AdaGradGraftingConfig]] = get_all_subclasses(
+        AdaGradGraftingConfig
+    )
+
     @parametrize("epsilon", (0.0, -1.0))
-    @parametrize("cls", get_all_subclasses(AdaGradGraftingConfig))  # type: ignore
+    @parametrize("cls", subclasses_types)
     def test_illegal_epsilon(
         self, cls: type[AdaGradGraftingConfig], epsilon: float
     ) -> None:
@@ -42,8 +46,12 @@ class AdaGradGraftingConfigSubclassesTest(unittest.TestCase):
 
 @instantiate_parametrized_tests
 class RMSpropGraftingConfigSubclassesTest(unittest.TestCase):
+    subclasses_types: list[type[RMSpropGraftingConfig]] = get_all_subclasses(
+        RMSpropGraftingConfig
+    )
+
     @parametrize("beta2", (-1.0, 0.0, 1.3))
-    @parametrize("cls", get_all_subclasses(RMSpropGraftingConfig))  # type: ignore
+    @parametrize("cls", subclasses_types)
     def test_illegal_beta2(
         self, cls: type[RMSpropGraftingConfig], beta2: float
     ) -> None:
@@ -59,10 +67,12 @@ class RMSpropGraftingConfigSubclassesTest(unittest.TestCase):
 
 @instantiate_parametrized_tests
 class PreconditionerConfigSubclassesTest(unittest.TestCase):
-    # Not testing for the base class PreconditionerConfig because it is an abstract class.
-    @parametrize(  # type: ignore
-        "cls", get_all_subclasses(PreconditionerConfig, include_cls_self=False)
+    subclasses_types: list[type[PreconditionerConfig]] = get_all_subclasses(
+        PreconditionerConfig, include_cls_self=False
     )
+
+    # Not testing for the base class PreconditionerConfig because it is an abstract class.
+    @parametrize("cls", subclasses_types)
     def test_illegal_num_tolerated_failed_amortized_computations(
         self, cls: type[PreconditionerConfig]
     ) -> None:
@@ -80,9 +90,11 @@ class PreconditionerConfigSubclassesTest(unittest.TestCase):
 
 @instantiate_parametrized_tests
 class ShampooPreconditionerConfigSubclassesTest(unittest.TestCase):
-    @parametrize(  # type: ignore
-        "cls", get_all_subclasses(ShampooPreconditionerConfig, include_cls_self=True)
+    subclasses_types: list[type[ShampooPreconditionerConfig]] = get_all_subclasses(
+        ShampooPreconditionerConfig, include_cls_self=True
     )
+
+    @parametrize("cls", subclasses_types)
     def test_illegal_inverse_exponent_override(
         self, cls: type[ShampooPreconditionerConfig]
     ) -> None:
@@ -130,12 +142,13 @@ class ShampooPreconditionerConfigSubclassesTest(unittest.TestCase):
 
 @instantiate_parametrized_tests
 class EigenvalueCorrectedShampooPreconditionerConfigSubclassesTest(unittest.TestCase):
-    @parametrize(  # type: ignore
-        "cls",
+    subclasses_types: list[type[EigenvalueCorrectedShampooPreconditionerConfig]] = (
         get_all_subclasses(
             EigenvalueCorrectedShampooPreconditionerConfig, include_cls_self=True
-        ),
+        )
     )
+
+    @parametrize("cls", subclasses_types)
     def test_illegal_ignored_basis_change_dims(
         self, cls: type[EigenvalueCorrectedShampooPreconditionerConfig]
     ) -> None:
@@ -177,12 +190,7 @@ class EigenvalueCorrectedShampooPreconditionerConfigSubclassesTest(unittest.Test
             ignored_basis_change_dims=duplicate_ignored_basis_change_dims_config,
         )
 
-    @parametrize(  # type: ignore
-        "cls",
-        get_all_subclasses(
-            EigenvalueCorrectedShampooPreconditionerConfig, include_cls_self=True
-        ),
-    )
+    @parametrize("cls", subclasses_types)
     def test_illegal_inverse_exponent_override(
         self, cls: type[EigenvalueCorrectedShampooPreconditionerConfig]
     ) -> None:
