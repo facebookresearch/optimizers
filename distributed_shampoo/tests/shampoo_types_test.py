@@ -68,7 +68,8 @@ class RMSpropGraftingConfigSubclassesTest(unittest.TestCase):
 @instantiate_parametrized_tests
 class PreconditionerConfigSubclassesTest(unittest.TestCase):
     subclasses_types: list[type[PreconditionerConfig]] = get_all_subclasses(
-        PreconditionerConfig, include_cls_self=False
+        PreconditionerConfig,  # type: ignore[type-abstract]
+        include_cls_self=False,
     )
 
     # Not testing for the base class PreconditionerConfig because it is an abstract class.
