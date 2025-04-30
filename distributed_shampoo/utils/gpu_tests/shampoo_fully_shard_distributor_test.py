@@ -18,6 +18,7 @@ from distributed_shampoo.distributed_shampoo import DistributedShampoo
 from distributed_shampoo.shampoo_types import (
     AdaGradGraftingConfig,
     FullyShardShampooConfig,
+    HybridShardShampooConfig,
 )
 from distributed_shampoo.tests.shampoo_test_utils import (
     compare_two_optimizers_models_devices_on_weight_and_loss,
@@ -26,14 +27,23 @@ from distributed_shampoo.tests.shampoo_test_utils import (
 )
 
 from torch import nn
+from torch.distributed.device_mesh import init_device_mesh
 from torch.distributed.fsdp import FSDPModule, fully_shard
 from torch.optim.optimizer import ParamsT
 from torch.testing._internal.common_distributed import skip_if_lt_x_gpu
-from torch.testing._internal.common_fsdp import FSDPTest
+from torch.testing._internal.common_utils import (
+    instantiate_parametrized_tests,
+    parametrize,
+)
+from torch.testing._internal.distributed._tensor.common_dtensor import (
+    DTensorTestBase,
+    with_comms,
+)
 
 
 @unittest.skipIf(not torch.cuda.is_available(), "Skip when CUDA is not available")
-class ShampooFullyShardDistributorTest(FSDPTest):
+@instantiate_parametrized_tests
+class ShampooFullyShardDistributorTest(DTensorTestBase):
     @property
     def world_size(self) -> int:
         return 2
@@ -93,6 +103,7 @@ class ShampooFullyShardDistributorTest(FSDPTest):
             distributed_config=distributed_config,
         )
 
+    @with_comms
     @skip_if_lt_x_gpu(2)
     def test_all_ranks_with_no_grads(self) -> None:
         fully_shard_config = FullyShardShampooConfig()  # type: ignore[abstract]
@@ -130,6 +141,7 @@ class ShampooFullyShardDistributorTest(FSDPTest):
             steps_with_gradients + steps_without_gradients,
         )
 
+    @with_comms
     @skip_if_lt_x_gpu(2)
     def test_fully_shard_shampoo_against_default_shampoo(self) -> None:
         fully_shard_config = FullyShardShampooConfig()  # type: ignore[abstract]
@@ -145,4 +157,37 @@ class ShampooFullyShardDistributorTest(FSDPTest):
                 ShampooFullyShardDistributorTest._construct_model,
                 post_model_decoration=partial(fully_shard),
             ),
+        )
+
+    @with_comms
+    @skip_if_lt_x_gpu(2)
+    @parametrize("communicate_params", (True, False))
+    def test_hybrid_shard_shampoo_config_against_fully_shard_shampoo_config_bitwise_identical(
+        self, communicate_params: bool
+    ) -> None:
+        mesh_2d = init_device_mesh(
+            "cuda", (1, self.world_size), mesh_dim_names=("replicate", "shard")
+        )
+        fully_shard_config = FullyShardShampooConfig()  # type: ignore[abstract]
+        hybrid_shard_config = HybridShardShampooConfig(
+            device_mesh=mesh_2d, communicate_params=communicate_params
+        )
+
+        compare_two_optimizers_models_devices_on_weight_and_loss(
+            control_optim_factory=ShampooFullyShardDistributorTest._shampoo_optim_factory(
+                distributed_config=fully_shard_config
+            ),
+            control_model_factory=partial(
+                ShampooFullyShardDistributorTest._construct_model,
+                post_model_decoration=partial(fully_shard, mesh=mesh_2d),
+            ),
+            experimental_optim_factory=ShampooFullyShardDistributorTest._shampoo_optim_factory(
+                distributed_config=hybrid_shard_config
+            ),
+            experimental_model_factory=partial(
+                ShampooFullyShardDistributorTest._construct_model,
+                post_model_decoration=partial(fully_shard, mesh=mesh_2d),
+            ),
+            rtol=0.0,
+            atol=0.0,
         )
