@@ -1127,21 +1127,62 @@ class BaseShampooPreconditionerList(
         )
 
 
-class RootInvShampooPreconditionerList(
+ClassicShampooKroneckerFactorsStateType = TypeVar(
+    "ClassicShampooKroneckerFactorsStateType",
+    RootInvShampooKroneckerFactorsState,
+    EigendecomposedShampooKroneckerFactorsState,
+)
+
+ClassicShampooKroneckerFactorsUnwrappedType = TypeVar(
+    "ClassicShampooKroneckerFactorsUnwrappedType",
+    RootInvShampooKroneckerFactorsUnwrapped,
+    EigendecomposedShampooKroneckerFactorsUnwrapped,
+)
+
+
+class ClassicShampooPreconditionerList(
     BaseShampooPreconditionerList[
-        RootInvShampooKroneckerFactorsState, RootInvShampooKroneckerFactorsUnwrapped
+        ClassicShampooKroneckerFactorsStateType,
+        ClassicShampooKroneckerFactorsUnwrappedType,
     ]
 ):
-    """Root inverse Shampoo preconditioners for list of parameters."""
+    """Base class for Shampoo preconditioners that rely on ShampooPreconditionerConfig.
+
+    This class factors out common implementations for Shampoo preconditioners that use
+    ShampooPreconditionerConfig to determine inverse exponent overrides and preconditioned dimensions.
+    It provides methods to retrieve inverse exponent overrides based on dimension and order,
+    and to create preconditioned dimension selectors.
+
+    """
+
+    def _get_inverse_exponent(self, dimension: int, order: int) -> float:
+        """
+        Retrieves the inverse exponent override based on the dimension and order.
+
+        Args:
+            dimension (int): The dimension for which the inverse exponent override is needed.
+            order (int): The order of the preconditioner.
+
+        Returns:
+            float: The inverse exponent override value for the given dimension and order.
+        """
+        inverse_exponent_override_on_order: dict[int, float] | float = attrgetter(
+            INVERSE_EXPONENT_OVERRIDE
+        )(self._preconditioner_config).get(order, {})
+        if isinstance(inverse_exponent_override_on_order, dict):
+            return inverse_exponent_override_on_order.get(
+                dimension, 1 / (2 * max(order, 1))
+            )
+        assert isinstance(
+            inverse_exponent_override_on_order, float
+        ), f"Expected inverse_exponent_override_on_order to be a float or a dict, but got {type(inverse_exponent_override_on_order)} instead."
+        return inverse_exponent_override_on_order
 
     def _create_preconditioned_dims_selector(
         self, dims: torch.Size
     ) -> tuple[bool, ...]:
         return tuple(
-            attrgetter(INVERSE_EXPONENT_OVERRIDE)(self._preconditioner_config)
-            .get((order := len(dims)), {})
-            .get(d, 1 / (2 * max(order, 1)))
-            != 0.0
+            self._get_inverse_exponent(dimension=d, order=len(dims)) != 0.0
             # Traverse through each dim of a block.
             for d in range(len(dims))
         )
@@ -1152,13 +1193,21 @@ class RootInvShampooPreconditionerList(
         return tuple(
             # Compute the inverse root, 1 / inverse_exponent{_override}, accordingly for each required dim.
             1
-            / attrgetter(INVERSE_EXPONENT_OVERRIDE)(self._preconditioner_config)
-            .get((order := len(preconditioned_dims_selector)), {})
-            .get(k, 1 / (2 * max(order, 1)))
+            / self._get_inverse_exponent(
+                dimension=k, order=len(preconditioned_dims_selector)
+            )
             # Traverse through each dim of a block that requires precondition.
             for k, should_precondition in enumerate(preconditioned_dims_selector)
             if should_precondition
         )
+
+
+class RootInvShampooPreconditionerList(
+    ClassicShampooPreconditionerList[
+        RootInvShampooKroneckerFactorsState, RootInvShampooKroneckerFactorsUnwrapped
+    ]
+):
+    """Root inverse Shampoo preconditioners for list of parameters."""
 
     def precondition(self, masked_grad_list: tuple[Tensor, ...]) -> tuple[Tensor, ...]:
         """
@@ -1272,38 +1321,12 @@ class RootInvShampooPreconditionerList(
 
 
 class EigendecomposedShampooPreconditionerList(
-    BaseShampooPreconditionerList[
+    ClassicShampooPreconditionerList[
         EigendecomposedShampooKroneckerFactorsState,
         EigendecomposedShampooKroneckerFactorsUnwrapped,
     ]
 ):
     """Eigendecomposed Shampoo preconditioners for list of parameters."""
-
-    def _create_preconditioned_dims_selector(
-        self, dims: torch.Size
-    ) -> tuple[bool, ...]:
-        return tuple(
-            attrgetter(INVERSE_EXPONENT_OVERRIDE)(self._preconditioner_config)
-            .get((order := len(dims)), {})
-            .get(d, 1 / (2 * order))
-            != 0.0
-            # Traverse through each dim of a block.
-            for d in range(len(dims))
-        )
-
-    def _get_inverse_roots_from_override(
-        self, preconditioned_dims_selector: tuple[bool, ...]
-    ) -> tuple[float, ...]:
-        return tuple(
-            # Compute the inverse root, 1 / inverse_exponent{_override}, accordingly for each required dim.
-            1
-            / attrgetter(INVERSE_EXPONENT_OVERRIDE)(self._preconditioner_config)
-            .get((order := len(preconditioned_dims_selector)), {})
-            .get(k, 1 / (2 * order))
-            # Traverse through each dim of a block that requires precondition.
-            for k, should_precondition in enumerate(preconditioned_dims_selector)
-            if should_precondition
-        )
 
     def precondition(self, masked_grad_list: tuple[Tensor, ...]) -> tuple[Tensor, ...]:
         """
