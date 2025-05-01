@@ -301,11 +301,14 @@ class BaseShampooPreconditionerListTest(unittest.TestCase):
             "compress_list",
             return_value=(True,) * max(param.dim(), 1),
         ) as mock_compress_list, mock.patch.object(
+            BaseShampooPreconditionerList,
+            "_create_kronecker_factors_state",
+        ) as mock_create_kronecker_factor_state, mock.patch.object(
             # Mock _update_factor_matrices() otherwise the access of factor_matrices will throw errors.
             BaseShampooPreconditionerList,
             "_update_factor_matrices",
         ) as mock_update_factor_matrices:
-            # Test the abstract methods _create_preconditioned_dims_selector(), _create_kronecker_factors_state_for_block(), _create_kronecker_factors_list(), and _get_inverse_roots_from_override().
+            # Test the abstract methods _create_preconditioned_dims_selector() and _get_inverse_roots_from_override().
             preconditioner_list = methodcaller(
                 "__call__",
                 block_list=(param,),
@@ -328,6 +331,7 @@ class BaseShampooPreconditionerListTest(unittest.TestCase):
             )
 
             mock_compress_list.assert_called_once()
+            mock_create_kronecker_factor_state.assert_called_once()
             mock_update_factor_matrices.assert_called_once()
 
 
