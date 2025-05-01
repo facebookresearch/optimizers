@@ -15,7 +15,7 @@ import time
 from dataclasses import fields
 from fractions import Fraction
 from math import isfinite
-from typing import Any, Callable
+from typing import Any, Callable, TypeVar
 
 import torch
 from matrix_functions_types import (
@@ -54,9 +54,12 @@ class NewtonConvergenceFlag(enum.Enum):
     EARLY_STOP = enum.auto()
 
 
+DataclassType = TypeVar("DataclassType")
+
+
 def _get_function_args_from_config(
     func: Callable[..., Any],  # type: ignore
-    config: Any,  # type: ignore
+    config: DataclassType,
 ) -> dict[str, Any]:
     """
     Returns a dict of arguments for func that are defined in config. Note that config is not expected to contain all arguments for func, nor are all fields in config expected to be applicable to func.
