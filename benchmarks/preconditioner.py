@@ -32,11 +32,10 @@ logging.getLogger("distributed_shampoo.utils.shampoo_preconditioner_list").setLe
 )
 
 
-class MockBlockInfo(BlockInfo):
+class MockBlockInfo:
     """Mock BlockInfo for benchmarking"""
 
     def __init__(self, param, param_index, block_index, device="cuda"):
-        super().__init__(param=param, start_index=0, end_index=param.numel())
         self.param = param
         self.composable_block_ids = (param_index, block_index)
         self.device = device
@@ -63,8 +62,8 @@ class PreconditionerBenchmark:
         self.param_shapes = param_shapes
         self.device = device
         self.state: dict[torch.Tensor, Any] = {}  # Optimizer state
-        self.blocks = []
-        self.block_infos = []
+        self.blocks: list[torch.Tensor] = []
+        self.block_infos: list[MockBlockInfo] = []
 
         # Prepare parameters and blocks
         for i, shape in enumerate(param_shapes):
@@ -97,7 +96,6 @@ class PreconditionerBenchmark:
             )
 
         elif preconditioner_type == "Shampoo":
-            # Using matrix_inverse_root by default
             config = ShampooPreconditionerConfig()
             return RootInvShampooPreconditionerList(
                 block_list=block_list,
@@ -130,14 +128,16 @@ class PreconditionerBenchmark:
         elif preconditioner_type == "EigenvalueCorrectedShampoo":
             from matrix_functions_types import QREigendecompositionConfig
 
-            config: EigenvalueCorrectedShampooPreconditionerConfig = (
-                EigenvalueCorrectedShampooPreconditionerConfig(...)
+            eigen_config: EigenvalueCorrectedShampooPreconditionerConfig = (
+                EigenvalueCorrectedShampooPreconditionerConfig(
+                    amortized_computation_config=QREigendecompositionConfig(),
+                )
             )
             return EigenvalueCorrectedShampooPreconditionerList(
                 block_list=block_list,
                 state=self.state,
                 block_info_list=block_info_list,
-                preconditioner_config=config,
+                preconditioner_config=eigen_config,
                 beta2=1.0,
                 epsilon=1e-12,
                 use_bias_correction=True,
@@ -151,13 +151,13 @@ class PreconditionerBenchmark:
         self,
         preconditioner: PreconditionerList,
         preconditioner_type: str,
-        num_epochs: int = 100,
+        num_epochs: int = 300,
         precondition_frequency: int = 5,
     ) -> dict[str, Any]:
         """Run benchmark for a preconditioner"""
         logger.info(f"Starting benchmark for {preconditioner_type}")
 
-        results = {
+        results: dict[str, Any] = {
             "preconditioner": preconditioner_type,
             "epochs": [],
             "total_time": 0.0,
@@ -223,9 +223,9 @@ class PreconditionerBenchmark:
 
         return results
 
-    def run_all_benchmarks(self, num_epochs: int = 100) -> dict[str, Any]:
+    def run_all_benchmarks(self, num_epochs: int = 300) -> dict[str, Any]:
         """Run benchmarks for all preconditioners"""
-        preconditioner_types = [
+        preconditioner_types: list[str] = [
             "SGD",
             "AdaGrad",
             "Shampoo",
@@ -233,7 +233,7 @@ class PreconditionerBenchmark:
             "EigenvalueCorrectedShampoo",
         ]
 
-        all_results = {}
+        all_results: dict[str, dict[str, Any]] = {}
 
         for preconditioner_type in preconditioner_types:
             try:
