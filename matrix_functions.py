@@ -66,7 +66,7 @@ def _get_function_args_from_config(
     """
     return {
         field.name: getattr(config, field.name)
-        for field in fields(config)
+        for field in fields(config)  # type: ignore[arg-type]
         if field.name in inspect.getfullargspec(func).args
     }
 
