@@ -1103,9 +1103,11 @@ class DistributedShampoo(torch.optim.Optimizer):
             # NOTE: Wrap scalar of group[LR] into a 0D tensor to avoid PT2 recompilation;
             # Send 0D tensor to GPU in `non_blocking` to avoid QPS regression. Remove the gpu
             # tensor impl once PT2 supports cpu 0D tensor properly.
-            lr = torch.tensor(group[LR], dtype=torch.float).to(
-                self._device, non_blocking=True
-            )
+            lr = torch.tensor(
+                group[LR],
+                dtype=torch.float,
+                pin_memory=torch.cuda.is_available(),
+            ).to(self._device, non_blocking=True)
             beta1 = group[BETAS][0]
             beta3 = group[BETA3]
             weight_decay = group[WEIGHT_DECAY]
