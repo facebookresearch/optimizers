@@ -12,6 +12,7 @@ from distributed_shampoo.shampoo_types import (
     EigenvalueCorrectedShampooPreconditionerConfig,
     ShampooPreconditionerConfig,
 )
+from distributed_shampoo.utils.shampoo_block_info import BlockInfo
 from distributed_shampoo.utils.shampoo_preconditioner_list import (
     AdagradPreconditionerList,
     EigendecomposedShampooPreconditionerList,
@@ -22,11 +23,7 @@ from distributed_shampoo.utils.shampoo_preconditioner_list import (
 )
 
 # Set logger config
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    handlers=[logging.StreamHandler()],
-)
+logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger(__name__)
 
 # Silence the instantiation logs from the preconditioner list module
@@ -35,10 +32,11 @@ logging.getLogger("distributed_shampoo.utils.shampoo_preconditioner_list").setLe
 )
 
 
-class MockBlockInfo:
+class MockBlockInfo(BlockInfo):
     """Mock BlockInfo for benchmarking"""
 
     def __init__(self, param, param_index, block_index, device="cuda"):
+        super().__init__(param=param, start_index=0, end_index=param.numel())
         self.param = param
         self.composable_block_ids = (param_index, block_index)
         self.device = device
@@ -64,7 +62,7 @@ class PreconditionerBenchmark:
     ):
         self.param_shapes = param_shapes
         self.device = device
-        self.state = {}  # Optimizer state
+        self.state: dict[torch.Tensor, Any] = {}  # Optimizer state
         self.blocks = []
         self.block_infos = []
 
@@ -132,8 +130,8 @@ class PreconditionerBenchmark:
         elif preconditioner_type == "EigenvalueCorrectedShampoo":
             from matrix_functions_types import QREigendecompositionConfig
 
-            config = EigenvalueCorrectedShampooPreconditionerConfig(
-                amortized_computation_config=QREigendecompositionConfig(),
+            config: EigenvalueCorrectedShampooPreconditionerConfig = (
+                EigenvalueCorrectedShampooPreconditionerConfig(...)
             )
             return EigenvalueCorrectedShampooPreconditionerList(
                 block_list=block_list,
