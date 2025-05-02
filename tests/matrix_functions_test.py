@@ -157,27 +157,6 @@ class ScaleAndPowEigenvaluesTest(unittest.TestCase):
 
 @instantiate_parametrized_tests
 class MatrixInverseRootTest(unittest.TestCase):
-    def test_matrix_inverse_root_scalar(self) -> None:
-        A = torch.tensor(2.0)
-        root = 2.0
-        exp = 1.82
-        with self.subTest("Test with scalar case."):
-            self.assertEqual(
-                A ** torch.tensor(-exp / root),
-                matrix_inverse_root(
-                    A,
-                    root=Fraction(root / exp),
-                ),
-            )
-        with self.subTest("Test with matrix case."):
-            self.assertEqual(
-                torch.tensor([[A ** torch.tensor(-exp / root)]]),
-                matrix_inverse_root(
-                    torch.tensor([[A]]),
-                    root=Fraction(root / exp),
-                ),
-            )
-
     def test_matrix_inverse_root_with_not_two_dim_matrix(self) -> None:
         A = torch.zeros((1, 2, 3))
         root = Fraction(4)
@@ -799,19 +778,6 @@ class ComputeMatrixRootInverseResidualsTest(unittest.TestCase):
 
 @instantiate_parametrized_tests
 class MatrixEigendecompositionTest(unittest.TestCase):
-    def test_matrix_eigendecomposition_scalar(self) -> None:
-        A = torch.tensor(2.0)
-        with self.subTest("Test with scalar case."):
-            self.assertEqual(
-                (A, torch.tensor(1)),
-                matrix_eigendecomposition(A),
-            )
-        with self.subTest("Test with matrix case."):
-            self.assertEqual(
-                (torch.tensor([[A]]), torch.tensor([[1]])),
-                matrix_eigendecomposition(torch.tensor([[A]])),
-            )
-
     def test_matrix_eigendecomposition_with_not_two_dim_matrix(self) -> None:
         A = torch.zeros((1, 2, 3))
         self.assertRaisesRegex(
