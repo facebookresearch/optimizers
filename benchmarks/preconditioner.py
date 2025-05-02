@@ -32,7 +32,7 @@ logging.getLogger("distributed_shampoo.utils.shampoo_preconditioner_list").setLe
 )
 
 
-class MockBlockInfo:
+class MockBlockInfo(BlockInfo):
     """Mock BlockInfo for benchmarking"""
 
     def __init__(self, param, param_index, block_index, device="cuda"):
