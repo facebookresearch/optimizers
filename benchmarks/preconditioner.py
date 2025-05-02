@@ -193,8 +193,8 @@ class PreconditionerBenchmark:
 
             epoch_time = time.time() - epoch_start_time
 
-            # Log output every 50 epochs
-            if (epoch + 1) % 50 == 0 or epoch == 0:
+            # Log output every 200 epochs
+            if (epoch + 1) % 200 == 0 or epoch == 0:
                 logger.info(
                     f"Epoch {epoch+1}/{num_epochs} - {preconditioner_type} | "
                     f"Time: {epoch_time:.4f}s | "
@@ -223,7 +223,7 @@ class PreconditionerBenchmark:
 
         return results
 
-    def run_all_benchmarks(self, num_epochs: int = 300) -> dict[str, Any]:
+    def run_all_benchmarks(self, num_epochs: int = 1000) -> dict[str, Any]:
         """Run benchmarks for all preconditioners"""
         preconditioner_types: list[str] = [
             "SGD",
@@ -271,4 +271,4 @@ if __name__ == "__main__":
     ]
 
     benchmark = PreconditionerBenchmark(param_shapes)
-    results = benchmark.run_all_benchmarks(num_epochs=300)
+    results = benchmark.run_all_benchmarks(num_epochs=1000)
