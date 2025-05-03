@@ -1432,6 +1432,7 @@ class EigendecomposedShampooPreconditionerList(
                                 A=bias_corrected_factor_matrix,
                                 eigendecomposition_config=eigendecomposition_config,
                                 is_diagonal=False,
+                                epsilon=self._epsilon,
                             )
                         )
                         computed_eigenvalues.to(dtype=factor_matrix_eigenvalues.dtype)
@@ -1681,6 +1682,7 @@ class EigenvalueCorrectedShampooPreconditionerList(
                             A=factor_matrix,
                             eigendecomposition_config=eigendecomposition_config,
                             is_diagonal=False,
+                            epsilon=self._epsilon,
                         )[1].to(dtype=factor_matrix_eigenvectors.dtype)
                         # Add success to success tracker.
                         success_tracker &= True

@@ -234,11 +234,6 @@ def matrix_inverse_root(
         NotImplementedError: If the root inverse config is not implemented.
 
     """
-
-    # check if matrix is scalar
-    if torch.numel(A) == 1:
-        return (A + epsilon).pow_(-1.0 / root)
-
     # check matrix shape
     if len(A.shape) != 2:
         raise ValueError("Matrix is not 2-dimensional!")
@@ -351,10 +346,6 @@ def matrix_eigendecomposition(
         NotImplementedError: If the eigendecomposition config is not implemented.
 
     """
-    # check if matrix is scalar
-    if torch.numel(A) == 1:
-        return A.squeeze(), torch.ones_like(A)
-
     # check matrix shape
     if len(A.shape) != 2:
         raise ValueError("Matrix is not 2-dimensional!")
