@@ -13,11 +13,45 @@ import unittest
 import torch
 
 from commons import get_all_subclasses
-from matrix_functions_types import QREigendecompositionConfig
+from matrix_functions_types import (
+    EighEigendecompositionConfig,
+    QREigendecompositionConfig,
+)
 from torch.testing._internal.common_utils import (
     instantiate_parametrized_tests,
     parametrize,
 )
+
+
+@instantiate_parametrized_tests
+class EighEigendecompositionConfigSubclassesTest(unittest.TestCase):
+    subclasses_types: list[type[EighEigendecompositionConfig]] = get_all_subclasses(
+        EighEigendecompositionConfig
+    )
+
+    @parametrize(
+        "eigendecomposition_offload_device",
+        ("cpu", "cuda", torch.device("cpu"), torch.device("cuda")),
+    )
+    @parametrize("cls", subclasses_types)
+    def test_eigendecomposition_offload_device(
+        self,
+        cls: type[EighEigendecompositionConfig],
+        eigendecomposition_offload_device: torch.device | str,
+    ) -> None:
+        config = cls(
+            eigendecomposition_offload_device=eigendecomposition_offload_device
+        )
+
+        # Check that the eigendecomposition_offload_device is a torch.device.
+        self.assertTrue(
+            isinstance(config.eigendecomposition_offload_device, torch.device)
+        )
+        # Check that the eigendecomposition_offload_device is the same as the one passed in.
+        self.assertEqual(
+            str(config.eigendecomposition_offload_device),
+            str(eigendecomposition_offload_device),
+        )
 
 
 @instantiate_parametrized_tests
