@@ -14,6 +14,7 @@ import math
 import time
 from dataclasses import fields
 from fractions import Fraction
+from functools import wraps
 from math import isfinite
 from typing import Any, Callable, TypeVar
 
@@ -54,12 +55,12 @@ class NewtonConvergenceFlag(enum.Enum):
     EARLY_STOP = enum.auto()
 
 
+FuncReturnType = TypeVar("FuncReturnType")
 DataclassType = TypeVar("DataclassType")
 
 
 def _get_function_args_from_config(
-    func: Callable[..., Any],  # type: ignore
-    config: DataclassType,
+    func: Callable[..., FuncReturnType], config: DataclassType
 ) -> dict[str, Any]:
     """
     Returns a dict of arguments for func that are defined in config. Note that config is not expected to contain all arguments for func, nor are all fields in config expected to be applicable to func.
@@ -71,6 +72,35 @@ def _get_function_args_from_config(
     }
 
 
+def _check_square_matrix(
+    func: Callable[..., FuncReturnType],
+) -> Callable[..., FuncReturnType]:
+    """
+    Decorator to check if the input matrix is square.
+
+    This decorator checks if the input matrix `A` is a 2-dimensional square matrix.
+    If not, it raises a ValueError. If the matrix is valid, it calls the decorated function.
+
+    Args:
+        func (Callable[..., FuncReturnType]): The function to be decorated.
+
+    Returns:
+        wrapped_func (Callable[..., FuncReturnType]): The wrapped function that includes the square matrix check.
+
+    """
+
+    @wraps(func)
+    def wrapper(A: Tensor, *args: Any, **kwargs: Any) -> FuncReturnType:
+        if len(A.shape) != 2:
+            raise ValueError(f"Matrix is not 2-dimensional! {A.shape=}")
+        if A.shape[0] != A.shape[1]:
+            raise ValueError(f"Matrix is not square! {A.shape=}")
+        return func(A, *args, **kwargs)
+
+    return wrapper
+
+
+@_check_square_matrix
 def check_diagonal(A: Tensor) -> bool:
     """Checks if symmetric matrix is diagonal. Throw if the input is not a square matrix.
 
@@ -84,14 +114,6 @@ def check_diagonal(A: Tensor) -> bool:
         ValueError: If the matrix is not 2-dimensional or not square.
 
     """
-
-    A_shape = A.shape
-    if len(A_shape) != 2:
-        raise ValueError(f"Matrix is not 2-dimensional! {A_shape=}")
-
-    if A_shape[0] != A_shape[1]:
-        raise ValueError(f"Matrix is not square! {A_shape=}")
-
     # Check both upper triangular part and lower triangular part are all zeros.
     return not A.triu(diagonal=1).any() and not A.tril(diagonal=-1).any()
 
@@ -201,6 +223,7 @@ def stabilize_and_pow_eigenvalues(
     return inv_power_L
 
 
+@_check_square_matrix
 def matrix_inverse_root(
     A: Tensor,
     root: Fraction,
@@ -226,12 +249,6 @@ def matrix_inverse_root(
         NotImplementedError: If the root inverse config is not implemented.
 
     """
-    # check matrix shape
-    if len(A.shape) != 2:
-        raise ValueError("Matrix is not 2-dimensional!")
-    elif A.shape[0] != A.shape[1]:
-        raise ValueError("Matrix is not square!")
-
     if is_diagonal:
         return _matrix_inverse_root_diagonal(
             A=A,
@@ -316,6 +333,7 @@ def _matrix_inverse_root_diagonal(
     )
 
 
+@_check_square_matrix
 def matrix_eigendecomposition(
     A: Tensor,
     epsilon: float = 0.0,
@@ -340,12 +358,6 @@ def matrix_eigendecomposition(
         NotImplementedError: If the eigendecomposition config is not implemented.
 
     """
-    # check matrix shape
-    if len(A.shape) != 2:
-        raise ValueError("Matrix is not 2-dimensional!")
-    elif A.shape[0] != A.shape[1]:
-        raise ValueError("Matrix is not square!")
-
     # Return the (sorted) diagonal of A and identity matrix if A is diagonal.
     if is_diagonal:
         return A.diag(), torch.eye(
@@ -892,6 +904,7 @@ def _matrix_inverse_root_higher_order(
     return X, M, termination_flag, iteration, true_error
 
 
+@_check_square_matrix
 def compute_matrix_root_inverse_residuals(
     A: Tensor,
     X_hat: Tensor,
@@ -926,11 +939,7 @@ def compute_matrix_root_inverse_residuals(
     ), f"Only EigenConfig is supported for compute_matrix_root_inverse_residuals; currently {root_inv_config=}."
 
     # check shape of matrix
-    if len(A.shape) != 2:
-        raise ValueError("Matrix is not 2-dimensional!")
-    elif A.shape[0] != A.shape[1]:
-        raise ValueError("Matrix is not square!")
-    elif A.shape != X_hat.shape:
+    if A.shape != X_hat.shape:
         raise ValueError("Matrix shapes do not match!")
 
     # compute error by comparing against double precision
