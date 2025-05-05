@@ -13,6 +13,7 @@ import re
 import unittest
 from collections.abc import Callable
 from functools import partial
+from itertools import filterfalse
 from unittest import mock
 
 import torch
@@ -44,6 +45,9 @@ from torch.testing._internal.distributed._tensor.common_dtensor import (
     DTensorTestBase,
     with_comms,
 )
+
+
+PRECONDITIONER_DIM = 4
 
 
 @unittest.skipIf(not torch.cuda.is_available(), "Skip when CUDA is not available")
@@ -84,9 +88,9 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
         #      Similarly, the second linear layer has a [1, 8] parameter and is split
         #      into two [4] chunks.
 
-        model_linear_layers_dims = (16, 8, 1)
+        model_linear_layers_dims = (4 * PRECONDITIONER_DIM, 2 * PRECONDITIONER_DIM, 1)
         # model dead layers won't parpicipate in the training and thus don't have grads.
-        model_dead_layers_dims = (4, 1)
+        model_dead_layers_dims = (PRECONDITIONER_DIM, 1)
         return construct_training_problem(
             model_linear_layers_dims=model_linear_layers_dims,
             model_dead_layers_dims=model_dead_layers_dims,
@@ -106,7 +110,7 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
             epsilon=1e-8,
             momentum=0.0,
             weight_decay=0.0,
-            max_preconditioner_dim=4,
+            max_preconditioner_dim=PRECONDITIONER_DIM,
             precondition_frequency=1,
             start_preconditioning_step=2,
             use_decoupled_weight_decay=True,
@@ -276,14 +280,22 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
         #
         # We expect that the rank should correspond to the rank in the shard dimension
         # in order to avoid having the same key.
-        rank = mesh_2d.get_local_rank(mesh_dim=1)
-        matches = 0
-        for key in flattened_state_dict.keys():
-            if SHAMPOO in key:
-                with self.subTest(key=key):
-                    self.assertIn(f"rank_{rank}-block_", key)
-                    matches += 1
-        self.assertGreater(matches, 0)
+        rank: int = mesh_2d.get_local_rank(mesh_dim=1)
+
+        def expected_key_criterion(key: str) -> bool:
+            return f"rank_{rank}-block_" in key
+
+        keys_with_shampoo = filter(
+            lambda key: SHAMPOO in key, flattened_state_dict.keys()
+        )
+        keys_with_expected_key, keys_without_expected_key = (
+            list(filter(expected_key_criterion, keys_with_shampoo)),
+            list(filterfalse(expected_key_criterion, keys_with_shampoo)),
+        )
+        self.assertFalse(
+            keys_without_expected_key, msg=f"{keys_without_expected_key=} is not empty."
+        )
+        self.assertTrue(keys_with_expected_key)
 
     @with_comms
     @skip_if_lt_x_gpu(4)
