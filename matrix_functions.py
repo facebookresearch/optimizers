@@ -319,7 +319,9 @@ def _matrix_inverse_root_diagonal(
     if root <= 0:
         raise ValueError(f"Root {root} should be positive!")
 
-    return torch.diag((torch.diagonal(A) + epsilon).pow_(-1.0 / root))
+    return torch.diag(
+        stabilize_and_pow_eigenvalues(torch.diagonal(A), root=root, epsilon=epsilon)
+    )
 
 
 def matrix_eigendecomposition(
