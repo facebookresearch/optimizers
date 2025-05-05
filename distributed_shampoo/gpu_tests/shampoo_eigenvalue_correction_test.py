@@ -37,10 +37,6 @@ from torch.testing._internal.common_utils import (
 )
 
 
-available_devices: tuple[torch.device, ...] = (torch.device("cpu"),) + (
-    torch.device("cuda"),
-) * torch.cuda.is_available()
-
 # Note: We have to set the epsilon to a very small value (i.e., 1e-15) due to the
 # the place epsilon is added in the PyTorch optimizers (i.e., AdaGrad, RMSprop, Adam, AdamW)
 # and Distributed Shampoo.
@@ -57,6 +53,10 @@ class DistributedShampooEigenvalueCorrectionTest(unittest.TestCase):
         **kwargs: Any,
     ) -> torch.optim.Optimizer:
         return optim_cls(parameters, **kwargs)
+
+    available_devices: tuple[torch.device, ...] = (torch.device("cpu"),) + (
+        torch.device("cuda"),
+    ) * torch.cuda.is_available()
 
     @parametrize(
         "start_preconditioning_step, preconditioner_config",

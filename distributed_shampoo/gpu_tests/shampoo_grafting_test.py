@@ -41,10 +41,6 @@ from torch.testing._internal.common_utils import (
     parametrize,
 )
 
-available_devices: tuple[torch.device, ...] = (torch.device("cpu"),) + (
-    torch.device("cuda"),
-) * torch.cuda.is_available()
-
 
 @instantiate_parametrized_tests
 class DistributedShampooGraftingTest(unittest.TestCase):
@@ -55,6 +51,10 @@ class DistributedShampooGraftingTest(unittest.TestCase):
         **kwargs: Any,
     ) -> torch.optim.Optimizer:
         return optim_cls(parameters, **kwargs)
+
+    available_devices: tuple[torch.device, ...] = (torch.device("cpu"),) + (
+        torch.device("cuda"),
+    ) * torch.cuda.is_available()
 
     @parametrize(
         "preconditioner_config",
