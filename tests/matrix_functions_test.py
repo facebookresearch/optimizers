@@ -25,11 +25,11 @@ import torch
 from matrix_functions import (
     _matrix_inverse_root_eigen,
     _matrix_inverse_root_newton,
+    _matrix_perturbation,
     check_diagonal,
     compute_matrix_root_inverse_residuals,
     matrix_eigendecomposition,
     matrix_inverse_root,
-    matrix_perturbation,
     NewtonConvergenceFlag,
     stabilize_and_pow_eigenvalues,
 )
@@ -71,48 +71,22 @@ class CheckDiagonalTest(unittest.TestCase):
 
 
 class MatrixPerturbationTest(unittest.TestCase):
-    def test_matrix_perturbation_not_is_eigenvalues_for_not_two_dim_matrix(
-        self,
-    ) -> None:
-        A = torch.zeros((2, 2, 2))
-        self.assertRaisesRegex(
-            ValueError,
-            re.escape("Matrix is not 2-dimensional!"),
-            matrix_perturbation,
-            A,
-            epsilon=0.1,
-            is_eigenvalues=False,
-        )
-
-    def test_matrix_perturbation_not_is_eigenvalues_for_not_square_matrix(
-        self,
-    ) -> None:
-        A = torch.zeros((2, 3))
-        self.assertRaisesRegex(
-            ValueError,
-            re.escape("Matrix is not square!"),
-            matrix_perturbation,
-            A,
-            epsilon=0.1,
-            is_eigenvalues=False,
-        )
-
     def test_matrix_perturbation_not_is_eigenvalues(self) -> None:
         A = torch.eye(2)
         torch.testing.assert_close(
-            A * 1.1, matrix_perturbation(A, epsilon=0.1, is_eigenvalues=False)
+            A * 1.1, _matrix_perturbation(A, epsilon=0.1, is_eigenvalues=False)
         )
 
     def test_matrix_perturbation_is_eigenvalues(self) -> None:
         A = torch.ones(5)
         torch.testing.assert_close(
-            A + 0.1, matrix_perturbation(A, epsilon=0.1, is_eigenvalues=True)
+            A + 0.1, _matrix_perturbation(A, epsilon=0.1, is_eigenvalues=True)
         )
 
     def test_matrix_perturbation_is_eigenvalues_square(self) -> None:
         A = torch.eye(2)
         torch.testing.assert_close(
-            A + 0.1, matrix_perturbation(A, epsilon=0.1, is_eigenvalues=True)
+            A + 0.1, _matrix_perturbation(A, epsilon=0.1, is_eigenvalues=True)
         )
 
 

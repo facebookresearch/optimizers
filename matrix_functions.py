@@ -96,7 +96,7 @@ def check_diagonal(A: Tensor) -> bool:
     return not A.triu(diagonal=1).any() and not A.tril(diagonal=-1).any()
 
 
-def matrix_perturbation(
+def _matrix_perturbation(
     A: Tensor,
     epsilon: float = 0.0,
     is_eigenvalues: bool = True,
@@ -111,20 +111,12 @@ def matrix_perturbation(
     Returns:
         A_ridge (Tensor): Matrix with perturbation/regularization.
 
-    Raises:
-        ValueError: If the input matrix is not two-dimensional or square when `is_eigenvalues` is False.
-
     """
-    if not is_eigenvalues:
-        if A.ndim != 2:
-            raise ValueError(f"Matrix is not 2-dimensional! {A.ndim=}")
-        if A.shape[0] != A.shape[1]:
-            raise ValueError(f"Matrix is not square! {A.shape=}")
-        dim = A.shape[0]
-        identity = torch.eye(dim, dtype=A.dtype, device=A.device)
-        return A.add(identity, alpha=epsilon)
-    else:
-        return A + epsilon
+    return (
+        A.add(torch.eye(A.shape[0], dtype=A.dtype, device=A.device), alpha=epsilon)
+        if not is_eigenvalues
+        else A + epsilon
+    )
 
 
 def truncate_eigenvalues_cutoff(
@@ -158,7 +150,7 @@ def stabilize_and_pow_eigenvalues(
     """
     Stabilize the eigenvalues of a matrix and raise them to a negative fractional power.
 
-    If using epsilon (i.e. rank_deficient_stability_config is a PerturbationConfig), stabilization entails adding epsilon to the eigenvalues, i.e. regularization. See matrix_perturbation() and PerturbationConfig for details.
+    If using epsilon (i.e. rank_deficient_stability_config is a PerturbationConfig), stabilization entails adding epsilon to the eigenvalues, i.e. regularization. See _matrix_perturbation() and PerturbationConfig for details.
 
     If using pseudo-inverse (i.e. rank_deficient_stability_config is a PseudoInverseConfig), stabilization entails ignoring all eigenvalues sufficiently close to zero as determined by some cutoff. See truncate_eigenvalues_cutoff() and PseudoInverseConfig for details.
 
@@ -200,7 +192,7 @@ def stabilize_and_pow_eigenvalues(
                 if rank_deficient_stability_config.perturb_before_computation
                 else (-min(lambda_min, 0.0) + epsilon)
             )
-            L = matrix_perturbation(L, epsilon=effective_epsilon, is_eigenvalues=True)
+            L = _matrix_perturbation(L, epsilon=effective_epsilon, is_eigenvalues=True)
 
             inv_power_L = L.pow(torch.as_tensor(-1.0 / root))
         case _:
@@ -382,7 +374,7 @@ def matrix_eigendecomposition(
         )
         and eigendecomposition_config.rank_deficient_stability_config.perturb_before_computation
     ):
-        A_ridge = matrix_perturbation(A, epsilon=epsilon, is_eigenvalues=False)
+        A_ridge = _matrix_perturbation(A, epsilon=epsilon, is_eigenvalues=False)
     else:
         A_ridge = A
 
@@ -593,7 +585,7 @@ def _matrix_inverse_root_eigen(
         isinstance(rank_deficient_stability_config, PerturbationConfig)
         and rank_deficient_stability_config.perturb_before_computation
     ):
-        A_ridge = matrix_perturbation(A, epsilon=epsilon, is_eigenvalues=False)
+        A_ridge = _matrix_perturbation(A, epsilon=epsilon, is_eigenvalues=False)
     else:
         A_ridge = A
 
