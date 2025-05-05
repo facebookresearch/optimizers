@@ -10,12 +10,12 @@ LICENSE file in the root directory of this source tree.
 import itertools
 import re
 import unittest
-import unittest.mock as mock
 from collections.abc import Callable
 from dataclasses import dataclass
 from fractions import Fraction
 from functools import partial
 from types import ModuleType
+from unittest import mock
 
 import matrix_functions
 
