@@ -91,11 +91,9 @@ class DDPDistributor(DistributorInterface):
                 )
 
         # Initialize _dist_group and _group_rank.
-        self._dist_group: dist.ProcessGroup | None = (
-            dist.distributed_c10d.GroupMember.WORLD
-            if self._group_size == self._global_size
-            else dist.new_subgroups(group_size=self._group_size)[0]
-        )
+        self._dist_group: dist.ProcessGroup | None = dist.new_subgroups(
+            group_size=self._group_size
+        )[0]
         group_rank: int = dist.get_rank(group=self._dist_group)
 
         # Assign ranks to blocks with their respective buffer size.
