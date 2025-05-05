@@ -12,7 +12,7 @@ LICENSE file in the root directory of this source tree.
 import unittest
 from collections.abc import Callable
 from functools import partial
-from itertools import pairwise
+from itertools import filterfalse, pairwise
 
 import torch
 from distributed_shampoo.distributed_shampoo import DistributedShampoo
@@ -40,6 +40,9 @@ from torch.testing._internal.common_utils import (
     instantiate_parametrized_tests,
     parametrize,
 )
+
+
+PRECONDITIONER_DIM = 4
 
 
 @unittest.skipIf(not torch.cuda.is_available(), "Skip when CUDA is not available")
@@ -70,7 +73,13 @@ class ShampooFSDPDistributorTest(FSDPTest):
         #       This corresponds to index 612 - 512 - 72 = 28 in the third parameter. Note
         #       that splitting at this index is equivalent to the standard blocking with a
         #       block size of 4.
-        model_linear_layers_dims = (16 * 4, 8, 9, 16 * 4, 1)
+        model_linear_layers_dims = (
+            4 * PRECONDITIONER_DIM * PRECONDITIONER_DIM,
+            2 * PRECONDITIONER_DIM,
+            9,
+            4 * PRECONDITIONER_DIM * PRECONDITIONER_DIM,
+            1,
+        )
         model, loss, data, target = construct_training_problem(
             model_linear_layers_dims=model_linear_layers_dims,
             model_dead_layers_dims=None,
@@ -101,7 +110,7 @@ class ShampooFSDPDistributorTest(FSDPTest):
             epsilon=1e-8,
             momentum=0.0,
             weight_decay=0.0,
-            max_preconditioner_dim=4,
+            max_preconditioner_dim=PRECONDITIONER_DIM,
             precondition_frequency=1,
             start_preconditioning_step=2,
             use_decoupled_weight_decay=True,
@@ -178,14 +187,22 @@ class ShampooFSDPDistributorTest(FSDPTest):
             key_to_param=model.named_parameters()
         )
         flattened_state_dict = flatten_state_dict(state_dict["state"])[0]
-        rank = dist.get_rank()
-        matches = 0
-        for key in flattened_state_dict.keys():
-            if SHAMPOO in key:
-                with self.subTest(key=key):
-                    self.assertIn(f"rank_{rank}-block_", key)
-                    matches += 1
-        self.assertGreater(matches, 0)
+        rank: int = dist.get_rank()
+
+        def expected_key_criterion(key: str) -> bool:
+            return f"rank_{rank}-block_" in key
+
+        keys_with_shampoo = filter(
+            lambda key: SHAMPOO in key, flattened_state_dict.keys()
+        )
+        keys_with_expected_key, keys_without_expected_key = (
+            list(filter(expected_key_criterion, keys_with_shampoo)),
+            list(filterfalse(expected_key_criterion, keys_with_shampoo)),
+        )
+        self.assertFalse(
+            keys_without_expected_key, msg=f"{keys_without_expected_key=} is not empty."
+        )
+        self.assertTrue(keys_with_expected_key)
 
     @skip_if_lt_x_gpu(2)
     @parametrize("communicate_params", (True, False))

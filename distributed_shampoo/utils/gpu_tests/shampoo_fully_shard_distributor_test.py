@@ -40,6 +40,8 @@ from torch.testing._internal.distributed._tensor.common_dtensor import (
     with_comms,
 )
 
+PRECONDITIONER_DIM = 4
+
 
 @unittest.skipIf(not torch.cuda.is_available(), "Skip when CUDA is not available")
 @instantiate_parametrized_tests
@@ -73,9 +75,9 @@ class ShampooFullyShardDistributorTest(DTensorTestBase):
         #      Similarly, the second linear layer has a [1, 8] parameter and is split
         #      into two [4] chunks.
 
-        model_linear_layers_dims = (16, 8, 1)
+        model_linear_layers_dims = (4 * PRECONDITIONER_DIM, 2 * PRECONDITIONER_DIM, 1)
         # model dead layers won't parpicipate in the training and thus don't have grads.
-        model_dead_layers_dims = (4, 1)
+        model_dead_layers_dims = (PRECONDITIONER_DIM, 1)
         return construct_training_problem(
             model_linear_layers_dims=model_linear_layers_dims,
             model_dead_layers_dims=model_dead_layers_dims,
@@ -95,7 +97,7 @@ class ShampooFullyShardDistributorTest(DTensorTestBase):
             epsilon=1e-8,
             momentum=0.0,
             weight_decay=0.0,
-            max_preconditioner_dim=4,
+            max_preconditioner_dim=PRECONDITIONER_DIM,
             precondition_frequency=1,
             start_preconditioning_step=2,
             use_decoupled_weight_decay=True,
