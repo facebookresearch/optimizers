@@ -299,18 +299,10 @@ class DDPDistributor(DistributorInterface):
             )
             split_tensors_list.append(split_tensors)
 
-        # Obtain ordered buffer ranks containing (view of local buffer, rank).
-        splitted_local_dist_buffers = []
-        buffer_indices = [0] * len(
-            local_dist_buffers
-        )  # index counter for each rank for obtaining right buffer
-        for _, rank in buffer_size_ranks:
-            splitted_local_dist_buffers.append(
-                split_tensors_list[rank][buffer_indices[rank]]
-            )
-            buffer_indices[rank] += 1
-
-        return tuple(splitted_local_dist_buffers)
+        split_tensors_iterators = list(map(iter, split_tensors_list))
+        return tuple(
+            next(split_tensors_iterators[rank]) for _, rank in buffer_size_ranks
+        )
 
     def _construct_distributed_buffers(
         self,
