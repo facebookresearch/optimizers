@@ -31,37 +31,44 @@ from torch.testing._internal.common_utils import (
 
 @instantiate_parametrized_tests
 class MergeSmallDimsTest(unittest.TestCase):
-    def test_merge_all_small_dims(self) -> None:
-        dims = (1, 2, 5, 1)
-        merged_dims = (10,)
-        threshold = 10
-        self.assertEqual(merge_small_dims(dims, threshold), merged_dims)
-
-    def test_merge_some_small_dims(self) -> None:
-        dims = (1, 2, 5, 1)
-        merged_dims = (2, 5)
-        threshold = 1
-        self.assertEqual(merge_small_dims(dims, threshold), merged_dims)
+    @parametrize("threshold, expected_new_tensor_shape", ((10, (10,)), (1, (2, 5))))
+    def test_merge_all_small_dims(
+        self, threshold: int, expected_new_tensor_shape: tuple[int, ...]
+    ) -> None:
+        self.assertEqual(
+            merge_small_dims(tensor_shape=(1, 2, 5, 1), threshold=threshold),
+            expected_new_tensor_shape,
+        )
 
     def test_merge_small_dims_for_single_dim(self) -> None:
-        dims = torch.Size([2])
-        merged_dims = (2,)
-        threshold = 10
-        self.assertEqual(merge_small_dims(dims, threshold), merged_dims)
+        expected_new_tensor_shape = (2,)
+        self.assertEqual(
+            merge_small_dims(tensor_shape=torch.Size([2]), threshold=10),
+            expected_new_tensor_shape,
+        )
 
     @parametrize("threshold", (10, 1))
     def test_merge_small_dims_all_ones(self, threshold: int) -> None:
-        dims = (1, 1, 1, 1)
-        merged_dims = (1,)
-        self.assertEqual(merge_small_dims(dims, threshold), merged_dims)
+        expected_new_tensor_shape = (1,)
+        self.assertEqual(
+            merge_small_dims(tensor_shape=(1, 1, 1, 1), threshold=threshold),
+            expected_new_tensor_shape,
+        )
 
     @parametrize("tensor_shape", ((0,), (0, 1), (0, 1, 5, 10, 20)))
     def test_merge_small_dims_empty(self, tensor_shape: tuple[int, ...]) -> None:
-        merged_dims = (0,)
-        threshold = 10
+        expected_new_tensor_shape = (0,)
         self.assertEqual(
-            merge_small_dims(tensor_shape=tensor_shape, threshold=threshold),
-            merged_dims,
+            merge_small_dims(tensor_shape=tensor_shape, threshold=10),
+            expected_new_tensor_shape,
+        )
+
+    @parametrize("threshold", (10, 1))
+    def test_empty_dims(self, threshold: int) -> None:
+        expected_new_tensor_shape = ()
+        self.assertEqual(
+            merge_small_dims(tensor_shape=(), threshold=threshold),
+            expected_new_tensor_shape,
         )
 
 

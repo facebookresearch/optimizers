@@ -11,7 +11,7 @@ import heapq
 import operator
 from collections.abc import Callable, Iterator, Sequence
 from functools import partial, reduce
-from itertools import accumulate, chain, compress, pairwise
+from itertools import accumulate, chain, compress, islice, pairwise
 from types import TracebackType
 from typing import Type, TypeVar
 
@@ -30,12 +30,14 @@ def merge_small_dims(tensor_shape: Sequence[int], threshold: int) -> tuple[int, 
         new_tensor_shape (tuple[int, ...]): New tensor shape.
 
     """
+    if not tensor_shape:
+        return ()
 
     # Squeeze tensor shape to remove dimension with 1; if all dimensions are 1,
     # then add a 1 to the tensor shape.
     squeezed_tensor_shape = list(filter(lambda t: t != 1, tensor_shape)) or [1]
     new_tensor_shape = [squeezed_tensor_shape[0]]
-    for next_tensor_shape in squeezed_tensor_shape[1:]:
+    for next_tensor_shape in islice(squeezed_tensor_shape, 1, None):
         if (new_dimension := new_tensor_shape[-1] * next_tensor_shape) <= threshold:
             new_tensor_shape[-1] = new_dimension
         else:
