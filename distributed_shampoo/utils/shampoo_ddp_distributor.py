@@ -293,7 +293,7 @@ class DDPDistributor(DistributorInterface):
             assert (
                 remainder_size >= 0
             ), f"Local distributed buffer size {local_dist_buffer.size(0)} is "
-            "not larger than or equal to the sum of buffer sizes {sum(required_buffer_sizes)}!"
+            f"not larger than or equal to the sum of buffer sizes {sum(required_buffer_sizes)}!"
             split_tensors = torch.split(
                 local_dist_buffer, required_buffer_sizes + [remainder_size]
             )
