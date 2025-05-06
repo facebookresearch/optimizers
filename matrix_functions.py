@@ -218,7 +218,9 @@ def stabilize_and_pow_eigenvalues(
 
             inv_power_L = L.pow(torch.as_tensor(-1.0 / root))
         case _:
-            raise ValueError(f"{rank_deficient_stability_config=} is not supported.")
+            raise NotImplementedError(
+                f"{rank_deficient_stability_config=} is not supported."
+            )
 
     return inv_power_L
 
