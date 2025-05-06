@@ -10,7 +10,6 @@ LICENSE file in the root directory of this source tree.
 #!/usr/bin/env python3
 
 import unittest
-from typing import Type
 
 import torch
 
@@ -49,7 +48,7 @@ class DistributorInterfaceTest(unittest.TestCase):
         ).param_groups[0]
         self._distributor = self._get_distributor_type()(param_group=self._param_group)
 
-    def _get_distributor_type(self) -> Type[DistributorInterface]:
+    def _get_distributor_type(self) -> type[DistributorInterface]:
         # Disable the abstract methods check from the interface so it is possible to instantiate DistributorInterface.
         DistributorInterface.__abstractmethods__ = frozenset()
         return DistributorInterface
@@ -64,7 +63,7 @@ class DistributorInterfaceTest(unittest.TestCase):
 
 
 class DistributorTest(DistributorInterfaceTest):
-    def _get_distributor_type(self) -> Type[DistributorInterface]:
+    def _get_distributor_type(self) -> type[DistributorInterface]:
         return Distributor
 
     def test_update_params(self) -> None:
