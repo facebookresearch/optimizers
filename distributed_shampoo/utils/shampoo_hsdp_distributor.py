@@ -173,10 +173,12 @@ class HSDPDistributor(DistributorInterface):
             device_mesh = get_device_mesh(
                 device_type=self._hsdp_device_mesh.device_type,
                 mesh=tuple(
-                    tuple(ranks_in_replicated_subgroup)
-                    for ranks_in_replicated_subgroup in ranks_in_replicated_group.view(
-                        -1, self._dist_group_size
-                    ).tolist()
+                    map(
+                        partial(tuple),
+                        ranks_in_replicated_group.view(
+                            -1, self._dist_group_size
+                        ).tolist(),
+                    )
                 ),
                 mesh_dim_names=("replicate", "shard"),
             )
@@ -885,16 +887,19 @@ class HSDPDistributor(DistributorInterface):
             out (Tensor): Desired Tensor.
 
         """
-        ranks_in_replicated_group = torch.tensor(
-            dist.get_process_group_ranks(self._hsdp_device_mesh.get_group(0))
+        ranks_in_replicated_group = dist.get_process_group_ranks(
+            self._hsdp_device_mesh.get_group(0)
         )
         device_mesh_2d = get_device_mesh(
             device_type=device.type,
+            # NOTE: Use itertools.batched(ranks_in_replicated_group, self._dist_group_size) when downstream applications are Python 3.12+ available
             mesh=tuple(
-                tuple(ranks_in_replicated_subgroup)
-                for ranks_in_replicated_subgroup in ranks_in_replicated_group.view(
-                    -1, self._dist_group_size
-                ).tolist()
+                map(
+                    partial(tuple),
+                    torch.tensor(ranks_in_replicated_group)
+                    .view(-1, self._dist_group_size)
+                    .tolist(),
+                )
             ),
             mesh_dim_names=("replicate", "shard"),
         )
