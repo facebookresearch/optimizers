@@ -46,118 +46,157 @@ from matrix_functions_types import (
     QREigendecompositionConfig,
 )
 from torch import Tensor
+from torch.testing._internal.common_utils import (
+    instantiate_parametrized_tests,
+    parametrize,
+)
 
 
-class PreconditionerListTest(unittest.TestCase):
-    """PreconditionerListTest is the base class for testing all Preconditioner implementations.
+class AbstractTest:
+    class PreconditionerListTestInterface(abc.ABC, unittest.TestCase):
+        """PreconditionerListTestInterface is the base class for testing all PreconditionerList implementations.
 
-    Note that all the subclasses may not implement setUp() and only need to implement _instantiate_block_list() and
-    _instantiate_preconditioner_list() to enable the the usages of self._block_list and self._preconditioner_list.
+        This abstract class provides a standardized testing framework for various preconditioner list implementations.
+        It defines a set of abstract methods that subclasses must implement, as well as concrete test methods that
+        verify the behavior of preconditioner lists.
 
-    Subclasses could override the following test cases for their specific needs:
-        1. test_update_preconditioners_and_precondition()
-            - consider using _test_update_preconditioners_and_precondition() as a helper function to test this.
-        2. test_numel_list()
-        3. test_dims_list()
-        4. test_num_bytes_list()
-        5. test_numel()
-        6. test_num_bytes()
-        7. test_compress_preconditioner_list()
-    """
+        Note that all the subclasses may not implement setUp() and only need to implement _instantiate_block_list() and
+        _instantiate_preconditioner_list() to enable the the usages of self._block_list and self._preconditioner_list.
 
-    def setUp(self) -> None:
-        self._block_list = self._instantiate_block_list()
-        self._preconditioner_list = self._instantiate_preconditioner_list()
+        Subclasses might override the following test cases for their specific needs:
+            1. _expected_numel_list() - Expected number of elements in each preconditioner
+            2. _expected_dims_list() - Expected dimensions of each preconditioner
+            3. _expected_num_bytes_list() - Expected memory usage of each preconditioner
+            4. _expected_numel() - Expected total number of elements across all preconditioners
+            5. _expected_num_bytes() - Expected total memory usage across all preconditioners
+            6. _expected_compress_list_call_count() - Expected number of calls to compress_list
 
+        Subclasses should leverage the _verify_preconditioner_updates() helper method to test their
+        preconditioner_list implementations with specific gradient inputs and expected outputs.
+        """
+
+        def setUp(self) -> None:
+            self._block_list: tuple[Tensor, ...] = self._instantiate_block_list()
+            self._preconditioner_list: PreconditionerList = (
+                self._instantiate_preconditioner_list()
+            )
+
+        @abc.abstractmethod
+        def _instantiate_block_list(self) -> tuple[Tensor, ...]: ...
+
+        @abc.abstractmethod
+        def _instantiate_preconditioner_list(
+            self, **kwargs: Any
+        ) -> PreconditionerList: ...
+
+        @property
+        @abc.abstractmethod
+        def _expected_numel_list(self) -> tuple[int, ...]: ...
+
+        def test_numel_list(self) -> None:
+            self.assertEqual(
+                self._preconditioner_list.numel_list, self._expected_numel_list
+            )
+
+        @property
+        @abc.abstractmethod
+        def _expected_dims_list(self) -> tuple[torch.Size, ...]: ...
+
+        def test_dims_list(self) -> None:
+            self.assertEqual(
+                self._preconditioner_list.dims_list, self._expected_dims_list
+            )
+
+        @property
+        @abc.abstractmethod
+        def _expected_num_bytes_list(self) -> tuple[int, ...]: ...
+
+        def test_num_bytes_list(self) -> None:
+            self.assertEqual(
+                self._preconditioner_list.num_bytes_list, self._expected_num_bytes_list
+            )
+
+        @property
+        @abc.abstractmethod
+        def _expected_numel(self) -> int: ...
+
+        def test_numel(self) -> None:
+            self.assertEqual(self._preconditioner_list.numel(), self._expected_numel)
+
+        @property
+        @abc.abstractmethod
+        def _expected_num_bytes(self) -> int: ...
+
+        def test_num_bytes(self) -> None:
+            self.assertEqual(
+                self._preconditioner_list.num_bytes(), self._expected_num_bytes
+            )
+
+        @property
+        @abc.abstractmethod
+        def _expected_compress_list_call_count(self) -> int: ...
+
+        def test_compress_preconditioner_list(self) -> None:
+            with mock.patch.object(
+                shampoo_preconditioner_list, "compress_list"
+            ) as mock_compress_list:
+                self.assertIsNone(
+                    self._preconditioner_list.compress_preconditioner_list(
+                        local_grad_selector=(True,) * len(self._block_list)
+                    )
+                )
+            self.assertEqual(
+                mock_compress_list.call_count, self._expected_compress_list_call_count
+            )
+
+        def _verify_preconditioner_updates(
+            self,
+            preconditioner_list: PreconditionerList,
+            masked_grad_lists: list[tuple[Tensor, ...]],
+            masked_expected_preconditioned_grad_list: tuple[Tensor, ...],
+        ) -> None:
+            """
+            Test helper function that verifies preconditioner updates and preconditioning.
+
+            This function takes a preconditioner_list and updates it using gradients from masked_grad_lists.
+            It performs amortized computation at the end and verifies the preconditioned gradients of the last step.
+
+            Subclasses should use this method to test their preconditioner_list implementations with specific
+            gradient inputs and expected outputs. This provides a standardized way to verify that preconditioners
+            are correctly updating and producing the expected preconditioned gradients.
+
+            Args:
+                preconditioner_list (PreconditionerList): The list of preconditioners to be updated.
+                masked_grad_lists (list[tuple[Tensor, ...]]): A list of gradient tuples for each update step.
+                masked_expected_preconditioned_grad_list (tuple[Tensor, ...]): The expected preconditioned gradients after all updates.
+            """
+            for step, masked_grad_list in enumerate(masked_grad_lists, start=1):
+                preconditioner_list.update_preconditioners(
+                    masked_grad_list=masked_grad_list,
+                    step=torch.tensor(step),
+                    # Only update the complete preconditioner during the last call to update_preconditioners().
+                    perform_amortized_computation=isinstance(
+                        preconditioner_list, BaseShampooPreconditionerList
+                    )
+                    and step == len(masked_grad_lists),
+                )
+
+            masked_actual_preconditioned_grad_list = preconditioner_list.precondition(
+                masked_grad_list=masked_grad_lists[-1]
+            )
+            torch.testing.assert_close(
+                masked_actual_preconditioned_grad_list,
+                masked_expected_preconditioned_grad_list,
+            )
+
+
+class SGDPreconditionerListTest(AbstractTest.PreconditionerListTestInterface):
     def _instantiate_block_list(self) -> tuple[Tensor, ...]:
         return (
             torch.tensor([1.0, 2.0]),
             torch.tensor([[3.0, 4.0], [5.0, 6.0]]),
         )
 
-    def _instantiate_preconditioner_list(self, **kwargs: Any) -> PreconditionerList:
-        # Disable the abstract methods check from the interface so it is possible to instantiate PreconditionerList.
-        PreconditionerList.__abstractmethods__ = frozenset()
-        return PreconditionerList(block_list=self._block_list)  # type: ignore[abstract]
-
-    def _test_update_preconditioners_and_precondition(
-        self,
-        preconditioner_list: PreconditionerList,
-        masked_grad_lists: list[tuple[Tensor, ...]],
-        masked_expected_preconditioned_grad_list: tuple[Tensor, ...] | None,
-    ) -> None:
-        for step, masked_grad_list in enumerate(masked_grad_lists, start=1):
-            preconditioner_list.update_preconditioners(
-                masked_grad_list=masked_grad_list,
-                step=torch.tensor(step),
-                # Only update the complete preconditioner during the last call to update_preconditioners().
-                perform_amortized_computation=isinstance(
-                    preconditioner_list, BaseShampooPreconditionerList
-                )
-                and step == len(masked_grad_lists),
-            )
-        masked_preconditioned_grad_list = preconditioner_list.precondition(
-            masked_grad_list=masked_grad_lists[-1]
-        )
-        if masked_expected_preconditioned_grad_list is not None:
-            torch.testing.assert_close(
-                masked_preconditioned_grad_list,
-                masked_expected_preconditioned_grad_list,
-            )
-        else:
-            self.assertIsNone(masked_preconditioned_grad_list)
-
-    def test_update_preconditioners_and_precondition(self) -> None:
-        masked_grad_list = (
-            torch.tensor([0.0, 1.0]),
-            torch.tensor([[1.0, 2.0], [3.0, 4.0]]),
-        )
-        self._test_update_preconditioners_and_precondition(
-            preconditioner_list=self._preconditioner_list,
-            masked_grad_lists=[masked_grad_list],
-            masked_expected_preconditioned_grad_list=None,
-        )
-
-    def test_numel_list(self) -> None:
-        self.assertEqual(self._preconditioner_list.numel_list, (0, 0))
-
-    def test_dims_list(self) -> None:
-        self.assertEqual(
-            self._preconditioner_list.dims_list, (torch.Size([2]), torch.Size([2, 2]))
-        )
-
-    def test_num_bytes_list(self) -> None:
-        self.assertEqual(self._preconditioner_list.num_bytes_list, (0, 0))
-
-    def test_numel(self) -> None:
-        self.assertEqual(self._preconditioner_list.numel(), 0)
-
-    def test_num_bytes(self) -> None:
-        self.assertEqual(self._preconditioner_list.num_bytes(), 0)
-
-    def _test_compress_preconditioner_list(
-        self,
-        expected_compress_list_call_count: int,
-    ) -> None:
-        with mock.patch.object(
-            shampoo_preconditioner_list,
-            "compress_list",
-        ) as mock_compress_list:
-            self.assertIsNone(
-                self._preconditioner_list.compress_preconditioner_list(
-                    local_grad_selector=(True,) * len(self._block_list)
-                )
-            )
-            self.assertEqual(
-                mock_compress_list.call_count,
-                expected_compress_list_call_count,
-            )
-
-    def test_compress_preconditioner_list(self) -> None:
-        self._test_compress_preconditioner_list(expected_compress_list_call_count=0)
-
-
-class SGDPreconditionerListTest(PreconditionerListTest):
     def _instantiate_preconditioner_list(self, **kwargs: Any) -> SGDPreconditionerList:
         return SGDPreconditionerList(block_list=self._block_list, **kwargs)
 
@@ -166,17 +205,39 @@ class SGDPreconditionerListTest(PreconditionerListTest):
             torch.tensor([0.0, 1.0]),
             torch.tensor([[1.0, 2.0], [3.0, 4.0]]),
         )
-        self._test_update_preconditioners_and_precondition(
+        self._verify_preconditioner_updates(
             preconditioner_list=self._instantiate_preconditioner_list(),
             masked_grad_lists=[masked_grad_list],
             masked_expected_preconditioned_grad_list=masked_grad_list,
         )
 
-    def test_compress_preconditioner_list(self) -> None:
-        self._test_compress_preconditioner_list(expected_compress_list_call_count=0)
+    @property
+    def _expected_numel_list(self) -> tuple[int, ...]:
+        return (0, 0)
+
+    @property
+    def _expected_dims_list(self) -> tuple[torch.Size, ...]:
+        return (torch.Size([2]), torch.Size([2, 2]))
+
+    @property
+    def _expected_num_bytes_list(self) -> tuple[int, ...]:
+        return (0, 0)
+
+    @property
+    def _expected_numel(self) -> int:
+        return 0
+
+    @property
+    def _expected_num_bytes(self) -> int:
+        return 0
+
+    @property
+    def _expected_compress_list_call_count(self) -> int:
+        return 0
 
 
-class AdagradPreconditionerListTest(PreconditionerListTest):
+@instantiate_parametrized_tests
+class AdagradPreconditionerListTest(AbstractTest.PreconditionerListTestInterface):
     def _instantiate_block_list(self) -> tuple[Tensor, ...]:
         # Because maximum_preconditioner_dim = 2, self._params[0] forms a block by itself,
         # and self._params[1] are split into two blocks.
@@ -187,13 +248,13 @@ class AdagradPreconditionerListTest(PreconditionerListTest):
         )
 
     def _instantiate_preconditioner_list(
-        self, **kwargs: Any
+        self, epsilon: float = 0.0, **kwargs: Any
     ) -> AdagradPreconditionerList:  # type: ignore[override]
-        kwargs = {"epsilon": 0.0} | kwargs
         return AdagradPreconditionerList(
             block_list=self._block_list,
             state=self._state,
             block_info_list=self._block_info_list,
+            epsilon=epsilon,
             **kwargs,
         )
 
@@ -238,53 +299,50 @@ class AdagradPreconditionerListTest(PreconditionerListTest):
             torch.tensor(1.0),
         )
 
-        self._test_update_preconditioners_and_precondition(
+        self._verify_preconditioner_updates(
             preconditioner_list=self._instantiate_preconditioner_list(beta2=1.0),
             masked_grad_lists=[grad_list],
             masked_expected_preconditioned_grad_list=torch._foreach_sign(grad_list),
         )
-        self._test_update_preconditioners_and_precondition(
+        self._verify_preconditioner_updates(
             preconditioner_list=self._instantiate_preconditioner_list(beta2=0.9),
             masked_grad_lists=[grad_list],
             masked_expected_preconditioned_grad_list=torch._foreach_sign(grad_list),
         )
-        self._test_update_preconditioners_and_precondition(
+        self._verify_preconditioner_updates(
             preconditioner_list=self._instantiate_preconditioner_list(
                 beta2=0.99,
                 use_bias_correction=False,
             ),
             masked_grad_lists=[grad_list],
             masked_expected_preconditioned_grad_list=torch._foreach_mul(
-                [
-                    torch.tensor(10.0),
-                    torch.tensor(10.0),
-                    torch.tensor(10.0),
-                    torch.tensor(10.0),
-                ],
-                torch._foreach_sign(grad_list),
+                torch._foreach_sign(grad_list), 10.0
             ),
         )
 
-    def test_numel_list(self) -> None:
-        self.assertEqual(self._preconditioner_list.numel_list, (2, 4, 2, 1))
+    @property
+    def _expected_numel_list(self) -> tuple[int, ...]:
+        return (2, 4, 2, 1)
 
-    def test_dims_list(self) -> None:
-        self.assertEqual(
-            self._preconditioner_list.dims_list,
-            (torch.Size([2]), torch.Size([2, 2]), torch.Size([1, 2]), torch.Size([])),
-        )
+    @property
+    def _expected_dims_list(self) -> tuple[torch.Size, ...]:
+        return (torch.Size([2]), torch.Size([2, 2]), torch.Size([1, 2]), torch.Size([]))
 
-    def test_num_bytes_list(self) -> None:
-        self.assertEqual(self._preconditioner_list.num_bytes_list, (8, 16, 8, 4))
+    @property
+    def _expected_num_bytes_list(self) -> tuple[int, ...]:
+        return (8, 16, 8, 4)
 
-    def test_numel(self) -> None:
-        self.assertEqual(self._preconditioner_list.numel(), 9)
+    @property
+    def _expected_numel(self) -> int:
+        return 9
 
-    def test_num_bytes(self) -> None:
-        self.assertEqual(self._preconditioner_list.num_bytes(), 36)
+    @property
+    def _expected_num_bytes(self) -> int:
+        return 36
 
-    def test_compress_preconditioner_list(self) -> None:
-        self._test_compress_preconditioner_list(expected_compress_list_call_count=1)
+    @property
+    def _expected_compress_list_call_count(self) -> int:
+        return 1
 
 
 class BaseShampooPreconditionerListTest(unittest.TestCase):
@@ -379,7 +437,19 @@ class EigendecompositionProperties(AmortizedComputationProperties):
 
 # Use outer class as wrapper to avoid running the abstract test.
 class AbstractTest:
-    class BaseShampooPreconditionerListTest(abc.ABC, AdagradPreconditionerListTest):
+    @instantiate_parametrized_tests
+    class BaseShampooPreconditionerListTest(
+        AbstractTest.PreconditionerListTestInterface, abc.ABC
+    ):
+        """
+        BaseShampooPreconditionerListTest is an abstract class for testing Shampoo preconditioner lists.
+
+        Users should override the following abstract methods:
+            1. _amortized_computation_properties - Provides properties for amortized computation functions.
+            2. _default_preconditioner_config - Returns the default configuration for the preconditioner.
+            3. _preconditioner_list_factory - Factory method to create instances of PreconditionerList.
+        """
+
         @property
         @abc.abstractmethod
         def _amortized_computation_properties(
@@ -394,19 +464,61 @@ class AbstractTest:
         @abc.abstractmethod
         def _preconditioner_list_factory(self) -> Callable[..., PreconditionerList]: ...
 
+        def _instantiate_block_list(self) -> tuple[Tensor, ...]:
+            # Because maximum_preconditioner_dim = 2, self._params[0] forms a block by itself,
+            # and self._params[1] are split into two blocks.
+            return (
+                self._params[0],
+                *torch.split(self._params[1], 2, dim=0),
+                self._params[2],
+            )
+
+        def setUp(self) -> None:
+            self._params = (
+                torch.tensor([1.0, 2.0]),
+                torch.arange(6, dtype=torch.float).reshape(3, 2),
+                torch.tensor(1.0),  # a 0D tensor
+            )
+            self._state = {  # type: ignore[var-annotated]
+                self._params[0]: {},
+                self._params[1]: {},
+                self._params[2]: {},
+            }
+            # Because maximum_preconditioner_dim = 2, self._params[0] forms a block by itself,
+            # and self._params[1] are split into two blocks.
+            self._block_info_list = (
+                BlockInfo(
+                    param=self._params[0],
+                    composable_block_ids=(0, "block_0"),
+                ),
+                BlockInfo(
+                    param=self._params[1],
+                    composable_block_ids=(1, "block_0"),
+                ),
+                BlockInfo(
+                    param=self._params[1],
+                    composable_block_ids=(1, "block_1"),
+                ),
+                BlockInfo(
+                    param=self._params[2],
+                    composable_block_ids=(2, "block_0"),
+                ),
+            )
+
+            super().setUp()
+
         def _instantiate_preconditioner_list(self, **kwargs: Any) -> PreconditionerList:  # type: ignore[override]
-            kwargs = {
-                "preconditioner_config": self._default_preconditioner_config
-            } | kwargs
             return self._preconditioner_list_factory(
                 block_list=self._block_list,
                 state=self._state,
                 block_info_list=self._block_info_list,
                 factor_matrix_dtype=torch.float64,
-                **kwargs,
+                **{"preconditioner_config": self._default_preconditioner_config}
+                | kwargs,
             )
 
-        def _test_raise_invalid_value_in_factor_matrix(
+        @parametrize("invalid_value", (torch.nan, torch.inf))
+        def test_raise_invalid_value_in_factor_matrix(
             self, invalid_value: float
         ) -> None:
             self.assertRaisesRegex(
@@ -422,14 +534,6 @@ class AbstractTest:
                 step=torch.tensor(1),
                 perform_amortized_computation=True,
             )
-
-        # Because nan as the input of self._preconditioner_list.update_preconditioners() would change the internal state to nan (and stayed as nan even after other updates),
-        # we need to test the cases of nan and inf separately.
-        def test_raise_inf_in_factor_matrix(self) -> None:
-            self._test_raise_invalid_value_in_factor_matrix(invalid_value=torch.inf)
-
-        def test_raise_nan_in_factor_matrix(self) -> None:
-            self._test_raise_invalid_value_in_factor_matrix(invalid_value=torch.nan)
 
         def test_raise_nan_and_inf_in_inv_factor_matrix_amortized_computation(
             self,
@@ -464,31 +568,31 @@ class AbstractTest:
                 self._amortized_computation_properties.amortized_computation_function_name,
                 # Simulate the situation throws an exception (not nan and inf) to test the warning
                 side_effect=ZeroDivisionError,
-            ) as mock_amortized_computation:
-                with self.assertLogs(level="WARNING") as cm:
-                    self._preconditioner_list.update_preconditioners(
-                        masked_grad_list=(
-                            torch.tensor([1.0, 0.0]),
-                            torch.eye(2) / math.sqrt(2.0),
-                            torch.tensor([[1.0, 0.0]]),
-                            torch.tensor(1.0),
-                        ),
-                        step=torch.tensor(1),
-                        perform_amortized_computation=True,
-                    )
-                self.assertCountEqual(
-                    # Only extracts the first sentence in the warning message for simple comparison.
-                    [r.msg.split(". ", maxsplit=1)[0] for r in cm.records],
-                    [
-                        "Matrix computation failed for factor matrix 0.block_0.0 with exception=ZeroDivisionError()",
-                        "Matrix computation failed for factor matrix 1.block_0.0 with exception=ZeroDivisionError()",
-                        "Matrix computation failed for factor matrix 1.block_0.1 with exception=ZeroDivisionError()",
-                        "Matrix computation failed for factor matrix 1.block_1.0 with exception=ZeroDivisionError()",
-                        "Matrix computation failed for factor matrix 1.block_1.1 with exception=ZeroDivisionError()",
-                    ],
+            ) as mock_amortized_computation, self.assertLogs(level="WARNING") as cm:
+                self._preconditioner_list.update_preconditioners(
+                    masked_grad_list=(
+                        torch.tensor([1.0, 0.0]),
+                        torch.eye(2) / math.sqrt(2.0),
+                        torch.tensor([[1.0, 0.0]]),
+                        torch.tensor(1.0),
+                    ),
+                    step=torch.tensor(1),
+                    perform_amortized_computation=True,
                 )
-                mock_amortized_computation.assert_called()
-                mock_amortized_computation.reset_mock()
+
+            self.assertCountEqual(
+                # Only extracts the first sentence in the warning message for simple comparison.
+                [r.msg.split(". ", maxsplit=1)[0] for r in cm.records],
+                [
+                    "Matrix computation failed for factor matrix 0.block_0.0 with exception=ZeroDivisionError()",
+                    "Matrix computation failed for factor matrix 1.block_0.0 with exception=ZeroDivisionError()",
+                    "Matrix computation failed for factor matrix 1.block_0.1 with exception=ZeroDivisionError()",
+                    "Matrix computation failed for factor matrix 1.block_1.0 with exception=ZeroDivisionError()",
+                    "Matrix computation failed for factor matrix 1.block_1.1 with exception=ZeroDivisionError()",
+                ],
+            )
+            mock_amortized_computation.assert_called()
+            mock_amortized_computation.reset_mock()
 
         def test_amortized_computation_failure_tolerance(self) -> None:
             self._preconditioner_list = self._instantiate_preconditioner_list()
@@ -639,7 +743,9 @@ class AbstractTest:
                         ],
                     )
 
-        def test_precondition_grad(self) -> None:
+        # Compare the results of preconditioning the gradient with both setups for different contract dimensions.
+        @parametrize("dims", (([0], [0]), ([0], [1])))
+        def test_precondition_grad(self, dims: tuple[list[int], list[int]]) -> None:
             # Generate a random gradient tensor with shape (2, 3, 4, 5, 6, 7).
             grad = torch.randn((2, 3, 4, 5, 6, 7))
 
@@ -677,49 +783,49 @@ class AbstractTest:
                 )
             ]
 
-            # Compare the results of preconditioning the gradient with both setups for different contract dimensions.
-            for dims in (([0], [0]), ([0], [1])):
-                with self.subTest(dims=dims):
-                    torch.testing.assert_close(
-                        self._preconditioner_list._precondition_grad(  # type: ignore[attr-defined]
-                            grad=grad,
-                            preconditioned_dims_selector=experimental_preconditioned_dims_selector,
-                            preconditioner_list=experimental_preconditioner_list,
-                            dims=dims,
-                        ),
-                        self._preconditioner_list._precondition_grad(  # type: ignore[attr-defined]
-                            grad=grad,
-                            preconditioned_dims_selector=control_preconditioned_dims_selector,
-                            preconditioner_list=control_preconditioner_list,
-                            dims=dims,
-                        ),
-                    )
-
-        def test_numel_list(self) -> None:
-            self.assertEqual(self._preconditioner_list.numel_list, (8, 16, 10, 0))
-
-        def test_dims_list(self) -> None:
-            self.assertEqual(
-                self._preconditioner_list.dims_list,
-                (
-                    torch.Size([2]),
-                    torch.Size([2, 2]),
-                    torch.Size([1, 2]),
-                    torch.Size([]),
+            torch.testing.assert_close(
+                self._preconditioner_list._precondition_grad(  # type: ignore[attr-defined]
+                    grad=grad,
+                    preconditioned_dims_selector=experimental_preconditioned_dims_selector,
+                    preconditioner_list=experimental_preconditioner_list,
+                    dims=dims,
+                ),
+                self._preconditioner_list._precondition_grad(  # type: ignore[attr-defined]
+                    grad=grad,
+                    preconditioned_dims_selector=control_preconditioned_dims_selector,
+                    preconditioner_list=control_preconditioner_list,
+                    dims=dims,
                 ),
             )
 
-        def test_num_bytes_list(self) -> None:
-            self.assertEqual(self._preconditioner_list.num_bytes_list, (48, 96, 60, 0))
+        @property
+        def _expected_numel_list(self) -> tuple[int, ...]:
+            return (8, 16, 10, 0)
 
-        def test_numel(self) -> None:
-            self.assertEqual(self._preconditioner_list.numel(), 34)
+        @property
+        def _expected_dims_list(self) -> tuple[torch.Size, ...]:
+            return (
+                torch.Size([2]),
+                torch.Size([2, 2]),
+                torch.Size([1, 2]),
+                torch.Size([]),
+            )
 
-        def test_num_bytes(self) -> None:
-            self.assertEqual(self._preconditioner_list.num_bytes(), 204)
+        @property
+        def _expected_num_bytes_list(self) -> tuple[int, ...]:
+            return (48, 96, 60, 0)
 
-        def test_compress_preconditioner_list(self) -> None:
-            self._test_compress_preconditioner_list(expected_compress_list_call_count=5)
+        @property
+        def _expected_numel(self) -> int:
+            return 34
+
+        @property
+        def _expected_num_bytes(self) -> int:
+            return 204
+
+        @property
+        def _expected_compress_list_call_count(self) -> int:
+            return 5
 
 
 class RootInvShampooPreconditionerListTest(
@@ -792,9 +898,9 @@ class RootInvShampooPreconditionerListTest(
         masked_expected_preconditioned_grad_list = [
             preconditioned_grad.clone() for preconditioned_grad in masked_grad_list2
         ]
-        masked_expected_preconditioned_grad_list[2] /= torch.tensor(2.0 ** (1 / 4))
+        masked_expected_preconditioned_grad_list[2] /= 2.0 ** (1 / 4)
 
-        self._test_update_preconditioners_and_precondition(
+        self._verify_preconditioner_updates(
             preconditioner_list=self._instantiate_preconditioner_list(
                 beta2=1.0,
                 use_bias_correction=True,
@@ -830,9 +936,9 @@ class RootInvShampooPreconditionerListTest(
             preconditioned_grad.clone()
             for preconditioned_grad in beta2_compensated_grad_list2
         ]
-        masked_expected_preconditioned_grad_list[2] /= torch.tensor(2.0 ** (1 / 4))
+        masked_expected_preconditioned_grad_list[2] /= 2.0 ** (1 / 4)
 
-        self._test_update_preconditioners_and_precondition(
+        self._verify_preconditioner_updates(
             preconditioner_list=self._instantiate_preconditioner_list(
                 beta2=beta2,
                 use_bias_correction=False,
@@ -870,9 +976,9 @@ class RootInvShampooPreconditionerListTest(
             preconditioned_grad.clone()
             for preconditioned_grad in bias_compensated_grad_list2
         ]
-        masked_expected_preconditioned_grad_list[2] /= torch.tensor(2.0 ** (1 / 4))
+        masked_expected_preconditioned_grad_list[2] /= 2.0 ** (1 / 4)
 
-        self._test_update_preconditioners_and_precondition(
+        self._verify_preconditioner_updates(
             preconditioner_list=self._instantiate_preconditioner_list(
                 beta2=beta2,
                 use_bias_correction=True,
@@ -967,7 +1073,7 @@ class RootInvShampooPreconditionerListTest(
         )
 
         # Apply preconditioner to the last step (masked_grad_list2) with epsilon. The result should be the same as the expected preconditioned grad list.
-        self._test_update_preconditioners_and_precondition(
+        self._verify_preconditioner_updates(
             preconditioner_list=self._instantiate_preconditioner_list(
                 beta2=1.0,
                 use_bias_correction=True,
@@ -1033,7 +1139,7 @@ class RootInvShampooPreconditionerListTest(
         ]
 
         # The default case where we do not ignore any dimensions.
-        self._test_update_preconditioners_and_precondition(
+        self._verify_preconditioner_updates(
             preconditioner_list=self._instantiate_preconditioner_list(
                 beta2=1.0,
             ),
@@ -1044,7 +1150,7 @@ class RootInvShampooPreconditionerListTest(
         )
 
         # When ignoring all the dimensions by setting all inverse exponent override values to 0.0, the preconditioner should be the identity matrix, and the expected preconditioned gradient should be the same as the input gradient.
-        self._test_update_preconditioners_and_precondition(
+        self._verify_preconditioner_updates(
             preconditioner_list=self._instantiate_preconditioner_list(
                 beta2=1.0,
                 preconditioner_config=replace(
@@ -1126,7 +1232,7 @@ class RootInvShampooPreconditionerListTest(
             torch.tensor(2.0),
         )
 
-        self._test_update_preconditioners_and_precondition(
+        self._verify_preconditioner_updates(
             preconditioner_list=self._instantiate_preconditioner_list(
                 beta2=1.0,
                 use_bias_correction=True,
@@ -1239,7 +1345,7 @@ class EigenvalueCorrectedShampooPreconditionerListTest(
             torch.tensor([[0.0, 1.0]]),
             torch.tensor(2 / math.sqrt(5)),
         )
-        self._test_update_preconditioners_and_precondition(
+        self._verify_preconditioner_updates(
             preconditioner_list=self._instantiate_preconditioner_list(
                 beta2=1.0,
                 use_bias_correction=True,
@@ -1279,7 +1385,7 @@ class EigenvalueCorrectedShampooPreconditionerListTest(
             masked_expected_preconditioned_grad_list, math.sqrt(1 - beta2)
         )
 
-        self._test_update_preconditioners_and_precondition(
+        self._verify_preconditioner_updates(
             preconditioner_list=self._instantiate_preconditioner_list(
                 beta2=beta2,
                 use_bias_correction=False,
@@ -1317,7 +1423,7 @@ class EigenvalueCorrectedShampooPreconditionerListTest(
             masked_expected_preconditioned_grad_list, math.sqrt(1 - beta2**2)
         )
 
-        self._test_update_preconditioners_and_precondition(
+        self._verify_preconditioner_updates(
             preconditioner_list=self._instantiate_preconditioner_list(
                 beta2=beta2,
                 use_bias_correction=True,
@@ -1406,7 +1512,7 @@ class EigenvalueCorrectedShampooPreconditionerListTest(
             torch.tensor(0.4),
         )
 
-        self._test_update_preconditioners_and_precondition(
+        self._verify_preconditioner_updates(
             preconditioner_list=self._instantiate_preconditioner_list(
                 beta2=1.0,
                 use_bias_correction=True,
