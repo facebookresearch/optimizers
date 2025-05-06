@@ -74,6 +74,12 @@ def compress_list(
     NOTE: Despite the name, this function can compress both lists and tuples, but will always return
     a tuple in order to ensure downstream compatibility.
 
+    Example:
+        complete_list = ['a', 'b', 'c', 'd'] and selector = [True, False, True, False]:
+        Result: ('a', 'c')
+
+        Only elements from complete_list where the corresponding selector is True are included.
+
     Args:
         complete_list (Sequence[CompressListType]): Complete tuple of candidates.
         selector (Sequence[bool]): Mask that is True if state is active, False otherwise.
@@ -101,7 +107,13 @@ def get_dtype_size(dtype: torch.dtype) -> int:
 def generate_pairwise_indices(input_list: Sequence[int]) -> Iterator[tuple[int, int]]:
     """Generates accumulated pairwise indices for a given input list.
 
-    For example, if input_list = (1, 3, 2), then this will output [(0, 1), (1, 4), (4, 6)].
+    For example, if input_list = (1, 3, 2),
+        - First element (1) generates index range [0, 1)
+        - Second element (3) generates index range [1, 4)
+        - Third element (2) generates index range [4, 6)
+
+    then this will output [(0, 1), (1, 4), (4, 6)].
+
     This is useful for generating interval indices for iterating through a list given the
     number of blocks within each parameter.
 
@@ -180,6 +192,11 @@ def distribute_buffer_sizes(
     Example:
         Assuming ALIGNMENT_BYTES = 64, given buffer_sizes = [128, 64, 500, 256], group_size = 2
         -> buffer_size_ranks = [(128, 1), (64, 1), (512, 0), (256, 1)]
+
+        This means buffer at index 0 (size 128) is assigned to rank 1,
+        buffer at index 1 (size 64) is assigned to rank 1,
+        buffer at index 2 (size 512) is assigned to rank 0, and
+        buffer at index 3 (size 256) is assigned to rank 1.
     """
     ALIGNMENT_BYTES = (
         64  # necessary for determining buffer size, possibly hardware-dependent
