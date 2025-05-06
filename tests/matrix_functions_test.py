@@ -43,6 +43,7 @@ from matrix_functions_types import (
     PerturbationConfig,
     PseudoInverseConfig,
     QREigendecompositionConfig,
+    RankDeficientStabilityConfig,
     RootInvConfig,
 )
 from torch import Tensor
@@ -96,7 +97,7 @@ class ScaleAndPowEigenvaluesTest(unittest.TestCase):
         torch.testing.assert_close(
             torch.tensor([1.0, 0.5]),
             stabilize_and_pow_eigenvalues(
-                L,
+                L=L,
                 root=Fraction(2),
                 epsilon=1.0,
             ),
@@ -107,7 +108,7 @@ class ScaleAndPowEigenvaluesTest(unittest.TestCase):
         torch.testing.assert_close(
             torch.tensor([1.0, 0.5]),
             stabilize_and_pow_eigenvalues(
-                L,
+                L=L,
                 root=Fraction(2),
                 epsilon=0.9,
                 rank_deficient_stability_config=PerturbationConfig(
@@ -121,11 +122,43 @@ class ScaleAndPowEigenvaluesTest(unittest.TestCase):
         torch.testing.assert_close(
             torch.tensor([1.0, 0.5, 0.0]),
             stabilize_and_pow_eigenvalues(
-                L,
+                L=L,
                 root=Fraction(2),
                 epsilon=0.0,
                 rank_deficient_stability_config=PseudoInverseConfig(rank_rtol=None),
             ),
+        )
+
+    def test_pseudoinverse_with_invalid_epsilon(self) -> None:
+        L = torch.tensor([1.0, 4.0, 0.0])
+        epsilon = 1e-8
+        self.assertRaisesRegex(
+            ValueError,
+            re.escape(f"{epsilon=} should be 0.0 when using pseudo-inverse!"),
+            stabilize_and_pow_eigenvalues,
+            L=L,
+            root=Fraction(2),
+            epsilon=epsilon,
+            rank_deficient_stability_config=PseudoInverseConfig(rank_rtol=None),
+        )
+
+    def test_invalid_rank_deficient_stability_config(
+        self,
+    ) -> None:
+        @dataclass
+        class NotSupportedRankDeficientStabilityConfig(RankDeficientStabilityConfig):
+            """A dummy rank_deficient_stability_config that is not supported."""
+
+            unsupported_mode: str = ""
+
+        L = torch.tensor([1.0, 4.0, 0.0])
+        self.assertRaisesRegex(
+            NotImplementedError,
+            r"rank_deficient_stability_config=.*\.NotSupportedRankDeficientStabilityConfig\(.*\) is not supported\.",
+            stabilize_and_pow_eigenvalues,
+            L=L,
+            root=Fraction(2),
+            rank_deficient_stability_config=NotSupportedRankDeficientStabilityConfig(),
         )
 
 
@@ -356,7 +389,7 @@ class MatrixRootDiagonalTest(unittest.TestCase):
         torch.testing.assert_close(
             expected_root_list,
             matrix_inverse_root(
-                A,
+                A=A,
                 root=root,
                 is_diagonal=True,
             ),
@@ -477,7 +510,7 @@ class EigenRootTest(unittest.TestCase):
         self.assertTrue(torch.all(torch.isinf(M_default)))
 
         M_pseudoinverse = matrix_inverse_root(
-            A,
+            A=A,
             root=root,
             root_inv_config=EigenConfig(
                 rank_deficient_stability_config=PseudoInverseConfig(rank_rtol=None)
@@ -488,7 +521,7 @@ class EigenRootTest(unittest.TestCase):
 
     def test_matrix_root_eigen_nonpositive_root(self) -> None:
         A = torch.tensor([[-1.0, 0.0], [0.0, 2.0]])
-        root = -1
+        root = Fraction(-1)
         self.assertRaisesRegex(
             ValueError,
             re.escape(f"Root {root} should be positive!"),
@@ -497,7 +530,7 @@ class EigenRootTest(unittest.TestCase):
             root=root,
         )
 
-    def test_pseudoinverse_epsilon_nonzero(self) -> None:
+    def test_pseudoinverse_with_invalid_epsilon(self) -> None:
         A = torch.tensor([[1.0, 0.0], [0.0, 0.0]])
         epsilon = 1e-8
         self.assertRaisesRegex(
@@ -770,6 +803,20 @@ class MatrixEigendecompositionTest(unittest.TestCase):
             A=A,
         )
 
+    def test_pseudoinverse_with_invalid_epsilon(self) -> None:
+        A = torch.ones((2, 2))
+        epsilon = 1e-8
+        self.assertRaisesRegex(
+            ValueError,
+            re.escape(f"{epsilon=} should be 0.0 when using pseudo-inverse!"),
+            matrix_eigendecomposition,
+            A=A,
+            epsilon=epsilon,
+            eigendecomposition_config=EighEigendecompositionConfig(
+                rank_deficient_stability_config=PseudoInverseConfig(rank_rtol=None)
+            ),
+        )
+
     @parametrize(
         "eigendecomposition_config",
         (
@@ -819,7 +866,7 @@ class MatrixEigendecompositionTest(unittest.TestCase):
         torch.testing.assert_close(
             (expected_eigenvalues, expected_eigenvectors),
             matrix_eigendecomposition(
-                A,
+                A=A,
                 eigendecomposition_config=eigendecomposition_config,
                 is_diagonal=False,
             ),
@@ -877,7 +924,7 @@ class MatrixEigendecompositionTest(unittest.TestCase):
         qr_config = QREigendecompositionConfig(max_iterations=10_000)
         qr_config.eigenvectors_estimate = initialization_fn(A)
         estimated_eigenvalues, estimated_eigenvectors = matrix_eigendecomposition(
-            A,
+            A=A,
             is_diagonal=False,
             eigendecomposition_config=qr_config,
         )
@@ -921,7 +968,7 @@ class MatrixEigendecompositionDiagonalTest(unittest.TestCase):
         torch.testing.assert_close(
             (expected_eigenvalues, expected_eigenvectors),
             matrix_eigendecomposition(
-                A,
+                A=A,
                 is_diagonal=True,
             ),
         )
