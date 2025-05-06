@@ -13,7 +13,7 @@ import math
 import unittest
 from functools import partial
 from numbers import Real
-from typing import Any, Type
+from typing import Any
 
 import torch
 from distributed_shampoo.distributed_shampoo import DistributedShampoo
@@ -49,7 +49,7 @@ class DistributedShampooEigenvalueCorrectionTest(unittest.TestCase):
     @staticmethod
     def _optim_factory(
         parameters: ParamsT,
-        optim_cls: Type[torch.optim.Optimizer],
+        optim_cls: type[torch.optim.Optimizer],
         **kwargs: Any,
     ) -> torch.optim.Optimizer:
         return optim_cls(parameters, **kwargs)

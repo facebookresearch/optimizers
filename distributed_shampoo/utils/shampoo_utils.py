@@ -13,7 +13,7 @@ from collections.abc import Callable, Iterator, Sequence
 from functools import partial, reduce
 from itertools import accumulate, chain, compress, islice, pairwise
 from types import TracebackType
-from typing import Type, TypeVar
+from typing import TypeVar
 
 import torch
 from torch import Tensor
@@ -162,7 +162,7 @@ class ParameterizeEnterExitContext:
 
     def __exit__(
         self,
-        exc_type: Type[BaseException] | None,
+        exc_type: type[BaseException] | None,
         exc_val: BaseException | None,
         exc_tb: TracebackType | None,
     ) -> None:

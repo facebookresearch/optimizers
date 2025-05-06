@@ -12,7 +12,7 @@ LICENSE file in the root directory of this source tree.
 import math
 import unittest
 from functools import partial
-from typing import Any, Type
+from typing import Any
 
 import torch
 from distributed_shampoo.distributed_shampoo import DistributedShampoo
@@ -47,7 +47,7 @@ class DistributedShampooGraftingTest(unittest.TestCase):
     @staticmethod
     def _optim_factory(
         parameters: ParamsT,
-        optim_cls: Type[torch.optim.Optimizer],
+        optim_cls: type[torch.optim.Optimizer],
         **kwargs: Any,
     ) -> torch.optim.Optimizer:
         return optim_cls(parameters, **kwargs)
