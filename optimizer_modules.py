@@ -100,7 +100,8 @@ class OptimizerModule:
                 elif isinstance(value, (list, tuple, set)):
                     destination[key] = {}
                     save_to_state_dict(
-                        states=enumerate(value),
+                        # Note: mypy is right on this typing error but it is impossible to flatten one more level of codes to eliminate this.
+                        states=enumerate(value),  # type: ignore[arg-type]
                         destination=destination[key],
                     )
                 elif store_non_tensors:
