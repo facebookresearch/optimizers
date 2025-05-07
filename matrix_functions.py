@@ -179,8 +179,8 @@ def stabilize_and_pow_eigenvalues(
     Args:
         L (Tensor): The input matrix.
         root (Fraction): The fractional power to which the eigenvalues should be raised.
-        epsilon (float, optional): A small value added to the eigenvalues for stability. (Default: 0.0)
-        rank_deficient_stability_config (RankDeficientStabilityConfig, optional): Configuration for handling/stabilizing rank-deficient matrices. (Default: DefaultPerturbationConfig)
+        epsilon (float): A small value added to the eigenvalues for stability. (Default: 0.0)
+        rank_deficient_stability_config (RankDeficientStabilityConfig): Configuration for handling/stabilizing rank-deficient matrices. (Default: DefaultPerturbationConfig)
 
     Returns:
         inv_power_L (Tensor): The resulting matrix with stabilized and powered eigenvalues.
@@ -346,8 +346,8 @@ def matrix_eigendecomposition(
 
     Args:
         A (Tensor): The input symmetric matrix.
-        epsilon (float): Adds epsilon * I to matrix before taking matrix root for numerical stability. See DistributedShampoo.epsilon for details. (Default: 0.0)
-        eigendecomposition_config (EigendecompositionConfig): Determines how eigendecomposition is computed.
+        epsilon (float): Adds epsilon * I to matrix before taking matrix root for numerical stability. (Default: 0.0)
+        eigendecomposition_config (EigendecompositionConfig): Determines how eigendecomposition is computed. (Default: DefaultEigendecompositionConfig)
         is_diagonal (bool): Whether A is diagonal. (Default: False)
 
     Returns:
@@ -422,7 +422,7 @@ def _eigh_eigenvalue_decomposition(
 
     Args:
         A (Tensor): The input symmetric matrix.
-        retry_double_precision (bool, optional): Whether to retry the computation in double precision if it fails in the current precision. Defaults to True.
+        retry_double_precision (bool): Whether to retry the computation in double precision if it fails in the current precision. (Default: True)
         eigendecomposition_offload_device (torch.device | str): Device to offload eigendecomposition computation. If value is empty string, do not perform offloading. (Default: "")
 
     Returns:
@@ -649,7 +649,7 @@ def _matrix_inverse_root_newton(
         A (Tensor): Matrix of interest.
         root (int): Root of interest. Any natural number.
         epsilon (float): Adds epsilon * I to matrix before taking matrix root. (Default: 0.0)
-        max_iterations (int): Maximum number of iterations. (Default: 1000)
+        max_iterations (int): Maximum number of iterations. (Default: 100)
         tolerance (float): Tolerance. (Default: 1e-6)
 
     Returns:
@@ -726,9 +726,9 @@ def _matrix_inverse_root_higher_order(
     Args:
         A (Tensor): Matrix of interest.
         root (Fraction): Root of interest. Any rational number. Use small numerator, denominator for best numerics as well as performance.
-        rel_epsilon (float): Adds epsilon * lambda_max * I to matrix before taking matrix root, where lambda_max is an upper bound on maximum eigenvalue.
+        rel_epsilon (float): Adds epsilon * lambda_max * I to matrix before taking matrix root, where lambda_max is an upper bound on maximum eigenvalue. (Default: 0.0)
         abs_epsilon (float): Adds epsilon * I to matrix before taking matrix root. When both "abs_epsilon" and "rel_epsilon" are specified, max(rel_epsilon * lambda_max, abs_epsilon) * I is added to the matrix.
-        Generally recommend setting according to A.dtype (1e-3 for tf32, 1e-5 for fp32, 1e-9 for fp64) (Default: 0.0)
+            Generally recommend setting according to A.dtype (1e-3 for tf32, 1e-5 for fp32, 1e-9 for fp64) (Default: 0.0)
         max_iterations (int): Maximum number of iterations. Typically we need < 20 iterations. (Default: 100)
         tolerance (float): Tolerance for determining exit criterion from iterations. (Default: 1e-20, which in practice guarantees they run to convergence)
         order (int): Order of the method. Order must be >= 2.  Higher order methods accelerate convergence (fewer iterations), but can take more matmuls per iteration. (Default: 3)
