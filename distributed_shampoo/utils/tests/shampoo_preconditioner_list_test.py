@@ -52,8 +52,8 @@ from torch.testing._internal.common_utils import (
 )
 
 
-class AbstractTest:
-    class PreconditionerListTestInterface(abc.ABC, unittest.TestCase):
+class AbstractPreconditionerListTest:
+    class Interface(abc.ABC, unittest.TestCase):
         """PreconditionerListTestInterface is the base class for testing all PreconditionerList implementations.
 
         This abstract class provides a standardized testing framework for various preconditioner list implementations.
@@ -190,7 +190,7 @@ class AbstractTest:
             )
 
 
-class SGDPreconditionerListTest(AbstractTest.PreconditionerListTestInterface):
+class SGDPreconditionerListTest(AbstractPreconditionerListTest.Interface):
     def _instantiate_block_list(self) -> tuple[Tensor, ...]:
         return (
             torch.tensor([1.0, 2.0]),
@@ -237,7 +237,7 @@ class SGDPreconditionerListTest(AbstractTest.PreconditionerListTestInterface):
 
 
 @instantiate_parametrized_tests
-class AdagradPreconditionerListTest(AbstractTest.PreconditionerListTestInterface):
+class AdagradPreconditionerListTest(AbstractPreconditionerListTest.Interface):
     def _instantiate_block_list(self) -> tuple[Tensor, ...]:
         # Because maximum_preconditioner_dim = 2, self._params[0] forms a block by itself,
         # and self._params[1] are split into two blocks.
@@ -439,7 +439,7 @@ class EigendecompositionProperties(AmortizedComputationProperties):
 class AbstractTest:
     @instantiate_parametrized_tests
     class BaseShampooPreconditionerListTest(
-        AbstractTest.PreconditionerListTestInterface, abc.ABC
+        AbstractPreconditionerListTest.Interface, abc.ABC
     ):
         """
         BaseShampooPreconditionerListTest is an abstract class for testing Shampoo preconditioner lists.
