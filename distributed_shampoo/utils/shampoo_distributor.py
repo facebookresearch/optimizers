@@ -10,7 +10,7 @@ LICENSE file in the root directory of this source tree.
 from abc import ABC, abstractmethod
 from collections.abc import Iterable
 from operator import attrgetter
-from typing import Any
+from typing import Any, Literal, overload
 
 import torch
 from distributed_shampoo.shampoo_types import (
@@ -109,6 +109,21 @@ class DistributorInterface(ABC):
         """
         return (param_index, f"block_{block_index}")
 
+    @overload
+    @torch.no_grad()
+    def _get_params_or_grads(self) -> Iterable[Tensor]: ...
+
+    @overload
+    @torch.no_grad()
+    def _get_params_or_grads(
+        self, get_grad: Literal[True]
+    ) -> Iterable[Tensor | None]: ...
+
+    @overload
+    @torch.no_grad()
+    def _get_params_or_grads(self, get_grad: Literal[False]) -> Iterable[Tensor]: ...
+
+    @torch.no_grad()
     def _get_params_or_grads(self, get_grad: bool = False) -> Iterable[Tensor | None]:
         """Helper function that gets params or grads from the parameter group.
 
@@ -150,7 +165,6 @@ class DistributorInterface(ABC):
                 else param.size()
             )
             for param in self._get_params_or_grads()
-            if param is not None  # For type checking. Param should not be None here.
         )
 
         # Generate blocked parameters list and number of blocks per parameter.
@@ -160,7 +174,6 @@ class DistributorInterface(ABC):
         for param, merged_dims in zip(
             self._get_params_or_grads(), self._global_merged_dims_list, strict=True
         ):
-            assert param is not None
             # Obtain blocks for each parameter after merging.
             blocks_within_param = multi_dim_split(
                 param.view(merged_dims), self._param_group[MAX_PRECONDITIONER_DIM]

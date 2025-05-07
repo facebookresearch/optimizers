@@ -8,9 +8,10 @@ LICENSE file in the root directory of this source tree.
 """
 
 import logging
+from collections.abc import Iterable
 from functools import partial
 from itertools import islice
-from typing import Any, Iterable
+from typing import Any, Literal, overload
 
 import torch
 from distributed_shampoo.shampoo_types import (
@@ -218,6 +219,20 @@ class HybridShardDistributor(DistributorInterface):
             comms_group_rank=comms_group_rank,
         )
 
+    @overload
+    @torch.no_grad()
+    def _get_params_or_grads(self) -> Iterable[Tensor]: ...
+
+    @overload
+    @torch.no_grad()
+    def _get_params_or_grads(
+        self, get_grad: Literal[True]
+    ) -> Iterable[Tensor | None]: ...
+
+    @overload
+    @torch.no_grad()
+    def _get_params_or_grads(self, get_grad: Literal[False]) -> Iterable[Tensor]: ...
+
     @torch.no_grad()
     def _get_params_or_grads(self, get_grad: bool = False) -> Iterable[Tensor | None]:
         """Helper function to get the local params (or grad) from the param_group, where params are represented as DTensors.
@@ -347,8 +362,8 @@ class HybridShardDistributor(DistributorInterface):
         """
         # Call `super()` instead of `self` as a performance optimization.
         # This leads to O(1) instead of O(N) complexity to retrieve the parameters.
-        non_empty_params: Iterable[DTensor] = filter(
-            lambda p: p.to_local().numel() > 0,  # type: ignore[arg-type]
+        non_empty_params: Iterable[Tensor] = filter(
+            lambda p: isinstance(p, DTensor) and p.to_local().numel() > 0,
             super()._get_params_or_grads(),
         )
 
