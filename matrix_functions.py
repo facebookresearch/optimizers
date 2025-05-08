@@ -196,14 +196,14 @@ def stabilize_and_pow_eigenvalues(
                 raise ValueError(f"{epsilon=} should be 0.0 when using pseudo-inverse!")
 
             spectrum_cutoff = truncate_eigenvalues_cutoff(
-                L,
+                L=L,
                 rank_rtol=rank_deficient_stability_config.rank_rtol,
                 rank_atol=rank_deficient_stability_config.rank_atol,
             )
             inv_power_L = torch.where(
                 L <= spectrum_cutoff,
                 torch.zeros_like(L),
-                L.pow(torch.as_tensor(-1.0 / root)),
+                L.pow(-1.0 / root),
             )
         case PerturbationConfig():
             lambda_min = torch.min(L).item()
@@ -214,9 +214,11 @@ def stabilize_and_pow_eigenvalues(
                 if rank_deficient_stability_config.perturb_before_computation
                 else (-min(lambda_min, 0.0) + epsilon)
             )
-            L = _matrix_perturbation(L, epsilon=effective_epsilon, is_eigenvalues=True)
+            L = _matrix_perturbation(
+                A=L, epsilon=effective_epsilon, is_eigenvalues=True
+            )
 
-            inv_power_L = L.pow(torch.as_tensor(-1.0 / root))
+            inv_power_L = L.pow_(-1.0 / root)
         case _:
             raise NotImplementedError(
                 f"{rank_deficient_stability_config=} is not supported."
