@@ -9,7 +9,7 @@ LICENSE file in the root directory of this source tree.
 
 import logging
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Hashable, Mapping
 from dataclasses import asdict, dataclass
 from fractions import Fraction
 from functools import reduce
@@ -135,6 +135,10 @@ class SGDPreconditionerList(PreconditionerList):
         return
 
 
+SubStateValueType = TypeVar("SubStateValueType")
+StateValueType = dict[Hashable, SubStateValueType]
+
+
 class AdagradPreconditionerList(PreconditionerList):
     """Adagrad / Adam / RMSprop preconditioners for a list of parameters.
 
@@ -163,8 +167,7 @@ class AdagradPreconditionerList(PreconditionerList):
     def __init__(
         self,
         block_list: tuple[Tensor, ...],
-        # type: ignore
-        state: Mapping[Tensor, Any],
+        state: Mapping[Tensor, StateValueType],
         block_info_list: tuple[BlockInfo, ...],
         beta2: float = 1.0,
         epsilon: float = 1e-10,
@@ -746,8 +749,7 @@ class BaseShampooPreconditionerList(
     def __init__(
         self,
         block_list: tuple[Tensor, ...],
-        # type: ignore
-        state: Mapping[Tensor, Any],
+        state: Mapping[Tensor, StateValueType],
         block_info_list: tuple[BlockInfo, ...],
         preconditioner_config: PreconditionerConfig,
         beta2: float = 1.0,
@@ -813,8 +815,7 @@ class BaseShampooPreconditionerList(
     def _create_kronecker_factors_state(
         self,
         block_list: tuple[Tensor, ...],
-        # type: ignore
-        state: Mapping[Tensor, Any],
+        state: Mapping[Tensor, StateValueType],
         block_info_list: tuple[BlockInfo, ...],
         preconditioned_dims_list: tuple[tuple[int, ...], ...],
     ) -> list[ShampooKroneckerFactorsUnwrappedType]:
