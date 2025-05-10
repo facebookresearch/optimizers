@@ -201,7 +201,7 @@ class AbstractTest:
 
             # Define the expected distributed state dictionary for each rank.
             rank_to_expected_distributed_state_dict = {
-                1: {
+                0: {
                     '["block_1", "shampoo", "factor_matrices", 0]': DTensor.from_local(
                         local_tensor=tensor(
                             [
@@ -210,7 +210,7 @@ class AbstractTest:
                                 [0.0004, 0.0004, 0.0004],
                             ]
                         ),
-                        device_mesh=DeviceMesh(str(self._device), [1]),
+                        device_mesh=DeviceMesh(str(self._device), [0]),
                         placements=(Replicate(),),
                     ),
                     '["block_1", "shampoo", "factor_matrices", 1]': DTensor.from_local(
@@ -221,7 +221,7 @@ class AbstractTest:
                                 [0.0004, 0.0005, 0.0006],
                             ]
                         ),
-                        device_mesh=DeviceMesh(str(self._device), [1]),
+                        device_mesh=DeviceMesh(str(self._device), [0]),
                         placements=(Replicate(),),
                     ),
                     '["block_1", "shampoo", "inv_factor_matrices", 0]': DTensor.from_local(
@@ -232,7 +232,7 @@ class AbstractTest:
                                 [-31.4793, -31.5677, 68.4570],
                             ]
                         ),
-                        device_mesh=DeviceMesh(str(self._device), [1]),
+                        device_mesh=DeviceMesh(str(self._device), [0]),
                         placements=(Replicate(),),
                     ),
                     '["block_1", "shampoo", "inv_factor_matrices", 1]': DTensor.from_local(
@@ -243,7 +243,7 @@ class AbstractTest:
                                 [-28.3770, -37.7380, 52.6266],
                             ]
                         ),
-                        device_mesh=DeviceMesh(str(self._device), [1]),
+                        device_mesh=DeviceMesh(str(self._device), [0]),
                         placements=(Replicate(),),
                     ),
                     '["block_1", "adagrad"]': DTensor.from_local(
@@ -254,7 +254,7 @@ class AbstractTest:
                                 [7.0041e-05, 1.2452e-04, 1.9456e-04],
                             ]
                         ),
-                        device_mesh=DeviceMesh(str(self._device), [1]),
+                        device_mesh=DeviceMesh(str(self._device), [0]),
                         placements=(Replicate(),),
                     ),
                     '["block_1", "momentum"]': DTensor.from_local(
@@ -265,7 +265,7 @@ class AbstractTest:
                                 [1.6924, 1.9865, 2.2806],
                             ]
                         ),
-                        device_mesh=DeviceMesh(str(self._device), [1]),
+                        device_mesh=DeviceMesh(str(self._device), [0]),
                         placements=(Replicate(),),
                     ),
                     '["block_1", "filtered_grad"]': DTensor.from_local(
@@ -276,12 +276,11 @@ class AbstractTest:
                                 [0.0013, 0.0017, 0.0021],
                             ]
                         ),
-                        device_mesh=DeviceMesh(str(self._device), [1]),
+                        device_mesh=DeviceMesh(str(self._device), [0]),
                         placements=(Replicate(),),
                     ),
-                    '["step"]': tensor(num_steps),
                 },
-                0: {
+                1: {
                     '["block_0", "shampoo", "factor_matrices", 0]': DTensor.from_local(
                         local_tensor=tensor(
                             [
@@ -290,7 +289,7 @@ class AbstractTest:
                                 [3.8911e-05, 3.8911e-05, 3.8911e-05],
                             ]
                         ),
-                        device_mesh=DeviceMesh(str(self._device), [0]),
+                        device_mesh=DeviceMesh(str(self._device), [1]),
                         placements=(Replicate(),),
                     ),
                     '["block_0", "shampoo", "factor_matrices", 1]': DTensor.from_local(
@@ -301,7 +300,7 @@ class AbstractTest:
                                 [0.0000e00, 4.6694e-05, 9.3387e-05],
                             ]
                         ),
-                        device_mesh=DeviceMesh(str(self._device), [0]),
+                        device_mesh=DeviceMesh(str(self._device), [1]),
                         placements=(Replicate(),),
                     ),
                     '["block_0", "shampoo", "inv_factor_matrices", 0]': DTensor.from_local(
@@ -312,7 +311,7 @@ class AbstractTest:
                                 [-30.1266, -30.1204, 69.8673],
                             ]
                         ),
-                        device_mesh=DeviceMesh(str(self._device), [0]),
+                        device_mesh=DeviceMesh(str(self._device), [1]),
                         placements=(Replicate(),),
                     ),
                     '["block_0", "shampoo", "inv_factor_matrices", 1]': DTensor.from_local(
@@ -323,7 +322,7 @@ class AbstractTest:
                                 [0.0000, -36.1519, 27.6963],
                             ]
                         ),
-                        device_mesh=DeviceMesh(str(self._device), [0]),
+                        device_mesh=DeviceMesh(str(self._device), [1]),
                         placements=(Replicate(),),
                     ),
                     '["block_0", "adagrad"]': DTensor.from_local(
@@ -334,7 +333,7 @@ class AbstractTest:
                                 [0.0000e00, 7.7823e-06, 3.1129e-05],
                             ]
                         ),
-                        device_mesh=DeviceMesh(str(self._device), [0]),
+                        device_mesh=DeviceMesh(str(self._device), [1]),
                         placements=(Replicate(),),
                     ),
                     '["block_0", "momentum"]': DTensor.from_local(
@@ -345,7 +344,7 @@ class AbstractTest:
                                 [0.0000, 1.5694, 2.3289],
                             ]
                         ),
-                        device_mesh=DeviceMesh(str(self._device), [0]),
+                        device_mesh=DeviceMesh(str(self._device), [1]),
                         placements=(Replicate(),),
                     ),
                     '["block_0", "filtered_grad"]': DTensor.from_local(
@@ -356,10 +355,9 @@ class AbstractTest:
                                 [0.0000, 0.0004, 0.0009],
                             ]
                         ),
-                        device_mesh=DeviceMesh(str(self._device), [0]),
+                        device_mesh=DeviceMesh(str(self._device), [1]),
                         placements=(Replicate(),),
                     ),
-                    '["step"]': tensor(num_steps),
                 },
             }
 
@@ -371,6 +369,7 @@ class AbstractTest:
             self.assertEqual(
                 distributed_state_dict.keys(),
                 rank_to_expected_distributed_state_dict[dist.get_rank()].keys(),
+                msg=f"{distributed_state_dict.keys() - rank_to_expected_distributed_state_dict[dist.get_rank()].keys()=} {rank_to_expected_distributed_state_dict[dist.get_rank()].keys() - distributed_state_dict.keys()=}",
             )
 
             # Helper function to get the local tensor from a DTensor or return the tensor itself.
@@ -432,7 +431,7 @@ class AbstractTest:
             self.assertEqual(
                 optimizer.distributed_state_dict(key_to_param=model.named_parameters())[
                     "state"
-                ]["linear_layers.0.weight"]['["step"]'].item(),
+                ]["scalar"]['["step"]'].item(),
                 steps_with_gradients + steps_without_gradients,
             )
 
@@ -454,6 +453,7 @@ class AbstractTest:
                     construct_training_problem,
                     model_linear_layers_dims=(PRECONDITIONER_DIM, 1),
                     model_dead_layers_dims=(PRECONDITIONER_DIM, 1),
+                    enable_learnable_scalar=False,
                     device=self._device,
                 ),
                 num_steps=num_steps,
@@ -497,6 +497,7 @@ class AbstractTest:
                         construct_training_problem,
                         model_linear_layers_dims=(PRECONDITIONER_DIM, 1),
                         model_dead_layers_dims=None,
+                        enable_learnable_scalar=False,
                         device=self._device,
                     ),
                 )

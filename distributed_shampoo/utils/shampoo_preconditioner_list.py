@@ -1072,7 +1072,7 @@ class BaseShampooPreconditionerList(
                 self._masked_kronecker_factors_unwrapped,
                 strict=True,
             ):
-                # Because of preconditioned_dims_selector, we may have no factor matrices to update.
+                # Because of preconditioned_dims_selector and 0D tensor, we may have no factor matrices to update.
                 if not kronecker_factors.factor_matrices:
                     continue
 
