@@ -7,9 +7,9 @@ LICENSE file in the root directory of this source tree.
 
 """
 
-import itertools
 from collections.abc import Callable
 from functools import partial, reduce
+from itertools import pairwise, repeat
 
 import torch
 from torch import nn
@@ -18,36 +18,41 @@ from torch.distributed.tensor import DTensor
 from torch.optim.optimizer import ParamsT
 
 
-class _ModelWithLinearAndDeadLayers(nn.Module):
+class _ModelWithScalarAndLinearAndDeadLayers(nn.Module):
     def __init__(
         self,
         model_linear_layers_dims: tuple[int, ...],
         model_dead_layers_dims: tuple[int, ...] | None,
+        enable_learnable_scalar: bool = True,
         bias: bool = False,
     ) -> None:
         super().__init__()
+        # Choose torch.tenosr over nn.Parameter(requires_grad=False) to avoid model.parameters() including this scalar when enable_learnable_scalar is False.
+        self.scalar: torch.Tensor = (
+            nn.Parameter(torch.zeros(()))
+            if enable_learnable_scalar
+            else torch.zeros(())
+        )
         # fully_shard doesn't support containers so we fall back to use nn.Sequential
         self.linear_layers: nn.Sequential = nn.Sequential(
-            *(
-                nn.Linear(a, b, bias=bias)
-                for a, b in itertools.pairwise(model_linear_layers_dims)
-            )
+            *(nn.Linear(a, b, bias=bias) for a, b in pairwise(model_linear_layers_dims))
         )
         if model_dead_layers_dims is not None:
             self.dead_layers: nn.Sequential = nn.Sequential(
                 *(
                     nn.Linear(a, b, bias=False)
-                    for a, b in itertools.pairwise(model_dead_layers_dims)
+                    for a, b in pairwise(model_dead_layers_dims)
                 )
             )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return reduce(lambda x, layer: layer(x), self.linear_layers, x)
+        return reduce(lambda x, layer: layer(x), self.linear_layers, x) + self.scalar
 
 
 def construct_training_problem(
     model_linear_layers_dims: tuple[int, ...],
     model_dead_layers_dims: tuple[int, ...] | None = (10, 10),
+    enable_learnable_scalar: bool = True,
     device: torch.device | None = None,
     bias: bool = False,
     fill: float | tuple[float, ...] = 0.0,
@@ -59,6 +64,7 @@ def construct_training_problem(
     Args:
         model_linear_layers_dims (tuple[int, ...]): The dimensions of the model linear layers.
         model_dead_layers_dims (tuple[int, ...] | None): The dimensions of the model dead linear layers. (Default: (10, 10))
+        enable_learnable_scalar (bool): Whether to enable a learnable scalar multiplier for the input tensor. (Default: True)
         device (torch.device | None): The device to use. (Default: None)
         bias (bool): Whether to use bias in the linear (non-dead) layers. (Default: False)
         fill (float | tuple[float, ...]): The value(s) to fill the model parameters. If a tuple, each element should correspond to one layer. (Default: 0.0)
@@ -74,17 +80,22 @@ def construct_training_problem(
     data = torch.arange(model_linear_layers_dims[0], dtype=torch.float, device=device)
     data /= torch.linalg.norm(data)
 
-    model = _ModelWithLinearAndDeadLayers(
+    model = _ModelWithScalarAndLinearAndDeadLayers(
         model_linear_layers_dims=model_linear_layers_dims,
         model_dead_layers_dims=model_dead_layers_dims,
+        enable_learnable_scalar=enable_learnable_scalar,
         bias=bias,
     ).to(device=device)
 
-    if isinstance(fill, float):
-        fill = (fill,) * (len(model.linear_layers))
-    for m, f in zip(model.linear_layers, fill, strict=True):
+    for m, f in zip(
+        model.linear_layers,
+        repeat(fill, len(model.linear_layers)) if isinstance(fill, float) else fill,
+        strict=True,
+    ):
+        # Directly fills the weight tensor with the value 'f' without tracking in autograd.
         m.weight.data.fill_(f)
         if bias:
+            # If bias is used, directly fills the bias tensor with the value 'f' without tracking in autograd.
             m.bias.data.fill_(f)
 
     loss = nn.MSELoss()
@@ -248,6 +259,7 @@ def compare_two_optimizers_devices_on_weight_and_loss(
     experimental_device: torch.device | None,
     model_linear_layers_dims: tuple[int, ...] = (10, 1, 1),
     model_dead_layers_dims: tuple[int, ...] | None = None,
+    enable_learnable_scalar: bool = True,
     fill: float | tuple[float, ...] = 1.0,
     total_steps: int = 5,
     rtol: float | None = None,
@@ -261,12 +273,13 @@ def compare_two_optimizers_devices_on_weight_and_loss(
         control_device (torch.device | None): The device to use for the control optimizer.
         experimental_optim_factory (Callable[[ParamsT], torch.optim.Optimizer]): A factory function that returns an instance of the experimental optimizer.
         experimental_device (torch.device | None): The device to use for the experimental optimizer.
-        model_linear_layers_dims (tuple[int, ...]): The dimensions of the linear layers in the neural network. (Defaults: (10, 1, 1))
-        model_dead_layers_dims (tuple[int, ...] | None): The dimensions of the dead layers in the neural network. (Defaults: None)
+        model_linear_layers_dims (tuple[int, ...]): The dimensions of the linear layers in the neural network. (Default: (10, 1, 1))
+        model_dead_layers_dims (tuple[int, ...] | None): The dimensions of the dead layers in the neural network. (Default: None)
+        enable_learnable_scalar (bool): Whether to enable a learnable scalar multiplier for the input tensor. (Default: True)
         fill (float | tuple[float, ...]): The value(s) to fill the model parameters. If a tuple, each element should correspond to one layer. (Default: 1.0)
-        total_steps (int): The number of training steps. (Defaults: 5)
-        rtol (float | None): The relative tolerance for comparing weights and losses. (Defaults: None)
-        atol (float | None): The absolute tolerance for comparing weights and losses. (Defaults: None)
+        total_steps (int): The number of training steps. (Default: 5)
+        rtol (float | None): The relative tolerance for comparing weights and losses. (Default: None)
+        atol (float | None): The absolute tolerance for comparing weights and losses. (Default: None)
 
     Returns:
         None
@@ -276,6 +289,7 @@ def compare_two_optimizers_devices_on_weight_and_loss(
         construct_training_problem,
         model_linear_layers_dims=model_linear_layers_dims,
         model_dead_layers_dims=model_dead_layers_dims,
+        enable_learnable_scalar=enable_learnable_scalar,
         fill=fill,
     )
     compare_two_optimizers_models_devices_on_weight_and_loss(
@@ -299,6 +313,7 @@ def compare_two_optimizers_on_weight_and_loss(
     experimental_optim_factory: Callable[[ParamsT], torch.optim.Optimizer],
     model_linear_layers_dims: tuple[int, ...] = (10, 1, 1),
     model_dead_layers_dims: tuple[int, ...] | None = None,
+    enable_learnable_scalar: bool = True,
     device: torch.device | None = None,
     fill: float | tuple[float, ...] = 1.0,
     total_steps: int = 5,
@@ -311,13 +326,14 @@ def compare_two_optimizers_on_weight_and_loss(
     Args:
         control_optim_factory (Callable[[ParamsT], torch.optim.Optimizer]): A factory function that returns an instance of the control optimizer.
         experimental_optim_factory (Callable[[ParamsT], torch.optim.Optimizer]): A factory function that returns an instance of the experimental optimizer.
-        model_linear_layers_dims (tuple[int, ...]): The dimensions of the linear layers in the neural network. (Defaults: (10, 1, 1))
-        model_dead_layers_dims (tuple[int, ...] | None): The dimensions of the dead layers in the neural network. (Defaults: None)
-        device (torch.device | None): The device to use for training. (Defaults: None)
+        model_linear_layers_dims (tuple[int, ...]): The dimensions of the linear layers in the neural network. (Default: (10, 1, 1))
+        model_dead_layers_dims (tuple[int, ...] | None): The dimensions of the dead layers in the neural network. (Default: None)
+        enable_learnable_scalar (bool): Whether to enable a learnable scalar multiplier for the input tensor. (Default: True)
+        device (torch.device | None): The device to use for training. (Default: None)
         fill (float | tuple[float, ...]): The value(s) to fill the model parameters. If a tuple, each element should correspond to one layer. (Default: 1.0)
-        total_steps (int): The number of training steps. (Defaults: 5)
-        rtol (float | None): The relative tolerance for comparing weights and losses. (Defaults: None)
-        atol (float | None): The absolute tolerance for comparing weights and losses. (Defaults: None)
+        total_steps (int): The number of training steps. (Default: 5)
+        rtol (float | None): The relative tolerance for comparing weights and losses. (Default: None)
+        atol (float | None): The absolute tolerance for comparing weights and losses. (Default: None)
 
     Returns:
         None
@@ -329,6 +345,7 @@ def compare_two_optimizers_on_weight_and_loss(
         experimental_device=device,
         model_linear_layers_dims=model_linear_layers_dims,
         model_dead_layers_dims=model_dead_layers_dims,
+        enable_learnable_scalar=enable_learnable_scalar,
         fill=fill,
         total_steps=total_steps,
         rtol=rtol,
@@ -341,6 +358,7 @@ def compare_optimizer_on_cpu_and_device(
     device: torch.device,
     model_linear_layers_dims: tuple[int, ...] = (10, 1, 1),
     model_dead_layers_dims: tuple[int, ...] | None = None,
+    enable_learnable_scalar: bool = True,
     fill: float | tuple[float, ...] = 1.0,
     total_steps: int = 5,
     rtol: float | None = None,
@@ -352,12 +370,13 @@ def compare_optimizer_on_cpu_and_device(
     Args:
         optim_factory (Callable[[ParamsT], torch.optim.Optimizer]): A factory function that returns an instance of the optimizer.
         device (torch.device): The other experimental device to use for the training.
-        model_linear_layers_dims (tuple[int, ...]): The dimensions of the linear layers in the neural network. (Defaults: (10, 1, 1))
-        model_dead_layers_dims (tuple[int, ...] | None): The dimensions of the dead layers in the neural network. (Defaults: None)
+        model_linear_layers_dims (tuple[int, ...]): The dimensions of the linear layers in the neural network. (Default: (10, 1, 1))
+        model_dead_layers_dims (tuple[int, ...] | None): The dimensions of the dead layers in the neural network. (Default: None)
+        enable_learnable_scalar (bool): Whether to enable a learnable scalar multiplier for the input tensor. (Default: True)
         fill (float | tuple[float, ...]): The value(s) to fill the model parameters. If a tuple, each element should correspond to one layer. (Default: 1.0)
-        total_steps (int): The number of training steps. (Defaults: 5)
-        rtol (float | None): The relative tolerance for comparing weights and losses. (Defaults: None)
-        atol (float | None): The absolute tolerance for comparing weights and losses. (Defaults: None)
+        total_steps (int): The number of training steps. (Default: 5)
+        rtol (float | None): The relative tolerance for comparing weights and losses. (Default: None)
+        atol (float | None): The absolute tolerance for comparing weights and losses. (Default: None)
 
     Returns:
         None
@@ -369,6 +388,7 @@ def compare_optimizer_on_cpu_and_device(
         experimental_device=device,
         model_linear_layers_dims=model_linear_layers_dims,
         model_dead_layers_dims=model_dead_layers_dims,
+        enable_learnable_scalar=enable_learnable_scalar,
         fill=fill,
         total_steps=total_steps,
         rtol=rtol,

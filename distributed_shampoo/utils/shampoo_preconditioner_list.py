@@ -1072,7 +1072,7 @@ class BaseShampooPreconditionerList(
                 self._masked_kronecker_factors_unwrapped,
                 strict=True,
             ):
-                # Because of preconditioned_dims_selector, we may have no factor matrices to update.
+                # Because of preconditioned_dims_selector and 0D tensor, we may have no factor matrices to update.
                 if not kronecker_factors.factor_matrices:
                     continue
 
@@ -1551,6 +1551,7 @@ class EigenvalueCorrectedShampooPreconditionerList(
                 strict=True,
             ):
                 factor_eigenvectors = kronecker_factors.factor_matrices_eigenvectors
+                # Because of 0D tensor, we may have no factor eigenvectors to update.
                 if factor_eigenvectors and factor_eigenvectors[0].any():
                     grad = self._precondition_grad(
                         grad=grad,
