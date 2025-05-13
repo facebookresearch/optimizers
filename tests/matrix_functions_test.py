@@ -23,6 +23,7 @@ import numpy as np
 
 import torch
 from matrix_functions import (
+    _check_square_matrix,
     _matrix_inverse_root_eigen,
     _matrix_inverse_root_newton,
     _matrix_perturbation,
@@ -53,41 +54,57 @@ from torch.testing._internal.common_utils import (
 )
 
 
-class CheckDiagonalTest(unittest.TestCase):
-    def test_check_diagonal_for_not_two_dim_matrix(self) -> None:
+class CheckSquareMatrixTest(unittest.TestCase):
+    @staticmethod
+    @_check_square_matrix
+    def check_square_matrix_func(A: Tensor) -> Tensor:
+        """Helper function decorated with _check_square_matrix for testing."""
+        return A
+
+    def test_check_square_matrix_for_not_two_dim_matrix(self) -> None:
+        # Test with a 3D tensor
         A = torch.zeros((2, 2, 2))
         self.assertRaisesRegex(
-            ValueError, re.escape("Matrix is not 2-dimensional!"), check_diagonal, A
+            ValueError,
+            re.escape("Matrix is not 2-dimensional!"),
+            CheckSquareMatrixTest.check_square_matrix_func,
+            A=A,
         )
 
-    def test_check_diagonal_for_not_square_matrix(self) -> None:
+    def test_check_square_matrix_for_not_square_matrix(self) -> None:
         A = torch.zeros((2, 3))
         self.assertRaisesRegex(
-            ValueError, re.escape("Matrix is not square!"), check_diagonal, A
+            ValueError,
+            re.escape("Matrix is not square!"),
+            CheckSquareMatrixTest.check_square_matrix_func,
+            A=A,
         )
 
-    def test_check_diagonal_for_diagonal_matrix(self) -> None:
+    def test_check_square_matrix_for_square_matrix(self) -> None:
         A = torch.eye(2)
-        self.assertTrue(check_diagonal(A))
+        # Verify the function was called and returned the input
+        torch.testing.assert_close(
+            A, CheckSquareMatrixTest.check_square_matrix_func(A=A)
+        )
 
 
+class CheckDiagonalTest(unittest.TestCase):
+    def test_check_diagonal_for_diagonal_matrix(self) -> None:
+        self.assertTrue(check_diagonal(A=torch.eye(2)))
+
+
+@instantiate_parametrized_tests
 class MatrixPerturbationTest(unittest.TestCase):
     def test_matrix_perturbation_not_is_eigenvalues(self) -> None:
         A = torch.eye(2)
         torch.testing.assert_close(
-            A * 1.1, _matrix_perturbation(A, epsilon=0.1, is_eigenvalues=False)
+            A * 1.1, _matrix_perturbation(A=A, epsilon=0.1, is_eigenvalues=False)
         )
 
-    def test_matrix_perturbation_is_eigenvalues(self) -> None:
-        A = torch.ones(5)
+    @parametrize("A", (torch.ones(5), torch.eye(2)))
+    def test_matrix_perturbation_is_eigenvalues(self, A: Tensor) -> None:
         torch.testing.assert_close(
-            A + 0.1, _matrix_perturbation(A, epsilon=0.1, is_eigenvalues=True)
-        )
-
-    def test_matrix_perturbation_is_eigenvalues_square(self) -> None:
-        A = torch.eye(2)
-        torch.testing.assert_close(
-            A + 0.1, _matrix_perturbation(A, epsilon=0.1, is_eigenvalues=True)
+            A + 0.1, _matrix_perturbation(A=A, epsilon=0.1, is_eigenvalues=True)
         )
 
 
@@ -164,30 +181,6 @@ class ScaleAndPowEigenvaluesTest(unittest.TestCase):
 
 @instantiate_parametrized_tests
 class MatrixInverseRootTest(unittest.TestCase):
-    def test_matrix_inverse_root_with_not_two_dim_matrix(self) -> None:
-        A = torch.zeros((1, 2, 3))
-        root = Fraction(4)
-        self.assertRaisesRegex(
-            ValueError,
-            re.escape("Matrix is not 2-dimensional!"),
-            matrix_inverse_root,
-            A=A,
-            root=root,
-            is_diagonal=False,
-        )
-
-    def test_matrix_inverse_root_not_square(self) -> None:
-        A = torch.zeros((2, 3))
-        root = Fraction(4)
-        self.assertRaisesRegex(
-            ValueError,
-            re.escape("Matrix is not square!"),
-            matrix_inverse_root,
-            A=A,
-            root=root,
-            is_diagonal=False,
-        )
-
     @parametrize(
         "root_inv_config",
         (
@@ -414,7 +407,7 @@ class EigenRootTest(unittest.TestCase):
         tolerance: float,
         eig_sols: Callable[[int], Tensor],
     ) -> None:
-        X, L, Q = _matrix_inverse_root_eigen(
+        X, L, _ = _matrix_inverse_root_eigen(
             A=A(n),
             root=Fraction(root),
             epsilon=epsilon,
@@ -425,25 +418,23 @@ class EigenRootTest(unittest.TestCase):
         torch.testing.assert_close(L, eig_sols(n))
         self.assertLessEqual(rel_error.item(), tolerance)
 
-    @parametrize("epsilon", [0.0])
     @parametrize("root", [1, 2, 4, 8])
     @parametrize("n", [10, 100])
-    def test_eigen_root_identity(self, n: int, root: int, epsilon: float) -> None:
+    def test_eigen_root_identity(self, n: int, root: int) -> None:
         self._test_eigen_root_multi_dim(
             A=torch.eye,
             n=n,
             root=root,
-            epsilon=epsilon,
+            epsilon=0.0,
             tolerance=1e-6,
             eig_sols=torch.ones,
         )
 
     @parametrize("alpha, beta", feasible_alpha_beta_pairs)
-    @parametrize("epsilon", [0.0])
     @parametrize("root", [1, 2, 4, 8])
     @parametrize("n", [10, 100])
     def test_eigen_root_tridiagonal(
-        self, n: int, root: int, epsilon: float, alpha: float, beta: float
+        self, n: int, root: int, alpha: float, beta: float
     ) -> None:
         def eig_sols_tridiagonal_1(n: int, alpha: float, beta: float) -> Tensor:
             eigs = alpha * torch.ones(n) + 2 * beta * torch.tensor(
@@ -467,7 +458,7 @@ class EigenRootTest(unittest.TestCase):
             A=partial(A_tridiagonal_1, alpha=alpha, beta=beta),
             n=n,
             root=root,
-            epsilon=epsilon,
+            epsilon=0.0,
             tolerance=1e-4,
             eig_sols=partial(eig_sols_tridiagonal_1, alpha=alpha, beta=beta),
         )
@@ -494,7 +485,7 @@ class EigenRootTest(unittest.TestCase):
             A=partial(A_tridiagonal_2, alpha=alpha, beta=beta),
             n=n,
             root=root,
-            epsilon=epsilon,
+            epsilon=0.0,
             tolerance=1e-4,
             eig_sols=partial(eig_sols_tridiagonal_2, alpha=alpha, beta=beta),
         )
@@ -505,7 +496,7 @@ class EigenRootTest(unittest.TestCase):
         epsilon = 0.0
 
         M_default = matrix_inverse_root(
-            A, root=root, root_inv_config=EigenConfig(), epsilon=epsilon
+            A=A, root=root, root_inv_config=EigenConfig(), epsilon=epsilon
         )
         self.assertTrue(torch.all(torch.isinf(M_default)))
 
@@ -624,30 +615,26 @@ class NewtonRootInverseTest(unittest.TestCase):
         self.assertLessEqual(M_error.item(), M_tol)
         self.assertLessEqual(rel_A_error.item(), A_tol)
 
-    @parametrize("epsilon", [0.0])
     @parametrize("root", [2, 4, 8])
     @parametrize("n", [10, 100])
-    def test_newton_root_inverse_identity(
-        self, n: int, root: int, epsilon: float
-    ) -> None:
+    def test_newton_root_inverse_identity(self, n: int, root: int) -> None:
         max_iterations = 1000
 
         self._test_newton_root_inverse_multi_dim(
             A=torch.eye,
             n=n,
             root=root,
-            epsilon=epsilon,
+            epsilon=0.0,
             max_iterations=max_iterations,
             A_tol=1e-6,
             M_tol=1e-6,
         )
 
     @parametrize("alpha, beta", feasible_alpha_beta_pairs)
-    @parametrize("epsilon", [0.0])
     @parametrize("root", [2, 4, 8])
     @parametrize("n", [10, 100])
     def test_newton_root_inverse_tridiagonal(
-        self, n: int, root: int, epsilon: float, alpha: float, beta: float
+        self, n: int, root: int, alpha: float, beta: float
     ) -> None:
         max_iterations = 1000
 
@@ -666,7 +653,7 @@ class NewtonRootInverseTest(unittest.TestCase):
             A=partial(A_tridiagonal_1, alpha=alpha, beta=beta),
             n=n,
             root=root,
-            epsilon=epsilon,
+            epsilon=0.0,
             max_iterations=max_iterations,
             A_tol=1e-4,
             M_tol=1e-6,
@@ -686,7 +673,7 @@ class NewtonRootInverseTest(unittest.TestCase):
             A=partial(A_tridiagonal_2, alpha=alpha, beta=beta),
             n=n,
             root=root,
-            epsilon=epsilon,
+            epsilon=0.0,
             max_iterations=max_iterations,
             A_tol=1e-4,
             M_tol=1e-6,
@@ -715,34 +702,6 @@ class CoupledHigherOrderRootInverseTest(unittest.TestCase):
 
 @instantiate_parametrized_tests
 class ComputeMatrixRootInverseResidualsTest(unittest.TestCase):
-    def test_matrix_root_inverse_residuals_with_not_two_dim_matrix(self) -> None:
-        A = torch.zeros((1, 2, 3))
-        X_hat = torch.zeros((2, 2))
-        root = Fraction(4)
-        self.assertRaisesRegex(
-            ValueError,
-            re.escape("Matrix is not 2-dimensional!"),
-            compute_matrix_root_inverse_residuals,
-            A=A,
-            X_hat=X_hat,
-            root=root,
-            epsilon=0.0,
-        )
-
-    def test_matrix_root_inverse_residuals_with_not_square_matrix(self) -> None:
-        A = torch.zeros((1, 2))
-        X_hat = torch.zeros((2, 2))
-        root = Fraction(4)
-        self.assertRaisesRegex(
-            ValueError,
-            re.escape("Matrix is not square!"),
-            compute_matrix_root_inverse_residuals,
-            A=A,
-            X_hat=X_hat,
-            root=root,
-            epsilon=0.0,
-        )
-
     def test_matrix_root_inverse_residuals_with_inconsistent_dims(self) -> None:
         A = torch.zeros((2, 2))
         X_hat = torch.zeros((3, 3))
@@ -785,24 +744,6 @@ class ComputeMatrixRootInverseResidualsTest(unittest.TestCase):
 
 @instantiate_parametrized_tests
 class MatrixEigendecompositionTest(unittest.TestCase):
-    def test_matrix_eigendecomposition_with_not_two_dim_matrix(self) -> None:
-        A = torch.zeros((1, 2, 3))
-        self.assertRaisesRegex(
-            ValueError,
-            re.escape("Matrix is not 2-dimensional!"),
-            matrix_eigendecomposition,
-            A=A,
-        )
-
-    def test_matrix_eigendecomposition_not_square(self) -> None:
-        A = torch.zeros((2, 3))
-        self.assertRaisesRegex(
-            ValueError,
-            re.escape("Matrix is not square!"),
-            matrix_eigendecomposition,
-            A=A,
-        )
-
     def test_pseudoinverse_with_invalid_epsilon(self) -> None:
         A = torch.ones((2, 2))
         epsilon = 1e-8
