@@ -11,7 +11,7 @@ import logging
 from collections.abc import Callable, Iterator
 from copy import deepcopy
 from functools import partial
-from typing import Any
+from typing import Any, overload
 
 import torch
 
@@ -1069,12 +1069,20 @@ class DistributedShampoo(torch.optim.Optimizer):
             else ()
         )
 
+    @overload
     @torch.no_grad()
-    def step(self, closure: Callable[[], float] | None = None) -> float | None:  # type: ignore[override]
+    def step(self, closure: None = None) -> None: ...
+
+    @overload
+    @torch.no_grad()
+    def step(self, closure: Callable[[], float]) -> float: ...
+
+    @torch.no_grad()
+    def step(self, closure: Callable[[], float] | None = None) -> float | None:
         """Performs a single optimization step.
 
         Args:
-            closure (Callable[[], float] | None): A closure that reevaluates the model
+            closure (callable, optional): A closure that reevaluates the model
                 and returns the loss.
 
         """
