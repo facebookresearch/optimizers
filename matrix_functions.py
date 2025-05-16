@@ -141,28 +141,6 @@ def _matrix_perturbation(
     )
 
 
-def truncate_eigenvalues_cutoff(
-    L: Tensor,
-    rank_rtol: float | None = None,
-    rank_atol: float = 0.0,
-) -> float:
-    """Filter the eigenvalues based on the numerical rank of the matrix. The procedure below mimics the steps described in the documentation of https://pytorch.org/docs/stable/generated/torch.linalg.matrix_rank.html.
-
-    Args:
-        L (Tensor): Eigenvalues of matrix.
-        rank_rtol (float): Relative tolerance for determining numerical rank of matrix. (Default: None)
-        rank_atol (float): Absolute tolerance for determining numerical rank of matrix. (Default: 0.0)
-
-    Returns:
-        spectrum_cutoff (float): Cutoff to filter out eigenvalues.
-    """
-    if rank_rtol is None:
-        rtol = L.numel() * torch.finfo(L.dtype).eps
-    else:
-        rtol = rank_rtol
-    return max(rank_atol, rtol * L.max().relu().item())
-
-
 def stabilize_and_pow_eigenvalues(
     L: Tensor,
     root: Fraction,
@@ -190,6 +168,28 @@ def stabilize_and_pow_eigenvalues(
         ValueError: If rank_deficient_stability_config is not a supported config type.
 
     """
+
+    def truncate_eigenvalues_cutoff(
+        L: Tensor,
+        rank_rtol: float | None = None,
+        rank_atol: float = 0.0,
+    ) -> float:
+        """Filter the eigenvalues based on the numerical rank of the matrix. The procedure below mimics the steps described in the documentation of https://pytorch.org/docs/stable/generated/torch.linalg.matrix_rank.html.
+
+        Args:
+            L (Tensor): Eigenvalues of matrix.
+            rank_rtol (float | None): Relative tolerance for determining numerical rank of matrix. (Default: None)
+            rank_atol (float): Absolute tolerance for determining numerical rank of matrix. (Default: 0.0)
+
+        Returns:
+            spectrum_cutoff (float): Cutoff to filter out eigenvalues.
+        """
+        if rank_rtol is None:
+            rtol = L.numel() * torch.finfo(L.dtype).eps
+        else:
+            rtol = rank_rtol
+        return max(rank_atol, rtol * L.max().relu().item())
+
     match rank_deficient_stability_config:
         case PseudoInverseConfig():
             if epsilon != 0.0:

@@ -108,33 +108,31 @@ class MatrixPerturbationTest(unittest.TestCase):
         )
 
 
-class ScaleAndPowEigenvaluesTest(unittest.TestCase):
-    def test_scale_and_pow_eigenvalues_perturb_before(self) -> None:
+@instantiate_parametrized_tests
+class StabilizeAndPowEigenvaluesTest(unittest.TestCase):
+    @parametrize("perturb_before_computation", (True, False))
+    def test_stabilize_and_pow_eigenvalues_perturbation(
+        self, perturb_before_computation: bool
+    ) -> None:
         L = torch.tensor([0.1, 3.1])
+        # The stabilized eigenvalues is [1.0, 4.0] and with root = 2,
+        # that is why expected output is [1.0, 0.5]
         torch.testing.assert_close(
             torch.tensor([1.0, 0.5]),
             stabilize_and_pow_eigenvalues(
                 L=L,
                 root=Fraction(2),
-                epsilon=1.0,
-            ),
-        )
-
-    def test_scale_and_pow_eigenvalues_perturb_after(self) -> None:
-        L = torch.tensor([0.1, 3.1])
-        torch.testing.assert_close(
-            torch.tensor([1.0, 0.5]),
-            stabilize_and_pow_eigenvalues(
-                L=L,
-                root=Fraction(2),
-                epsilon=0.9,
+                epsilon=1.0 - torch.min(L).item() * (not perturb_before_computation),
                 rank_deficient_stability_config=PerturbationConfig(
-                    perturb_before_computation=False
+                    perturb_before_computation=perturb_before_computation
                 ),
             ),
         )
 
-    def test_scale_and_pow_eigenvalues_pseudoinverse(self) -> None:
+    @parametrize("rank_rtol", (None, 1e-6))
+    def test_stabilize_and_pow_eigenvalues_pseudoinverse(
+        self, rank_rtol: float | None
+    ) -> None:
         L = torch.tensor([1.0, 4.0, 0.0])
         torch.testing.assert_close(
             torch.tensor([1.0, 0.5, 0.0]),
@@ -142,7 +140,9 @@ class ScaleAndPowEigenvaluesTest(unittest.TestCase):
                 L=L,
                 root=Fraction(2),
                 epsilon=0.0,
-                rank_deficient_stability_config=PseudoInverseConfig(rank_rtol=None),
+                rank_deficient_stability_config=PseudoInverseConfig(
+                    rank_rtol=rank_rtol
+                ),
             ),
         )
 
@@ -159,9 +159,7 @@ class ScaleAndPowEigenvaluesTest(unittest.TestCase):
             rank_deficient_stability_config=PseudoInverseConfig(rank_rtol=None),
         )
 
-    def test_invalid_rank_deficient_stability_config(
-        self,
-    ) -> None:
+    def test_invalid_rank_deficient_stability_config(self) -> None:
         @dataclass
         class NotSupportedRankDeficientStabilityConfig(RankDeficientStabilityConfig):
             """A dummy rank_deficient_stability_config that is not supported."""
