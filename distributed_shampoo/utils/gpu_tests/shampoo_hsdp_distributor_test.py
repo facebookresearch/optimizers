@@ -18,11 +18,7 @@ from unittest import mock
 
 import torch
 from distributed_shampoo.distributed_shampoo import DistributedShampoo
-from distributed_shampoo.shampoo_types import (
-    AdaGradGraftingConfig,
-    CommunicationDType,
-    HSDPShampooConfig,
-)
+from distributed_shampoo.shampoo_types import AdaGradGraftingConfig, HSDPShampooConfig
 from distributed_shampoo.tests.shampoo_test_utils import (
     compare_two_optimizers_models_devices_on_weight_and_loss,
     construct_training_problem,
@@ -123,17 +119,17 @@ class ShampooHSDPDistributorTest(FSDPTest):
     @parametrize(
         "communication_dtype, communicate_params",
         (
-            (CommunicationDType.DEFAULT, False),
-            (CommunicationDType.DEFAULT, True),
-            (CommunicationDType.FP16, False),
-            (CommunicationDType.BF16, False),
+            (torch.float32, False),
+            (torch.float32, True),
+            (torch.float16, False),
+            (torch.bfloat16, False),
         ),
     )
     @parametrize("num_trainers_per_group", (-1, 1, 2))
     def test_hsdp_shampoo_against_default_shampoo(
         self,
         num_trainers_per_group: int,
-        communication_dtype: CommunicationDType,
+        communication_dtype: torch.dtype,
         communicate_params: bool,
     ) -> None:
         hsdp_config = HSDPShampooConfig(
@@ -349,33 +345,6 @@ class ShampooHSDPDistributorTest(FSDPTest):
                 ),
                 ShampooHSDPDistributorTest._shampoo_optim_factory(
                     distributed_config=hsdp_config
-                ),
-                model.parameters(),
-            )
-
-    @skip_if_lt_x_gpu(4)
-    def test_unsupported_communication_dtype(self) -> None:
-        hsdp_config = HSDPShampooConfig(
-            param_to_metadata={}, device_mesh=init_device_mesh("cuda", (2, 2))
-        )
-        model = ShampooHSDPDistributorTest._construct_model(
-            post_model_decoration=partial(
-                FSDP1,
-                device_mesh=hsdp_config.device_mesh,
-                sharding_strategy=ShardingStrategy.HYBRID_SHARD,
-                use_orig_params=True,
-            ),
-            distributed_config=hsdp_config,
-        )[0]
-
-        with mock.patch.object(CommunicationDType, "__eq__", return_value=False):
-            self.assertRaisesRegex(
-                NotImplementedError,
-                re.escape(
-                    "Unsupported communication dtype: CommunicationDType.DEFAULT"
-                ),
-                ShampooHSDPDistributorTest._shampoo_optim_factory(
-                    distributed_config=hsdp_config,
                 ),
                 model.parameters(),
             )

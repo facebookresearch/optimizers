@@ -14,11 +14,7 @@ from typing import Any
 
 import torch
 import torch.distributed as dist
-from distributed_shampoo.shampoo_types import (
-    CommunicationDType,
-    DDPShampooConfig,
-    PARAMS,
-)
+from distributed_shampoo.shampoo_types import DDPShampooConfig, PARAMS
 from distributed_shampoo.utils.shampoo_block_info import DTensorBlockInfo
 from distributed_shampoo.utils.shampoo_dist_utils import get_device_mesh
 from distributed_shampoo.utils.shampoo_distributor import DistributorInterface
@@ -77,19 +73,6 @@ class DDPDistributor(DistributorInterface):
         # Create flag for distributing parameters instead of search directions.
         self._communicate_params: bool = distributed_config.communicate_params
 
-        # Determine communication type.
-        match distributed_config.communication_dtype:
-            case CommunicationDType.BF16:
-                communication_dtype = torch.bfloat16
-            case CommunicationDType.FP16:
-                communication_dtype = torch.float16
-            case CommunicationDType.FP32 | CommunicationDType.DEFAULT:
-                communication_dtype = torch.float32
-            case _:
-                raise NotImplementedError(
-                    f"Unsupported communication dtype: {distributed_config.communication_dtype}"
-                )
-
         # Initialize _dist_group and _group_rank.
         self._dist_group: dist.ProcessGroup | None = dist.new_subgroups(
             group_size=self._group_size
@@ -99,7 +82,8 @@ class DDPDistributor(DistributorInterface):
         # Assign ranks to blocks with their respective buffer size.
         buffer_size_ranks = distribute_buffer_sizes(
             buffer_sizes=tuple(
-                blocked_param.numel() * get_dtype_size(communication_dtype)
+                blocked_param.numel()
+                * get_dtype_size(distributed_config.communication_dtype)
                 for blocked_param in self._global_blocked_params
             ),
             group_size=self._group_size,
@@ -130,7 +114,7 @@ class DDPDistributor(DistributorInterface):
 
         self._construct_distributed_buffers(
             buffer_size_ranks=buffer_size_ranks,
-            communication_dtype=communication_dtype,
+            communication_dtype=distributed_config.communication_dtype,
             group_rank=group_rank,
         )
 
