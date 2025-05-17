@@ -30,8 +30,6 @@ def merge_small_dims(tensor_shape: Sequence[int], threshold: int) -> tuple[int, 
         new_tensor_shape (tuple[int, ...]): New tensor shape.
 
     """
-    if not tensor_shape:
-        return ()
 
     # Squeeze tensor shape to remove dimension with 1; if all dimensions are 1,
     # then add a 1 to the tensor shape.
@@ -65,12 +63,12 @@ def multi_dim_split(tensor: Tensor, split_size: int) -> tuple[Tensor, ...]:
     )
 
 
-CompressListType = TypeVar("CompressListType")
+_CompressListType = TypeVar("_CompressListType")
 
 
 def compress_list(
-    complete_list: Sequence[CompressListType], selector: Sequence[bool]
-) -> tuple[CompressListType, ...]:
+    complete_list: Sequence[_CompressListType], selector: Sequence[bool]
+) -> tuple[_CompressListType, ...]:
     """Compresses sequence based on selector.
 
     NOTE: Despite the name, this function can compress both lists and tuples, but will always return
@@ -130,7 +128,7 @@ def generate_pairwise_indices(input_list: Sequence[int]) -> Iterator[tuple[int, 
     return pairwise(accumulate(chain([0], input_list)))
 
 
-ParameterizeEnterExitContextType = TypeVar("ParameterizeEnterExitContextType")
+_ParameterizeEnterExitContextType = TypeVar("_ParameterizeEnterExitContextType")
 
 
 class ParameterizeEnterExitContext:
@@ -145,9 +143,9 @@ class ParameterizeEnterExitContext:
 
     def __init__(
         self,
-        input_with_enter_exit_context: ParameterizeEnterExitContextType,
-        enter_method_caller: Callable[[ParameterizeEnterExitContextType], None],
-        exit_method_caller: Callable[[ParameterizeEnterExitContextType], None],
+        input_with_enter_exit_context: _ParameterizeEnterExitContextType,
+        enter_method_caller: Callable[[_ParameterizeEnterExitContextType], None],
+        exit_method_caller: Callable[[_ParameterizeEnterExitContextType], None],
     ) -> None:
         self._enter_method: Callable[[], None] = partial(
             enter_method_caller, input_with_enter_exit_context

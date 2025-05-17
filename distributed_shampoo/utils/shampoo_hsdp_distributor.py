@@ -15,7 +15,6 @@ from typing import Any
 
 import torch
 from distributed_shampoo.shampoo_types import (
-    CommunicationDType,
     FSDPParameterMetadata,
     HSDPShampooConfig,
     MAX_PRECONDITIONER_DIM,
@@ -151,19 +150,6 @@ class HSDPDistributor(DistributorInterface):
         # Create flag for distributing parameters instead of search directions.
         self._communicate_params: bool = distributed_config.communicate_params
 
-        # Determine communication type.
-        match distributed_config.communication_dtype:
-            case CommunicationDType.BF16:
-                communication_dtype = torch.bfloat16
-            case CommunicationDType.FP16:
-                communication_dtype = torch.float16
-            case CommunicationDType.FP32 | CommunicationDType.DEFAULT:
-                communication_dtype = torch.float32
-            case _:
-                raise NotImplementedError(
-                    f"Unsupported communication dtype: {distributed_config.communication_dtype}"
-                )
-
         # Initialize _dist_group and _group_rank.
         # Note that this requires initializing all process groups.
         # Splits replicated ranks group into smaller groups of size self._dist_group_size.
@@ -197,7 +183,8 @@ class HSDPDistributor(DistributorInterface):
         # Assign ranks to blocks with their respective buffer size.
         buffer_size_ranks = distribute_buffer_sizes(
             buffer_sizes=tuple(
-                blocked_param.numel() * get_dtype_size(communication_dtype)
+                blocked_param.numel()
+                * get_dtype_size(distributed_config.communication_dtype)
                 for blocked_param in self._global_blocked_params
             ),
             group_size=self._dist_group_size,
@@ -228,7 +215,7 @@ class HSDPDistributor(DistributorInterface):
 
         self._construct_distributed_buffers(
             buffer_size_ranks=buffer_size_ranks,
-            communication_dtype=communication_dtype,
+            communication_dtype=distributed_config.communication_dtype,
             comms_group_rank=comms_group_rank,
         )
 

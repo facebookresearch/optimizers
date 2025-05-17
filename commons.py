@@ -57,12 +57,12 @@ class AbstractDataclass(ABC):
         """An abstract method that must be implemented by all subclasses."""
 
 
-SubclassesType = TypeVar("SubclassesType")
+_SubclassesType = TypeVar("_SubclassesType")
 
 
 def get_all_subclasses(
-    cls: SubclassesType, include_cls_self: bool = True
-) -> list[SubclassesType]:
+    cls: _SubclassesType, include_cls_self: bool = True
+) -> list[_SubclassesType]:
     """
     Retrieves all subclasses of a given class, optionally including the class itself.
 
@@ -77,7 +77,7 @@ def get_all_subclasses(
         list[SubclassesType]: A list of all unique subclasses of the given class.
     """
 
-    def get_all_unique_subclasses(cls: SubclassesType) -> set[SubclassesType]:
+    def get_all_unique_subclasses(cls: _SubclassesType) -> set[_SubclassesType]:
         """Gets all unique subclasses of a given class recursively."""
         return reduce(
             or_,

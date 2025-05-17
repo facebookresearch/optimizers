@@ -288,7 +288,6 @@ import torch.distributed as dist
 
 from distributed_shampoo import (
     AdamGraftingConfig,
-    CommunicationDType,
     DDPShampooConfig,
     DistributedShampoo,
 )
@@ -326,7 +325,7 @@ optimizer = DistributedShampoo(
         epsilon=1e-12,
     ),
     distributed_config=DDPShampooConfig(
-        communication_dtype=CommunicationDType.FP32,
+        communication_dtype=torch.float32,
         num_trainers_per_group=8,
         communicate_params=False,
     ),
@@ -680,7 +679,7 @@ With the inclusion of learning rate grafting, we can extract a good learning rat
 5. If enabling DDP Shampoo, you can tune for performance:
 
     * **Process Group Size** (`num_trainers_per_group`): For large-scale distributed jobs, this hyperparameter allows us to trade off computational and communication costs. Assuming the number of GPUs per node is 8, one should search for a value in $\{8,16,32,64\}$. This hyperparameter has no impact on model quality.
-    * **Quantized Communications** (`communication_dtype`): One can enable quantized communications by setting the `communication_dtype`. We have found that using `CommunicationDType.FP16` works well in practice (with `communicate_params = False`).
+    * **Quantized Communications** (`communication_dtype`): One can enable quantized communications by setting the `communication_dtype`. We have found that using `torch.float16` works well in practice (with `communicate_params = False`).
     * **Communicate Updated Parameters** (`communicate_params`): If one does not enable quantized communications, one can possibly obtain better performance by communicating the updated parameters by setting this to `True`.
 
 ## Commmon Questions

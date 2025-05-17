@@ -22,7 +22,6 @@ import torch
 from distributed_shampoo.distributed_shampoo import DistributedShampoo
 from distributed_shampoo.shampoo_types import (
     AdaGradGraftingConfig,
-    CommunicationDType,
     DDPShampooConfig,
     DefaultEigenvalueCorrectedShampooConfig,
     DefaultShampooConfig,
@@ -116,16 +115,16 @@ class AbstractTest:
             "communication_dtype, communicate_params, rtol, atol",
             (
                 # Expecting CommunicationDType.DEFAULT would have bitwise identical results (by setting rtol=atol=0.0).
-                (CommunicationDType.DEFAULT, False, 0.0, 0.0),
-                (CommunicationDType.DEFAULT, True, 0.0, 0.0),
+                (torch.float32, False, 0.0, 0.0),
+                (torch.float32, True, 0.0, 0.0),
                 # Using FP16 for distributed parameters prohibitively lowers precision.
                 (
-                    CommunicationDType.FP16,
+                    torch.float16,
                     False,
                     *default_tolerances(torch.float16),
                 ),
                 (
-                    CommunicationDType.BF16,
+                    torch.bfloat16,
                     False,
                     # BF16 requires 2x tolerances than the original bfloat16 tolerances.
                     *[2 * tol for tol in default_tolerances(torch.bfloat16)],
@@ -136,7 +135,7 @@ class AbstractTest:
         def test_losses(
             self,
             num_trainers_per_group: int,
-            communication_dtype: CommunicationDType,
+            communication_dtype: torch.dtype,
             communicate_params: bool,
             rtol: float,
             atol: float,
@@ -505,27 +504,6 @@ class AbstractTest:
                 mock_step.assert_called()
             else:
                 mock_step.assert_not_called()
-
-        def test_unsupported_communication_dtype(self) -> None:
-            self._init_distributed()
-
-            with mock.patch.object(CommunicationDType, "__eq__", return_value=False):
-                self.assertRaisesRegex(
-                    NotImplementedError,
-                    re.escape(
-                        "Unsupported communication dtype: CommunicationDType.DEFAULT"
-                    ),
-                    train_model,
-                    optim_factory=AbstractTest.ShampooDDPDistributorDeviceTest._shampoo_optim_factory(
-                        distributed_config=DDPShampooConfig()
-                    ),
-                    model_factory=partial(
-                        construct_training_problem,
-                        model_linear_layers_dims=(PRECONDITIONER_DIM, 1),
-                        model_dead_layers_dims=None,
-                        device=self._device,
-                    ),
-                )
 
 
 class ShampooDDPDistributorCPUTest(AbstractTest.ShampooDDPDistributorDeviceTest):
