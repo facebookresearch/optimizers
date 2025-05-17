@@ -457,25 +457,25 @@ class DistributedShampoo(torch.optim.Optimizer):
     ) -> None:
         match distributed_config:
             case None:
-                distributor: Callable[..., DistributorInterface] = Distributor
+                distributor_cls: Callable[..., DistributorInterface] = Distributor
             case HSDPShampooConfig():
-                distributor = partial(
+                distributor_cls = partial(
                     HSDPDistributor, distributed_config=distributed_config
                 )
             case HybridShardShampooConfig():
-                distributor = partial(
+                distributor_cls = partial(
                     HybridShardDistributor, distributed_config=distributed_config
                 )
             case DDPShampooConfig():
-                distributor = partial(
+                distributor_cls = partial(
                     DDPDistributor, distributed_config=distributed_config
                 )
             case FSDPShampooConfig():
-                distributor = partial(
+                distributor_cls = partial(
                     FSDPDistributor, distributed_config=distributed_config
                 )
             case FullyShardShampooConfig():
-                distributor = FullyShardDistributor
+                distributor_cls = FullyShardDistributor
             case _:
                 raise NotImplementedError(f"{distributed_config=} not supported!")
 
@@ -483,7 +483,7 @@ class DistributedShampoo(torch.optim.Optimizer):
             self._per_group_state_lists, self.param_groups, strict=True
         ):
             # Instantiate distributors for each group.
-            state_lists[DISTRIBUTOR] = distributor(group)
+            state_lists[DISTRIBUTOR] = distributor_cls(group)
 
             # If the number of trainers is more than the number of blocks,
             # some workers might not get any parameters which cause wasting resources because
