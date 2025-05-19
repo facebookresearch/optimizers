@@ -31,17 +31,15 @@ class FullyShardDistributor(Distributor):
 
     @overload
     @torch.no_grad()
-    def _get_params_or_grads(self) -> Iterable[Tensor]: ...
-
-    @overload
-    @torch.no_grad()
     def _get_params_or_grads(
         self, get_grad: Literal[True]
     ) -> Iterable[Tensor | None]: ...
 
     @overload
     @torch.no_grad()
-    def _get_params_or_grads(self, get_grad: Literal[False]) -> Iterable[Tensor]: ...
+    def _get_params_or_grads(
+        self, get_grad: Literal[False] = False
+    ) -> Iterable[Tensor]: ...
 
     @torch.no_grad()
     def _get_params_or_grads(self, get_grad: bool = False) -> Iterable[Tensor | None]:
