@@ -1551,6 +1551,7 @@ class EigenvalueCorrectedShampooPreconditionerList(
                 strict=True,
             ):
                 factor_eigenvectors = kronecker_factors.factor_matrices_eigenvectors
+                # Because of preconditioned_dims_selector, we may have no factor eigenvectors to update.
                 if factor_eigenvectors and factor_eigenvectors[0].any():
                     grad = self._precondition_grad(
                         grad=grad,

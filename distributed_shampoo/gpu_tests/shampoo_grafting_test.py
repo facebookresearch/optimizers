@@ -292,9 +292,15 @@ class DistributedShampooGraftingTest(unittest.TestCase):
                 nesterov=use_nesterov,
             ),
             experimental_optim_factory=experimental_optim_factory,
+            # Setting model_linear_layers_dims to (10, 10) to ensure a simple model structure,
+            # as SGD can be sensitive to the choice of model architecture.
+            model_linear_layers_dims=(10, 10),
             device=device,
         )
 
         compare_optimizer_on_cpu_and_device(
-            optim_factory=experimental_optim_factory, device=device
+            optim_factory=experimental_optim_factory,
+            # Using the same model_linear_layers_dims for consistency in testing across devices.
+            model_linear_layers_dims=(10, 10),
+            device=device,
         )

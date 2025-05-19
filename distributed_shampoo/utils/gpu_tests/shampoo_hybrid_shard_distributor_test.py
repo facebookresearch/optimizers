@@ -93,6 +93,7 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
         return construct_training_problem(
             model_linear_layers_dims=model_linear_layers_dims,
             model_dead_layers_dims=model_dead_layers_dims,
+            enable_learnable_scalar=False,  # Disable 0D learable parameter because FSDP doesn't support it.
             device=torch.device("cuda"),
             fill=0.1,
             post_model_decoration=post_model_decoration,

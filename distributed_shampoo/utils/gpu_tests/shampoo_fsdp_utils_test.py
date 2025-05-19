@@ -33,7 +33,10 @@ def _create_model_and_params(
     model_linear_layers_dims: tuple[int, ...] = (2, 5, 3),
 ) -> tuple[nn.Module, list[Parameter]]:
     model, _, _, _ = construct_training_problem(
-        model_linear_layers_dims, model_dead_layers_dims=None, fill=(1.0, 2.0)
+        model_linear_layers_dims=model_linear_layers_dims,
+        model_dead_layers_dims=None,
+        enable_learnable_scalar=False,  # Disable 0D learable parameter because FSDP doesn't support it.
+        fill=(1.0, 2.0),
     )
     assert isinstance(model, nn.Module)
     return model, list(model.parameters())

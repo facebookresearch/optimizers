@@ -46,8 +46,9 @@ class DistributorTest(unittest.TestCase):
         )
 
     def test_update_params(self) -> None:
-        # Explicitly disable the gradient of the bias layer and call merge_and_block_gradients()
-        # to update the local gradient selector.
+        # Explicitly disable the gradient of the scalar parameter and call merge_and_block_gradients()
+        # to update the local gradient selector for the scalar parameter (i.e., 1st block) and bias layer (i.e., 4th block).
+        self._model.scalar.grad = None  # type: ignore[union-attr]
         self._model.linear_layers[0].weight.grad = torch.ones_like(  # type: ignore[index, union-attr]
             (
                 self._model.linear_layers[0].weight  # type: ignore[index, union-attr]
@@ -87,15 +88,16 @@ class DistributorTest(unittest.TestCase):
         )
 
     def test_local_grad_selector(self) -> None:
-        # Explicitly disable the gradient of the bias layer and call merge_and_block_gradients()
-        # to update the local gradient selector for the bias layer (i.e., 3rd block).
+        # Explicitly disable the gradient of the scalar parameter and call merge_and_block_gradients()
+        # to update the local gradient selector for the scalar parameter (i.e., 1st block) and bias layer (i.e., 4th block).
+        self._model.scalar.grad = None  # type: ignore[union-attr]
         self._model.linear_layers[0].weight.grad = torch.ones_like(  # type: ignore[index, union-attr]
             self._model.linear_layers[0].weight  # type: ignore[index, union-attr]
         )
         self._model.linear_layers[0].bias.grad = None  # type: ignore[index, union-attr]
         self._distributor.merge_and_block_gradients()
 
-        expected_local_grad_selector = (True, True, False)
+        expected_local_grad_selector = (False, True, True, False)
         self.assertEqual(
             self._distributor.local_grad_selector,
             expected_local_grad_selector,
@@ -105,6 +107,7 @@ class DistributorTest(unittest.TestCase):
         # In Distributor, because there is no global vs. local boundary concept,
         # global and local blocked params are always identical.
         expected_local_params = (
+            torch.zeros((1,), dtype=torch.float),
             torch.zeros(PRECONDITIONER_DIM, PRECONDITIONER_DIM, dtype=torch.float),
             torch.zeros(PRECONDITIONER_DIM, PRECONDITIONER_DIM, dtype=torch.float),
             torch.zeros(PRECONDITIONER_DIM, dtype=torch.float),
@@ -127,16 +130,20 @@ class DistributorTest(unittest.TestCase):
 
         expected_local_block_info_list = (
             BlockInfo(
-                param=self._model.linear_layers[0].weight,  # type: ignore[index, union-attr]
+                param=self._model.scalar,  # type: ignore[arg-type, union-attr]
                 composable_block_ids=(0, "block_0"),
             ),
             BlockInfo(
                 param=self._model.linear_layers[0].weight,  # type: ignore[index, union-attr]
-                composable_block_ids=(0, "block_1"),
+                composable_block_ids=(1, "block_0"),
+            ),
+            BlockInfo(
+                param=self._model.linear_layers[0].weight,  # type: ignore[index, union-attr]
+                composable_block_ids=(1, "block_1"),
             ),
             BlockInfo(
                 param=self._model.linear_layers[0].bias,  # type: ignore[index, union-attr]
-                composable_block_ids=(1, "block_0"),
+                composable_block_ids=(2, "block_0"),
             ),
         )
         for index, (a, b) in enumerate(
@@ -153,12 +160,14 @@ class DistributorTest(unittest.TestCase):
             )
 
     def test_merge_and_block_gradients(self) -> None:
+        self._model.scalar.grad = torch.ones_like(self._model.scalar)  # type: ignore[arg-type, union-attr]
         self._model.linear_layers[0].weight.grad = torch.ones_like(  # type: ignore[index, union-attr]
             self._model.linear_layers[0].weight  # type: ignore[index, union-attr]
         )
         self._model.linear_layers[0].bias.grad = None  # type: ignore[index, union-attr]
         actual_local_masked_block_grads = self._distributor.merge_and_block_gradients()
         expected_local_masked_block_grads = (
+            torch.ones((1,)),  # type: ignore[arg-type, union-attr]
             torch.ones((PRECONDITIONER_DIM, PRECONDITIONER_DIM)),
             torch.ones((PRECONDITIONER_DIM, PRECONDITIONER_DIM)),
         )

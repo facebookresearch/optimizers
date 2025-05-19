@@ -23,6 +23,8 @@ from torch import Tensor
 def merge_small_dims(tensor_shape: tuple[int, ...], threshold: int) -> tuple[int, ...]:
     """Reshapes tensor by merging small dimensions.
 
+    Note: Shampoo will promote 0D tensor into an 1D tensor.
+
     Args:
         tensor_shape (tuple[int, ...]): The shape of the tensor.
         threshold (int): Threshold on the maximum size of each dimension.
