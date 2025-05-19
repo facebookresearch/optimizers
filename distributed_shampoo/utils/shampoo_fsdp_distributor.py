@@ -165,12 +165,10 @@ class FSDPDistributor(DistributorInterface):
 
             for split_param in split_params:
                 # Obtain blocks for each parameter after merging.
-                merged_dims = (
-                    merge_small_dims(
-                        split_param.size(), self._param_group[MAX_PRECONDITIONER_DIM]
-                    )
-                    if self._param_group[USE_MERGE_DIMS]
-                    else split_param.size()
+                merged_dims = merge_small_dims(
+                    tensor_shape=split_param.size(),
+                    threshold=self._param_group[MAX_PRECONDITIONER_DIM]
+                    * self._param_group[USE_MERGE_DIMS],
                 )
                 blocks_within_split_param = multi_dim_split(
                     split_param.view(merged_dims),

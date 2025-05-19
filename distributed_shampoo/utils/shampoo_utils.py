@@ -10,7 +10,7 @@ LICENSE file in the root directory of this source tree.
 import heapq
 import operator
 from collections.abc import Callable, Iterator, Sequence
-from functools import partial, reduce
+from functools import cache, partial, reduce
 from itertools import accumulate, chain, compress, islice, pairwise
 from types import TracebackType
 from typing import TypeVar
@@ -19,11 +19,12 @@ import torch
 from torch import Tensor
 
 
-def merge_small_dims(tensor_shape: Sequence[int], threshold: int) -> tuple[int, ...]:
+@cache
+def merge_small_dims(tensor_shape: tuple[int, ...], threshold: int) -> tuple[int, ...]:
     """Reshapes tensor by merging small dimensions.
 
     Args:
-        tensor_shape (Sequence[int]): The shape of the tensor.
+        tensor_shape (tuple[int, ...]): The shape of the tensor.
         threshold (int): Threshold on the maximum size of each dimension.
 
     Returns:

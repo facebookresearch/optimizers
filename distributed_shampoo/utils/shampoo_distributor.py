@@ -155,12 +155,10 @@ class DistributorInterface(ABC):
 
         # Merge dimensions for each parameter.
         self._global_merged_dims_list: tuple[tuple[int, ...], ...] = tuple(
-            tuple(
-                merge_small_dims(
-                    param.size(), self._param_group[MAX_PRECONDITIONER_DIM]
-                )
-                if self._param_group[USE_MERGE_DIMS]
-                else param.size()
+            merge_small_dims(
+                tensor_shape=param.size(),
+                threshold=self._param_group[MAX_PRECONDITIONER_DIM]
+                * self._param_group[USE_MERGE_DIMS],
             )
             for param in self._get_params_or_grads()
         )
