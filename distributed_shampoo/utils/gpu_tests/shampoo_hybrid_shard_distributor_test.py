@@ -20,7 +20,6 @@ import torch
 from distributed_shampoo.distributed_shampoo import DistributedShampoo
 from distributed_shampoo.shampoo_types import (
     AdaGradGraftingConfig,
-    CommunicationDType,
     FullyShardShampooConfig,
     HybridShardShampooConfig,
 )
@@ -123,17 +122,17 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
     @parametrize(
         "communication_dtype, communicate_params",
         (
-            (CommunicationDType.DEFAULT, False),
-            (CommunicationDType.DEFAULT, True),
-            (CommunicationDType.FP16, False),
-            (CommunicationDType.BF16, False),
+            (torch.float32, False),
+            (torch.float32, True),
+            (torch.float16, False),
+            (torch.bfloat16, False),
         ),
     )
     @parametrize("num_trainers_per_group", (-1, 1, 2))
     def test_hybrid_shard_shampoo_against_default_shampoo(
         self,
         num_trainers_per_group: int,
-        communication_dtype: CommunicationDType,
+        communication_dtype: torch.dtype,
         communicate_params: bool,
     ) -> None:
         hybrid_shard_config = HybridShardShampooConfig(
@@ -166,19 +165,71 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
     @parametrize(
         "communication_dtype, communicate_params",
         (
-            (CommunicationDType.DEFAULT, False),
-            (CommunicationDType.DEFAULT, True),
-            (CommunicationDType.FP16, False),
-            (CommunicationDType.BF16, False),
+            (torch.float32, False),
+            (torch.float32, True),
+            (torch.float16, False),
+            (torch.bfloat16, False),
+        ),
+    )
+    @parametrize("num_trainers_per_group", (-1, 1, 2))
+    def test_hybrid_shampoo_n_by_one_mesh_against_default_shampoo(
+        self,
+        num_trainers_per_group: int,
+        communication_dtype: torch.dtype,
+        communicate_params: bool,
+    ) -> None:
+        """
+        Testing the correctness of hybrid shard shampoo distributor of (n, 1) mesh
+        by comparing it with default shampoo. (n, 1) mesh is a special case of hybrid shard.
+        The shard size is 1 so it is equivalent to default or DDP Shampoo.
+        """
+        hybrid_shard_config = HybridShardShampooConfig(
+            device_mesh=init_device_mesh(
+                "cuda", (4, 1), mesh_dim_names=("replicate", "shard")
+            ),
+            communication_dtype=communication_dtype,
+            num_trainers_per_group=num_trainers_per_group,
+            communicate_params=communicate_params,
+        )
+
+        compare_two_optimizers_models_devices_on_weight_and_loss(
+            control_optim_factory=ShampooHybridShardDistributorTest._shampoo_optim_factory(
+                distributed_config=None,
+            ),
+            control_model_factory=ShampooHybridShardDistributorTest._construct_model,
+            experimental_optim_factory=ShampooHybridShardDistributorTest._shampoo_optim_factory(
+                distributed_config=hybrid_shard_config,
+            ),
+            experimental_model_factory=partial(
+                ShampooHybridShardDistributorTest._construct_model,
+                post_model_decoration=partial(
+                    fully_shard, mesh=hybrid_shard_config.device_mesh
+                ),
+            ),
+        )
+
+    @with_comms
+    @skip_if_lt_x_gpu(4)
+    @parametrize(
+        "communication_dtype, communicate_params",
+        (
+            (torch.float32, False),
+            (torch.float32, True),
+            (torch.float16, False),
+            (torch.bfloat16, False),
         ),
     )
     @parametrize("num_trainers_per_group", (-1, 1, 2))
     def test_hybrid_shard_shampoo_config_against_fully_shard_shampoo_config(
         self,
         num_trainers_per_group: int,
-        communication_dtype: CommunicationDType,
+        communication_dtype: torch.dtype,
         communicate_params: bool,
     ) -> None:
+        """
+        Testing the correctness of hybrid shard shampoo distributor by comparing it with
+        fully shard distributor.
+        """
         mesh_2d = init_device_mesh(
             "cuda", (2, 2), mesh_dim_names=("replicate", "shard")
         )
@@ -377,33 +428,6 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
                 ValueError,
                 re.escape(
                     "distributed_config.num_trainers_per_group=3 must divide self._replicated_group_size=4!"
-                ),
-                ShampooHybridShardDistributorTest._shampoo_optim_factory(
-                    distributed_config=hybrid_shard_config,
-                ),
-                model.parameters(),
-            )
-
-    @with_comms
-    @skip_if_lt_x_gpu(4)
-    def test_unsupported_communication_dtype(self) -> None:
-        hybrid_shard_config = HybridShardShampooConfig(
-            device_mesh=init_device_mesh(
-                "cuda", (2, 2), mesh_dim_names=("replicate", "shard")
-            )
-        )
-        model = ShampooHybridShardDistributorTest._construct_model(
-            post_model_decoration=partial(
-                fully_shard, mesh=hybrid_shard_config.device_mesh
-            ),
-        )[0]
-        assert isinstance(model, nn.Module)
-
-        with mock.patch.object(CommunicationDType, "__eq__", return_value=False):
-            self.assertRaisesRegex(
-                NotImplementedError,
-                re.escape(
-                    "Unsupported communication dtype: CommunicationDType.DEFAULT"
                 ),
                 ShampooHybridShardDistributorTest._shampoo_optim_factory(
                     distributed_config=hybrid_shard_config,

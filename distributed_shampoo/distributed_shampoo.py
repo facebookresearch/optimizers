@@ -10,6 +10,7 @@ LICENSE file in the root directory of this source tree.
 import logging
 from collections.abc import Callable, Iterator
 from copy import deepcopy
+from dataclasses import asdict
 from functools import partial
 from typing import Any, overload
 
@@ -250,13 +251,6 @@ class DistributedShampoo(torch.optim.Optimizer):
             shampoo_pt2_compile_config = None.
 
         Shampoo PT2 compilation can also be customized for the backend and options via ShampooPT2CompileConfig.
-            ShampooPT2CompileConfig
-                - pytorch_compile_backend: PT2 backend to use. All available backends in pytorch 2.0 is available for Shampoo. Typical backends to use
-                    include 'inductor', 'aot_eager'. For more details: https://pytorch.org/docs/stable/torch.compiler.html
-                - enable_shampoo_pt2_dynamic_shape: if true, PT2 will compile Shampoo data/tensors with `dynamic shape` mode. Default is False and use
-                    `static` mode. `dynamic shape` means the tensor shapes can change from run to run, and PT2 will generate kernels not specialized to
-                    particular tensor shape. Recommended to use `static` mode here for Shampoo.
-                    More about dynamic shape: https://pytorch.org/docs/stable/torch.compiler_dynamic_shapes.html
 
     5. [EXPERIMENTAL] Eigenvalue correction (SOAP): We can (approximately) correct the eigenvalues of Shampoo's preconditioner by accumulating a running
         average of the squared gradient in the eigenbasis of Shampoo's preconditioner. This running average (with hyperparameter `betas[1]`) is
@@ -288,7 +282,7 @@ class DistributedShampoo(torch.optim.Optimizer):
             (Default: 1)
         start_preconditioning_step (int): Iteration to start computing inverse preconditioner. If -1, uses
             the same value as precondition_frequency. (Default: -1)
-        use_nesterov (bool): Flag for using Nesterov momentum. (default: False)
+        use_nesterov (bool): Flag for using Nesterov momentum. (Default: False)
         use_bias_correction (bool): Flag for using bias correction. (Default: True)
         use_decoupled_weight_decay (bool): Flag for using AdamW-style decoupled weight decay. (Default: True)
         grafting_config (GraftingConfig | None): Configuration for grafting method. If None, ignores grafting.
@@ -680,16 +674,14 @@ class DistributedShampoo(torch.optim.Optimizer):
         # Use PT2 to compile the step function for each parameter group.
         self._per_group_step: Callable[..., None] = (
             torch.compile(
-                self._per_group_step_impl,
-                backend=shampoo_pt2_compile_config.pytorch_compile_backend,
-                dynamic=shampoo_pt2_compile_config.enable_shampoo_pt2_dynamic_shape,
+                self._per_group_step_impl, **asdict(shampoo_pt2_compile_config)
             )
             if shampoo_pt2_compile_config is not None
             else self._per_group_step_impl
         )
         if shampoo_pt2_compile_config is not None:
             logger.info(
-                f"DistributedShampoo optimizer initialization is using {shampoo_pt2_compile_config.pytorch_compile_backend} backend and enable_shampoo_pt2_dynamic_shape={shampoo_pt2_compile_config.enable_shampoo_pt2_dynamic_shape}"
+                f"DistributedShampoo optimizer initialization is using {shampoo_pt2_compile_config=}"
             )
 
     @staticmethod
@@ -1111,11 +1103,9 @@ class DistributedShampoo(torch.optim.Optimizer):
             # NOTE: Wrap scalar of group[LR] into a 0D tensor to avoid PT2 recompilation;
             # Send 0D tensor to GPU in `non_blocking` to avoid QPS regression. Remove the gpu
             # tensor impl once PT2 supports cpu 0D tensor properly.
-            lr = torch.tensor(
-                group[LR],
-                dtype=torch.float,
-                pin_memory=torch.cuda.is_available(),
-            ).to(self._device, non_blocking=True)
+            lr = torch.tensor(group[LR], dtype=torch.float).to(
+                self._device, non_blocking=True
+            )
             beta1 = group[BETAS][0]
             beta3 = group[BETA3]
             weight_decay = group[WEIGHT_DECAY]

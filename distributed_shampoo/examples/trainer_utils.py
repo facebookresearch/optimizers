@@ -12,6 +12,7 @@ import enum
 import logging
 import random
 from abc import ABC, abstractmethod
+from operator import attrgetter
 
 import numpy as np
 
@@ -21,7 +22,6 @@ import torch.distributed as dist
 from distributed_shampoo import (
     AdaGradGraftingConfig,
     AdamGraftingConfig,
-    CommunicationDType,
     CoupledHigherOrderConfig,
     CoupledNewtonConfig,
     DefaultEigenvalueCorrectedShampooConfig,
@@ -47,13 +47,6 @@ default_device = torch.device("cpu")
 
 
 ###### ENUM CLASSES ######
-class DType(enum.Enum):
-    BF16 = torch.bfloat16
-    FP16 = torch.float16
-    FP32 = torch.float32
-    FP64 = torch.float64
-
-
 class OptimizerType(enum.Enum):
     SGD = 0
     ADAM = 1
@@ -224,16 +217,16 @@ class Parser:
         # Arguments for mixed-precision.
         parser.add_argument(
             "--preconditioner-dtype",
-            type=lambda t: enum_type_parse(t, DType),
-            default=DType.FP32,
+            type=lambda t: attrgetter(t)(torch),
+            default=torch.float32,
             help="Preconditioner dtype for Shampoo.",
         )
 
         # Arguments for DDP Shampoo.
         parser.add_argument(
             "--communication-dtype",
-            type=lambda t: enum_type_parse(t, CommunicationDType),
-            default=CommunicationDType.FP32,
+            type=lambda t: attrgetter(t)(torch),
+            default=torch.float32,
             help="Communication dtype for Shampoo.",
         )
         parser.add_argument(
@@ -386,7 +379,7 @@ def instantiate_optimizer(
     grafting_epsilon: float,
     use_merge_dims: bool,
     distributed_config: DistributedConfig | None,
-    preconditioner_dtype: DType,
+    preconditioner_dtype: torch.dtype,
     preconditioner_computation_type: PreconditionerComputationType,
 ) -> torch.optim.Optimizer:
     if optimizer_type == OptimizerType.SGD:
@@ -436,7 +429,7 @@ def instantiate_optimizer(
             ),
             use_merge_dims=use_merge_dims,
             distributed_config=distributed_config,
-            preconditioner_dtype=preconditioner_dtype.value,
+            preconditioner_dtype=preconditioner_dtype,
             preconditioner_config=instantiate_preconditioner_config(
                 preconditioner_computation_type=preconditioner_computation_type,
                 exponent_multiplier=exponent_multiplier,
