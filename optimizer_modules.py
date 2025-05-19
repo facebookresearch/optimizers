@@ -17,7 +17,7 @@ from torch.optim.optimizer import StateDict
 
 logger: logging.Logger = logging.getLogger(__name__)
 
-StateType = TypeVar("StateType")
+_StateType = TypeVar("_StateType")
 
 
 class OptimizerModule:
@@ -65,7 +65,7 @@ class OptimizerModule:
         """
 
         def save_to_state_dict(
-            states: Iterable[tuple[str, StateType]], destination: StateDict
+            states: Iterable[tuple[str, _StateType]], destination: StateDict
         ) -> None:
             r"""Saves module state to `destination` dictionary, containing a state
             of the module, but not its descendants. This is called on every

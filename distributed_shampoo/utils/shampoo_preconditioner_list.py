@@ -135,8 +135,8 @@ class SGDPreconditionerList(PreconditionerList):
         return
 
 
-SubStateValueType = TypeVar("SubStateValueType")
-StateValueType = dict[Hashable, SubStateValueType]
+_SubStateValueType = TypeVar("_SubStateValueType")
+_StateValueType = dict[Hashable, _SubStateValueType]
 
 
 class AdagradPreconditionerList(PreconditionerList):
@@ -154,7 +154,7 @@ class AdagradPreconditionerList(PreconditionerList):
 
     Args:
         block_list (tuple[Tensor, ...]): List of (blocks of) parameters.
-        state (Mapping[Tensor, Any]): Mapping containing optimizer state.
+        state (Mapping[Tensor, _StateValueType]): Mapping containing optimizer state.
         block_info_list (tuple[BlockInfo, ...]): List containing corresponding BlockInfo for each block/parameter in block_list.
             Note that this should have the same length as block_list.
         beta2 (float): Exponential moving average factor for Adam/RMSprop second moment state. If beta2 = 1., will use
@@ -167,7 +167,7 @@ class AdagradPreconditionerList(PreconditionerList):
     def __init__(
         self,
         block_list: tuple[Tensor, ...],
-        state: Mapping[Tensor, StateValueType],
+        state: Mapping[Tensor, _StateValueType],
         block_info_list: tuple[BlockInfo, ...],
         beta2: float = 1.0,
         epsilon: float = 1e-10,
@@ -710,14 +710,14 @@ class EigenvalueCorrectedShampooKroneckerFactorsUnwrapped(
         assert len(self.factor_matrices) == len(self.factor_matrices_eigenvectors)
 
 
-ShampooKroneckerFactorsStateType = TypeVar(
-    "ShampooKroneckerFactorsStateType",
+_ShampooKroneckerFactorsStateType = TypeVar(
+    "_ShampooKroneckerFactorsStateType",
     RootInvShampooKroneckerFactorsState,
     EigendecomposedShampooKroneckerFactorsState,
     EigenvalueCorrectedShampooKroneckerFactorsState,
 )
-ShampooKroneckerFactorsUnwrappedType = TypeVar(
-    "ShampooKroneckerFactorsUnwrappedType",
+_ShampooKroneckerFactorsUnwrappedType = TypeVar(
+    "_ShampooKroneckerFactorsUnwrappedType",
     RootInvShampooKroneckerFactorsUnwrapped,
     EigendecomposedShampooKroneckerFactorsUnwrapped,
     EigenvalueCorrectedShampooKroneckerFactorsUnwrapped,
@@ -726,7 +726,7 @@ ShampooKroneckerFactorsUnwrappedType = TypeVar(
 
 class BaseShampooPreconditionerList(
     PreconditionerList,
-    Generic[ShampooKroneckerFactorsStateType, ShampooKroneckerFactorsUnwrappedType],
+    Generic[_ShampooKroneckerFactorsStateType, _ShampooKroneckerFactorsUnwrappedType],
 ):
     """Base class for Shampoo preconditioners.
 
@@ -734,7 +734,7 @@ class BaseShampooPreconditionerList(
 
     Args:
         block_list (tuple[Tensor, ...]): List of (blocks of) parameters.
-        state (Mapping[Tensor, Any]): Mapping containing optimizer state.
+        state (Mapping[Tensor, _StateValueType]): Mapping containing optimizer state.
         block_info_list (tuple[BlockInfo, ...]): List containing corresponding BlockInfo for each block/parameter in block_list.
             Note that this should have the same length as block_list.
         preconditioner_config (PreconditionerConfig): Configuration for preconditioner computation.
@@ -749,7 +749,7 @@ class BaseShampooPreconditionerList(
     def __init__(
         self,
         block_list: tuple[Tensor, ...],
-        state: Mapping[Tensor, StateValueType],
+        state: Mapping[Tensor, _StateValueType],
         block_info_list: tuple[BlockInfo, ...],
         preconditioner_config: PreconditionerConfig,
         beta2: float = 1.0,
@@ -780,7 +780,7 @@ class BaseShampooPreconditionerList(
         )
 
         # Create the Kronecker factors.
-        kronecker_factors_unwrapped: list[ShampooKroneckerFactorsUnwrappedType] = (
+        kronecker_factors_unwrapped: list[_ShampooKroneckerFactorsUnwrappedType] = (
             self._create_kronecker_factors_state(
                 block_list=block_list,
                 state=state,
@@ -815,10 +815,10 @@ class BaseShampooPreconditionerList(
     def _create_kronecker_factors_state(
         self,
         block_list: tuple[Tensor, ...],
-        state: Mapping[Tensor, StateValueType],
+        state: Mapping[Tensor, _StateValueType],
         block_info_list: tuple[BlockInfo, ...],
         preconditioned_dims_list: tuple[tuple[int, ...], ...],
-    ) -> list[ShampooKroneckerFactorsUnwrappedType]:
+    ) -> list[_ShampooKroneckerFactorsUnwrappedType]:
         # Instantiate (blocked) Kronecker factors and construct list of Kronecker factors.
         # NOTE: We need to instantiate the Kronecker factor states within the optimizer's state dictionary,
         # and do not explicitly store them as RootInvShampooPreconditionerList attributes here.
@@ -977,13 +977,13 @@ class BaseShampooPreconditionerList(
     def _initialize_state_lists(
         self,
         block_list: tuple[Tensor, ...],
-        kronecker_factors_unwrapped: list[ShampooKroneckerFactorsUnwrappedType],
+        kronecker_factors_unwrapped: list[_ShampooKroneckerFactorsUnwrappedType],
         preconditioned_dims_list: tuple[tuple[int, ...], ...],
         preconditioned_dims_selector_list: tuple[tuple[bool, ...], ...],
     ) -> None:
         # Initialize local lists.
         self._local_kronecker_factors_unwrapped: tuple[
-            ShampooKroneckerFactorsUnwrappedType,
+            _ShampooKroneckerFactorsUnwrappedType,
             ...,
         ] = tuple(kronecker_factors_unwrapped)
         self._local_order_list: tuple[int, ...] = tuple(
@@ -1008,7 +1008,7 @@ class BaseShampooPreconditionerList(
             self._local_failed_amortized_computation_counter_list
         )
         self._masked_kronecker_factors_unwrapped: tuple[
-            ShampooKroneckerFactorsUnwrappedType,
+            _ShampooKroneckerFactorsUnwrappedType,
             ...,
         ] = self._local_kronecker_factors_unwrapped
         self._masked_preconditioned_dims_selector_list: tuple[tuple[bool, ...], ...] = (
@@ -1049,7 +1049,7 @@ class BaseShampooPreconditionerList(
                 )
             )
             self._masked_kronecker_factors_unwrapped: tuple[  # type: ignore[no-redef]
-                ShampooKroneckerFactorsUnwrappedType,
+                _ShampooKroneckerFactorsUnwrappedType,
                 ...,
             ] = compress_list(
                 self._local_kronecker_factors_unwrapped, local_grad_selector
@@ -1128,14 +1128,14 @@ class BaseShampooPreconditionerList(
         )
 
 
-ClassicShampooKroneckerFactorsStateType = TypeVar(
-    "ClassicShampooKroneckerFactorsStateType",
+_ClassicShampooKroneckerFactorsStateType = TypeVar(
+    "_ClassicShampooKroneckerFactorsStateType",
     RootInvShampooKroneckerFactorsState,
     EigendecomposedShampooKroneckerFactorsState,
 )
 
-ClassicShampooKroneckerFactorsUnwrappedType = TypeVar(
-    "ClassicShampooKroneckerFactorsUnwrappedType",
+_ClassicShampooKroneckerFactorsUnwrappedType = TypeVar(
+    "_ClassicShampooKroneckerFactorsUnwrappedType",
     RootInvShampooKroneckerFactorsUnwrapped,
     EigendecomposedShampooKroneckerFactorsUnwrapped,
 )
@@ -1143,8 +1143,8 @@ ClassicShampooKroneckerFactorsUnwrappedType = TypeVar(
 
 class ClassicShampooPreconditionerList(
     BaseShampooPreconditionerList[
-        ClassicShampooKroneckerFactorsStateType,
-        ClassicShampooKroneckerFactorsUnwrappedType,
+        _ClassicShampooKroneckerFactorsStateType,
+        _ClassicShampooKroneckerFactorsUnwrappedType,
     ]
 ):
     """Base class for Shampoo preconditioners that rely on ShampooPreconditionerConfig.

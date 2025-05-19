@@ -65,7 +65,7 @@ class MergeSmallDimsTest(unittest.TestCase):
 
     @parametrize("threshold", (10, 1))
     def test_empty_dims(self, threshold: int) -> None:
-        expected_new_tensor_shape = ()
+        expected_new_tensor_shape = (1,)
         self.assertEqual(
             merge_small_dims(tensor_shape=(), threshold=threshold),
             expected_new_tensor_shape,

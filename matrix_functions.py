@@ -55,12 +55,12 @@ class NewtonConvergenceFlag(enum.Enum):
     EARLY_STOP = enum.auto()
 
 
-FuncReturnType = TypeVar("FuncReturnType")
-DataclassType = TypeVar("DataclassType")
+_FuncReturnType = TypeVar("_FuncReturnType")
+_DataclassType = TypeVar("_DataclassType")
 
 
 def _get_function_args_from_config(
-    func: Callable[..., FuncReturnType], config: DataclassType
+    func: Callable[..., _FuncReturnType], config: _DataclassType
 ) -> dict[str, Any]:
     """
     Returns a dict of arguments for func that are defined in config. Note that config is not expected to contain all arguments for func, nor are all fields in config expected to be applicable to func.
@@ -73,8 +73,8 @@ def _get_function_args_from_config(
 
 
 def _check_square_matrix(
-    func: Callable[..., FuncReturnType],
-) -> Callable[..., FuncReturnType]:
+    func: Callable[..., _FuncReturnType],
+) -> Callable[..., _FuncReturnType]:
     """
     Decorator to check if the input matrix is square.
 
@@ -90,7 +90,7 @@ def _check_square_matrix(
     """
 
     @wraps(func)
-    def wrapper(A: Tensor, *args: Any, **kwargs: Any) -> FuncReturnType:
+    def wrapper(A: Tensor, *args: Any, **kwargs: Any) -> _FuncReturnType:
         if len(A.shape) != 2:
             raise ValueError(f"Matrix is not 2-dimensional! {A.shape=}")
         if A.shape[0] != A.shape[1]:
