@@ -7,6 +7,7 @@ LICENSE file in the root directory of this source tree.
 
 """
 
+from functools import partial
 from math import prod
 from typing import Any
 
@@ -151,7 +152,11 @@ class FSDPDistributor(DistributorInterface):
         global_num_blocks_per_split_param = []
         # self._global_merged_dims_list has the same length as the total number of split tensor
         # blocks within all flattened parameters obtained from split tensor block recovery.
-        global_merged_dims_list = []
+        merge_dims = partial(
+            merge_small_dims,
+            threshold=self._param_group[MAX_PRECONDITIONER_DIM]
+            * self._param_group[USE_MERGE_DIMS],
+        )
 
         for flattened_param in self._param_group[PARAMS]:
             # Split flattened parameters into valid tensor blocks of the parameter.
@@ -165,11 +170,7 @@ class FSDPDistributor(DistributorInterface):
 
             for split_param in split_params:
                 # Obtain blocks for each parameter after merging.
-                merged_dims = merge_small_dims(
-                    tensor_shape=split_param.size(),
-                    threshold=self._param_group[MAX_PRECONDITIONER_DIM]
-                    * self._param_group[USE_MERGE_DIMS],
-                )
+                merged_dims = merge_dims(tensor_shape=split_param.size())
                 blocks_within_split_param = multi_dim_split(
                     split_param.view(merged_dims),
                     self._param_group[MAX_PRECONDITIONER_DIM],
@@ -185,9 +186,7 @@ class FSDPDistributor(DistributorInterface):
                     for block_param in blocks_within_split_param
                 )
 
-                # Stores the merged dimensions for each parameter and the number of blocks for each param so
-                # we could use this later for constructing the mask on filtering blocks when grad is None.
-                global_merged_dims_list.append(merged_dims)
+                # Stores the number of blocks for each param so we could use this later for constructing the mask on filtering blocks when grad is None.
                 global_num_blocks_per_split_param.append(len(blocks_within_split_param))
 
         # Check that the number of blocks for each parameter equals to the summation of the number of blocks
@@ -205,7 +204,6 @@ class FSDPDistributor(DistributorInterface):
         self._global_num_blocks_per_split_param = tuple(
             global_num_blocks_per_split_param
         )
-        self._global_merged_dims_list = tuple(global_merged_dims_list)
 
     def _merge_and_block_gradients(
         self,
@@ -218,6 +216,11 @@ class FSDPDistributor(DistributorInterface):
         """
         local_masked_blocked_grads: list[Tensor] = []
         global_grad_selector = []
+        merge_dims = partial(
+            merge_small_dims,
+            threshold=self._param_group[MAX_PRECONDITIONER_DIM]
+            * self._param_group[USE_MERGE_DIMS],
+        )
 
         for (
             flattened_param,
@@ -251,27 +254,23 @@ class FSDPDistributor(DistributorInterface):
                 self._param_to_metadata[flattened_param].end_idx,
             )
 
-            # Get the merged dimensions and the number of blocks for each split gradient.
-            merged_dims_within_flattened_param = self._global_merged_dims_list[
-                split_index:next_split_index
-            ]
+            # Get the number of blocks for each split gradient.
             num_blocks_within_split_grads = self._global_num_blocks_per_split_param[
                 split_index:next_split_index
             ]
 
-            for (
-                grad,
-                merged_dims,
-                (blocks_within_split_index, next_blocks_within_split_index),
+            for grad, (
+                blocks_within_split_index,
+                next_blocks_within_split_index,
             ) in zip(
                 split_grads,
-                merged_dims_within_flattened_param,
                 generate_pairwise_indices(num_blocks_within_split_grads),
                 strict=True,
             ):
                 # Obtain blocks for each split gradient after merging.
                 blocks_within_grad = multi_dim_split(
-                    grad.view(merged_dims), self._param_group[MAX_PRECONDITIONER_DIM]
+                    grad.view(merge_dims(tensor_shape=grad.size())),
+                    self._param_group[MAX_PRECONDITIONER_DIM],
                 )
                 # Generate block-to-parameter metadata and extend blocked parameters list.
                 local_masked_blocked_grads.extend(

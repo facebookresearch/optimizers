@@ -9,6 +9,7 @@ LICENSE file in the root directory of this source tree.
 
 from abc import ABC, abstractmethod
 from collections.abc import Iterable
+from functools import partial
 from operator import attrgetter
 from typing import Any, Literal, overload
 
@@ -41,8 +42,7 @@ class DistributorInterface(ABC):
 
     def __init__(self, param_group: dict[str, Any]) -> None:
         self._param_group = param_group
-        # Merge and block parameters creates self._global_blocked_params, self._global_num_blocks_per_param,
-        # and self._global_merged_dims_list.
+        # Merge and block parameters creates self._global_blocked_params and self._global_num_blocks_per_param
         # Global blocked params are all the blocked parameters after merging and blocking.
         # Global num blocks per param stores the number of blocks for each global parameter.
         # Global merged dims list stores the merged dimensions for each global parameter.
@@ -153,26 +153,20 @@ class DistributorInterface(ABC):
 
         """
 
-        # Merge dimensions for each parameter.
-        self._global_merged_dims_list: tuple[tuple[int, ...], ...] = tuple(
-            merge_small_dims(
-                tensor_shape=param.size(),
-                threshold=self._param_group[MAX_PRECONDITIONER_DIM]
-                * self._param_group[USE_MERGE_DIMS],
-            )
-            for param in self._get_params_or_grads()
-        )
-
         # Generate blocked parameters list and number of blocks per parameter.
         global_blocked_params: list[Tensor] = []
         global_num_blocks_per_param: list[int] = []
+        merge_dims = partial(
+            merge_small_dims,
+            threshold=self._param_group[MAX_PRECONDITIONER_DIM]
+            * self._param_group[USE_MERGE_DIMS],
+        )
 
-        for param, merged_dims in zip(
-            self._get_params_or_grads(), self._global_merged_dims_list, strict=True
-        ):
+        for param in self._get_params_or_grads():
             # Obtain blocks for each parameter after merging.
             blocks_within_param = multi_dim_split(
-                param.view(merged_dims), self._param_group[MAX_PRECONDITIONER_DIM]
+                param.view(merge_dims(tensor_shape=param.size())),
+                self._param_group[MAX_PRECONDITIONER_DIM],
             )
 
             # Generate and extend blocked parameters list.
@@ -209,10 +203,14 @@ class DistributorInterface(ABC):
 
         local_masked_blocked_grads: list[Tensor] = []
         global_grad_selector = []
+        merge_dims = partial(
+            merge_small_dims,
+            threshold=self._param_group[MAX_PRECONDITIONER_DIM]
+            * self._param_group[USE_MERGE_DIMS],
+        )
 
-        for grad, merged_dims, num_blocks, (block_index, next_block_index) in zip(
+        for grad, num_blocks, (block_index, next_block_index) in zip(
             self._get_params_or_grads(get_grad=True),
-            self._global_merged_dims_list,
             self._global_num_blocks_per_param,
             generate_pairwise_indices(self._global_num_blocks_per_param),
             strict=True,
@@ -230,7 +228,8 @@ class DistributorInterface(ABC):
 
             # Obtain blocks for each gradient after merging.
             blocks_within_grad = multi_dim_split(
-                grad.view(merged_dims), self._param_group[MAX_PRECONDITIONER_DIM]
+                grad.view(merge_dims(tensor_shape=grad.size())),
+                self._param_group[MAX_PRECONDITIONER_DIM],
             )
             # Generate block-to-parameter metadata and extend blocked parameters list.
             local_masked_blocked_grads.extend(
