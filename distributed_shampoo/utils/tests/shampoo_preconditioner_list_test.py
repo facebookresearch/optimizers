@@ -11,7 +11,7 @@ import abc
 import math
 import re
 import unittest
-from collections.abc import Callable
+from collections.abc import Callable, Hashable
 from dataclasses import dataclass, field, replace
 from operator import methodcaller
 from typing import Any
@@ -264,7 +264,7 @@ class AdagradPreconditionerListTest(AbstractPreconditionerListTest.Interface):
             torch.arange(6, dtype=torch.float).reshape(3, 2),
             torch.tensor(1.0),  # a 0D tensor
         )
-        self._state = {  # type: ignore[var-annotated]
+        self._state: dict[Tensor, dict[Hashable, object]] = {
             self._params[0]: {},
             self._params[1]: {},
             self._params[2]: {},
@@ -479,7 +479,7 @@ class AbstractTest:
                 torch.arange(6, dtype=torch.float).reshape(3, 2),
                 torch.tensor(1.0),  # a 0D tensor
             )
-            self._state = {  # type: ignore[var-annotated]
+            self._state: dict[Tensor, dict[Hashable, object]] = {
                 self._params[0]: {},
                 self._params[1]: {},
                 self._params[2]: {},
