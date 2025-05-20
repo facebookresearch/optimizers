@@ -1074,9 +1074,10 @@ class DistributedShampoo(torch.optim.Optimizer):
         """Performs a single optimization step.
 
         Args:
-            closure (callable, optional): A closure that reevaluates the model
-                and returns the loss.
+            closure (Callable[[], float] | Nnoe): A closure that reevaluates the model and returns the loss. (Default: None)
 
+        Returns:
+            loss (float | None): The loss value returned by the closure if provided, otherwise None.
         """
         loss = None
         if closure is not None:
