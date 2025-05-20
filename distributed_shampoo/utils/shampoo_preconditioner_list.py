@@ -1034,27 +1034,22 @@ class BaseShampooPreconditionerList(
         with profiler.record_function(
             f"## {self.__class__.__name__}:{self.compress_preconditioner_list.__name__} ##"
         ):
-            self._masked_order_list: tuple[int, ...] = compress_list(  # type: ignore[no-redef]
+            self._masked_order_list = compress_list(
                 self._local_order_list, local_grad_selector
             )
-            self._masked_roots_list: tuple[tuple[float, ...], ...] = compress_list(  # type: ignore[no-redef]
+            self._masked_roots_list = compress_list(
                 self._local_roots_list, local_grad_selector
             )
-            self._masked_failed_amortized_computation_counter_list: list[int] = (  # type: ignore[no-redef]
-                list(
-                    compress_list(
-                        self._local_failed_amortized_computation_counter_list,
-                        local_grad_selector,
-                    )
+            self._masked_failed_amortized_computation_counter_list = list(
+                compress_list(
+                    self._local_failed_amortized_computation_counter_list,
+                    local_grad_selector,
                 )
             )
-            self._masked_kronecker_factors_unwrapped: tuple[  # type: ignore[no-redef]
-                _ShampooKroneckerFactorsUnwrappedType,
-                ...,
-            ] = compress_list(
+            self._masked_kronecker_factors_unwrapped = compress_list(
                 self._local_kronecker_factors_unwrapped, local_grad_selector
             )
-            self._masked_preconditioned_dims_selector_list = compress_list(  # type: ignore[no-redef]
+            self._masked_preconditioned_dims_selector_list = compress_list(
                 self._local_preconditioned_dims_selector_list, local_grad_selector
             )
 
