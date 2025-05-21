@@ -235,10 +235,10 @@ class HybridShardDistributor(DistributorInterface):
     # NOTE: Remove this function once PT2 supports all_gather with functional collective
     @torch.no_grad()
     @torch.compiler.disable
-    def all_gather_into_tensor(self) -> None:
+    def _all_gather_into_tensor(self) -> None:
         dist.all_gather_into_tensor(
-            self._global_dist_buffer,
-            self._local_dist_buffer,
+            output_tensor=self._global_dist_buffer,
+            input_tensor=self._local_dist_buffer,
             group=self._comms_dist_group,
         )
 
@@ -271,7 +271,7 @@ class HybridShardDistributor(DistributorInterface):
                     self._local_masked_blocked_params,
                 )
 
-            self.all_gather_into_tensor()
+            self._all_gather_into_tensor()
 
             # torch._foreach only accepts non-empty list
             if self._global_masked_blocked_params:
@@ -296,7 +296,7 @@ class HybridShardDistributor(DistributorInterface):
                     masked_blocked_search_directions,
                 )
 
-            self.all_gather_into_tensor()
+            self._all_gather_into_tensor()
 
             # torch._foreach only accepts non-empty list
             if self._global_masked_blocked_params:
