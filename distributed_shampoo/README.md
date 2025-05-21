@@ -1,5 +1,8 @@
 # PyTorch Distributed Shampoo
 
+[![arXiv](https://img.shields.io/badge/arXiv-2309.06497-b31b1b.svg)](https://arxiv.org/abs/2309.06497)
+
+
 Distributed Shampoo is a preconditioned stochastic gradient optimizer in the adaptive gradient (Adagrad) family of methods [1, 2]. It converges faster by leveraging neural network-specific structures to achieve comparable model quality/accuracy in fewer iterations or epochs at the cost of additional FLOPs and memory, or achieve higher model quality in the same number of iterations or epochs. Our implementation offers specialized support for serial, [Distributed Data Parallel (DDP)](https://pytorch.org/tutorials/intermediate/ddp_tutorial.html), [Fully Sharded Data Parallel (FSDP)](https://pytorch.org/tutorials/intermediate/FSDP_tutorial.html), [Hybrid Sharding Data Parallel (HSDP)](https://pytorch.org/tutorials/recipes/distributed_device_mesh.html#how-to-use-devicemesh-with-hsdp), [Per-parameter Fully Sharded Data Parallel (FSDP2)](#fsdp2-training-support), and [Per-parameter Hybrid Sharded Data Parallel (HSDP2)](#hsdp2-training-support) training.
 
 Distributed Shampoo currently only supports dense parameters.
@@ -285,7 +288,6 @@ import torch.distributed as dist
 
 from distributed_shampoo import (
     AdamGraftingConfig,
-    CommunicationDType,
     DDPShampooConfig,
     DistributedShampoo,
 )
@@ -323,7 +325,7 @@ optimizer = DistributedShampoo(
         epsilon=1e-12,
     ),
     distributed_config=DDPShampooConfig(
-        communication_dtype=CommunicationDType.FP32,
+        communication_dtype=torch.float32,
         num_trainers_per_group=8,
         communicate_params=False,
     ),
@@ -670,14 +672,13 @@ With the inclusion of learning rate grafting, we can extract a good learning rat
     * **Nesterov Momentum** (`momentum`, `use_nesterov`): In some cases, we have found using Nesterov momentum to substantially improve model quality. To use this, we recommend setting `momentum` to 0.5 or 0.9 and setting `use_nesterov` to True. The learning rate needs to be re-tuned with respect to this hyperparameter.
     * **Epsilon Regularization** (`epsilon`): One should typically search for a value in $\{10^{−12},10^{−11},...,10^{−2},10^{−1}\}$.
     * **Exponential Moving Average Parameters** (`betas`): One can tune the `betas = (beta1, beta2)` parameters as is typical for Adam(W).
-    * **Inverse Root Override and Multiplier** (`inv_root_override`, `exponent_multiplier`): In general, we have found that using `inv_root_override = 2` xor `exponent_multiplier = 1.82` works well in practice, particularly for models dominated by fully-connected layers, such as in ranking and recommendation models.
     * **Preconditioner Data Type** (`preconditioner_dtype`): For certain models, it is necessary to use higher precision to accumulate the Shampoo factor matrices and compute its eigendecomposition to obtain high enough numerical accuracy. In those cases, one can specify this as `torch.float64`. (Note that this will use more memory.)
     * **MTML Task Weights**: Task weights may need to be re-tuned as Distributed Shampoo will better exploit certain imbalances between different task losses.
 
 5. If enabling DDP Shampoo, you can tune for performance:
 
     * **Process Group Size** (`num_trainers_per_group`): For large-scale distributed jobs, this hyperparameter allows us to trade off computational and communication costs. Assuming the number of GPUs per node is 8, one should search for a value in $\{8,16,32,64\}$. This hyperparameter has no impact on model quality.
-    * **Quantized Communications** (`communication_dtype`): One can enable quantized communications by setting the `communication_dtype`. We have found that using `CommunicationDType.FP16` works well in practice (with `communicate_params = False`).
+    * **Quantized Communications** (`communication_dtype`): One can enable quantized communications by setting the `communication_dtype`. We have found that using `torch.float16` works well in practice (with `communicate_params = False`).
     * **Communicate Updated Parameters** (`communicate_params`): If one does not enable quantized communications, one can possibly obtain better performance by communicating the updated parameters by setting this to `True`.
 
 ## Commmon Questions

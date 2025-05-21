@@ -22,19 +22,21 @@ import torch
 from distributed_shampoo.distributed_shampoo import DistributedShampoo
 from distributed_shampoo.shampoo_types import (
     AdaGradGraftingConfig,
-    CommunicationDType,
     DDPShampooConfig,
     DefaultEigenvalueCorrectedShampooConfig,
     DefaultShampooConfig,
     DefaultSOAPConfig,
     PreconditionerConfig,
+    ShampooPreconditionerConfig,
 )
 from distributed_shampoo.tests.shampoo_test_utils import (
     compare_two_optimizers_on_weight_and_loss,
     construct_training_problem,
+    train_model,
 )
+from matrix_functions_types import DefaultEigendecompositionConfig
 
-from torch import distributed as dist, tensor
+from torch import distributed as dist, nn, tensor
 from torch.distributed.device_mesh import DeviceMesh
 from torch.distributed.tensor import DTensor
 from torch.distributed.tensor.placement_types import Replicate
@@ -59,38 +61,6 @@ class AbstractTest:
         @property
         @abc.abstractmethod
         def _device(self) -> torch.device: ...
-
-        @staticmethod
-        def _train_model(
-            optim_factory: Callable[
-                [ParamsT],
-                torch.optim.Optimizer,
-            ],
-            device: torch.device,
-            model_linear_layers_dims: tuple[int, ...] = (
-                PRECONDITIONER_DIM * 4,
-                PRECONDITIONER_DIM * 2,
-                1,
-            ),
-            model_dead_layer_dims: tuple[int, ...] | None = (
-                PRECONDITIONER_DIM,
-                PRECONDITIONER_DIM,
-            ),
-        ) -> tuple[torch.Tensor, torch.Tensor]:
-            model, loss, data, target = construct_training_problem(
-                model_linear_layers_dims=model_linear_layers_dims,
-                model_dead_layer_dims=model_dead_layer_dims,
-                device=device,
-                fill=0.01,
-            )
-            params = list(model.parameters())
-            optimizer = optim_factory(params)
-            for _ in range(5):
-                optimizer.zero_grad()
-                objective = loss(model(data), target)
-                objective.backward()
-                optimizer.step()
-            return params[0], objective.detach()
 
         def _init_distributed(self) -> None:
             if not dist.is_initialized():
@@ -125,9 +95,7 @@ class AbstractTest:
                 precondition_frequency=1,
                 start_preconditioning_step=2,
                 use_decoupled_weight_decay=True,
-                grafting_config=AdaGradGraftingConfig(
-                    epsilon=1e-8,
-                ),
+                grafting_config=AdaGradGraftingConfig(epsilon=1e-8),
                 distributed_config=distributed_config,
                 preconditioner_config=preconditioner_config,
             )
@@ -136,6 +104,9 @@ class AbstractTest:
             "preconditioner_config",
             (
                 DefaultShampooConfig,
+                ShampooPreconditionerConfig(
+                    amortized_computation_config=DefaultEigendecompositionConfig
+                ),
                 DefaultEigenvalueCorrectedShampooConfig,
                 DefaultSOAPConfig,
             ),
@@ -144,16 +115,16 @@ class AbstractTest:
             "communication_dtype, communicate_params, rtol, atol",
             (
                 # Expecting CommunicationDType.DEFAULT would have bitwise identical results (by setting rtol=atol=0.0).
-                (CommunicationDType.DEFAULT, False, 0.0, 0.0),
-                (CommunicationDType.DEFAULT, True, 0.0, 0.0),
+                (torch.float32, False, 0.0, 0.0),
+                (torch.float32, True, 0.0, 0.0),
                 # Using FP16 for distributed parameters prohibitively lowers precision.
                 (
-                    CommunicationDType.FP16,
+                    torch.float16,
                     False,
                     *default_tolerances(torch.float16),
                 ),
                 (
-                    CommunicationDType.BF16,
+                    torch.bfloat16,
                     False,
                     # BF16 requires 2x tolerances than the original bfloat16 tolerances.
                     *[2 * tol for tol in default_tolerances(torch.bfloat16)],
@@ -164,7 +135,7 @@ class AbstractTest:
         def test_losses(
             self,
             num_trainers_per_group: int,
-            communication_dtype: CommunicationDType,
+            communication_dtype: torch.dtype,
             communicate_params: bool,
             rtol: float,
             atol: float,
@@ -190,7 +161,7 @@ class AbstractTest:
                     PRECONDITIONER_DIM * 2,
                     1,
                 ),
-                model_dead_layer_dims=(PRECONDITIONER_DIM, PRECONDITIONER_DIM),
+                model_dead_layers_dims=(PRECONDITIONER_DIM, PRECONDITIONER_DIM),
                 device=self._device,
                 fill=0.01,
                 rtol=rtol,
@@ -200,25 +171,28 @@ class AbstractTest:
         def test_distributed_state_dict(self) -> None:
             self._init_distributed()
 
-            model, loss, data, target = construct_training_problem(
+            num_steps = 3
+            model, _, _, _, optimizer = train_model(
+                optim_factory=AbstractTest.ShampooDDPDistributorDeviceTest._shampoo_optim_factory(
+                    distributed_config=DDPShampooConfig()
+                ),
                 # Setting model_linear_layers_dims to creates an model with one linear layer with (PRECONDITIONER_DIM * 2)xPRECONDITIONER_DIM weight.
                 # Because Shampoo's max_preconditioner_dim = PRECONDITIONER_DIM, there will be two blocks; rank 0 has block 0 and rank 1 has block 1.
-                model_linear_layers_dims=(PRECONDITIONER_DIM * 2, PRECONDITIONER_DIM),
-                model_dead_layer_dims=None,
-                device=self._device,
-                fill=0.01,
+                model_factory=partial(
+                    construct_training_problem,
+                    model_linear_layers_dims=(
+                        PRECONDITIONER_DIM * 2,
+                        PRECONDITIONER_DIM,
+                    ),
+                    model_dead_layers_dims=None,
+                    device=self._device,
+                    fill=0.01,
+                ),
+                num_steps=num_steps,
             )
-            params = list(model.parameters())
-            optimizer = self._shampoo_optim_factory(
-                distributed_config=DDPShampooConfig()
-            )(params)
-            assert isinstance(optimizer, DistributedShampoo)
-            for _ in range(3):
-                optimizer.zero_grad()
-                objective = loss(model(data), target)
-                objective.backward()
-                optimizer.step()
 
+            assert isinstance(model, nn.Module)
+            assert isinstance(optimizer, DistributedShampoo)
             # Retrieve the distributed state dictionary of the first layer (i.e., the only layer) from the optimizer.
             distributed_state_dict = optimizer.distributed_state_dict(
                 key_to_param=model.named_parameters(), save_param_groups=False
@@ -226,7 +200,7 @@ class AbstractTest:
 
             # Define the expected distributed state dictionary for each rank.
             rank_to_expected_distributed_state_dict = {
-                1: {
+                0: {
                     '["block_1", "shampoo", "factor_matrices", 0]': DTensor.from_local(
                         local_tensor=tensor(
                             [
@@ -235,7 +209,7 @@ class AbstractTest:
                                 [0.0004, 0.0004, 0.0004],
                             ]
                         ),
-                        device_mesh=DeviceMesh(str(self._device), [1]),
+                        device_mesh=DeviceMesh(str(self._device), [0]),
                         placements=(Replicate(),),
                     ),
                     '["block_1", "shampoo", "factor_matrices", 1]': DTensor.from_local(
@@ -246,7 +220,7 @@ class AbstractTest:
                                 [0.0004, 0.0005, 0.0006],
                             ]
                         ),
-                        device_mesh=DeviceMesh(str(self._device), [1]),
+                        device_mesh=DeviceMesh(str(self._device), [0]),
                         placements=(Replicate(),),
                     ),
                     '["block_1", "shampoo", "inv_factor_matrices", 0]': DTensor.from_local(
@@ -257,7 +231,7 @@ class AbstractTest:
                                 [-31.4793, -31.5677, 68.4570],
                             ]
                         ),
-                        device_mesh=DeviceMesh(str(self._device), [1]),
+                        device_mesh=DeviceMesh(str(self._device), [0]),
                         placements=(Replicate(),),
                     ),
                     '["block_1", "shampoo", "inv_factor_matrices", 1]': DTensor.from_local(
@@ -268,7 +242,7 @@ class AbstractTest:
                                 [-28.3770, -37.7380, 52.6266],
                             ]
                         ),
-                        device_mesh=DeviceMesh(str(self._device), [1]),
+                        device_mesh=DeviceMesh(str(self._device), [0]),
                         placements=(Replicate(),),
                     ),
                     '["block_1", "adagrad"]': DTensor.from_local(
@@ -279,7 +253,7 @@ class AbstractTest:
                                 [7.0041e-05, 1.2452e-04, 1.9456e-04],
                             ]
                         ),
-                        device_mesh=DeviceMesh(str(self._device), [1]),
+                        device_mesh=DeviceMesh(str(self._device), [0]),
                         placements=(Replicate(),),
                     ),
                     '["block_1", "momentum"]': DTensor.from_local(
@@ -290,7 +264,7 @@ class AbstractTest:
                                 [1.6924, 1.9865, 2.2806],
                             ]
                         ),
-                        device_mesh=DeviceMesh(str(self._device), [1]),
+                        device_mesh=DeviceMesh(str(self._device), [0]),
                         placements=(Replicate(),),
                     ),
                     '["block_1", "filtered_grad"]': DTensor.from_local(
@@ -301,12 +275,11 @@ class AbstractTest:
                                 [0.0013, 0.0017, 0.0021],
                             ]
                         ),
-                        device_mesh=DeviceMesh(str(self._device), [1]),
+                        device_mesh=DeviceMesh(str(self._device), [0]),
                         placements=(Replicate(),),
                     ),
-                    '["step"]': tensor(3),
                 },
-                0: {
+                1: {
                     '["block_0", "shampoo", "factor_matrices", 0]': DTensor.from_local(
                         local_tensor=tensor(
                             [
@@ -315,7 +288,7 @@ class AbstractTest:
                                 [3.8911e-05, 3.8911e-05, 3.8911e-05],
                             ]
                         ),
-                        device_mesh=DeviceMesh(str(self._device), [0]),
+                        device_mesh=DeviceMesh(str(self._device), [1]),
                         placements=(Replicate(),),
                     ),
                     '["block_0", "shampoo", "factor_matrices", 1]': DTensor.from_local(
@@ -326,7 +299,7 @@ class AbstractTest:
                                 [0.0000e00, 4.6694e-05, 9.3387e-05],
                             ]
                         ),
-                        device_mesh=DeviceMesh(str(self._device), [0]),
+                        device_mesh=DeviceMesh(str(self._device), [1]),
                         placements=(Replicate(),),
                     ),
                     '["block_0", "shampoo", "inv_factor_matrices", 0]': DTensor.from_local(
@@ -337,7 +310,7 @@ class AbstractTest:
                                 [-30.1266, -30.1204, 69.8673],
                             ]
                         ),
-                        device_mesh=DeviceMesh(str(self._device), [0]),
+                        device_mesh=DeviceMesh(str(self._device), [1]),
                         placements=(Replicate(),),
                     ),
                     '["block_0", "shampoo", "inv_factor_matrices", 1]': DTensor.from_local(
@@ -348,7 +321,7 @@ class AbstractTest:
                                 [0.0000, -36.1519, 27.6963],
                             ]
                         ),
-                        device_mesh=DeviceMesh(str(self._device), [0]),
+                        device_mesh=DeviceMesh(str(self._device), [1]),
                         placements=(Replicate(),),
                     ),
                     '["block_0", "adagrad"]': DTensor.from_local(
@@ -359,7 +332,7 @@ class AbstractTest:
                                 [0.0000e00, 7.7823e-06, 3.1129e-05],
                             ]
                         ),
-                        device_mesh=DeviceMesh(str(self._device), [0]),
+                        device_mesh=DeviceMesh(str(self._device), [1]),
                         placements=(Replicate(),),
                     ),
                     '["block_0", "momentum"]': DTensor.from_local(
@@ -370,7 +343,7 @@ class AbstractTest:
                                 [0.0000, 1.5694, 2.3289],
                             ]
                         ),
-                        device_mesh=DeviceMesh(str(self._device), [0]),
+                        device_mesh=DeviceMesh(str(self._device), [1]),
                         placements=(Replicate(),),
                     ),
                     '["block_0", "filtered_grad"]': DTensor.from_local(
@@ -381,10 +354,9 @@ class AbstractTest:
                                 [0.0000, 0.0004, 0.0009],
                             ]
                         ),
-                        device_mesh=DeviceMesh(str(self._device), [0]),
+                        device_mesh=DeviceMesh(str(self._device), [1]),
                         placements=(Replicate(),),
                     ),
-                    '["step"]': tensor(3),
                 },
             }
 
@@ -396,6 +368,7 @@ class AbstractTest:
             self.assertEqual(
                 distributed_state_dict.keys(),
                 rank_to_expected_distributed_state_dict[dist.get_rank()].keys(),
+                msg=f"{distributed_state_dict.keys() - rank_to_expected_distributed_state_dict[dist.get_rank()].keys()=} {rank_to_expected_distributed_state_dict[dist.get_rank()].keys() - distributed_state_dict.keys()=}",
             )
 
             # Helper function to get the local tensor from a DTensor or return the tensor itself.
@@ -417,6 +390,84 @@ class AbstractTest:
                         rtol=2e-1,
                     )
 
+        @parametrize("communicate_params", (False, True))
+        def test_all_ranks_with_no_grads(self, communicate_params: bool) -> None:
+            self._init_distributed()
+
+            steps_with_gradients = 2
+            model, loss, data, target, optimizer = train_model(
+                optim_factory=AbstractTest.ShampooDDPDistributorDeviceTest._shampoo_optim_factory(
+                    distributed_config=DDPShampooConfig(
+                        communicate_params=communicate_params
+                    )
+                ),
+                # 4 * 2 blocks in total. Rank 0 and Rank 1 have 4 blocks each.
+                model_factory=partial(
+                    construct_training_problem,
+                    model_linear_layers_dims=(
+                        PRECONDITIONER_DIM * 4,
+                        PRECONDITIONER_DIM * 2,
+                    ),
+                    model_dead_layers_dims=None,
+                    device=self._device,
+                ),
+                num_steps=steps_with_gradients,
+            )
+            assert isinstance(model, nn.Module)
+
+            steps_without_gradients = 3
+            for _ in range(steps_without_gradients):
+                objective = loss(model(data), target)
+                objective.backward()
+
+                # Experiment setup: all ranks get no gradients.
+                optimizer.zero_grad()
+
+                optimizer.step()
+
+            assert isinstance(optimizer, DistributedShampoo)
+            # For each rank, no matter getting gradients or not, the step should be updated.
+            self.assertEqual(
+                optimizer.distributed_state_dict(key_to_param=model.named_parameters())[
+                    "state"
+                ]["scalar"]['["step"]'].item(),
+                steps_with_gradients + steps_without_gradients,
+            )
+
+        @parametrize("communicate_params", (False, True))
+        def test_some_ranks_with_no_grads_due_to_dead_layers(
+            self, communicate_params: bool
+        ) -> None:
+            self._init_distributed()
+
+            num_steps = 3
+            model, _, _, _, optimizer = train_model(
+                optim_factory=AbstractTest.ShampooDDPDistributorDeviceTest._shampoo_optim_factory(
+                    distributed_config=DDPShampooConfig(
+                        communicate_params=communicate_params
+                    )
+                ),
+                # Experiment setup: only two blocks in total, one rank gets one block with gradients and the other rank gets one block without gradients due to dead layer.
+                model_factory=partial(
+                    construct_training_problem,
+                    model_linear_layers_dims=(PRECONDITIONER_DIM, 1),
+                    model_dead_layers_dims=(PRECONDITIONER_DIM, 1),
+                    enable_learnable_scalar=False,
+                    device=self._device,
+                ),
+                num_steps=num_steps,
+            )
+            assert isinstance(model, nn.Module)
+
+            assert isinstance(optimizer, DistributedShampoo)
+            # For each rank, no matter getting gradients or not, the step should be updated.
+            self.assertEqual(
+                optimizer.distributed_state_dict(key_to_param=model.named_parameters())[
+                    "state"
+                ]["linear_layers.0.weight"]['["step"]'].item(),
+                num_steps,
+            )
+
         # This mock is used to catch the number of calls to Shampoo's step(), which happened after __init__().
         # If there is no blocked params, __init__() will raise and step() should not be called.
         # Otherwise, step() will be called.
@@ -434,34 +485,26 @@ class AbstractTest:
                     re.escape("Some workers have no parameters to work on."),
                 )
             ):
-                AbstractTest.ShampooDDPDistributorDeviceTest._train_model(
-                    self._shampoo_optim_factory(distributed_config=DDPShampooConfig()),
-                    device=self._device,
+                train_model(
+                    optim_factory=AbstractTest.ShampooDDPDistributorDeviceTest._shampoo_optim_factory(
+                        distributed_config=DDPShampooConfig()
+                    ),
                     # Setting model_linear_layers_dims to (PRECONDITIONER_DIM, 1) creates an model with one linear layer with PRECONDITIONER_DIMx1 weight.
                     # Because Shampoo's max_preconditioner_dim = PRECONDITIONER_DIM, there will be only one block.
                     # In the case of two trainers per group, there will be one trainer has no params to work on.
-                    model_linear_layers_dims=(PRECONDITIONER_DIM, 1),
-                    model_dead_layer_dims=None,
+                    model_factory=partial(
+                        construct_training_problem,
+                        model_linear_layers_dims=(PRECONDITIONER_DIM, 1),
+                        model_dead_layers_dims=None,
+                        enable_learnable_scalar=False,
+                        device=self._device,
+                    ),
                 )
 
             if has_blocked_params:
                 mock_step.assert_called()
             else:
                 mock_step.assert_not_called()
-
-        def test_unsupported_communication_dtype(self) -> None:
-            self._init_distributed()
-
-            with mock.patch.object(CommunicationDType, "__eq__", return_value=False):
-                self.assertRaisesRegex(
-                    NotImplementedError,
-                    re.escape(
-                        "Unsupported communication dtype: CommunicationDType.DEFAULT"
-                    ),
-                    AbstractTest.ShampooDDPDistributorDeviceTest._train_model,
-                    self._shampoo_optim_factory(distributed_config=DDPShampooConfig()),
-                    device=self._device,
-                )
 
 
 class ShampooDDPDistributorCPUTest(AbstractTest.ShampooDDPDistributorDeviceTest):

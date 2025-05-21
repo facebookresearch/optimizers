@@ -7,8 +7,9 @@ LICENSE file in the root directory of this source tree.
 
 """
 
-import enum
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, make_dataclass
+from inspect import signature
+from typing import Any
 
 import torch
 
@@ -64,15 +65,6 @@ PREVIOUS_GRAD_SELECTOR = "previous_grad_selector"
 SHAMPOO_PRECONDITIONER_LIST = "shampoo_preconditioner_list"
 
 
-###### ENUM CLASSES ######
-@enum.unique
-class CommunicationDType(enum.Enum):
-    DEFAULT = enum.auto()
-    FP16 = enum.auto()
-    BF16 = enum.auto()
-    FP32 = enum.auto()
-
-
 ###### ERROR CLASSES ######
 class PreconditionerValueError(ValueError):
     """ValueError for invalid values encountered during Preconditioner computation."""
@@ -89,7 +81,8 @@ class PreconditionerConfig(AbstractDataclass):
 
     """
 
-    amortized_computation_config: MatrixFunctionConfig  # type: ignore
+    # repr=False prevents __repr__() from accessing this field to avoid linter complaints
+    amortized_computation_config: MatrixFunctionConfig = field(repr=False)
     num_tolerated_failed_amortized_computations: int = 3
 
     def __post_init__(self) -> None:
@@ -106,48 +99,51 @@ class ShampooPreconditionerConfig(PreconditionerConfig):
     Attributes:
         amortized_computation_config (RootInvConfig | EigendecompositionConfig): Configuration for the inverse-root computation. (Default: DefaultEigenConfig)
         num_tolerated_failed_amortized_computations (int): Number of failed amortized computations to tolerate before raising an error. (Default: 3)
-        inverse_exponent_override (dict[int, dict[int, float]]): The inverse_exponent_override attribute is a dictionary that allows for customizing the inverse exponent used in the Shampoo preconditioner computation.
-            The keys of the dictionary represent the order of the tensor, and the values are dictionaries with dimension indices as keys and override values as values. All unspecified dimensions use a default exponent of 1/(2*o), where o is the order of the tensor. (Default: {})
+        inverse_exponent_override (dict[int, dict[int, float] | float]): The inverse_exponent_override attribute is a dictionary that allows for customizing the inverse exponent used in the Shampoo preconditioner computation.
+            The keys of the dictionary represent the order of the tensor, and the values are either dictionaries with dimension indices as keys and override values as values, or a single float value for all dimensions. All unspecified dimensions use a default exponent of 1/(2*max(o,1)), where o is the order of the tensor. (Default: {})
 
-            As an example, suppose inverse_exponent_override={2: {0: 0.5, 1: 0.2}, 3: {0: 0.0, 1: 0.25}}. In this case, all 1-D tensors will use the default exponent of 0.5 for preconditioning the first (and only) dimension. All 2-D tensors will be preconditioned with an exponent of 0.5 on the first dimension and 0.2 on the second dimension. All 3-D tensors will have the first dimension be preconditioned with an exponent of 0.5, the second dimension not preconditioned, and the third dimension preconditioned with the default exponent 0.1667.
+            As an example, suppose inverse_exponent_override={2: 0.2, 3: {0: 0.0, 1: 0.25}}. In this case, all 1-D tensors will use the default exponent of 0.5 for preconditioning the first (and only) dimension. All 2-D tensors will be preconditioned with an exponent of 0.2 on all dimensions. All 3-D tensors will have the first dimension be preconditioned with an exponent of 0.5, the second dimension not preconditioned, and the third dimension preconditioned with the default exponent 0.1667.
             A visualization of this example can be seen below:
             1-D:
                             +-------x-------+
                                     |
                                     |
-                            (^0.5), the default inverse exponent 1/(2*1)
+                            (^0.5), the default inverse exponent 1/(2*1) since inverse_exponent_override[1] is not specified
             2-D:
                             +-----------+
                             |           |
                             |           |
-                   (^0.2)---|           |
+                            |           |-----(^0.2), as specified by inverse_exponent_override[2]=0.2
                             |           |
                             |           |
                             +-----------+
                                   |
                                   |
-                                (^0.5)
+                                (^0.2), as specified by inverse_exponent_override[2]=0.2
             3-D:
                                +---------------+
                               /               /|
                              /               / |
                             +---------------+  |
                             |               |  |
-                            |               |  |
-                  (^0.25)---|               |  +
+                            |               | -|---(^0.25), as specified by inverse_exponent_override[3][1]=0.25
+                            |               |  +
                             |               | /
                             |               |/\
                             +---------------+  \
-                                    |          (^0.1667), the default inverse exponent 1/(2*3)
-                                    |
-                            no preconditioning
+                                    |          (^0.1667), the default inverse exponent 1/(2*3) since inverse_exponent_override[3][2] is not specified
+                                    |          
+                            no preconditioning since inverse_exponent_override[3][0]=0.0
+
 
     """
 
     amortized_computation_config: RootInvConfig | EigendecompositionConfig = field(
         default_factory=lambda: DefaultEigenConfig
     )
-    inverse_exponent_override: dict[int, dict[int, float]] = field(default_factory=dict)
+    inverse_exponent_override: dict[int, dict[int, float] | float] = field(
+        default_factory=dict
+    )
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -159,19 +155,33 @@ class ShampooPreconditionerConfig(PreconditionerConfig):
                 f"Invalid orders in {self.inverse_exponent_override=}: {non_positive_orders}. All orders must be >= 0."
             )
 
-        for order, dim_and_override in self.inverse_exponent_override.items():
-            if illegal_dimensions := [
-                dim for dim in dim_and_override if not (0 <= dim <= max(order - 1, 0))
-            ]:
-                raise ValueError(
-                    f"Invalid dimensions in {self.inverse_exponent_override[order]=}: {illegal_dimensions}. All dimensions must be within [0, {max(order - 1, 0)}]."
-                )
-            if non_positive_overrides := [
-                override for override in dim_and_override.values() if override < 0
-            ]:
-                raise ValueError(
-                    f"Invalid override value in {self.inverse_exponent_override[order]=}: {non_positive_overrides}. All overrides must be >= 0."
-                )
+        for (
+            order,
+            dim_override_or_universal_override,
+        ) in self.inverse_exponent_override.items():
+            if isinstance(dim_override_or_universal_override, dict):
+                if illegal_dimensions := [
+                    dim
+                    for dim in dim_override_or_universal_override
+                    if not (0 <= dim <= max(order - 1, 0))
+                ]:
+                    raise ValueError(
+                        f"Invalid dimensions in self.inverse_exponent_override[{order}]={self.inverse_exponent_override[order]}: {illegal_dimensions}. All dimensions must be within [0, {max(order - 1, 0)}]."
+                    )
+                if non_positive_overrides := [
+                    override
+                    for override in dim_override_or_universal_override.values()
+                    if override < 0
+                ]:
+                    raise ValueError(
+                        f"Invalid override value in self.inverse_exponent_override[{order}]={self.inverse_exponent_override[order]}: {non_positive_overrides}. All overrides must be >= 0."
+                    )
+            else:
+                assert isinstance(dim_override_or_universal_override, float)
+                if dim_override_or_universal_override < 0:
+                    raise ValueError(
+                        f"Invalid override value in self.inverse_exponent_override[{order}]={self.inverse_exponent_override[order]}: {dim_override_or_universal_override}. All overrides must be >= 0."
+                    )
 
 
 DefaultShampooConfig = ShampooPreconditionerConfig()
@@ -197,15 +207,15 @@ class EigenvalueCorrectedShampooPreconditionerConfig(PreconditionerConfig):
                             +-------x-------+
                                     |
                                     |
-                             no change basis
+                             no change basis, as specified by 0 in ignored_basis_change_dims[1]
             2-D:
-                                +-----------+
-                                |           |
-                                |           |
-             no change basis ---|           |
-                                |           |
-                                |           |
-                                +-----------+
+                            +-----------+
+                            |           |
+                            |           |
+                            |           |-----no change basis, as specified by 1 in ignored_basis_change_dims[2]
+                            |           |
+                            |           |
+                            +-----------+
             3-D:
                                +---------------+
                               /               /|
@@ -217,9 +227,9 @@ class EigenvalueCorrectedShampooPreconditionerConfig(PreconditionerConfig):
                             |               | /
                             |               |/\
                             +---------------+  \
-                                    |        no change basis
+                                    |        no change basis, as specified by 2 in ignored_basis_change_dims[3]
                                     |
-                             no change basis
+                             no change basis, as specified by 0 in ignored_basis_change_dims[3]
 
         inverse_exponent_override (dict[int, float]): The inverse_exponent_override attribute is a dictionary that allows for customizing the inverse exponent used in eigenvalue correction.
             The keys of the dictionary represent the order of the tensor, and the values are the exponent override values. For example, if we want to use a custom inverse exponent for 3-D tensors, we can set inverse_exponent_override as inverse_exponent_override={3: 0.25}.
@@ -318,7 +328,7 @@ class DDPShampooConfig(DistributedConfig):
     Enables distributed computation and optimizer states (like ZeRO-1) via DTensor for Shampoo.
 
     Attributes:
-        communication_dtype (CommunicationDType): Data type for communication between ranks. (Default: DEFAULT)
+        communication_dtype (torch.dtype): Data type for communication between ranks. (Default: torch.float32)
         num_trainers_per_group (int): Number of GPUs per distributed process group for distributed computation/memory.
             If num_trainers_per_group = -1 is used, then defaults to using the LOCAL_WORLD_SIZE. (Default: -1)
         communicate_params (bool): Flag for all-gathering updated params across multiple workers.
@@ -326,7 +336,7 @@ class DDPShampooConfig(DistributedConfig):
 
     """
 
-    communication_dtype: CommunicationDType = CommunicationDType.DEFAULT
+    communication_dtype: torch.dtype = torch.float32
     num_trainers_per_group: int = -1
     communicate_params: bool = False
 
@@ -356,7 +366,7 @@ class HSDPShampooConfig(FSDPShampooConfig, DDPShampooConfig):
         device_mesh (torch.distributed.device_mesh.DeviceMesh): A 2D device mesh that specifies the layout of the numbers of
             replicate and shard dimensions.
         param_to_metadata (dict[Parameter, FSDPParameterMetadata]): Dictionary mapping parameter to its metadata from HSDP.
-        communication_dtype (CommunicationDType): Data type for communication between ranks. (Default: DEFAULT)
+        communication_dtype (torch.dtype): Data type for communication between ranks. (Default: torch.float32)
         num_trainers_per_group (int): Number of GPUs per distributed process group for distributed computation/memory.
             If num_trainers_per_group = -1 is used, then defaults to using the number of workers in each replicated HSDP
             group. (Default: -1)
@@ -385,7 +395,7 @@ class HybridShardShampooConfig(FullyShardShampooConfig, DDPShampooConfig):
 
     Attributes:
         device_mesh (torch.distributed.device_mesh.DeviceMesh): Device mesh for Hybrid Shard.
-        communication_dtype (CommunicationDType): Data type for communication between ranks. (Default: DEFAULT)
+        communication_dtype (torch.dtype): Data type for communication between ranks. (Default: torch.float32)
         num_trainers_per_group (int): Number of GPUs per distributed process group for distributed computation/memory.
             If num_trainers_per_group = -1 is used, then defaults to using the number of workers in each replicated HSDP
             group. (Default: -1)
@@ -397,29 +407,30 @@ class HybridShardShampooConfig(FullyShardShampooConfig, DDPShampooConfig):
     device_mesh: DeviceMesh
 
 
-@dataclass
-class ShampooPT2CompileConfig:
+_ShampooPT2CompileConfigImpl: type[object] = make_dataclass(
+    "_ShampooPT2CompileConfigImpl",
+    [
+        (name, param.annotation, param.default)
+        for name, param in signature(torch.compile).parameters.items()
+        if name != "model"
+    ],
+    kw_only=True,
+)
+
+
+class ShampooPT2CompileConfig(
+    _ShampooPT2CompileConfigImpl  # type: ignore
+):
     """Configuration for Shampoo PT2 compilation.
 
     Enables Shampoo pytorch compilation with configure to speed up model training.
     For more details: https://pytorch.org/get-started/pytorch-2.0/
 
-    Attributes:
-        pytorch_compile_backend (str): The backend for PT2 compilation. More info about PT2 backends:
-            https://pytorch.org/docs/stable/torch.compiler.html (Default: inductor)
-        enable_shampoo_pt2_dynamic_shape (bool | None): Compile Shampoo in static, dynamic or auto-dynamic shape mode (Default: False).
-            - False: Use 'static' mode. Static mode assumes tensors in Shampoo will NOT change shapes. We recommend using this mode if
-                you expect parameters and gradients to change shapes only a very small number of times (e.g. <=5).
-            - True: Use 'dynamic' mode.  Dynamic mode assumes all tensors in Shampoo can change shapes during the run. In general, we do
-                not recommend using this mode, as it generates kernels that are not specialized to particular tensor shapes, and therefore
-                perform much slower.
-            - None: Use 'auto-dynamic' mode. Auto-dynamic mode assumes tensors in Shampoo are static, but will switch to dynamic mode if
-                some tensors change shapes. If PT2 recompiles excessively during your run, we recommend trying this mode to reduce recompilation overhead.
-
+    The fields under ShampooPT2CompileConfig are the same as the arguments of torch.compile except `model`.
     """
 
-    pytorch_compile_backend: str = "inductor"
-    enable_shampoo_pt2_dynamic_shape: bool | None = False
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
 
 
 @dataclass(init=False)

@@ -11,6 +11,7 @@ LICENSE file in the root directory of this source tree.
 
 import abc
 import copy
+import gc
 import re
 import unittest
 from dataclasses import dataclass
@@ -28,6 +29,7 @@ from distributed_shampoo.shampoo_types import (
     GraftingConfig,
     PreconditionerConfig,
     ShampooPreconditionerConfig,
+    ShampooPT2CompileConfig,
 )
 from matrix_functions_types import DefaultEigendecompositionConfig, EigenConfig
 from torch import nn
@@ -214,21 +216,33 @@ class DistributedShampooTest(unittest.TestCase):
 
         self.assertEqual(self._optimizer.step(closure=closure), 1.0)
 
-    def test_step_with_empty_grad_list(self) -> None:
-        # Because the grad_list is empty, after taking five steps, the internal step should be 0.
-        for _ in range(5):
-            self._optimizer.zero_grad()
-            self._optimizer.step()
+    def test_optimizer_zero_grad(self) -> None:
+        self._model[0].weight.grad = torch.ones_like(self._model[0].weight)
 
-        actual_step = self._optimizer.distributed_state_dict(
-            key_to_param=self._model.named_parameters(),
-            save_param_groups=True,
-        )["state"]["0.weight"]['["step"]']
-        torch.testing.assert_close(
-            actual_step,
-            torch.as_tensor(0),
-            rtol=0,
-            atol=0,
+        # Store the data pointer of the current gradient to check if it gets freed later.
+        grad_data_ptr = self._model[0].weight.grad.data_ptr()
+
+        self._optimizer.step()
+
+        # Call zero_grad with set_to_none=True to explicitly release gradient memory rather than just zeroing it out.
+        self._optimizer.zero_grad(set_to_none=True)
+
+        # Verify that the gradient has been set to None.
+        self.assertIsNone(self._model[0].weight.grad)
+
+        # Get all tensor objects currently tracked by the garbage collector.
+        all_alive_tensors = tuple(
+            obj
+            for obj in gc.get_objects()
+            # Using type(obj) here to prevent the garbage collector from including non-real tensors like FakeTensor.
+            if type(obj) in (torch.Tensor, nn.Parameter)
+        )
+
+        # Check that the stored gradient data pointer is not in the list of alive tensors, ensuring it was freed.
+        self.assertNotIn(
+            grad_data_ptr,
+            (t.data_ptr() for t in all_alive_tensors),
+            msg="Found gradients space is still not freed, check Shampoo code for properly free gradients pointers.",
         )
 
 
@@ -978,6 +992,7 @@ class DistributedShampooNoneGradTest(unittest.TestCase):
             max_preconditioner_dim=5,
             precondition_frequency=1,
             start_preconditioning_step=1,
+            shampoo_pt2_compile_config=ShampooPT2CompileConfig(backend="eager"),
             distributed_config=None,
             # Explicity set grafting_config=None to test the case that no grafting is used.
             grafting_config=None,

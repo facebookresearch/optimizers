@@ -10,20 +10,23 @@ LICENSE file in the root directory of this source tree.
 import heapq
 import operator
 from collections.abc import Callable, Iterator, Sequence
-from functools import partial, reduce
-from itertools import accumulate, chain, compress, pairwise
+from functools import cache, partial, reduce
+from itertools import accumulate, chain, compress, islice, pairwise
 from types import TracebackType
-from typing import Type, TypeVar
+from typing import TypeVar
 
 import torch
 from torch import Tensor
 
 
-def merge_small_dims(tensor_shape: Sequence[int], threshold: int) -> tuple[int, ...]:
+@cache
+def merge_small_dims(tensor_shape: tuple[int, ...], threshold: int) -> tuple[int, ...]:
     """Reshapes tensor by merging small dimensions.
 
+    Note: Shampoo will promote 0D tensor into an 1D tensor.
+
     Args:
-        tensor_shape (Sequence[int]): The shape of the tensor.
+        tensor_shape (tuple[int, ...]): The shape of the tensor.
         threshold (int): Threshold on the maximum size of each dimension.
 
     Returns:
@@ -35,7 +38,7 @@ def merge_small_dims(tensor_shape: Sequence[int], threshold: int) -> tuple[int, 
     # then add a 1 to the tensor shape.
     squeezed_tensor_shape = list(filter(lambda t: t != 1, tensor_shape)) or [1]
     new_tensor_shape = [squeezed_tensor_shape[0]]
-    for next_tensor_shape in squeezed_tensor_shape[1:]:
+    for next_tensor_shape in islice(squeezed_tensor_shape, 1, None):
         if (new_dimension := new_tensor_shape[-1] * next_tensor_shape) <= threshold:
             new_tensor_shape[-1] = new_dimension
         else:
@@ -63,16 +66,22 @@ def multi_dim_split(tensor: Tensor, split_size: int) -> tuple[Tensor, ...]:
     )
 
 
-CompressListType = TypeVar("CompressListType")
+_CompressListType = TypeVar("_CompressListType")
 
 
 def compress_list(
-    complete_list: Sequence[CompressListType], selector: Sequence[bool]
-) -> tuple[CompressListType, ...]:
+    complete_list: Sequence[_CompressListType], selector: Sequence[bool]
+) -> tuple[_CompressListType, ...]:
     """Compresses sequence based on selector.
 
     NOTE: Despite the name, this function can compress both lists and tuples, but will always return
     a tuple in order to ensure downstream compatibility.
+
+    Example:
+        complete_list = ['a', 'b', 'c', 'd'] and selector = [True, False, True, False]:
+        Result: ('a', 'c')
+
+        Only elements from complete_list where the corresponding selector is True are included.
 
     Args:
         complete_list (Sequence[CompressListType]): Complete tuple of candidates.
@@ -101,7 +110,13 @@ def get_dtype_size(dtype: torch.dtype) -> int:
 def generate_pairwise_indices(input_list: Sequence[int]) -> Iterator[tuple[int, int]]:
     """Generates accumulated pairwise indices for a given input list.
 
-    For example, if input_list = (1, 3, 2), then this will output [(0, 1), (1, 4), (4, 6)].
+    For example, if input_list = (1, 3, 2),
+        - First element (1) generates index range [0, 1)
+        - Second element (3) generates index range [1, 4)
+        - Third element (2) generates index range [4, 6)
+
+    then this will output [(0, 1), (1, 4), (4, 6)].
+
     This is useful for generating interval indices for iterating through a list given the
     number of blocks within each parameter.
 
@@ -116,7 +131,7 @@ def generate_pairwise_indices(input_list: Sequence[int]) -> Iterator[tuple[int, 
     return pairwise(accumulate(chain([0], input_list)))
 
 
-ParameterizeEnterExitContextType = TypeVar("ParameterizeEnterExitContextType")
+_ParameterizeEnterExitContextType = TypeVar("_ParameterizeEnterExitContextType")
 
 
 class ParameterizeEnterExitContext:
@@ -131,9 +146,9 @@ class ParameterizeEnterExitContext:
 
     def __init__(
         self,
-        input_with_enter_exit_context: ParameterizeEnterExitContextType,
-        enter_method_caller: Callable[[ParameterizeEnterExitContextType], None],
-        exit_method_caller: Callable[[ParameterizeEnterExitContextType], None],
+        input_with_enter_exit_context: _ParameterizeEnterExitContextType,
+        enter_method_caller: Callable[[_ParameterizeEnterExitContextType], None],
+        exit_method_caller: Callable[[_ParameterizeEnterExitContextType], None],
     ) -> None:
         self._enter_method: Callable[[], None] = partial(
             enter_method_caller, input_with_enter_exit_context
@@ -148,7 +163,7 @@ class ParameterizeEnterExitContext:
 
     def __exit__(
         self,
-        exc_type: Type[BaseException] | None,
+        exc_type: type[BaseException] | None,
         exc_val: BaseException | None,
         exc_tb: TracebackType | None,
     ) -> None:
@@ -180,6 +195,11 @@ def distribute_buffer_sizes(
     Example:
         Assuming ALIGNMENT_BYTES = 64, given buffer_sizes = [128, 64, 500, 256], group_size = 2
         -> buffer_size_ranks = [(128, 1), (64, 1), (512, 0), (256, 1)]
+
+        This means buffer at index 0 (size 128) is assigned to rank 1,
+        buffer at index 1 (size 64) is assigned to rank 1,
+        buffer at index 2 (size 512) is assigned to rank 0, and
+        buffer at index 3 (size 256) is assigned to rank 1.
     """
     ALIGNMENT_BYTES = (
         64  # necessary for determining buffer size, possibly hardware-dependent

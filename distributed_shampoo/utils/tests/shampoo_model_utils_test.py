@@ -12,9 +12,9 @@ from math import sqrt
 from typing import cast
 
 import torch
-import torch.nn as nn
 
 from distributed_shampoo.utils.shampoo_model_utils import CombinedLinear
+from torch import nn
 
 from torch.testing._internal.common_utils import (
     instantiate_parametrized_tests,

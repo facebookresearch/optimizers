@@ -9,14 +9,14 @@ LICENSE file in the root directory of this source tree.
 
 import logging
 from abc import ABC, abstractmethod
-from collections.abc import Mapping
+from collections.abc import Callable, Hashable, Mapping
 from dataclasses import asdict, dataclass
 from fractions import Fraction
 from functools import reduce
 
 from itertools import chain
 from operator import attrgetter
-from typing import Any, cast, Generic, TypeVar
+from typing import Any, cast, Generic, get_args, TypeVar
 
 import torch
 from distributed_shampoo.shampoo_types import (
@@ -25,7 +25,11 @@ from distributed_shampoo.shampoo_types import (
 )
 from distributed_shampoo.utils.shampoo_block_info import BlockInfo
 from distributed_shampoo.utils.shampoo_utils import compress_list, get_dtype_size
-from matrix_functions import matrix_eigendecomposition, matrix_inverse_root
+from matrix_functions import (
+    matrix_eigendecomposition,
+    matrix_inverse_root,
+    stabilize_and_pow_eigenvalues,
+)
 
 from matrix_functions_types import (
     EigendecompositionConfig,
@@ -131,6 +135,10 @@ class SGDPreconditionerList(PreconditionerList):
         return
 
 
+_SubStateValueType = TypeVar("_SubStateValueType")
+_StateValueType = dict[Hashable, _SubStateValueType]
+
+
 class AdagradPreconditionerList(PreconditionerList):
     """Adagrad / Adam / RMSprop preconditioners for a list of parameters.
 
@@ -146,7 +154,7 @@ class AdagradPreconditionerList(PreconditionerList):
 
     Args:
         block_list (tuple[Tensor, ...]): List of (blocks of) parameters.
-        state (Mapping[Tensor, Any]): Mapping containing optimizer state.
+        state (Mapping[Tensor, _StateValueType]): Mapping containing optimizer state.
         block_info_list (tuple[BlockInfo, ...]): List containing corresponding BlockInfo for each block/parameter in block_list.
             Note that this should have the same length as block_list.
         beta2 (float): Exponential moving average factor for Adam/RMSprop second moment state. If beta2 = 1., will use
@@ -159,8 +167,7 @@ class AdagradPreconditionerList(PreconditionerList):
     def __init__(
         self,
         block_list: tuple[Tensor, ...],
-        # type: ignore
-        state: Mapping[Tensor, Any],
+        state: Mapping[Tensor, _StateValueType],
         block_info_list: tuple[BlockInfo, ...],
         beta2: float = 1.0,
         epsilon: float = 1e-10,
@@ -281,8 +288,57 @@ class AdagradPreconditionerList(PreconditionerList):
 
 
 @dataclass
-class BaseShampooKroneckerFactors(OptimizerModule):
-    """Base class for Shampoo Kronecker factors.
+class BaseShampooKroneckerFactorsState(OptimizerModule):
+    """Base class for Shampoo Kronecker factors (wrapped).
+
+    Attributes:
+        factor_matrices (tuple[Tensor, ...]): A tuple of tensors representing the factor matrices.
+        factor_matrix_indices (tuple[str, ...]): A tuple of strings representing the indices of the factor matrices.
+    """
+
+    factor_matrices: tuple[Tensor, ...]
+    factor_matrix_indices: tuple[str, ...]
+
+    @classmethod
+    def from_block(cls, **kwargs: Any) -> "BaseShampooKroneckerFactorsState":
+        """
+        Creates a BaseShampooKroneckerFactorsState object for a given block.
+
+        Args:
+            block_info (BlockInfo): Information about the block, including methods to allocate tensors.
+            factor_matrix_dtype (torch.dtype): Data type for the factor matrices.
+            preconditioned_dims (tuple[int, ...]): Dimensions for which the factor matrices are preconditioned.
+
+        Returns:
+            kronecker_factors_state (BaseShampooKroneckerFactorsState): An instance of BaseShampooKroneckerFactorsState with initialized factor matrices and indices.
+        """
+        block_info: BlockInfo = kwargs["block_info"]
+        factor_matrix_dtype: torch.dtype = kwargs["factor_matrix_dtype"]
+        preconditioned_dims: tuple[int, ...] = kwargs["preconditioned_dims"]
+
+        return cls(
+            factor_matrices=tuple(
+                block_info.allocate_zeros_tensor(
+                    size=(dim, dim),
+                    dtype=factor_matrix_dtype,
+                    device=block_info.param.device,
+                )
+                for dim in preconditioned_dims
+            ),
+            factor_matrix_indices=tuple(
+                ".".join((*map(str, block_info.composable_block_ids), str(k)))
+                for k in range(len(preconditioned_dims))
+            ),
+        )
+
+    def __post_init__(self) -> None:
+        super().__init__()  # Add this because the synthesized __init__() does not call super().__init__().
+        assert len(self.factor_matrices) == len(self.factor_matrix_indices)
+
+
+@dataclass
+class BaseShampooKroneckerFactorsUnwrapped:
+    """Base class for Shampoo Kronecker factors (unwrapped).
 
     Attributes:
         factor_matrices (tuple[Tensor, ...]): A tuple of tensors representing the factor matrices.
@@ -293,12 +349,11 @@ class BaseShampooKroneckerFactors(OptimizerModule):
     factor_matrix_indices: tuple[str, ...]
 
     def __post_init__(self) -> None:
-        super().__init__()
         assert len(self.factor_matrices) == len(self.factor_matrix_indices)
 
 
 @dataclass(kw_only=True)
-class ShampooKroneckerFactorsState(BaseShampooKroneckerFactors):
+class RootInvShampooKroneckerFactorsState(BaseShampooKroneckerFactorsState):
     """Shampoo Kronecker factors (wrapped) for storing in the optimizer state.
 
     Attributes:
@@ -309,13 +364,51 @@ class ShampooKroneckerFactorsState(BaseShampooKroneckerFactors):
 
     inv_factor_matrices: tuple[Tensor, ...]
 
+    @classmethod
+    def from_block(cls, **kwargs: Any) -> "RootInvShampooKroneckerFactorsState":
+        """
+        Creates a RootInvShampooKroneckerFactorsState object for a given block.
+
+        Args:
+            block_info (BlockInfo): Information about the block, including methods to allocate tensors.
+            factor_matrix_dtype (torch.dtype): Data type for the factor matrices.
+            preconditioned_dims (tuple[int, ...]): Dimensions for which the factor matrices are preconditioned.
+            block_dtype (torch.dtype): Data type for the block.
+
+        Returns:
+            kronecker_factors_state (RootInvShampooKroneckerFactorsState): An instance of RootInvShampooKroneckerFactorsState with initialized inverse factor matrices.
+        """
+        block_info: BlockInfo = kwargs["block_info"]
+        factor_matrix_dtype: torch.dtype = kwargs["factor_matrix_dtype"]
+        preconditioned_dims: tuple[int, ...] = kwargs["preconditioned_dims"]
+        block_dtype: torch.dtype = kwargs["block_dtype"]
+
+        return cls(
+            **asdict(
+                BaseShampooKroneckerFactorsState.from_block(
+                    block_info=block_info,
+                    factor_matrix_dtype=factor_matrix_dtype,
+                    preconditioned_dims=preconditioned_dims,
+                )
+            ),
+            # Initialize inv_factor_matrices as identity matrices.
+            inv_factor_matrices=tuple(
+                block_info.allocate_eye_tensor(
+                    n=dim,
+                    dtype=block_dtype,
+                    device=block_info.param.device,
+                )
+                for dim in preconditioned_dims
+            ),
+        )
+
     def __post_init__(self) -> None:
         super().__post_init__()
         assert len(self.factor_matrices) == len(self.inv_factor_matrices)
 
 
 @dataclass(kw_only=True)
-class ShampooKroneckerFactorsList(BaseShampooKroneckerFactors):
+class RootInvShampooKroneckerFactorsUnwrapped(BaseShampooKroneckerFactorsUnwrapped):
     """Shampoo Kronecker factors (unwrapped) for operations during optimizer computation.
 
     Attributes:
@@ -326,13 +419,43 @@ class ShampooKroneckerFactorsList(BaseShampooKroneckerFactors):
 
     inv_factor_matrices: tuple[Tensor, ...]
 
+    @classmethod
+    def from_kronecker_factors_state(
+        cls,
+        unwrapped_tensor_getter: Callable[[Tensor], Tensor],
+        kronecker_factors_state: BaseShampooKroneckerFactorsState,
+    ) -> "RootInvShampooKroneckerFactorsUnwrapped":
+        """
+        Constructs a RootInvShampooKroneckerFactorsUnwrapped object from the given Kronecker factors state.
+
+        Args:
+            unwrapped_tensor_getter (Callable[[Tensor], Tensor]): A function to unwrap tensors.
+            kronecker_factors_state (BaseShampooKroneckerFactorsState): The state containing factor matrices and their indices.
+
+        Returns:
+            kronecker_factors_unwrapped (RootInvShampooKroneckerFactorsUnwrapped): An instance of RootInvShampooKroneckerFactorsUnwrapped.
+        """
+        assert isinstance(kronecker_factors_state, RootInvShampooKroneckerFactorsState)
+        return cls(
+            factor_matrices=tuple(
+                map(unwrapped_tensor_getter, kronecker_factors_state.factor_matrices)
+            ),
+            inv_factor_matrices=tuple(
+                map(
+                    unwrapped_tensor_getter,
+                    kronecker_factors_state.inv_factor_matrices,
+                )
+            ),
+            factor_matrix_indices=kronecker_factors_state.factor_matrix_indices,
+        )
+
     def __post_init__(self) -> None:
         super().__post_init__()
         assert len(self.factor_matrices) == len(self.inv_factor_matrices)
 
 
 @dataclass(kw_only=True)
-class EigendecomposedShampooKroneckerFactorsState(BaseShampooKroneckerFactors):
+class EigendecomposedShampooKroneckerFactorsState(BaseShampooKroneckerFactorsState):
     """Eigendecomposed Shampoo Kronecker factors (wrapped) for storing in the optimizer state.
 
     Attributes:
@@ -345,6 +468,53 @@ class EigendecomposedShampooKroneckerFactorsState(BaseShampooKroneckerFactors):
     factor_matrices_eigenvectors: tuple[Tensor, ...]
     factor_matrices_eigenvalues: tuple[Tensor, ...]
 
+    @classmethod
+    def from_block(cls, **kwargs: Any) -> "EigendecomposedShampooKroneckerFactorsState":
+        """
+        Creates an EigendecomposedShampooKroneckerFactorsState object for a given block.
+
+        Args:
+            block_info (BlockInfo): Information about the block, including methods to allocate tensors.
+            factor_matrix_dtype (torch.dtype): Data type for the factor matrices.
+            preconditioned_dims (tuple[int, ...]): Dimensions for which the factor matrices are preconditioned.
+            block_dtype (torch.dtype): Data type for the block.
+
+        Returns:
+            kronecker_factors_state (EigendecomposedShampooKroneckerFactorsState): An instance of EigendecomposedShampooKroneckerFactorsState.
+        """
+        block_info: BlockInfo = kwargs["block_info"]
+        factor_matrix_dtype: torch.dtype = kwargs["factor_matrix_dtype"]
+        preconditioned_dims: tuple[int, ...] = kwargs["preconditioned_dims"]
+        block_dtype: torch.dtype = kwargs["block_dtype"]
+
+        return cls(
+            **asdict(
+                BaseShampooKroneckerFactorsState.from_block(
+                    block_info=block_info,
+                    factor_matrix_dtype=factor_matrix_dtype,
+                    preconditioned_dims=preconditioned_dims,
+                )
+            ),
+            # Initialize factor_matrices_eigenvectors as identity matrices.
+            factor_matrices_eigenvectors=tuple(
+                block_info.allocate_eye_tensor(
+                    n=dim,
+                    dtype=block_dtype,
+                    device=block_info.param.device,
+                )
+                for dim in preconditioned_dims
+            ),
+            # Initialize factor_matrices_eigenvalues all ones.
+            factor_matrices_eigenvalues=tuple(
+                block_info.allocate_ones_tensor(
+                    size=(dim,),
+                    dtype=block_dtype,
+                    device=block_info.param.device,
+                )
+                for dim in preconditioned_dims
+            ),
+        )
+
     def __post_init__(self) -> None:
         super().__post_init__()
         assert (
@@ -355,7 +525,9 @@ class EigendecomposedShampooKroneckerFactorsState(BaseShampooKroneckerFactors):
 
 
 @dataclass(kw_only=True)
-class EigendecomposedShampooKroneckerFactorsList(BaseShampooKroneckerFactors):
+class EigendecomposedShampooKroneckerFactorsUnwrapped(
+    BaseShampooKroneckerFactorsUnwrapped
+):
     """Eigendecomposed Shampoo Kronecker factors (unwrapped) for operations during optimizer computation.
 
     Attributes:
@@ -368,6 +540,44 @@ class EigendecomposedShampooKroneckerFactorsList(BaseShampooKroneckerFactors):
     factor_matrices_eigenvectors: tuple[Tensor, ...]
     factor_matrices_eigenvalues: tuple[Tensor, ...]
 
+    @classmethod
+    def from_kronecker_factors_state(
+        cls,
+        unwrapped_tensor_getter: Callable[[Tensor], Tensor],
+        kronecker_factors_state: BaseShampooKroneckerFactorsState,
+    ) -> "EigendecomposedShampooKroneckerFactorsUnwrapped":
+        """
+        Constructs an EigendecomposedShampooKroneckerFactorsUnwrapped object from the given Kronecker factors state.
+
+        Args:
+            unwrapped_tensor_getter (Callable[[Tensor], Tensor]): A function to unwrap tensors.
+            kronecker_factors_state (BaseShampooKroneckerFactorsState): The state containing factor matrices and their indices.
+
+        Returns:
+            kronecker_factors_unwrapped (EigendecomposedShampooKroneckerFactorsUnwrapped): An instance of EigendecomposedShampooKroneckerFactorsUnwrapped.
+        """
+        assert isinstance(
+            kronecker_factors_state, EigendecomposedShampooKroneckerFactorsState
+        )
+        return cls(
+            factor_matrices=tuple(
+                map(unwrapped_tensor_getter, kronecker_factors_state.factor_matrices)
+            ),
+            factor_matrices_eigenvectors=tuple(
+                map(
+                    unwrapped_tensor_getter,
+                    kronecker_factors_state.factor_matrices_eigenvectors,
+                )
+            ),
+            factor_matrices_eigenvalues=tuple(
+                map(
+                    unwrapped_tensor_getter,
+                    kronecker_factors_state.factor_matrices_eigenvalues,
+                )
+            ),
+            factor_matrix_indices=kronecker_factors_state.factor_matrix_indices,
+        )
+
     def __post_init__(self) -> None:
         super().__post_init__()
         assert (
@@ -378,7 +588,7 @@ class EigendecomposedShampooKroneckerFactorsList(BaseShampooKroneckerFactors):
 
 
 @dataclass(kw_only=True)
-class EigenvalueCorrectedShampooKroneckerFactorsState(BaseShampooKroneckerFactors):
+class EigenvalueCorrectedShampooKroneckerFactorsState(BaseShampooKroneckerFactorsState):
     """Eigenvalue-corrected Shampoo Kronecker factors (wrapped) for storing in the optimizer state.
 
     Attributes:
@@ -391,13 +601,63 @@ class EigenvalueCorrectedShampooKroneckerFactorsState(BaseShampooKroneckerFactor
     factor_matrices_eigenvectors: tuple[Tensor, ...]
     corrected_eigenvalues: Tensor
 
+    @classmethod
+    def from_block(
+        cls, **kwargs: Any
+    ) -> "EigenvalueCorrectedShampooKroneckerFactorsState":
+        """
+        Creates an EigenvalueCorrectedShampooKroneckerFactorsState object for a given block.
+
+        Args:
+            block_info (BlockInfo): Information about the block, including methods to allocate tensors.
+            factor_matrix_dtype (torch.dtype): Data type for the factor matrices.
+            preconditioned_dims (tuple[int, ...]): Dimensions for which the factor matrices are preconditioned.
+            block_dtype (torch.dtype): Data type for the block.
+            dims (tuple[int, ...]): Dimensions of the block.
+
+        Returns:
+            kronecker_factors_state (EigenvalueCorrectedShampooKroneckerFactorsState): An instance of EigenvalueCorrectedShampooKroneckerFactorsState.
+        """
+        block_info: BlockInfo = kwargs["block_info"]
+        factor_matrix_dtype: torch.dtype = kwargs["factor_matrix_dtype"]
+        preconditioned_dims: tuple[int, ...] = kwargs["preconditioned_dims"]
+        block_dtype: torch.dtype = kwargs["block_dtype"]
+        dims: tuple[int, ...] = kwargs["dims"]
+
+        return EigenvalueCorrectedShampooKroneckerFactorsState(
+            **asdict(
+                BaseShampooKroneckerFactorsState.from_block(
+                    block_info=block_info,
+                    factor_matrix_dtype=factor_matrix_dtype,
+                    preconditioned_dims=preconditioned_dims,
+                )
+            ),
+            # Initialize factor_matrices_eigenvectors as identity matrices.
+            factor_matrices_eigenvectors=tuple(
+                block_info.allocate_eye_tensor(
+                    n=dim,
+                    dtype=block_dtype,
+                    device=block_info.param.device,
+                )
+                for dim in preconditioned_dims
+            ),
+            corrected_eigenvalues=block_info.allocate_zeros_tensor(
+                # Note that the corrected eigenvalues are not affected by the preconditioned_dims.
+                size=tuple(dims),
+                dtype=block_dtype,
+                device=block_info.param.device,
+            ),
+        )
+
     def __post_init__(self) -> None:
         super().__post_init__()
         assert len(self.factor_matrices) == len(self.factor_matrices_eigenvectors)
 
 
 @dataclass(kw_only=True)
-class EigenvalueCorrectedShampooKroneckerFactorsList(BaseShampooKroneckerFactors):
+class EigenvalueCorrectedShampooKroneckerFactorsUnwrapped(
+    BaseShampooKroneckerFactorsUnwrapped
+):
     """Eigenvalue-corrected Shampoo Kronecker factors (unwrapped) for operations during optimizer computation.
 
     Attributes:
@@ -410,28 +670,63 @@ class EigenvalueCorrectedShampooKroneckerFactorsList(BaseShampooKroneckerFactors
     factor_matrices_eigenvectors: tuple[Tensor, ...]
     corrected_eigenvalues: Tensor
 
+    @classmethod
+    def from_kronecker_factors_state(
+        cls,
+        unwrapped_tensor_getter: Callable[[Tensor], Tensor],
+        kronecker_factors_state: BaseShampooKroneckerFactorsState,
+    ) -> "EigenvalueCorrectedShampooKroneckerFactorsUnwrapped":
+        """
+        Constructs an EigenvalueCorrectedShampooKroneckerFactorsUnwrapped object from the given Kronecker factors state.
+
+        Args:
+            unwrapped_tensor_getter (Callable[[Tensor], Tensor]): A function to unwrap tensors.
+            kronecker_factors_state (BaseShampooKroneckerFactorsState): The state containing factor matrices and their indices.
+
+        Returns:
+            kronecker_factors_unwrapped (EigenvalueCorrectedShampooKroneckerFactorsUnwrapped): An instance of EigenvalueCorrectedShampooKroneckerFactorsUnwrapped.
+        """
+        assert isinstance(
+            kronecker_factors_state, EigenvalueCorrectedShampooKroneckerFactorsState
+        )
+        return cls(
+            factor_matrices=tuple(
+                map(unwrapped_tensor_getter, kronecker_factors_state.factor_matrices)
+            ),
+            factor_matrices_eigenvectors=tuple(
+                map(
+                    unwrapped_tensor_getter,
+                    kronecker_factors_state.factor_matrices_eigenvectors,
+                )
+            ),
+            corrected_eigenvalues=unwrapped_tensor_getter(
+                kronecker_factors_state.corrected_eigenvalues
+            ),
+            factor_matrix_indices=kronecker_factors_state.factor_matrix_indices,
+        )
+
     def __post_init__(self) -> None:
         super().__post_init__()
         assert len(self.factor_matrices) == len(self.factor_matrices_eigenvectors)
 
 
-ShampooKroneckerFactorsStateType = TypeVar(
-    "ShampooKroneckerFactorsStateType",
-    ShampooKroneckerFactorsState,
+_ShampooKroneckerFactorsStateType = TypeVar(
+    "_ShampooKroneckerFactorsStateType",
+    RootInvShampooKroneckerFactorsState,
     EigendecomposedShampooKroneckerFactorsState,
     EigenvalueCorrectedShampooKroneckerFactorsState,
 )
-ShampooKroneckerFactorsListType = TypeVar(
-    "ShampooKroneckerFactorsListType",
-    ShampooKroneckerFactorsList,
-    EigendecomposedShampooKroneckerFactorsList,
-    EigenvalueCorrectedShampooKroneckerFactorsList,
+_ShampooKroneckerFactorsUnwrappedType = TypeVar(
+    "_ShampooKroneckerFactorsUnwrappedType",
+    RootInvShampooKroneckerFactorsUnwrapped,
+    EigendecomposedShampooKroneckerFactorsUnwrapped,
+    EigenvalueCorrectedShampooKroneckerFactorsUnwrapped,
 )
 
 
 class BaseShampooPreconditionerList(
     PreconditionerList,
-    Generic[ShampooKroneckerFactorsStateType, ShampooKroneckerFactorsListType],
+    Generic[_ShampooKroneckerFactorsStateType, _ShampooKroneckerFactorsUnwrappedType],
 ):
     """Base class for Shampoo preconditioners.
 
@@ -439,7 +734,7 @@ class BaseShampooPreconditionerList(
 
     Args:
         block_list (tuple[Tensor, ...]): List of (blocks of) parameters.
-        state (Mapping[Tensor, Any]): Mapping containing optimizer state.
+        state (Mapping[Tensor, _StateValueType]): Mapping containing optimizer state.
         block_info_list (tuple[BlockInfo, ...]): List containing corresponding BlockInfo for each block/parameter in block_list.
             Note that this should have the same length as block_list.
         preconditioner_config (PreconditionerConfig): Configuration for preconditioner computation.
@@ -454,8 +749,7 @@ class BaseShampooPreconditionerList(
     def __init__(
         self,
         block_list: tuple[Tensor, ...],
-        # type: ignore
-        state: Mapping[Tensor, Any],
+        state: Mapping[Tensor, _StateValueType],
         block_info_list: tuple[BlockInfo, ...],
         preconditioner_config: PreconditionerConfig,
         beta2: float = 1.0,
@@ -486,7 +780,7 @@ class BaseShampooPreconditionerList(
         )
 
         # Create the Kronecker factors.
-        kronecker_factors_list: list[ShampooKroneckerFactorsListType] = (
+        kronecker_factors_unwrapped: list[_ShampooKroneckerFactorsUnwrappedType] = (
             self._create_kronecker_factors_state(
                 block_list=block_list,
                 state=state,
@@ -498,7 +792,7 @@ class BaseShampooPreconditionerList(
         # Initialize state lists.
         self._initialize_state_lists(
             block_list=block_list,
-            kronecker_factors_list=kronecker_factors_list,
+            kronecker_factors_unwrapped=kronecker_factors_unwrapped,
             preconditioned_dims_list=preconditioned_dims_list,
             preconditioned_dims_selector_list=preconditioned_dims_selector_list,
         )
@@ -518,94 +812,19 @@ class BaseShampooPreconditionerList(
         """
         ...
 
-    def _create_base_kronecker_factors(
-        self,
-        block_info: BlockInfo,
-        preconditioned_dims: tuple[int, ...],
-    ) -> BaseShampooKroneckerFactors:
-        """
-        Creates a BaseShampooKroneckerFactor object for a given block.
-
-        Args:
-            block_info (BlockInfo): The BlockInfo object containing information about the block.
-            preconditioned_dims (tuple[int, ...]): The preconditioned dimensions of the block.
-
-        Returns:
-            kronecker_factors_state (BaseShampooKroneckerFactors): An object containing the Kronecker factors for the block.
-        """
-        factor_matrices = tuple(
-            block_info.allocate_zeros_tensor(
-                size=(dim, dim),
-                dtype=self._factor_matrix_dtype,
-                device=block_info.param.device,
-            )
-            for dim in preconditioned_dims
-        )
-
-        param_index, block_index = block_info.composable_block_ids
-        factor_matrix_indices = tuple(
-            ".".join((str(param_index), str(block_index), str(k)))
-            for k in range(len(preconditioned_dims))
-        )
-        return BaseShampooKroneckerFactors(
-            factor_matrices=factor_matrices,
-            factor_matrix_indices=factor_matrix_indices,
-        )
-
-    @abstractmethod
-    def _create_kronecker_factors_state_for_block(
-        self,
-        block: Tensor,
-        block_info: BlockInfo,
-        dims: torch.Size,
-        preconditioned_dims: tuple[int, ...],
-    ) -> ShampooKroneckerFactorsStateType:
-        """
-        Creates a Kronecker factors state object for a given block.
-
-        Args:
-            block (Tensor): The block of the parameter.
-            block_info (BlockInfo): The BlockInfo object containing information about the block.
-            dims (torch.Size): The dimensions of the block.
-            preconditioned_dims (tuple[int, ...]): The preconditioned dimensions of the block.
-
-        Returns:
-            kronecker_factors_state (ShampooKroneckerFactorsStateType): An object containing the Kronecker factors for the block.
-        """
-        ...
-
-    @abstractmethod
-    def _create_kronecker_factors_list(
-        self,
-        kronecker_factors_state: ShampooKroneckerFactorsStateType,
-        block_info: BlockInfo,
-    ) -> ShampooKroneckerFactorsListType:
-        """
-        Creates a ShampooKroneckerFactorsList object from the given ShampooKroneckerFactorsState.
-
-        Args:
-            kronecker_factors_state (ShampooKroneckerFactorsStateType): The state containing the Kronecker factors.
-            block_info (BlockInfo): The BlockInfo object containing information about the block.
-
-        Returns:
-            kronecker_factors_list (ShampooKroneckerFactorsListType): A list of ShampooKroneckerFactors objects.
-        """
-        ...
-
     def _create_kronecker_factors_state(
         self,
         block_list: tuple[Tensor, ...],
-        # type: ignore
-        state: Mapping[Tensor, Any],
+        state: Mapping[Tensor, _StateValueType],
         block_info_list: tuple[BlockInfo, ...],
         preconditioned_dims_list: tuple[tuple[int, ...], ...],
-    ) -> list[ShampooKroneckerFactorsListType]:
+    ) -> list[_ShampooKroneckerFactorsUnwrappedType]:
         # Instantiate (blocked) Kronecker factors and construct list of Kronecker factors.
         # NOTE: We need to instantiate the Kronecker factor states within the optimizer's state dictionary,
-        # and do not explicitly store them as ShampooPreconditionerList attributes here.
-        # This is because the optimizer state is defined per-parameter, but ShampooPreconditionerList is defined
+        # and do not explicitly store them as RootInvShampooPreconditionerList attributes here.
+        # This is because the optimizer state is defined per-parameter, but RootInvShampooPreconditionerList is defined
         # across each parameter group (which includes multiple parameters).
-        kronecker_factors_list = []
+        kronecker_factors_unwrapped = []
         for block, block_info, dims, preconditioned_dims in zip(
             block_list,
             block_info_list,
@@ -617,21 +836,29 @@ class BaseShampooPreconditionerList(
             if block_index not in state[block_info.param]:
                 state[block_info.param][block_index] = {}
             block_state = state[block_info.param][block_index]
-            block_state[SHAMPOO] = self._create_kronecker_factors_state_for_block(
-                block=block,
-                block_info=block_info,
-                dims=dims,
-                preconditioned_dims=preconditioned_dims,
+            # NOTE: Use types.get_original_bases() instead of self.__orig_bases__ when downstream applications are Python 3.12+ available
+            kronecker_factors_state_type, kronecker_factors_state_unwrapped_type = (
+                get_args(attrgetter("__orig_bases__")(self)[0])
             )
-            kronecker_factors_list.append(
-                self._create_kronecker_factors_list(block_state[SHAMPOO], block_info)
+            block_state[SHAMPOO] = kronecker_factors_state_type.from_block(
+                block_info=block_info,
+                factor_matrix_dtype=self._factor_matrix_dtype,
+                preconditioned_dims=preconditioned_dims,
+                block_dtype=block.dtype,
+                dims=dims,
+            )
+            kronecker_factors_unwrapped.append(
+                kronecker_factors_state_unwrapped_type.from_kronecker_factors_state(
+                    kronecker_factors_state=block_state[SHAMPOO],
+                    unwrapped_tensor_getter=block_info.get_tensor,
+                )
             )
 
             logger.info(
                 f"Instantiated Shampoo Preconditioner {str(param_index) + '.' + str(block_index)} for Parameter {param_index} ({block_info.param.shape}), Block {block_index} ({block.shape})."
             )
 
-        return kronecker_factors_list
+        return kronecker_factors_unwrapped
 
     @abstractmethod
     def _get_inverse_roots_from_override(
@@ -750,15 +977,15 @@ class BaseShampooPreconditionerList(
     def _initialize_state_lists(
         self,
         block_list: tuple[Tensor, ...],
-        kronecker_factors_list: list[ShampooKroneckerFactorsListType],
+        kronecker_factors_unwrapped: list[_ShampooKroneckerFactorsUnwrappedType],
         preconditioned_dims_list: tuple[tuple[int, ...], ...],
         preconditioned_dims_selector_list: tuple[tuple[bool, ...], ...],
     ) -> None:
         # Initialize local lists.
-        self._local_kronecker_factors_list: tuple[
-            ShampooKroneckerFactorsListType,
+        self._local_kronecker_factors_unwrapped: tuple[
+            _ShampooKroneckerFactorsUnwrappedType,
             ...,
-        ] = tuple(kronecker_factors_list)
+        ] = tuple(kronecker_factors_unwrapped)
         self._local_order_list: tuple[int, ...] = tuple(
             block.dim() for block in block_list
         )
@@ -768,7 +995,7 @@ class BaseShampooPreconditionerList(
             for preconditioned_dims_selector in preconditioned_dims_selector_list
         )
         self._local_failed_amortized_computation_counter_list: list[int] = [0] * len(
-            self._local_kronecker_factors_list
+            self._local_kronecker_factors_unwrapped
         )
         self._local_preconditioned_dims_selector_list: tuple[tuple[bool, ...], ...] = (
             preconditioned_dims_selector_list
@@ -780,10 +1007,10 @@ class BaseShampooPreconditionerList(
         self._masked_failed_amortized_computation_counter_list: list[int] = (
             self._local_failed_amortized_computation_counter_list
         )
-        self._masked_kronecker_factors_list: tuple[
-            ShampooKroneckerFactorsListType,
+        self._masked_kronecker_factors_unwrapped: tuple[
+            _ShampooKroneckerFactorsUnwrappedType,
             ...,
-        ] = self._local_kronecker_factors_list
+        ] = self._local_kronecker_factors_unwrapped
         self._masked_preconditioned_dims_selector_list: tuple[tuple[bool, ...], ...] = (
             self._local_preconditioned_dims_selector_list
         )
@@ -807,25 +1034,22 @@ class BaseShampooPreconditionerList(
         with profiler.record_function(
             f"## {self.__class__.__name__}:{self.compress_preconditioner_list.__name__} ##"
         ):
-            self._masked_order_list: tuple[int, ...] = compress_list(  # type: ignore[no-redef]
+            self._masked_order_list = compress_list(
                 self._local_order_list, local_grad_selector
             )
-            self._masked_roots_list: tuple[tuple[float, ...], ...] = compress_list(  # type: ignore[no-redef]
+            self._masked_roots_list = compress_list(
                 self._local_roots_list, local_grad_selector
             )
-            self._masked_failed_amortized_computation_counter_list: list[int] = (  # type: ignore[no-redef]
-                list(
-                    compress_list(
-                        self._local_failed_amortized_computation_counter_list,
-                        local_grad_selector,
-                    )
+            self._masked_failed_amortized_computation_counter_list = list(
+                compress_list(
+                    self._local_failed_amortized_computation_counter_list,
+                    local_grad_selector,
                 )
             )
-            self._masked_kronecker_factors_list: tuple[  # type: ignore[no-redef]
-                ShampooKroneckerFactorsListType,
-                ...,
-            ] = compress_list(self._local_kronecker_factors_list, local_grad_selector)
-            self._masked_preconditioned_dims_selector_list = compress_list(  # type: ignore[no-redef]
+            self._masked_kronecker_factors_unwrapped = compress_list(
+                self._local_kronecker_factors_unwrapped, local_grad_selector
+            )
+            self._masked_preconditioned_dims_selector_list = compress_list(
                 self._local_preconditioned_dims_selector_list, local_grad_selector
             )
 
@@ -840,7 +1064,7 @@ class BaseShampooPreconditionerList(
                 masked_grad_list,
                 self._masked_order_list,
                 self._masked_preconditioned_dims_selector_list,
-                self._masked_kronecker_factors_list,
+                self._masked_kronecker_factors_unwrapped,
                 strict=True,
             ):
                 # Because of preconditioned_dims_selector, we may have no factor matrices to update.
@@ -899,64 +1123,64 @@ class BaseShampooPreconditionerList(
         )
 
 
-class ShampooPreconditionerList(
+_ClassicShampooKroneckerFactorsStateType = TypeVar(
+    "_ClassicShampooKroneckerFactorsStateType",
+    RootInvShampooKroneckerFactorsState,
+    EigendecomposedShampooKroneckerFactorsState,
+)
+
+_ClassicShampooKroneckerFactorsUnwrappedType = TypeVar(
+    "_ClassicShampooKroneckerFactorsUnwrappedType",
+    RootInvShampooKroneckerFactorsUnwrapped,
+    EigendecomposedShampooKroneckerFactorsUnwrapped,
+)
+
+
+class ClassicShampooPreconditionerList(
     BaseShampooPreconditionerList[
-        ShampooKroneckerFactorsState, ShampooKroneckerFactorsList
+        _ClassicShampooKroneckerFactorsStateType,
+        _ClassicShampooKroneckerFactorsUnwrappedType,
     ]
 ):
-    """Shampoo preconditioners for list of parameters."""
+    """Base class for Shampoo preconditioners that rely on ShampooPreconditionerConfig.
 
-    def _create_kronecker_factors_state_for_block(
-        self,
-        block: Tensor,
-        block_info: BlockInfo,
-        dims: torch.Size,
-        preconditioned_dims: tuple[int, ...],
-    ) -> ShampooKroneckerFactorsState:
-        return ShampooKroneckerFactorsState(
-            **asdict(
-                self._create_base_kronecker_factors(
-                    block_info=block_info, preconditioned_dims=preconditioned_dims
-                )
-            ),
-            # Initialize inv_factor_matrices as identity matrices.
-            inv_factor_matrices=tuple(
-                block_info.allocate_eye_tensor(
-                    n=dim,
-                    dtype=block.dtype,
-                    device=block_info.param.device,
-                )
-                for dim in preconditioned_dims
-            ),
-        )
+    This class factors out common implementations for Shampoo preconditioners that use
+    ShampooPreconditionerConfig to determine inverse exponent overrides and preconditioned dimensions.
+    It provides methods to retrieve inverse exponent overrides based on dimension and order,
+    and to create preconditioned dimension selectors.
+
+    """
+
+    def _get_inverse_exponent(self, dimension: int, order: int) -> float:
+        """
+        Retrieves the inverse exponent override based on the dimension and order.
+
+        Args:
+            dimension (int): The dimension for which the inverse exponent override is needed.
+            order (int): The order of the preconditioner.
+
+        Returns:
+            float: The inverse exponent override value for the given dimension and order.
+        """
+        inverse_exponent_override_on_order: dict[int, float] | float = attrgetter(
+            INVERSE_EXPONENT_OVERRIDE
+        )(self._preconditioner_config).get(order, {})
+        if isinstance(inverse_exponent_override_on_order, dict):
+            return inverse_exponent_override_on_order.get(
+                dimension, 1 / (2 * max(order, 1))
+            )
+        assert isinstance(
+            inverse_exponent_override_on_order, float
+        ), f"Expected inverse_exponent_override_on_order to be a float or a dict, but got {type(inverse_exponent_override_on_order)} instead."
+        return inverse_exponent_override_on_order
 
     def _create_preconditioned_dims_selector(
         self, dims: torch.Size
     ) -> tuple[bool, ...]:
         return tuple(
-            attrgetter(INVERSE_EXPONENT_OVERRIDE)(self._preconditioner_config)
-            .get((order := len(dims)), {})
-            .get(d, 1 / (2 * order))
-            != 0.0
+            self._get_inverse_exponent(dimension=d, order=len(dims)) != 0.0
             # Traverse through each dim of a block.
             for d in range(len(dims))
-        )
-
-    def _create_kronecker_factors_list(
-        self,
-        kronecker_factors_state: ShampooKroneckerFactorsState,
-        block_info: BlockInfo,
-    ) -> ShampooKroneckerFactorsList:
-        return ShampooKroneckerFactorsList(
-            factor_matrices=tuple(
-                block_info.get_tensor(t)
-                for t in kronecker_factors_state.factor_matrices
-            ),
-            inv_factor_matrices=tuple(
-                block_info.get_tensor(t)
-                for t in kronecker_factors_state.inv_factor_matrices
-            ),
-            factor_matrix_indices=kronecker_factors_state.factor_matrix_indices,
         )
 
     def _get_inverse_roots_from_override(
@@ -965,13 +1189,21 @@ class ShampooPreconditionerList(
         return tuple(
             # Compute the inverse root, 1 / inverse_exponent{_override}, accordingly for each required dim.
             1
-            / attrgetter(INVERSE_EXPONENT_OVERRIDE)(self._preconditioner_config)
-            .get((order := len(preconditioned_dims_selector)), {})
-            .get(k, 1 / (2 * order))
+            / self._get_inverse_exponent(
+                dimension=k, order=len(preconditioned_dims_selector)
+            )
             # Traverse through each dim of a block that requires precondition.
             for k, should_precondition in enumerate(preconditioned_dims_selector)
             if should_precondition
         )
+
+
+class RootInvShampooPreconditionerList(
+    ClassicShampooPreconditionerList[
+        RootInvShampooKroneckerFactorsState, RootInvShampooKroneckerFactorsUnwrapped
+    ]
+):
+    """Root inverse Shampoo preconditioners for list of parameters."""
 
     def precondition(self, masked_grad_list: tuple[Tensor, ...]) -> tuple[Tensor, ...]:
         """
@@ -995,7 +1227,7 @@ class ShampooPreconditionerList(
                 for masked_grad, preconditioned_dims_selector, kronecker_factors in zip(
                     masked_grad_list,
                     self._masked_preconditioned_dims_selector_list,
-                    self._masked_kronecker_factors_list,
+                    self._masked_kronecker_factors_unwrapped,
                     strict=True,
                 )
             )
@@ -1012,7 +1244,7 @@ class ShampooPreconditionerList(
         ):
             for idx, (kronecker_factors, roots) in enumerate(
                 zip(
-                    self._masked_kronecker_factors_list,
+                    self._masked_kronecker_factors_unwrapped,
                     self._masked_roots_list,
                     strict=True,
                 )
@@ -1067,7 +1299,7 @@ class ShampooPreconditionerList(
 
                     # Check if we encounter NaN or inf values in computed inverse matrix.
                     if not torch.isfinite(computed_inv_factor_matrix).all():
-                        torch.set_printoptions(threshold=100_000)
+                        torch.set_printoptions(profile="full")
                         raise PreconditionerValueError(
                             f"Encountered nan or inf values in inverse factor matrix {factor_matrix_index}! "
                             f"To mitigate, check factor matrix before the matrix computation: {bias_corrected_factor_matrix=}"
@@ -1085,92 +1317,12 @@ class ShampooPreconditionerList(
 
 
 class EigendecomposedShampooPreconditionerList(
-    BaseShampooPreconditionerList[
+    ClassicShampooPreconditionerList[
         EigendecomposedShampooKroneckerFactorsState,
-        EigendecomposedShampooKroneckerFactorsList,
+        EigendecomposedShampooKroneckerFactorsUnwrapped,
     ]
 ):
     """Eigendecomposed Shampoo preconditioners for list of parameters."""
-
-    def _create_kronecker_factors_state_for_block(
-        self,
-        block: Tensor,
-        block_info: BlockInfo,
-        dims: torch.Size,
-        preconditioned_dims: tuple[int, ...],
-    ) -> EigendecomposedShampooKroneckerFactorsState:
-        return EigendecomposedShampooKroneckerFactorsState(
-            **asdict(
-                self._create_base_kronecker_factors(
-                    block_info=block_info, preconditioned_dims=preconditioned_dims
-                )
-            ),
-            # Initialize factor_matrices_eigenvectors as identity matrices.
-            factor_matrices_eigenvectors=tuple(
-                block_info.allocate_eye_tensor(
-                    n=dim,
-                    dtype=block.dtype,
-                    device=block_info.param.device,
-                )
-                for dim in preconditioned_dims
-            ),
-            # Initialize factor_matrices_eigenvalues all ones.
-            factor_matrices_eigenvalues=tuple(
-                block_info.allocate_ones_tensor(
-                    size=(dim,),
-                    dtype=block.dtype,
-                    device=block_info.param.device,
-                )
-                for dim in preconditioned_dims
-            ),
-        )
-
-    def _create_preconditioned_dims_selector(
-        self, dims: torch.Size
-    ) -> tuple[bool, ...]:
-        return tuple(
-            attrgetter(INVERSE_EXPONENT_OVERRIDE)(self._preconditioner_config)
-            .get((order := len(dims)), {})
-            .get(d, 1 / (2 * order))
-            != 0.0
-            # Traverse through each dim of a block.
-            for d in range(len(dims))
-        )
-
-    def _create_kronecker_factors_list(
-        self,
-        kronecker_factors_state: EigendecomposedShampooKroneckerFactorsState,
-        block_info: BlockInfo,
-    ) -> EigendecomposedShampooKroneckerFactorsList:
-        return EigendecomposedShampooKroneckerFactorsList(
-            factor_matrices=tuple(
-                block_info.get_tensor(t)
-                for t in kronecker_factors_state.factor_matrices
-            ),
-            factor_matrices_eigenvectors=tuple(
-                block_info.get_tensor(t)
-                for t in kronecker_factors_state.factor_matrices_eigenvectors
-            ),
-            factor_matrices_eigenvalues=tuple(
-                block_info.get_tensor(t)
-                for t in kronecker_factors_state.factor_matrices_eigenvalues
-            ),
-            factor_matrix_indices=kronecker_factors_state.factor_matrix_indices,
-        )
-
-    def _get_inverse_roots_from_override(
-        self, preconditioned_dims_selector: tuple[bool, ...]
-    ) -> tuple[float, ...]:
-        return tuple(
-            # Compute the inverse root, 1 / inverse_exponent{_override}, accordingly for each required dim.
-            1
-            / attrgetter(INVERSE_EXPONENT_OVERRIDE)(self._preconditioner_config)
-            .get((order := len(preconditioned_dims_selector)), {})
-            .get(k, 1 / (2 * order))
-            # Traverse through each dim of a block that requires precondition.
-            for k, should_precondition in enumerate(preconditioned_dims_selector)
-            if should_precondition
-        )
 
     def precondition(self, masked_grad_list: tuple[Tensor, ...]) -> tuple[Tensor, ...]:
         """
@@ -1185,13 +1337,25 @@ class EigendecomposedShampooPreconditionerList(
         with profiler.record_function(
             f"## {self.__class__.__name__}:{self.precondition.__name__} ##"
         ):
+            # TODO: remove assertion when rank_deficient_stability_config is generalized to MatrixFunctionConfig
+            assert isinstance(
+                self._preconditioner_config.amortized_computation_config,
+                EigendecompositionConfig,
+            )
+            rank_deficient_stability_config = self._preconditioner_config.amortized_computation_config.rank_deficient_stability_config
+
             return tuple(
                 self._precondition_grad(
                     grad=masked_grad,
                     preconditioned_dims_selector=preconditioned_dims_selector,
                     preconditioner_list=tuple(
                         eigenvectors
-                        * eigenvalues.add(self._epsilon).pow_(-1.0 / root).unsqueeze(0)
+                        * stabilize_and_pow_eigenvalues(
+                            eigenvalues,
+                            root=Fraction(root),
+                            epsilon=self._epsilon,
+                            rank_deficient_stability_config=rank_deficient_stability_config,
+                        ).unsqueeze(0)
                         @ eigenvectors.T
                         for eigenvectors, eigenvalues, root in zip(
                             kronecker_factors.factor_matrices_eigenvectors,
@@ -1204,7 +1368,7 @@ class EigendecomposedShampooPreconditionerList(
                 for masked_grad, preconditioned_dims_selector, kronecker_factors, roots in zip(
                     masked_grad_list,
                     self._masked_preconditioned_dims_selector_list,
-                    self._masked_kronecker_factors_list,
+                    self._masked_kronecker_factors_unwrapped,
                     self._masked_roots_list,
                     strict=True,
                 )
@@ -1221,7 +1385,7 @@ class EigendecomposedShampooPreconditionerList(
             f"## {self.__class__.__name__}:{self._amortized_computation.__name__} ##"
         ):
             for idx, kronecker_factors in enumerate(
-                self._masked_kronecker_factors_list
+                self._masked_kronecker_factors_unwrapped
             ):
                 success_tracker: bool = True
                 for (
@@ -1264,6 +1428,7 @@ class EigendecomposedShampooPreconditionerList(
                                 A=bias_corrected_factor_matrix,
                                 eigendecomposition_config=eigendecomposition_config,
                                 is_diagonal=False,
+                                epsilon=self._epsilon,
                             )
                         )
                         computed_eigenvalues.to(dtype=factor_matrix_eigenvalues.dtype)
@@ -1290,7 +1455,7 @@ class EigendecomposedShampooPreconditionerList(
                             quantity_name = f"{computed_quantity=}".split("=")[0].split(
                                 "_"
                             )[-1]
-                            torch.set_printoptions(threshold=100_000)
+                            torch.set_printoptions(profile="full")
                             raise PreconditionerValueError(
                                 f"Encountered nan or inf values in {quantity_name} of factor matrix {factor_matrix_index}! "
                                 f"To mitigate, check factor matrix before the matrix computation: {bias_corrected_factor_matrix=}"
@@ -1310,40 +1475,10 @@ class EigendecomposedShampooPreconditionerList(
 class EigenvalueCorrectedShampooPreconditionerList(
     BaseShampooPreconditionerList[
         EigenvalueCorrectedShampooKroneckerFactorsState,
-        EigenvalueCorrectedShampooKroneckerFactorsList,
+        EigenvalueCorrectedShampooKroneckerFactorsUnwrapped,
     ]
 ):
     """Eigenvalue-corrected Shampoo preconditioners for list of parameters."""
-
-    def _create_kronecker_factors_state_for_block(
-        self,
-        block: Tensor,
-        block_info: BlockInfo,
-        dims: torch.Size,
-        preconditioned_dims: tuple[int, ...],
-    ) -> EigenvalueCorrectedShampooKroneckerFactorsState:
-        return EigenvalueCorrectedShampooKroneckerFactorsState(
-            **asdict(
-                self._create_base_kronecker_factors(
-                    block_info=block_info, preconditioned_dims=preconditioned_dims
-                )
-            ),
-            # Initialize factor_matrices_eigenvectors as identity matrices.
-            factor_matrices_eigenvectors=tuple(
-                block_info.allocate_eye_tensor(
-                    n=dim,
-                    dtype=block.dtype,
-                    device=block_info.param.device,
-                )
-                for dim in preconditioned_dims
-            ),
-            corrected_eigenvalues=block_info.allocate_zeros_tensor(
-                # Note that the corrected eigenvalues are not affected by the preconditioned_dims.
-                size=tuple(dims),
-                dtype=block.dtype,
-                device=block_info.param.device,
-            ),
-        )
 
     def _create_preconditioned_dims_selector(
         self, dims: torch.Size
@@ -1355,26 +1490,6 @@ class EigenvalueCorrectedShampooPreconditionerList(
             ).get(len(dims), [])
             # Traverse through each dim of a block.
             for d in range(len(dims))
-        )
-
-    def _create_kronecker_factors_list(
-        self,
-        kronecker_factors_state: EigenvalueCorrectedShampooKroneckerFactorsState,
-        block_info: BlockInfo,
-    ) -> EigenvalueCorrectedShampooKroneckerFactorsList:
-        return EigenvalueCorrectedShampooKroneckerFactorsList(
-            factor_matrices=tuple(
-                block_info.get_tensor(t)
-                for t in kronecker_factors_state.factor_matrices
-            ),
-            factor_matrices_eigenvectors=tuple(
-                block_info.get_tensor(t)
-                for t in kronecker_factors_state.factor_matrices_eigenvectors
-            ),
-            corrected_eigenvalues=block_info.get_tensor(
-                kronecker_factors_state.corrected_eigenvalues
-            ),
-            factor_matrix_indices=kronecker_factors_state.factor_matrix_indices,
         )
 
     def _get_inverse_roots_from_override(
@@ -1427,7 +1542,7 @@ class EigenvalueCorrectedShampooPreconditionerList(
             for grad, preconditioned_dims_selector, kronecker_factors in zip(
                 masked_grad_list,
                 self._masked_preconditioned_dims_selector_list,
-                self._masked_kronecker_factors_list,
+                self._masked_kronecker_factors_unwrapped,
                 strict=True,
             ):
                 # Transform the gradient to eigenbasis of Shampoo's factor matrices.
@@ -1470,7 +1585,7 @@ class EigenvalueCorrectedShampooPreconditionerList(
             ) in zip(
                 masked_grad_list,
                 self._masked_preconditioned_dims_selector_list,
-                self._masked_kronecker_factors_list,
+                self._masked_kronecker_factors_unwrapped,
                 self._masked_roots_list,
                 strict=True,
             ):
@@ -1482,11 +1597,24 @@ class EigenvalueCorrectedShampooPreconditionerList(
                 )
                 # Verify that the number of roots is 1 in Eigenvalue-Corrected Shampoo preconditioner.
                 assert len(roots) == 1, f"{len(roots)=} != 1"
+                # TODO: remove assertion when rank_deficient_stability_config is generalized to MatrixFunctionConfig
+                assert isinstance(
+                    self._preconditioner_config.amortized_computation_config,
+                    EigendecompositionConfig,
+                )
+                rank_deficient_stability_config = self._preconditioner_config.amortized_computation_config.rank_deficient_stability_config
+
                 # Precondition with inverse root of corrected eigenvalues.
-                grad.div_(
-                    kronecker_factors.corrected_eigenvalues.div(self._bias_correction2)
-                    .add_(self._epsilon)
-                    .pow_(1 / roots[0])
+                # Note that stabilize_and_pow_eigenvalues() takes the inverse of the root, so the result can be directly multiplied to the gradient.
+                grad.mul_(
+                    stabilize_and_pow_eigenvalues(
+                        kronecker_factors.corrected_eigenvalues.div(
+                            self._bias_correction2
+                        ),
+                        root=Fraction(roots[0]),
+                        epsilon=self._epsilon,
+                        rank_deficient_stability_config=rank_deficient_stability_config,
+                    )
                 )
                 # Convert back to basis of the parameters.
                 grad = self._precondition_grad(
@@ -1509,7 +1637,7 @@ class EigenvalueCorrectedShampooPreconditionerList(
             f"## {self.__class__.__name__}:{self._amortized_computation.__name__} ##"
         ):
             for idx, kronecker_factors in enumerate(
-                self._masked_kronecker_factors_list
+                self._masked_kronecker_factors_unwrapped
             ):
                 success_tracker: bool = True
                 for (
@@ -1544,6 +1672,7 @@ class EigenvalueCorrectedShampooPreconditionerList(
                             A=factor_matrix,
                             eigendecomposition_config=eigendecomposition_config,
                             is_diagonal=False,
+                            epsilon=self._epsilon,
                         )[1].to(dtype=factor_matrix_eigenvectors.dtype)
                         # Add success to success tracker.
                         success_tracker &= True
@@ -1559,7 +1688,7 @@ class EigenvalueCorrectedShampooPreconditionerList(
 
                     # Check if we encounter NaN or inf values in computed eigenvectors.
                     if not torch.isfinite(computed_eigenvectors).all():
-                        torch.set_printoptions(threshold=100_000)
+                        torch.set_printoptions(profile="full")
                         raise PreconditionerValueError(
                             f"Encountered nan or inf values in eigenvectors of factor matrix {factor_matrix_index}! "
                             f"To mitigate, check factor matrix before the matrix computation: {factor_matrix=}"
