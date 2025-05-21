@@ -1589,9 +1589,12 @@ class EigenvalueCorrectedShampooPreconditionerList(
                 self._masked_roots_list,
                 strict=True,
             ):
+                # Clone the masked gradient to avoid modifying the original tensor.
+                # This is only relevant when _precondition_grad is a no-op.
+                preconditioned_grad = masked_grad.clone()
                 # Transform the gradient to eigenbasis of Shampoo's factor matrices.
-                grad = self._precondition_grad(
-                    grad=masked_grad,
+                preconditioned_grad = self._precondition_grad(
+                    grad=preconditioned_grad,
                     preconditioned_dims_selector=preconditioned_dims_selector,
                     preconditioner_list=kronecker_factors.factor_matrices_eigenvectors,
                 )
@@ -1606,7 +1609,7 @@ class EigenvalueCorrectedShampooPreconditionerList(
 
                 # Precondition with inverse root of corrected eigenvalues.
                 # Note that stabilize_and_pow_eigenvalues() takes the inverse of the root, so the result can be directly multiplied to the gradient.
-                grad.mul_(
+                preconditioned_grad.mul_(
                     stabilize_and_pow_eigenvalues(
                         kronecker_factors.corrected_eigenvalues.div(
                             self._bias_correction2
@@ -1617,13 +1620,13 @@ class EigenvalueCorrectedShampooPreconditionerList(
                     )
                 )
                 # Convert back to basis of the parameters.
-                grad = self._precondition_grad(
-                    grad=grad,
+                preconditioned_grad = self._precondition_grad(
+                    grad=preconditioned_grad,
                     preconditioned_dims_selector=preconditioned_dims_selector,
                     preconditioner_list=kronecker_factors.factor_matrices_eigenvectors,
                     dims=([0], [1]),
                 )
-                preconditioned_grad_list.append(grad)
+                preconditioned_grad_list.append(preconditioned_grad)
             return tuple(preconditioned_grad_list)
 
     @torch.compiler.disable
