@@ -8,8 +8,10 @@ LICENSE file in the root directory of this source tree.
 """
 
 from abc import ABC, abstractmethod
+from collections.abc import Iterable
 from dataclasses import dataclass
 from functools import reduce
+from itertools import islice
 from operator import methodcaller, or_
 from typing import Any, TypeVar
 
@@ -86,3 +88,33 @@ def get_all_subclasses(
         )
 
     return list(get_all_unique_subclasses(cls) - (set() if include_cls_self else {cls}))
+
+
+_BatchedInputType = TypeVar("_BatchedInputType")
+
+
+def batched(
+    iterable: Iterable[_BatchedInputType], n: int
+) -> Iterable[tuple[_BatchedInputType, ...]]:
+    """
+    Batches an iterable into chunks of size n.
+
+    Note: This is a forward implementation of itertools.batched which is available in Python 3.12+.
+    Remove this function when downstream applications are using Python 3.12 or newer.
+
+    Args:
+        iterable (Iterable[_BatchedInputType]): The iterable to be batched.
+        n (int): The size of each batch.
+
+    Yields:
+        batched_tuple (tuple[_BatchedInputType, ...]): A generator that yields batches of size n.
+
+    Raises:
+        ValueError: If n is less than 1.
+    """
+    if n < 1:
+        raise ValueError(f"{n=} must be at least one")
+
+    iterator = iter(iterable)
+    while batch := tuple(islice(iterator, n)):
+        yield batch

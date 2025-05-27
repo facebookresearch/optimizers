@@ -541,6 +541,7 @@ class AbstractTest:
             for invalid_value in self._amortized_computation_properties.invalid_amortized_computation_return_values:
                 with (
                     self.subTest(invalid_value=invalid_value),
+                    # Mock the amortized computation function to simulate inv factor matrix with nan/inf values.
                     mock.patch.object(
                         shampoo_preconditioner_list,
                         self._amortized_computation_properties.amortized_computation_function_name,
@@ -561,6 +562,52 @@ class AbstractTest:
                         perform_amortized_computation=True,
                     )
                 mock_amortized_computation.assert_called_once()
+
+        def test_raise_nan_and_inf_in_inv_factor_matrix_amortized_computation_but_fail_saving(
+            self,
+        ) -> None:
+            expected_torch_save_failures = RuntimeError("Failed to save")
+
+            for invalid_value in self._amortized_computation_properties.invalid_amortized_computation_return_values:
+                with (
+                    self.subTest(invalid_value=invalid_value),
+                    # Mock the amortized computation function to simulate inv factor matrix with nan/inf values.
+                    mock.patch.object(
+                        shampoo_preconditioner_list,
+                        self._amortized_computation_properties.amortized_computation_function_name,
+                        side_effect=(invalid_value,),
+                    ) as mock_amortized_computation,
+                    # Mock the torch.save function to simulate a failure when saving.
+                    mock.patch.object(
+                        torch,
+                        "save",
+                        side_effect=expected_torch_save_failures,
+                    ) as mock_save,
+                    self.assertLogs(level="WARNING") as cm,
+                ):
+                    self.assertRaisesRegex(
+                        PreconditionerValueError,
+                        re.escape("Encountered nan or inf values in"),
+                        self._preconditioner_list.update_preconditioners,
+                        masked_grad_list=(
+                            torch.tensor([1.0, 0.0]),
+                            torch.eye(2) / math.sqrt(2.0),
+                            torch.tensor([[1.0, 0.0]]),
+                            torch.tensor(1.0),
+                        ),
+                        step=torch.tensor(1),
+                        perform_amortized_computation=True,
+                    )
+
+                mock_save.assert_called_once()
+                mock_amortized_computation.assert_called_once()
+
+                # Check that the warning message contains the expected failure reason.
+                self.assertCountEqual(
+                    # Only extracts the exception reason in the warning message for simple comparison.
+                    [r.msg.split(": ", maxsplit=1)[-1] for r in cm.records],
+                    [str(expected_torch_save_failures)],
+                )
 
         def test_amortized_computation_internal_failure(self) -> None:
             with mock.patch.object(

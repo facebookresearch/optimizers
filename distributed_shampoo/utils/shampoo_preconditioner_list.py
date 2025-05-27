@@ -13,9 +13,9 @@ from collections.abc import Callable, Hashable, Mapping
 from dataclasses import asdict, dataclass
 from fractions import Fraction
 from functools import reduce
-
 from itertools import chain
 from operator import attrgetter
+from pathlib import Path
 from typing import Any, cast, Generic, get_args, TypeVar
 
 import torch
@@ -1122,6 +1122,50 @@ class BaseShampooPreconditionerList(
             grad,
         )
 
+    @staticmethod
+    def _handle_preconditioner_error(
+        factor_matrix_index: str,
+        source_matrix: Tensor,
+        quantity_name: str,
+    ) -> None:
+        """
+        Handles errors related to preconditioner computation by saving the problematic matrix
+        and raising a detailed error message.
+
+        This method is called when NaN or inf values are detected in computed matrices during
+        preconditioner operations. It saves the source matrix to a file for debugging purposes
+        and raises a PreconditionerValueError with detailed information.
+
+        Args:
+            factor_matrix_index (str): The index identifier for the factor matrix.
+            source_matrix (Tensor): The source matrix that caused the computation error.
+            quantity_name (str): Description of the quantity being computed.
+
+        Raises:
+            PreconditionerValueError: Error with details about the problematic matrix.
+        """
+        # Save the problematic matrix to a file for debugging.
+        tmp_dir = Path("tmp").resolve()
+        tmp_dir.mkdir(exist_ok=True)
+        file_path = tmp_dir / f"{factor_matrix_index.replace('.', '_')}.pt"
+        try:
+            torch.save(source_matrix, file_path)
+            logger.info(f"Matrix has been saved to {file_path} for debugging.")
+        except Exception as e:
+            logger.warning(f"Failed to save matrix to {file_path}: {str(e)}")
+
+        torch.set_printoptions(
+            precision=10,  # Set the precision for floating point numbers to 10 decimal places.
+            linewidth=10000,  # Set the line width to 10000, allowing for long lines without wrapping.
+            profile="full",  # Use the 'full' profile to display all elements of tensors.
+            sci_mode=False,  # Disable scientific notation for floating point numbers.
+        )
+
+        raise PreconditionerValueError(
+            f"Encountered nan or inf values in {quantity_name} of factor matrix {factor_matrix_index}! "
+            f"To mitigate, check factor matrix before the matrix computation: {source_matrix=}"
+        )
+
 
 _ClassicShampooKroneckerFactorsStateType = TypeVar(
     "_ClassicShampooKroneckerFactorsStateType",
@@ -1299,10 +1343,10 @@ class RootInvShampooPreconditionerList(
 
                     # Check if we encounter NaN or inf values in computed inverse matrix.
                     if not torch.isfinite(computed_inv_factor_matrix).all():
-                        torch.set_printoptions(profile="full")
-                        raise PreconditionerValueError(
-                            f"Encountered nan or inf values in inverse factor matrix {factor_matrix_index}! "
-                            f"To mitigate, check factor matrix before the matrix computation: {bias_corrected_factor_matrix=}"
+                        BaseShampooPreconditionerList._handle_preconditioner_error(
+                            factor_matrix_index=factor_matrix_index,
+                            source_matrix=bias_corrected_factor_matrix,
+                            quantity_name="inverse",
                         )
                     inv_factor_matrix.copy_(computed_inv_factor_matrix)
 
@@ -1452,13 +1496,12 @@ class EigendecomposedShampooPreconditionerList(
                         (computed_eigenvectors, factor_matrix_eigenvectors),
                     ):
                         if not torch.isfinite(computed_quantity).all():
-                            quantity_name = f"{computed_quantity=}".split("=")[0].split(
-                                "_"
-                            )[-1]
-                            torch.set_printoptions(profile="full")
-                            raise PreconditionerValueError(
-                                f"Encountered nan or inf values in {quantity_name} of factor matrix {factor_matrix_index}! "
-                                f"To mitigate, check factor matrix before the matrix computation: {bias_corrected_factor_matrix=}"
+                            BaseShampooPreconditionerList._handle_preconditioner_error(
+                                factor_matrix_index=factor_matrix_index,
+                                source_matrix=bias_corrected_factor_matrix,
+                                quantity_name=f"{computed_quantity=}".split("=")[
+                                    0
+                                ].split("_")[-1],
                             )
                         target.copy_(computed_quantity)
 
@@ -1695,10 +1738,10 @@ class EigenvalueCorrectedShampooPreconditionerList(
 
                     # Check if we encounter NaN or inf values in computed eigenvectors.
                     if not torch.isfinite(computed_eigenvectors).all():
-                        torch.set_printoptions(profile="full")
-                        raise PreconditionerValueError(
-                            f"Encountered nan or inf values in eigenvectors of factor matrix {factor_matrix_index}! "
-                            f"To mitigate, check factor matrix before the matrix computation: {factor_matrix=}"
+                        BaseShampooPreconditionerList._handle_preconditioner_error(
+                            factor_matrix_index=factor_matrix_index,
+                            source_matrix=factor_matrix,
+                            quantity_name="eigenvectors",
                         )
                     factor_matrix_eigenvectors.copy_(computed_eigenvectors)
 

@@ -152,7 +152,7 @@ def stabilize_and_pow_eigenvalues(
 
     If using epsilon (i.e. rank_deficient_stability_config is a PerturbationConfig), stabilization entails adding epsilon to the eigenvalues, i.e. regularization. See _matrix_perturbation() and PerturbationConfig for details.
 
-    If using pseudo-inverse (i.e. rank_deficient_stability_config is a PseudoInverseConfig), stabilization entails ignoring all eigenvalues sufficiently close to zero as determined by some cutoff. See truncate_eigenvalues_cutoff() and PseudoInverseConfig for details.
+    If using pseudo-inverse (i.e. rank_deficient_stability_config is a PseudoInverseConfig), stabilization entails ignoring all eigenvalues sufficiently close to zero as determined by some cutoff. See compute_eigenvalue_threshold() and PseudoInverseConfig for details.
 
     Args:
         L (Tensor): The input matrix.
@@ -169,12 +169,13 @@ def stabilize_and_pow_eigenvalues(
 
     """
 
-    def truncate_eigenvalues_cutoff(
+    def compute_eigenvalue_threshold(
         L: Tensor,
         rank_rtol: float | None = None,
         rank_atol: float = 0.0,
     ) -> float:
-        """Filter the eigenvalues based on the numerical rank of the matrix. The procedure below mimics the steps described in the documentation of https://pytorch.org/docs/stable/generated/torch.linalg.matrix_rank.html.
+        """Computes a threshold for filtering eigenvalues based on the numerical rank of the matrix.
+        The procedure follows the approach described in the documentation of torch.linalg.matrix_rank.
 
         Args:
             L (Tensor): Eigenvalues of matrix.
@@ -182,7 +183,7 @@ def stabilize_and_pow_eigenvalues(
             rank_atol (float): Absolute tolerance for determining numerical rank of matrix. (Default: 0.0)
 
         Returns:
-            spectrum_cutoff (float): Cutoff to filter out eigenvalues.
+            threshold (float): Threshold value to filter out insignificant eigenvalues.
         """
         if rank_rtol is None:
             rtol = L.numel() * torch.finfo(L.dtype).eps
@@ -195,7 +196,7 @@ def stabilize_and_pow_eigenvalues(
             if epsilon != 0.0:
                 raise ValueError(f"{epsilon=} should be 0.0 when using pseudo-inverse!")
 
-            spectrum_cutoff = truncate_eigenvalues_cutoff(
+            spectrum_cutoff = compute_eigenvalue_threshold(
                 L=L,
                 rank_rtol=rank_deficient_stability_config.rank_rtol,
                 rank_atol=rank_deficient_stability_config.rank_atol,
@@ -209,14 +210,19 @@ def stabilize_and_pow_eigenvalues(
             lambda_min = torch.min(L).item()
 
             # make eigenvalues > 0 (if necessary)
-            effective_epsilon = (
-                -min(lambda_min - epsilon, 0.0)
-                if rank_deficient_stability_config.perturb_before_computation
-                else (-min(lambda_min, 0.0) + epsilon)
-            )
-            L = _matrix_perturbation(
-                A=L, epsilon=effective_epsilon, is_eigenvalues=True
-            )
+            if rank_deficient_stability_config.perturb_before_computation:
+                L = _matrix_perturbation(
+                    L, epsilon=-min(lambda_min - epsilon, 0.0), is_eigenvalues=True
+                )
+            else:
+                # NOTE: Although combining the two additions below is mathematically equivalent (and potentially numerically more accurate),
+                #       it will cause a numerics discrepancy that can lead to NaN/inf values in the computed inverse root.
+                # TODO: Investigate why this happens.
+                L = _matrix_perturbation(
+                    L, epsilon=-min(lambda_min, 0.0), is_eigenvalues=True
+                )
+                # and add the epsilon
+                L = _matrix_perturbation(L, epsilon=epsilon, is_eigenvalues=True)
 
             inv_power_L = L.pow_(-1.0 / root)
         case _:

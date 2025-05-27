@@ -14,6 +14,7 @@ from itertools import islice
 from typing import Any, Literal, overload
 
 import torch
+from commons import batched
 from distributed_shampoo.shampoo_types import HybridShardShampooConfig, PARAMS
 from distributed_shampoo.utils.shampoo_block_info import DTensorBlockInfo
 from distributed_shampoo.utils.shampoo_dist_utils import get_device_mesh
@@ -555,15 +556,7 @@ class HybridShardDistributor(DistributorInterface):
         )
         device_mesh_2d = get_device_mesh(
             device_type=device.type,
-            # NOTE: Use itertools.batched(ranks_in_replicated_group, self._dist_group_size) when downstream applications are Python 3.12+ available
-            mesh=tuple(
-                map(
-                    partial(tuple),
-                    torch.tensor(ranks_in_replicated_group)
-                    .view(-1, self._dist_group_size)
-                    .tolist(),
-                )
-            ),
+            mesh=tuple(batched(ranks_in_replicated_group, self._dist_group_size)),
             mesh_dim_names=("replicate", "shard"),
         )
         # NOTE: We get all submeshes along the "replicate" dimension, then pick out
