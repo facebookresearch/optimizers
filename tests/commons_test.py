@@ -74,7 +74,7 @@ class BatchedTest(unittest.TestCase):
 
     def test_empty_iterable(self) -> None:
         """Test batching an empty iterable."""
-        data = []
+        data: list[int] = []
         result = list(batched(data, n=3))
         self.assertEqual(result, [])
 
