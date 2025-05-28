@@ -8,7 +8,7 @@ LICENSE file in the root directory of this source tree.
 """
 
 from collections.abc import Callable
-from functools import partial, reduce
+from functools import partial
 from itertools import pairwise, repeat
 
 import torch
@@ -46,7 +46,7 @@ class _ModelWithScalarAndLinearAndDeadLayers(nn.Module):
             )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return reduce(lambda x, layer: layer(x), self.linear_layers, x) + self.scalar
+        return self.linear_layers(x) + self.scalar
 
 
 def construct_training_problem(

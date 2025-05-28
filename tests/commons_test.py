@@ -12,7 +12,7 @@ import unittest
 
 from dataclasses import dataclass
 
-from commons import AbstractDataclass, get_all_subclasses
+from commons import AbstractDataclass, batched, get_all_subclasses
 from torch.testing._internal.common_utils import (
     instantiate_parametrized_tests,
     parametrize,
@@ -56,6 +56,42 @@ class DummyMixedSubclass(DummySecondRootClass, DummySecondSubclass):
 
 class DummyLeafClass(DummyMixedSubclass):
     """Dummy leaf class for GetAllSubclassesTest."""
+
+
+@instantiate_parametrized_tests
+class BatchedTest(unittest.TestCase):
+    def test_normal_batching(self) -> None:
+        """Test batching an iterable with size divisible by batch size."""
+        data = [1, 2, 3, 4, 5, 6]
+        result = list(batched(data, n=2))
+        self.assertEqual(result, [(1, 2), (3, 4), (5, 6)])
+
+    def test_uneven_batching(self) -> None:
+        """Test batching an iterable with size not divisible by batch size."""
+        data = [1, 2, 3, 4, 5]
+        result = list(batched(data, n=2))
+        self.assertEqual(result, [(1, 2), (3, 4), (5,)])
+
+    def test_empty_iterable(self) -> None:
+        """Test batching an empty iterable."""
+        data: list[int] = []
+        result = list(batched(data, n=3))
+        self.assertEqual(result, [])
+
+    def test_batch_size_one(self) -> None:
+        """Test batching with batch size of 1."""
+        data = [1, 2, 3]
+        result = list(batched(data, n=1))
+        self.assertEqual(result, [(1,), (2,), (3,)])
+
+    @parametrize("n", (-1, 0))
+    def test_invalid_batch_size(self, n: int) -> None:
+        """Test that batched raises ValueError for batch size < 1."""
+        data = [1, 2, 3]
+        with self.assertRaisesRegex(
+            ValueError, re.escape(f"{n=} must be at least one")
+        ):
+            list(batched(data, n=n))
 
 
 @instantiate_parametrized_tests

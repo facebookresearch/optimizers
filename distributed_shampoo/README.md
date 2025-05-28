@@ -47,7 +47,7 @@ Key distinctives of this implementation include:
 
 We have tested this implementation on the following versions of PyTorch:
 
-- PyTorch >= 2.5;
+- PyTorch >= 2.7;
 - Python >= 3.12;
 - CUDA 11.3-11.4; 12.2+;
 

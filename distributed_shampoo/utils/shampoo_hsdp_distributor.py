@@ -14,6 +14,7 @@ from math import prod
 from typing import Any
 
 import torch
+from commons import batched
 from distributed_shampoo.shampoo_types import (
     FSDPParameterMetadata,
     HSDPShampooConfig,
@@ -222,10 +223,10 @@ class HSDPDistributor(DistributorInterface):
     # NOTE: Remove this function once PT2 supports all_gather with functional collective
     @torch.no_grad()
     @torch.compiler.disable
-    def all_gather_into_tensor(self) -> None:
+    def _all_gather_into_tensor(self) -> None:
         dist.all_gather_into_tensor(
-            self._global_dist_buffer,
-            self._local_dist_buffer,
+            output_tensor=self._global_dist_buffer,
+            input_tensor=self._local_dist_buffer,
             group=self._comms_dist_group,
         )
 
@@ -258,7 +259,7 @@ class HSDPDistributor(DistributorInterface):
                     self._local_masked_blocked_params,
                 )
 
-            self.all_gather_into_tensor()
+            self._all_gather_into_tensor()
 
             # torch._foreach only accepts non-empty list
             if self._global_masked_blocked_params:
@@ -283,7 +284,7 @@ class HSDPDistributor(DistributorInterface):
                     masked_blocked_search_directions,
                 )
 
-            self.all_gather_into_tensor()
+            self._all_gather_into_tensor()
 
             # torch._foreach only accepts non-empty list
             if self._global_masked_blocked_params:
@@ -873,14 +874,7 @@ class HSDPDistributor(DistributorInterface):
         device_mesh_2d = get_device_mesh(
             device_type=device.type,
             # NOTE: Use itertools.batched(ranks_in_replicated_group, self._dist_group_size) when downstream applications are Python 3.12+ available
-            mesh=tuple(
-                map(
-                    partial(tuple),
-                    torch.tensor(ranks_in_replicated_group)
-                    .view(-1, self._dist_group_size)
-                    .tolist(),
-                )
-            ),
+            mesh=tuple(batched(ranks_in_replicated_group, self._dist_group_size)),
             mesh_dim_names=("replicate", "shard"),
         )
         # NOTE: We get all submeshes along the "replicate" dimension, then pick out
