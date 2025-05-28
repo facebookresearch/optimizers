@@ -172,7 +172,7 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
             (torch.bfloat16, False),
         ),
     )
-    @parametrize("num_trainers_per_group", (-1, 1, 2))
+    @parametrize("num_trainers_per_group", (-1, 1, 2, 4))
     def test_hybrid_shampoo_n_by_one_mesh_against_default_shampoo(
         self,
         num_trainers_per_group: int,
