@@ -282,22 +282,19 @@ class MatrixInverseRootTest(unittest.TestCase):
     ) -> None:
         A = torch.tensor([[1.0, 0.0], [0.0, 4.0]])
         root = Fraction(4)
-        with (
-            mock.patch.object(
-                matrix_functions,
-                implementation,
-                return_value=(
-                    None,
-                    None,
-                    NewtonConvergenceFlag.REACHED_MAX_ITERS,
-                    None,
-                    None,
-                ),
+        with mock.patch.object(
+            matrix_functions,
+            implementation,
+            return_value=(
+                None,
+                None,
+                NewtonConvergenceFlag.REACHED_MAX_ITERS,
+                None,
+                None,
             ),
-            self.assertLogs(
-                level="WARNING",
-            ) as cm,
-        ):
+        ), self.assertLogs(
+            level="WARNING",
+        ) as cm:
             matrix_inverse_root(
                 A=A,
                 root=root,

@@ -1639,6 +1639,7 @@ class EigenvalueCorrectedShampooPreconditionerList(
                 preconditioned_dims_selector=preconditioned_dims_selector,
                 preconditioner_list=kronecker_factors.factor_matrices_eigenvectors,
             )
+
             # Verify that the number of roots is 1 in Eigenvalue-Corrected Shampoo preconditioner.
             assert len(roots) == 1, f"{len(roots)=} != 1"
             # TODO: remove assertion when rank_deficient_stability_config is generalized to MatrixFunctionConfig

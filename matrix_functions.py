@@ -424,14 +424,14 @@ def matrix_eigendecomposition(
 def _eigh_eigenvalue_decomposition(
     A: Tensor,
     retry_double_precision: bool = True,
-    eigendecomposition_offload_device: torch.device | str = "",
+    eigendecomposition_offload_device: str = "",
 ) -> tuple[Tensor, Tensor]:
     """Compute the eigendecomposition of a symmetric matrix using torch.linalg.eigh.
 
     Args:
         A (Tensor): The input symmetric matrix.
         retry_double_precision (bool): Whether to retry the computation in double precision if it fails in the current precision. (Default: True)
-        eigendecomposition_offload_device (torch.device | str): Device to offload eigendecomposition computation. If value is empty string, do not perform offloading. (Default: "")
+        eigendecomposition_offload_device (str): Device to offload eigendecomposition computation. If value is empty string, do not perform offloading. (Default: "")
 
     Returns:
         eigenvalues (Tensor): The eigenvalues of the input matrix A.
@@ -501,6 +501,7 @@ def _qr_algorithm(
     """Approximately compute the eigendecomposition of a symmetric matrix by performing the QR algorithm.
 
     Given an initial estimate of the eigenvectors Q of matrix A, QR iterations are performed until the criterion based on the estimated eigenvalues is below or equal to the specified tolerance or until the maximum number of iterations is reached.
+
     Note that if the criterion based on the estimated eigenvalues is already below or equal to the tolerance given the initial eigenvectors_estimate, the QR iterations will be skipped.
 
     Args:
@@ -553,7 +554,7 @@ def _matrix_inverse_root_eigen(
     epsilon: float = 0.0,
     rank_deficient_stability_config: RankDeficientStabilityConfig = DefaultPerturbationConfig,
     retry_double_precision: bool = True,
-    eigendecomposition_offload_device: torch.device | str = "",
+    eigendecomposition_offload_device: str = "",
 ) -> tuple[Tensor, Tensor, Tensor]:
     """Compute matrix inverse root using eigendecomposition of symmetric positive (semi-)definite matrix.
 
@@ -568,7 +569,7 @@ def _matrix_inverse_root_eigen(
         rank_deficient_stability_config (RankDeficientStabilityConfig): Configuration for handling/stabilizing rank-deficient matrices. (Default: DefaultPerturbationConfig)
         retry_double_precision (bool): Flag for re-trying eigendecomposition with higher precision if lower precision fails due
             to CuSOLVER failure. (Default: True)
-        eigendecomposition_offload_device (torch.device | str): Device to offload eigendecomposition computation. If value is empty string, do not perform offloading. (Default: "")
+        eigendecomposition_offload_device (str): Device to offload eigendecomposition computation. If value is empty string, do not perform offloading. (Default: "")
 
     Returns:
         X (Tensor): (Inverse) root of matrix. Same dimensions as A.
