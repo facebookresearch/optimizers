@@ -464,8 +464,8 @@ def _eigh_eigenvalue_decomposition(
     return L.to(device=current_device), Q.to(device=current_device, dtype=A.dtype)
 
 
-def _estimated_eigenvalues_criterion_below_or_equal_tolerance(
-    estimated_eigenvalues: Tensor, tolerance: float
+def _eigenvalues_estimate_criterion_below_or_equal_tolerance(
+    eigenvalues_estimate: Tensor, tolerance: float
 ) -> bool:
     """Evaluates if a criterion using estimated eigenvalues is below or equal to the tolerance.
 
@@ -479,15 +479,15 @@ def _estimated_eigenvalues_criterion_below_or_equal_tolerance(
     Hence, the two relative errors are also equivalent: ||A - A'||_F / ||A||_F = ||B - diag(B)||_F / ||B||_F.
 
     Args:
-        estimated_eigenvalues (Tensor): The estimated eigenvalues.
+        eigenvalues_estimate (Tensor): The estimated eigenvalues.
         tolerance (float): The tolerance for the criterion.
 
     Returns:
         is_below_tolerance (bool): True if the criterion is below or equal to the tolerance, False otherwise.
 
     """
-    norm = torch.linalg.norm(estimated_eigenvalues)
-    diagonal_norm = torch.linalg.norm(estimated_eigenvalues.diag())
+    norm = torch.linalg.norm(eigenvalues_estimate)
+    diagonal_norm = torch.linalg.norm(eigenvalues_estimate.diag())
     off_diagonal_norm = torch.sqrt(norm**2 - diagonal_norm**2)
     return bool(off_diagonal_norm <= tolerance * norm)
 
@@ -500,9 +500,7 @@ def _qr_algorithm(
 ) -> tuple[Tensor, Tensor]:
     """Approximately compute the eigendecomposition of a symmetric matrix by performing the QR algorithm.
 
-    Given an initial estimate of the eigenvectors Q of matrix A, a power iteration and a QR decomposition is performed each iteration, i.e. Q, _ <- QR(A @ Q).
-    When the initial estimate is the zero matrix, the eigendecomposition is computed using _eigh_eigenvalue_decomposition.
-
+    Given an initial estimate of the eigenvectors Q of matrix A, QR iterations are performed until the criterion based on the estimated eigenvalues is below or equal to the specified tolerance or until the maximum number of iterations is reached.
     Note that if the criterion based on the estimated eigenvalues is already below or equal to the tolerance given the initial eigenvectors_estimate, the QR iterations will be skipped.
 
     Args:
@@ -513,16 +511,13 @@ def _qr_algorithm(
             (Default: 0.01)
 
     Returns:
-        estimated_eigenvalues (Tensor): The estimated eigenvalues of the input matrix A.
-        estimated_eigenvectors (Tensor): The estimated eigenvectors of the input matrix A.
+        eigenvalues_estimate (Tensor): The estimated eigenvalues of the input matrix A.
+        eigenvectors_estimate (Tensor): The estimated eigenvectors of the input matrix A.
 
     Raises:
         AssertionError: If the data types of Q and A do not match.
 
     """
-    if not eigenvectors_estimate.any():
-        return _eigh_eigenvalue_decomposition(A)
-
     # Perform orthogonal/simultaneous iterations (QR algorithm).
     Q = eigenvectors_estimate
 
@@ -531,25 +526,25 @@ def _qr_algorithm(
         Q.dtype == A.dtype
     ), f"Q and A must have the same dtype! {Q.dtype=} {A.dtype=}"
 
-    estimated_eigenvalues = Q.T @ A @ Q
+    eigenvalues_estimate = Q.T @ A @ Q
     iteration = 0
     # NOTE: This will skip the QR iterations if the criterion is already below or equal to the tolerance given the initial eigenvectors_estimate.
     while (
         iteration < max_iterations
-        and not _estimated_eigenvalues_criterion_below_or_equal_tolerance(
-            estimated_eigenvalues, tolerance
+        and not _eigenvalues_estimate_criterion_below_or_equal_tolerance(
+            eigenvalues_estimate, tolerance
         )
     ):
-        power_iteration = A @ Q
-        Q = torch.linalg.qr(power_iteration).Q
+        Q, R = torch.linalg.qr(eigenvalues_estimate)
+        eigenvalues_estimate = R @ Q
+        eigenvectors_estimate = eigenvectors_estimate @ Q
         iteration += 1
-        estimated_eigenvalues = Q.T @ A @ Q
 
     # Ensure consistent ordering of estimated eigenvalues and eigenvectors.
-    estimated_eigenvalues, indices = estimated_eigenvalues.diag().sort(stable=True)
-    Q = Q[:, indices]
+    eigenvalues_estimate, indices = eigenvalues_estimate.diag().sort(stable=True)
+    eigenvectors_estimate = eigenvectors_estimate[:, indices]
 
-    return estimated_eigenvalues, Q
+    return eigenvalues_estimate, eigenvectors_estimate
 
 
 def _matrix_inverse_root_eigen(

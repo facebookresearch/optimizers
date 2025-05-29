@@ -282,19 +282,22 @@ class MatrixInverseRootTest(unittest.TestCase):
     ) -> None:
         A = torch.tensor([[1.0, 0.0], [0.0, 4.0]])
         root = Fraction(4)
-        with mock.patch.object(
-            matrix_functions,
-            implementation,
-            return_value=(
-                None,
-                None,
-                NewtonConvergenceFlag.REACHED_MAX_ITERS,
-                None,
-                None,
+        with (
+            mock.patch.object(
+                matrix_functions,
+                implementation,
+                return_value=(
+                    None,
+                    None,
+                    NewtonConvergenceFlag.REACHED_MAX_ITERS,
+                    None,
+                    None,
+                ),
             ),
-        ), self.assertLogs(
-            level="WARNING",
-        ) as cm:
+            self.assertLogs(
+                level="WARNING",
+            ) as cm,
+        ):
             matrix_inverse_root(
                 A=A,
                 root=root,
@@ -816,7 +819,6 @@ class MatrixEigendecompositionTest(unittest.TestCase):
     @parametrize(
         "initialization_fn",
         (
-            lambda A: torch.zeros_like(A),
             lambda A: torch.eye(A.shape[0], dtype=A.dtype, device=A.device),
             lambda A: matrix_eigendecomposition(A)[1],
         ),
@@ -862,20 +864,20 @@ class MatrixEigendecompositionTest(unittest.TestCase):
 
         qr_config = QREigendecompositionConfig(max_iterations=10_000)
         qr_config.eigenvectors_estimate = initialization_fn(A)
-        estimated_eigenvalues, estimated_eigenvectors = matrix_eigendecomposition(
+        eigenvalues_estimate, eigenvectors_estimate = matrix_eigendecomposition(
             A=A,
             is_diagonal=False,
             eigendecomposition_config=qr_config,
         )
 
         # Ensure that the signs of the eigenvectors are consistent.
-        estimated_eigenvectors[
+        eigenvectors_estimate[
             :,
-            expected_eigenvectors[0, :] / estimated_eigenvectors[0, :] < 0,
+            expected_eigenvectors[0, :] / eigenvectors_estimate[0, :] < 0,
         ] *= -1
         torch.testing.assert_close(
             (expected_eigenvalues, expected_eigenvectors),
-            (estimated_eigenvalues, estimated_eigenvectors),
+            (eigenvalues_estimate, eigenvectors_estimate),
             atol=atol,
             rtol=rtol,
         )
