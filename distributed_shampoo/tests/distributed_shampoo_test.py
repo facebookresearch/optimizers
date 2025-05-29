@@ -16,7 +16,7 @@ import re
 import unittest
 from dataclasses import dataclass
 from itertools import chain
-from typing import Any
+from typing import Any, cast
 
 import torch
 from distributed_shampoo.distributed_shampoo import DistributedShampoo
@@ -203,24 +203,26 @@ class DistributedShampooTest(unittest.TestCase):
         )
 
     def test_step_with_closure(self) -> None:
+        layer_weight: torch.Tensor = cast(torch.Tensor, self._model[0].weight)
         # Test the case without closure, the loss returned by step() is None.
         self._optimizer.zero_grad()
-        self._model[0].weight.grad = torch.rand_like(self._model[0].weight)
+        layer_weight.grad = torch.rand_like(layer_weight)
         self.assertIsNone(self._optimizer.step(closure=None))
 
         # Test the case that the closure returns a scalar.
         def closure() -> float:
             self._optimizer.zero_grad()
-            self._model[0].weight.grad = torch.rand_like(self._model[0].weight)
+            layer_weight.grad = torch.rand_like(layer_weight)
             return 1.0
 
         self.assertEqual(self._optimizer.step(closure=closure), 1.0)
 
     def test_optimizer_zero_grad(self) -> None:
-        self._model[0].weight.grad = torch.ones_like(self._model[0].weight)
+        layer_weight: torch.Tensor = cast(torch.Tensor, self._model[0].weight)
+        layer_weight.grad = torch.ones_like(layer_weight)
 
         # Store the data pointer of the current gradient to check if it gets freed later.
-        grad_data_ptr = self._model[0].weight.grad.data_ptr()
+        grad_data_ptr = layer_weight.grad.data_ptr()
 
         self._optimizer.step()
 
@@ -228,7 +230,7 @@ class DistributedShampooTest(unittest.TestCase):
         self._optimizer.zero_grad(set_to_none=True)
 
         # Verify that the gradient has been set to None.
-        self.assertIsNone(self._model[0].weight.grad)
+        self.assertIsNone(layer_weight.grad)
 
         # Get all tensor objects currently tracked by the garbage collector.
         all_alive_tensors = tuple(
@@ -999,21 +1001,23 @@ class DistributedShampooNoneGradTest(unittest.TestCase):
         )
 
     def test_step_with_consistent_grads(self) -> None:
+        layer_weight: torch.Tensor = cast(torch.Tensor, self._model[0].weight)
         with self.assertNoLogs(level="WARNING"):
             self._optimizer.zero_grad()
-            self._model[0].weight.grad = torch.rand_like(self._model[0].weight)
+            layer_weight.grad = torch.rand_like(layer_weight)
             self._optimizer.step()
 
             self._optimizer.zero_grad()
-            self._model[0].weight.grad = torch.rand_like(self._model[0].weight)
+            layer_weight.grad = torch.rand_like(layer_weight)
             self._optimizer.step()
 
     def test_step_with_none_grads(self) -> None:
+        layer_weight: torch.Tensor = cast(torch.Tensor, self._model[0].weight)
         expected_msg = "PT2 will recompile because the gradient selction of model parameters have changed from the previous step. Possible reasons include some gradients are None. If this is not intended, please check the data and/or model."
         ending_msg = "Changed gradient selector indices: [0, 1]"
         with self.assertLogs(level="WARNING") as cm:
             self._optimizer.zero_grad()
-            self._model[0].weight.grad = torch.rand_like(self._model[0].weight)
+            layer_weight.grad = torch.rand_like(layer_weight)
             self._optimizer.step()
 
             self._optimizer.zero_grad()  # Implicitly set grad=None in second step
