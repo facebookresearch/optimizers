@@ -20,6 +20,7 @@ import torch
 from distributed_shampoo.distributed_shampoo import DistributedShampoo
 from distributed_shampoo.shampoo_types import (
     AdaGradGraftingConfig,
+    DDPShampooConfig,
     FullyShardShampooConfig,
     HybridShardShampooConfig,
 )
@@ -101,7 +102,10 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
 
     @staticmethod
     def _shampoo_optim_factory(
-        distributed_config: FullyShardShampooConfig | HybridShardShampooConfig | None,
+        distributed_config: DDPShampooConfig
+        | FullyShardShampooConfig
+        | HybridShardShampooConfig
+        | None,
     ) -> Callable[[ParamsT], torch.optim.Optimizer]:
         return partial(
             DistributedShampoo,
@@ -207,6 +211,60 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
                     fully_shard, mesh=hybrid_shard_config.device_mesh
                 ),
             ),
+        )
+
+    @with_comms
+    @skip_if_lt_x_gpu(4)
+    @parametrize(
+        "communication_dtype, communicate_params",
+        (
+            (torch.float32, False),
+            (torch.float32, True),
+            (torch.float16, False),
+            (torch.bfloat16, False),
+        ),
+    )
+    @parametrize("num_trainers_per_group", (-1, 1, 2, 4))
+    def test_hybrid_shampoo_n_by_one_mesh_against_ddp_shampoo(
+        self,
+        num_trainers_per_group: int,
+        communication_dtype: torch.dtype,
+        communicate_params: bool,
+    ) -> None:
+        """
+        Testing the correctness of hybrid shard Shampoo distributor of (n, 1) mesh
+        by comparing it with DDP Shampoo. (n, 1) mesh is a special case of hybrid shard.
+        The shard size is 1 so it is equivalent to DDP Shampoo.
+        """
+        ddp_config = DDPShampooConfig(
+            communication_dtype=communication_dtype,
+            num_trainers_per_group=num_trainers_per_group,
+        )
+        hybrid_shard_config = HybridShardShampooConfig(
+            device_mesh=init_device_mesh(
+                "cuda", (4, 1), mesh_dim_names=("replicate", "shard")
+            ),
+            communication_dtype=communication_dtype,
+            num_trainers_per_group=num_trainers_per_group,
+            communicate_params=communicate_params,
+        )
+
+        compare_two_optimizers_models_devices_on_weight_and_loss(
+            control_optim_factory=ShampooHybridShardDistributorTest._shampoo_optim_factory(
+                distributed_config=ddp_config,
+            ),
+            control_model_factory=ShampooHybridShardDistributorTest._construct_model,
+            experimental_optim_factory=ShampooHybridShardDistributorTest._shampoo_optim_factory(
+                distributed_config=hybrid_shard_config,
+            ),
+            experimental_model_factory=partial(
+                ShampooHybridShardDistributorTest._construct_model,
+                post_model_decoration=partial(
+                    fully_shard, mesh=hybrid_shard_config.device_mesh
+                ),
+            ),
+            rtol=0.0,
+            atol=0.0,
         )
 
     @with_comms
