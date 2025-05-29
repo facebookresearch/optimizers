@@ -21,7 +21,6 @@ from matrix_functions_types import (
     EigendecompositionConfig,
     MatrixFunctionConfig,
     QREigendecompositionConfig,
-    RootInvConfig,
 )
 from torch.distributed.device_mesh import DeviceMesh
 from torch.distributed.fsdp import ShardingStrategy
@@ -97,7 +96,7 @@ class ShampooPreconditionerConfig(PreconditionerConfig):
     """Configuration for Shampoo preconditioner computation.
 
     Attributes:
-        amortized_computation_config (RootInvConfig | EigendecompositionConfig): Configuration for the inverse-root computation. (Default: DefaultEigenConfig)
+        amortized_computation_config (MatrixFunctionConfig): Configuration for the inverse-root computation. (Default: DefaultEigenConfig)
         num_tolerated_failed_amortized_computations (int): Number of failed amortized computations to tolerate before raising an error. (Default: 3)
         inverse_exponent_override (dict[int, dict[int, float] | float]): The inverse_exponent_override attribute is a dictionary that allows for customizing the inverse exponent used in the Shampoo preconditioner computation.
             The keys of the dictionary represent the order of the tensor, and the values are either dictionaries with dimension indices as keys and override values as values, or a single float value for all dimensions. All unspecified dimensions use a default exponent of 1/(2*max(o,1)), where o is the order of the tensor. (Default: {})
@@ -138,7 +137,7 @@ class ShampooPreconditionerConfig(PreconditionerConfig):
 
     """
 
-    amortized_computation_config: RootInvConfig | EigendecompositionConfig = field(
+    amortized_computation_config: MatrixFunctionConfig = field(
         default_factory=lambda: DefaultEigenConfig
     )
     inverse_exponent_override: dict[int, dict[int, float] | float] = field(

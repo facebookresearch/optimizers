@@ -89,19 +89,12 @@ class EighEigendecompositionConfig(EigendecompositionConfig):
         rank_deficient_stability_config (RankDeficientStabilityConfig): Configuration for handling/stabilizing rank-deficient matrices. (Default: DefaultPerturbationConfig)
         retry_double_precision (bool): Whether to re-trying eigendecomposition with higher (double) precision if lower precision fails due
             to CuSOLVER failure. (Default: True)
-        eigendecomposition_offload_device (torch.device | str): Device to offload eigendecomposition to. If value is empty string, we don't perform offloading. (Default: "")
+        eigendecomposition_offload_device (str): Device to offload eigendecomposition to. If value is empty string, we don't perform offloading. (Default: "")
 
     """
 
     retry_double_precision: bool = True
-    eigendecomposition_offload_device: torch.device | str = ""
-
-    def __post_init__(self) -> None:
-        # Convert an non-empty string to a torch.device; this verifies that the string is a valid device string early.
-        if self.eigendecomposition_offload_device != "":
-            self.eigendecomposition_offload_device = torch.device(
-                self.eigendecomposition_offload_device
-            )
+    eigendecomposition_offload_device: str = ""
 
 
 DefaultEigendecompositionConfig = EighEigendecompositionConfig()
@@ -155,7 +148,7 @@ class EigenConfig(RootInvConfig, EighEigendecompositionConfig):
         rank_deficient_stability_config (RankDeficientStabilityConfig): Configuration for handling/stabilizing rank-deficient matrices. (Default: DefaultPerturbationConfig)
         retry_double_precision (bool): Whether to re-trying eigendecomposition with higher (double) precision if lower precision fails due
             to CuSOLVER failure. (Default: True)
-        eigendecomposition_offload_device (torch.device | str): Device to offload eigendecomposition to. If value is empty string, we don't perform offloading. (Default: "")
+        eigendecomposition_offload_device (str): Device to offload eigendecomposition to. If value is empty string, we don't perform offloading. (Default: "")
         exponent_multiplier (float): Number to be multiplied to the numerator of the inverse root, i.e., eta where the
             exponent is -eta / (2 * p). (Default: 1.0)
         rank_deficient_stability_config (RankDeficientStabilityConfig): Configuration for handling/stabilizing rank-deficient matrices. (Default: DefaultPerturbationConfig)
