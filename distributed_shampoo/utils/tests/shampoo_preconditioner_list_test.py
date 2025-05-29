@@ -247,14 +247,11 @@ class AdagradPreconditionerListTest(AbstractPreconditionerListTest.Interface):
             self._params[2],
         )
 
-    def _instantiate_preconditioner_list(
-        self, epsilon: float = 0.0, **kwargs: Any
-    ) -> AdagradPreconditionerList:  # type: ignore[override]
+    def _instantiate_preconditioner_list(self, **kwargs: Any) -> PreconditionerList:
         return AdagradPreconditionerList(
             block_list=self._block_list,
             state=self._state,
             block_info_list=self._block_info_list,
-            epsilon=epsilon,
             **kwargs,
         )
 
@@ -507,7 +504,7 @@ class AbstractTest:
 
             super().setUp()
 
-        def _instantiate_preconditioner_list(self, **kwargs: Any) -> PreconditionerList:  # type: ignore[override]
+        def _instantiate_preconditioner_list(self, **kwargs: Any) -> PreconditionerList:
             return self._preconditioner_list_factory(
                 block_list=self._block_list,
                 state=self._state,
