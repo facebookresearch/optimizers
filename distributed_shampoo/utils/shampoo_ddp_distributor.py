@@ -14,11 +14,7 @@ from typing import Any
 
 import torch
 import torch.distributed as dist
-from distributed_shampoo.shampoo_types import (
-    CommunicationDType,
-    DDPShampooConfig,
-    PARAMS,
-)
+from distributed_shampoo.shampoo_types import DDPShampooConfig, PARAMS
 from distributed_shampoo.utils.shampoo_block_info import DTensorBlockInfo
 from distributed_shampoo.utils.shampoo_dist_utils import get_device_mesh
 from distributed_shampoo.utils.shampoo_distributor import DistributorInterface
@@ -77,31 +73,17 @@ class DDPDistributor(DistributorInterface):
         # Create flag for distributing parameters instead of search directions.
         self._communicate_params: bool = distributed_config.communicate_params
 
-        # Determine communication type.
-        match distributed_config.communication_dtype:
-            case CommunicationDType.BF16:
-                communication_dtype = torch.bfloat16
-            case CommunicationDType.FP16:
-                communication_dtype = torch.float16
-            case CommunicationDType.FP32 | CommunicationDType.DEFAULT:
-                communication_dtype = torch.float32
-            case _:
-                raise NotImplementedError(
-                    f"Unsupported communication dtype: {distributed_config.communication_dtype}"
-                )
-
         # Initialize _dist_group and _group_rank.
-        self._dist_group: dist.ProcessGroup | None = (
-            dist.distributed_c10d.GroupMember.WORLD
-            if self._group_size == self._global_size
-            else dist.new_subgroups(group_size=self._group_size)[0]
-        )
+        self._dist_group: dist.ProcessGroup | None = dist.new_subgroups(
+            group_size=self._group_size
+        )[0]
         group_rank: int = dist.get_rank(group=self._dist_group)
 
         # Assign ranks to blocks with their respective buffer size.
         buffer_size_ranks = distribute_buffer_sizes(
             buffer_sizes=tuple(
-                blocked_param.numel() * get_dtype_size(communication_dtype)
+                blocked_param.numel()
+                * get_dtype_size(distributed_config.communication_dtype)
                 for blocked_param in self._global_blocked_params
             ),
             group_size=self._group_size,
@@ -132,17 +114,17 @@ class DDPDistributor(DistributorInterface):
 
         self._construct_distributed_buffers(
             buffer_size_ranks=buffer_size_ranks,
-            communication_dtype=communication_dtype,
+            communication_dtype=distributed_config.communication_dtype,
             group_rank=group_rank,
         )
 
     # NOTE: Remove this function once PT2 supports all_gather with functional collective
     @torch.no_grad()
     @torch.compiler.disable
-    def all_gather_into_tensor(self) -> None:
+    def _all_gather_into_tensor(self) -> None:
         dist.all_gather_into_tensor(
-            self._global_dist_buffer,
-            self._local_dist_buffer,
+            output_tensor=self._global_dist_buffer,
+            input_tensor=self._local_dist_buffer,
             group=self._dist_group,
         )
 
@@ -155,46 +137,61 @@ class DDPDistributor(DistributorInterface):
 
         Args:
             masked_blocked_search_directions (tuple[Tensor, ...]): Search directions for each local blocked parameter.
-
-        See the comment in the parent class for details.
+            This tuple might be empty if the parameters are not receiving gradients.
 
         """
         if self._communicate_params:
-            # Perform your update to your local masked parameters and copy into buffers.
-            torch._foreach_add_(
-                self._local_masked_blocked_params,
-                masked_blocked_search_directions,
-            )
-            torch._foreach_copy_(
-                self._local_masked_dist_blocked_buffers,
-                self._local_masked_blocked_params,
-            )
+            assert (
+                len(self._local_masked_blocked_params)
+                == len(masked_blocked_search_directions)
+            ), f"Expected {len(self._local_masked_blocked_params)=} to be equal to {len(masked_blocked_search_directions)=}."
 
-            self.all_gather_into_tensor()
+            # torch._foreach only accepts non-empty list
+            if masked_blocked_search_directions:
+                # Perform your update to your local masked parameters and copy into buffers.
+                torch._foreach_add_(
+                    self._local_masked_blocked_params,
+                    masked_blocked_search_directions,
+                )
+                torch._foreach_copy_(
+                    self._local_masked_dist_blocked_buffers,
+                    self._local_masked_blocked_params,
+                )
 
-            # Copy updated blocked params in global_masked_dist_blocked_buffers
-            # into global_masked_blocked_params.
-            torch._foreach_copy_(
-                self._global_masked_blocked_params,
-                self._global_masked_dist_blocked_buffers,
-            )
+            self._all_gather_into_tensor()
+
+            # torch._foreach only accepts non-empty list
+            if self._global_masked_blocked_params:
+                # Copy updated blocked params in global_masked_dist_blocked_buffers into global_masked_blocked_params.
+                torch._foreach_copy_(
+                    self._global_masked_blocked_params,
+                    self._global_masked_dist_blocked_buffers,
+                )
 
         else:
-            # Search directions multiplied by alpha are distributed.
-            # Copy the local search directions to the communication buffer.
-            torch._foreach_copy_(
-                self._local_masked_dist_blocked_buffers,
-                masked_blocked_search_directions,
-            )
+            assert (
+                len(self._local_masked_dist_blocked_buffers)
+                == len(masked_blocked_search_directions)
+            ), f"Expected {len(self._local_masked_dist_blocked_buffers)=} to be equal to {len(masked_blocked_search_directions)=}."
 
-            self.all_gather_into_tensor()
+            # torch._foreach only accepts non-empty list
+            if masked_blocked_search_directions:
+                # Search directions multiplied by alpha are distributed.
+                # Copy the local search directions to the communication buffer.
+                torch._foreach_copy_(
+                    self._local_masked_dist_blocked_buffers,
+                    masked_blocked_search_directions,
+                )
 
-            # Add search directions in global_masked_dist_blocked_buffers
-            # to global_masked_blocked_params.
-            torch._foreach_add_(
-                self._global_masked_blocked_params,
-                self._global_masked_dist_blocked_buffers,
-            )
+            self._all_gather_into_tensor()
+
+            # torch._foreach only accepts non-empty list
+            if self._global_masked_blocked_params:
+                # Add search directions in global_masked_dist_blocked_buffers to global_masked_blocked_params.
+                torch._foreach_add_(
+                    self._global_masked_blocked_params,
+                    self._global_masked_dist_blocked_buffers,
+                )
 
     @torch.no_grad()
     def _construct_local_block_info_list(
@@ -280,24 +277,16 @@ class DDPDistributor(DistributorInterface):
             assert (
                 remainder_size >= 0
             ), f"Local distributed buffer size {local_dist_buffer.size(0)} is "
-            "not larger than or equal to the sum of buffer sizes {sum(required_buffer_sizes)}!"
+            f"not larger than or equal to the sum of buffer sizes {sum(required_buffer_sizes)}!"
             split_tensors = torch.split(
                 local_dist_buffer, required_buffer_sizes + [remainder_size]
             )
             split_tensors_list.append(split_tensors)
 
-        # Obtain ordered buffer ranks containing (view of local buffer, rank).
-        splitted_local_dist_buffers = []
-        buffer_indices = [0] * len(
-            local_dist_buffers
-        )  # index counter for each rank for obtaining right buffer
-        for _, rank in buffer_size_ranks:
-            splitted_local_dist_buffers.append(
-                split_tensors_list[rank][buffer_indices[rank]]
-            )
-            buffer_indices[rank] += 1
-
-        return tuple(splitted_local_dist_buffers)
+        split_tensors_iterators = list(map(iter, split_tensors_list))
+        return tuple(
+            next(split_tensors_iterators[rank]) for _, rank in buffer_size_ranks
+        )
 
     def _construct_distributed_buffers(
         self,

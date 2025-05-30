@@ -14,8 +14,8 @@ from math import prod
 from typing import Any
 
 import torch
+from commons import batched
 from distributed_shampoo.shampoo_types import (
-    CommunicationDType,
     FSDPParameterMetadata,
     HSDPShampooConfig,
     MAX_PRECONDITIONER_DIM,
@@ -151,19 +151,6 @@ class HSDPDistributor(DistributorInterface):
         # Create flag for distributing parameters instead of search directions.
         self._communicate_params: bool = distributed_config.communicate_params
 
-        # Determine communication type.
-        match distributed_config.communication_dtype:
-            case CommunicationDType.BF16:
-                communication_dtype = torch.bfloat16
-            case CommunicationDType.FP16:
-                communication_dtype = torch.float16
-            case CommunicationDType.FP32 | CommunicationDType.DEFAULT:
-                communication_dtype = torch.float32
-            case _:
-                raise NotImplementedError(
-                    f"Unsupported communication dtype: {distributed_config.communication_dtype}"
-                )
-
         # Initialize _dist_group and _group_rank.
         # Note that this requires initializing all process groups.
         # Splits replicated ranks group into smaller groups of size self._dist_group_size.
@@ -173,10 +160,12 @@ class HSDPDistributor(DistributorInterface):
             device_mesh = get_device_mesh(
                 device_type=self._hsdp_device_mesh.device_type,
                 mesh=tuple(
-                    tuple(ranks_in_replicated_subgroup)
-                    for ranks_in_replicated_subgroup in ranks_in_replicated_group.view(
-                        -1, self._dist_group_size
-                    ).tolist()
+                    map(
+                        partial(tuple),
+                        ranks_in_replicated_group.view(
+                            -1, self._dist_group_size
+                        ).tolist(),
+                    )
                 ),
                 mesh_dim_names=("replicate", "shard"),
             )
@@ -195,7 +184,8 @@ class HSDPDistributor(DistributorInterface):
         # Assign ranks to blocks with their respective buffer size.
         buffer_size_ranks = distribute_buffer_sizes(
             buffer_sizes=tuple(
-                blocked_param.numel() * get_dtype_size(communication_dtype)
+                blocked_param.numel()
+                * get_dtype_size(distributed_config.communication_dtype)
                 for blocked_param in self._global_blocked_params
             ),
             group_size=self._dist_group_size,
@@ -226,17 +216,17 @@ class HSDPDistributor(DistributorInterface):
 
         self._construct_distributed_buffers(
             buffer_size_ranks=buffer_size_ranks,
-            communication_dtype=communication_dtype,
+            communication_dtype=distributed_config.communication_dtype,
             comms_group_rank=comms_group_rank,
         )
 
     # NOTE: Remove this function once PT2 supports all_gather with functional collective
     @torch.no_grad()
     @torch.compiler.disable
-    def all_gather_into_tensor(self) -> None:
+    def _all_gather_into_tensor(self) -> None:
         dist.all_gather_into_tensor(
-            self._global_dist_buffer,
-            self._local_dist_buffer,
+            output_tensor=self._global_dist_buffer,
+            input_tensor=self._local_dist_buffer,
             group=self._comms_dist_group,
         )
 
@@ -250,45 +240,59 @@ class HSDPDistributor(DistributorInterface):
         Args:
             masked_blocked_search_directions (tuple[Tensor, ...]): Search directions for each local blocked parameter.
 
-        See the comment in the parent class for details.
-
         """
         if self._communicate_params:
-            # Perform your update to your local masked parameters and copy into buffers.
-            torch._foreach_add_(
-                self._local_masked_blocked_params,
-                masked_blocked_search_directions,
-            )
-            torch._foreach_copy_(
-                self._local_masked_dist_blocked_buffers,
-                self._local_masked_blocked_params,
-            )
+            assert (
+                len(self._local_masked_blocked_params)
+                == len(masked_blocked_search_directions)
+            ), f"Expected {len(self._local_masked_blocked_params)=} to be equal to {len(masked_blocked_search_directions)=}."
 
-            self.all_gather_into_tensor()
+            # torch._foreach only accepts non-empty list
+            if masked_blocked_search_directions:
+                # Perform your update to your local masked parameters and copy into buffers.
+                torch._foreach_add_(
+                    self._local_masked_blocked_params,
+                    masked_blocked_search_directions,
+                )
+                torch._foreach_copy_(
+                    self._local_masked_dist_blocked_buffers,
+                    self._local_masked_blocked_params,
+                )
 
-            # Copy updated blocked params in global_masked_dist_blocked_buffers
-            # into global_masked_blocked_params.
-            torch._foreach_copy_(
-                self._global_masked_blocked_params,
-                self._global_masked_dist_blocked_buffers,
-            )
+            self._all_gather_into_tensor()
+
+            # torch._foreach only accepts non-empty list
+            if self._global_masked_blocked_params:
+                # Copy updated blocked params in global_masked_dist_blocked_buffers into global_masked_blocked_params.
+                torch._foreach_copy_(
+                    self._global_masked_blocked_params,
+                    self._global_masked_dist_blocked_buffers,
+                )
 
         else:
-            # Search directions multiplied by alpha are distributed.
-            # Copy the local search directions to the communication buffer.
-            torch._foreach_copy_(
-                self._local_masked_dist_blocked_buffers,
-                masked_blocked_search_directions,
-            )
+            assert (
+                len(self._local_masked_dist_blocked_buffers)
+                == len(masked_blocked_search_directions)
+            ), f"Expected {len(self._local_masked_dist_blocked_buffers)=} to be equal to {len(masked_blocked_search_directions)=}."
 
-            self.all_gather_into_tensor()
+            # torch._foreach only accepts non-empty list
+            if masked_blocked_search_directions:
+                # Search directions multiplied by alpha are distributed.
+                # Copy the local search directions to the communication buffer.
+                torch._foreach_copy_(
+                    self._local_masked_dist_blocked_buffers,
+                    masked_blocked_search_directions,
+                )
 
-            # Add search directions in global_masked_dist_blocked_buffers
-            # to global_masked_blocked_params.
-            torch._foreach_add_(
-                self._global_masked_blocked_params,
-                self._global_masked_dist_blocked_buffers,
-            )
+            self._all_gather_into_tensor()
+
+            # torch._foreach only accepts non-empty list
+            if self._global_masked_blocked_params:
+                # Add search directions in global_masked_dist_blocked_buffers to global_masked_blocked_params.
+                torch._foreach_add_(
+                    self._global_masked_blocked_params,
+                    self._global_masked_dist_blocked_buffers,
+                )
 
     def _construct_composable_block_ids(
         self,
@@ -372,9 +376,11 @@ class HSDPDistributor(DistributorInterface):
         # split parameter.
         # This has the same length as the number of split parameters.
         global_num_blocks_per_split_param = []
-        # self._global_merged_dims_list has the same length as the total number of split tensor
-        # blocks within all flattened parameters obtained from split tensor block recovery.
-        global_merged_dims_list = []
+        merge_dims = partial(
+            merge_small_dims,
+            threshold=self._param_group[MAX_PRECONDITIONER_DIM]
+            * self._param_group[USE_MERGE_DIMS],
+        )
 
         for flattened_param in self._param_group[PARAMS]:
             # Split flattened parameters into valid tensor blocks of the parameter.
@@ -388,15 +394,8 @@ class HSDPDistributor(DistributorInterface):
 
             for split_param in split_params:
                 # Obtain blocks for each parameter after merging.
-                merged_dims = (
-                    merge_small_dims(
-                        split_param.size(), self._param_group[MAX_PRECONDITIONER_DIM]
-                    )
-                    if self._param_group[USE_MERGE_DIMS]
-                    else split_param.size()
-                )
                 blocks_within_split_param = multi_dim_split(
-                    split_param.view(merged_dims),
+                    split_param.view(merge_dims(tensor_shape=split_param.size())),
                     self._param_group[MAX_PRECONDITIONER_DIM],
                 )
 
@@ -410,9 +409,7 @@ class HSDPDistributor(DistributorInterface):
                     for block_param in blocks_within_split_param
                 )
 
-                # Stores the merged dimensions for each parameter and the number of blocks for each param so
-                # we could use this later for constructing the mask on filtering blocks when grad is None.
-                global_merged_dims_list.append(merged_dims)
+                # Stores the number of blocks for each param so we could use this later for constructing the mask on filtering blocks when grad is None.
                 global_num_blocks_per_split_param.append(len(blocks_within_split_param))
 
         # Check that the number of blocks for each parameter equals to the summation of the number of blocks
@@ -430,7 +427,6 @@ class HSDPDistributor(DistributorInterface):
         self._global_num_blocks_per_split_param = tuple(
             global_num_blocks_per_split_param
         )
-        self._global_merged_dims_list = tuple(global_merged_dims_list)
 
     @staticmethod
     def _split_local_dist_buffers(
@@ -472,24 +468,16 @@ class HSDPDistributor(DistributorInterface):
             assert (
                 remainder_size >= 0
             ), f"Local distributed buffer size {local_dist_buffer.size(0)} is "
-            "not larger than or equal to the sum of buffer sizes {sum(required_buffer_sizes)}!"
+            f"not larger than or equal to the sum of buffer sizes {sum(required_buffer_sizes)}!"
             split_tensors = torch.split(
                 local_dist_buffer, required_buffer_sizes + [remainder_size]
             )
             split_tensors_list.append(split_tensors)
 
-        # Obtain ordered buffer ranks containing (view of local buffer, rank).
-        splitted_local_dist_buffers = []
-        buffer_indices = [0] * len(
-            local_dist_buffers
-        )  # index counter for each rank for obtaining right buffer
-        for _, rank in buffer_size_ranks:
-            splitted_local_dist_buffers.append(
-                split_tensors_list[rank][buffer_indices[rank]]
-            )
-            buffer_indices[rank] += 1
-
-        return tuple(splitted_local_dist_buffers)
+        split_tensors_iterators = list(map(iter, split_tensors_list))
+        return tuple(
+            next(split_tensors_iterators[rank]) for _, rank in buffer_size_ranks
+        )
 
     def _construct_distributed_buffers(
         self,
@@ -561,6 +549,11 @@ class HSDPDistributor(DistributorInterface):
         """
         local_masked_blocked_grads: list[Tensor] = []
         global_grad_selector = []
+        merge_dims = partial(
+            merge_small_dims,
+            threshold=self._param_group[MAX_PRECONDITIONER_DIM]
+            * self._param_group[USE_MERGE_DIMS],
+        )
 
         for (
             flattened_param,
@@ -594,27 +587,23 @@ class HSDPDistributor(DistributorInterface):
                 self._param_to_metadata[flattened_param].end_idx,
             )
 
-            # Get the merged dimensions and the number of blocks for each split gradient.
-            merged_dims_within_flattened_param = self._global_merged_dims_list[
-                split_index:next_split_index
-            ]
+            # Get the number of blocks for each split gradient.
             num_blocks_within_split_grads = self._global_num_blocks_per_split_param[
                 split_index:next_split_index
             ]
 
-            for (
-                grad,
-                merged_dims,
-                (blocks_within_split_index, next_blocks_within_split_index),
+            for grad, (
+                blocks_within_split_index,
+                next_blocks_within_split_index,
             ) in zip(
                 split_grads,
-                merged_dims_within_flattened_param,
                 generate_pairwise_indices(num_blocks_within_split_grads),
                 strict=True,
             ):
                 # Obtain blocks for each split gradient after merging.
                 blocks_within_grad = multi_dim_split(
-                    grad.view(merged_dims), self._param_group[MAX_PRECONDITIONER_DIM]
+                    grad.view(merge_dims(tensor_shape=grad.size())),
+                    self._param_group[MAX_PRECONDITIONER_DIM],
                 )
                 # Generate block-to-parameter metadata and extend blocked parameters list.
                 local_masked_blocked_grads.extend(
@@ -879,17 +868,13 @@ class HSDPDistributor(DistributorInterface):
             out (Tensor): Desired Tensor.
 
         """
-        ranks_in_replicated_group = torch.tensor(
-            dist.get_process_group_ranks(self._hsdp_device_mesh.get_group(0))
+        ranks_in_replicated_group = dist.get_process_group_ranks(
+            self._hsdp_device_mesh.get_group(0)
         )
         device_mesh_2d = get_device_mesh(
             device_type=device.type,
-            mesh=tuple(
-                tuple(ranks_in_replicated_subgroup)
-                for ranks_in_replicated_subgroup in ranks_in_replicated_group.view(
-                    -1, self._dist_group_size
-                ).tolist()
-            ),
+            # NOTE: Use itertools.batched(ranks_in_replicated_group, self._dist_group_size) when downstream applications are Python 3.12+ available
+            mesh=tuple(batched(ranks_in_replicated_group, self._dist_group_size)),
             mesh_dim_names=("replicate", "shard"),
         )
         # NOTE: We get all submeshes along the "replicate" dimension, then pick out

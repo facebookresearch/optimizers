@@ -13,30 +13,38 @@ import re
 import unittest
 from collections.abc import Callable
 from functools import partial
-from itertools import pairwise, product
+from itertools import filterfalse, pairwise
 from unittest import mock
 
 import torch
 from distributed_shampoo.distributed_shampoo import DistributedShampoo
-from distributed_shampoo.shampoo_types import (
-    AdaGradGraftingConfig,
-    CommunicationDType,
-    HSDPShampooConfig,
+from distributed_shampoo.shampoo_types import AdaGradGraftingConfig, HSDPShampooConfig
+from distributed_shampoo.tests.shampoo_test_utils import (
+    compare_two_optimizers_models_devices_on_weight_and_loss,
+    construct_training_problem,
+    train_model,
 )
-from distributed_shampoo.tests.shampoo_test_utils import construct_training_problem
 from distributed_shampoo.utils.shampoo_fsdp_utils import compile_fsdp_parameter_metadata
 from distributed_shampoo.utils.shampoo_preconditioner_list import SHAMPOO
 
 from torch import nn
 from torch.distributed.checkpoint._nested_dict import flatten_state_dict
 from torch.distributed.device_mesh import init_device_mesh
-from torch.distributed.fsdp import FullyShardedDataParallel as FSDP, ShardingStrategy
+from torch.distributed.fsdp import FullyShardedDataParallel as FSDP1, ShardingStrategy
 from torch.optim.optimizer import ParamsT
 from torch.testing._internal.common_distributed import skip_if_lt_x_gpu
 from torch.testing._internal.common_fsdp import FSDPTest
+from torch.testing._internal.common_utils import (
+    instantiate_parametrized_tests,
+    parametrize,
+)
+
+
+PRECONDITIONER_DIM = 4
 
 
 @unittest.skipIf(not torch.cuda.is_available(), "Skip when CUDA is not available")
+@instantiate_parametrized_tests
 class ShampooHSDPDistributorTest(FSDPTest):
     @property
     def world_size(self) -> int:
@@ -44,129 +52,55 @@ class ShampooHSDPDistributorTest(FSDPTest):
 
     @staticmethod
     def _construct_model(
-        device: torch.device,
-        distributed_config: HSDPShampooConfig | None,
+        post_model_decoration: Callable[[nn.Module], nn.Module] = lambda x: x,
+        distributed_config: HSDPShampooConfig | None = None,
     ) -> tuple[nn.Module, nn.Module, torch.Tensor, torch.Tensor]:
         # NOTE: We construct the model here specifically in order to ensure that
         #       HSDP Shampoo and default Shampoo produce equivalent results.
-        #       This requires us to construct a model such that FSDP will split the
+        #       This requires us to construct a model such that FSDP1 will split the
         #       parameters such that the resulting blocks from tensor block recovery
         #       and merging/blocking are equivalent to what would be obtained by
         #       merging/blocking on the original parameters.
         #
-        #       An additional constraint imposed by FSDP is from PT2; the split must be
+        #       An additional constraint imposed by FSDP1 is from PT2; the split must be
         #       16-byte aligned. With FP32 elements, this corresponds to 4 elements.
         #
         #       Based on the design of the model below, the model has 512 + 72 + 576 + 64 =
         #       1224 elements, which means that the model will be split at index 612 across
-        #       the flattened param in FSDP.
+        #       the flattened param in FSDP1.
         #       This corresponds to index 612 - 512 - 72 = 28 in the third parameter. Note
         #       that splitting at this index is equivalent to the standard blocking with a
         #       block size of 4.
-        model_linear_layers_dims = (16 * 4, 8, 9, 16 * 4, 1)
+        model_linear_layers_dims = (
+            4 * PRECONDITIONER_DIM * PRECONDITIONER_DIM,
+            2 * PRECONDITIONER_DIM,
+            9,
+            4 * PRECONDITIONER_DIM * PRECONDITIONER_DIM,
+            1,
+        )
         model, loss, data, target = construct_training_problem(
             model_linear_layers_dims=model_linear_layers_dims,
             model_dead_layers_dims=None,
-            device=device,
+            enable_learnable_scalar=False,  # Disable 0D learable parameter because FSDP doesn't support it.
+            device=torch.device("cuda"),
             fill=0.01,
+            post_model_decoration=post_model_decoration,
         )
+        assert isinstance(model, nn.Module)
         if isinstance(distributed_config, HSDPShampooConfig):
-            model = FSDP(
-                model,
-                device_mesh=distributed_config.device_mesh,
-                sharding_strategy=ShardingStrategy.HYBRID_SHARD,
-                use_orig_params=True,
-            )
-            distributed_config.param_to_metadata = compile_fsdp_parameter_metadata(
-                model
-            )
             assert (
                 sum(param.numel() for param in model.parameters())
                 == sum(a * b for a, b in pairwise(model_linear_layers_dims)) // 2
             ), f"{sum(param.numel() for param in model.parameters())=}, {sum(a * b for a, b in pairwise(model_linear_layers_dims)) // 2=}"
+            distributed_config.param_to_metadata = compile_fsdp_parameter_metadata(
+                model
+            )
         return model, loss, data, target
-
-    @staticmethod
-    def _train_model(
-        optim_factory: Callable[
-            [ParamsT],
-            torch.optim.Optimizer,
-        ],
-        model_factory: Callable[
-            [torch.device],
-            tuple[
-                nn.Module,
-                nn.Module,
-                torch.Tensor,
-                torch.Tensor,
-            ],
-        ],
-        device: torch.device,
-    ) -> tuple[list[torch.Tensor], torch.Tensor]:
-        model, loss, data, target = model_factory(device)
-        params = model.parameters()
-        optimizer = optim_factory(params)
-        for _ in range(5):
-            optimizer.zero_grad()
-            objective = loss(model(data), target)
-            objective.backward()
-            optimizer.step()
-
-        with FSDP.summon_full_params(model):
-            return [
-                param.view(-1).detach().cpu() for param in model.parameters()
-            ], objective.detach().cpu()
-
-    @staticmethod
-    def _test_two_configs(
-        optim_factory1: Callable[
-            [ParamsT],
-            torch.optim.Optimizer,
-        ],
-        model_factory1: Callable[
-            [torch.device],
-            tuple[
-                nn.Module,
-                nn.Module,
-                torch.Tensor,
-                torch.Tensor,
-            ],
-        ],
-        optim_factory2: Callable[
-            [ParamsT],
-            torch.optim.Optimizer,
-        ],
-        model_factory2: Callable[
-            [torch.device],
-            tuple[
-                nn.Module,
-                nn.Module,
-                torch.Tensor,
-                torch.Tensor,
-            ],
-        ],
-        device: torch.device,
-    ) -> None:
-        params1, loss1 = ShampooHSDPDistributorTest._train_model(
-            optim_factory1,
-            model_factory1,
-            device=device,
-        )
-        params2, loss2 = ShampooHSDPDistributorTest._train_model(
-            optim_factory2,
-            model_factory2,
-            device=device,
-        )
-        torch.testing.assert_close(loss1, loss2, atol=1e-5, rtol=1e-5)
-        torch.testing.assert_close(params1, params2)
 
     @staticmethod
     def _shampoo_optim_factory(
         distributed_config: HSDPShampooConfig | None,
-    ) -> Callable[
-        [ParamsT],
-        torch.optim.Optimizer,
-    ]:
+    ) -> Callable[[ParamsT], torch.optim.Optimizer]:
         return partial(
             DistributedShampoo,
             lr=0.001,
@@ -174,76 +108,58 @@ class ShampooHSDPDistributorTest(FSDPTest):
             epsilon=1e-8,
             momentum=0.0,
             weight_decay=0.0,
-            max_preconditioner_dim=4,
+            max_preconditioner_dim=PRECONDITIONER_DIM,
             precondition_frequency=1,
             start_preconditioning_step=2,
             use_decoupled_weight_decay=True,
-            grafting_config=AdaGradGraftingConfig(
-                epsilon=1e-8,
-            ),
-            distributed_config=distributed_config,
-        )
-
-    @staticmethod
-    def _model_factory(
-        distributed_config: HSDPShampooConfig | None,
-    ) -> Callable[
-        [torch.device],
-        tuple[
-            nn.Module,
-            nn.Module,
-            torch.Tensor,
-            torch.Tensor,
-        ],
-    ]:
-        return partial(
-            ShampooHSDPDistributorTest._construct_model,
+            grafting_config=AdaGradGraftingConfig(epsilon=1e-8),
             distributed_config=distributed_config,
         )
 
     @skip_if_lt_x_gpu(4)
-    def test_hsdp_shampoo_against_default_shampoo(self) -> None:
-        mesh_2d = init_device_mesh("cuda", (2, 2))
-        for num_trainers_per_group, (
-            communication_dtype,
-            communicate_params,
-        ) in product(
-            (-1, 1, 2),
-            (
-                (CommunicationDType.DEFAULT, False),
-                (CommunicationDType.DEFAULT, True),
-                (CommunicationDType.FP16, False),
-                (CommunicationDType.BF16, False),
-            ),
-        ):
-            hsdp_config = HSDPShampooConfig(
-                param_to_metadata={},
-                device_mesh=mesh_2d,
-                communication_dtype=communication_dtype,
-                num_trainers_per_group=num_trainers_per_group,
-                communicate_params=communicate_params,
-            )
+    @parametrize(
+        "communication_dtype, communicate_params",
+        (
+            (torch.float32, False),
+            (torch.float32, True),
+            (torch.float16, False),
+            (torch.bfloat16, False),
+        ),
+    )
+    @parametrize("num_trainers_per_group", (-1, 1, 2))
+    def test_hsdp_shampoo_against_default_shampoo(
+        self,
+        num_trainers_per_group: int,
+        communication_dtype: torch.dtype,
+        communicate_params: bool,
+    ) -> None:
+        hsdp_config = HSDPShampooConfig(
+            param_to_metadata={},
+            device_mesh=init_device_mesh("cuda", (2, 2)),
+            communication_dtype=communication_dtype,
+            num_trainers_per_group=num_trainers_per_group,
+            communicate_params=communicate_params,
+        )
 
-            with self.subTest(
-                communication_dtype=communication_dtype,
-                num_trainers_per_group=num_trainers_per_group,
-                communicate_params=communicate_params,
-            ):
-                ShampooHSDPDistributorTest._test_two_configs(
-                    ShampooHSDPDistributorTest._shampoo_optim_factory(
-                        None,
-                    ),
-                    ShampooHSDPDistributorTest._model_factory(
-                        None,
-                    ),
-                    ShampooHSDPDistributorTest._shampoo_optim_factory(
-                        distributed_config=hsdp_config,
-                    ),
-                    ShampooHSDPDistributorTest._model_factory(
-                        hsdp_config,
-                    ),
-                    device=torch.device("cuda"),
-                )
+        compare_two_optimizers_models_devices_on_weight_and_loss(
+            control_optim_factory=ShampooHSDPDistributorTest._shampoo_optim_factory(
+                distributed_config=None,
+            ),
+            control_model_factory=ShampooHSDPDistributorTest._construct_model,
+            experimental_optim_factory=ShampooHSDPDistributorTest._shampoo_optim_factory(
+                distributed_config=hsdp_config,
+            ),
+            experimental_model_factory=partial(
+                ShampooHSDPDistributorTest._construct_model,
+                post_model_decoration=partial(
+                    FSDP1,
+                    device_mesh=hsdp_config.device_mesh,
+                    sharding_strategy=ShardingStrategy.HYBRID_SHARD,
+                    use_orig_params=True,
+                ),
+                distributed_config=hsdp_config,
+            ),
+        )
 
     @skip_if_lt_x_gpu(4)
     def test_hsdp_shampoo_block_index(self) -> None:
@@ -252,16 +168,28 @@ class ShampooHSDPDistributorTest(FSDPTest):
             param_to_metadata={},
             device_mesh=mesh_2d,
         )
-        model_factory = ShampooHSDPDistributorTest._model_factory(hsdp_config)
-        optim_factory = ShampooHSDPDistributorTest._shampoo_optim_factory(hsdp_config)
-        model, loss, data, target = model_factory(torch.device("cuda"))
-        params = model.parameters()
-        optimizer = optim_factory(params)
+
+        model, _, _, _, optimizer = train_model(
+            optim_factory=ShampooHSDPDistributorTest._shampoo_optim_factory(
+                hsdp_config
+            ),
+            model_factory=partial(
+                ShampooHSDPDistributorTest._construct_model,
+                post_model_decoration=partial(
+                    FSDP1,
+                    device_mesh=hsdp_config.device_mesh,
+                    sharding_strategy=ShardingStrategy.HYBRID_SHARD,
+                    use_orig_params=True,
+                ),
+                distributed_config=hsdp_config,
+            ),
+        )
+        assert isinstance(model, nn.Module)
         assert isinstance(optimizer, DistributedShampoo)
         state_dict = optimizer.distributed_state_dict(
             key_to_param=model.named_parameters()
         )
-        flattened_state_dict = flatten_state_dict(state_dict)[0]
+        flattened_state_dict = flatten_state_dict(state_dict["state"])[0]
 
         # Note that we get the local rank corresponding to the second mesh dimension
         # because the first mesh dimension corresponds to replication and the second
@@ -269,67 +197,143 @@ class ShampooHSDPDistributorTest(FSDPTest):
         #
         # We expect that the rank should correspond to the rank in the shard dimension
         # in order to avoid having the same key.
-        rank = mesh_2d.get_local_rank(mesh_dim=1)
-        matches = 0
-        for key in flattened_state_dict.keys():
-            if SHAMPOO in key:
-                with self.subTest(key=key):
-                    self.assertIn(f"rank_{rank}-block_", key)
-                    matches += 1
-        self.assertGreater(matches, 0)
+        rank: int = mesh_2d.get_local_rank(mesh_dim=1)
+
+        def expected_key_criterion(key: str) -> bool:
+            return f"rank_{rank}-block_" in key
+
+        keys_with_shampoo = filter(
+            lambda key: SHAMPOO in key, flattened_state_dict.keys()
+        )
+        keys_with_expected_key, keys_without_expected_key = (
+            list(filter(expected_key_criterion, keys_with_shampoo)),
+            list(filterfalse(expected_key_criterion, keys_with_shampoo)),
+        )
+        self.assertFalse(
+            keys_without_expected_key, msg=f"{keys_without_expected_key=} is not empty."
+        )
+        self.assertTrue(keys_with_expected_key)
+
+    @skip_if_lt_x_gpu(4)
+    @parametrize("communicate_params", (False, True))
+    def test_all_ranks_with_no_grads(self, communicate_params: bool) -> None:
+        hsdp_config = HSDPShampooConfig(
+            param_to_metadata={},
+            device_mesh=init_device_mesh("cuda", (2, 2)),
+            communicate_params=communicate_params,
+        )
+
+        steps_with_gradients = 2
+        model, loss, data, target, optimizer = train_model(
+            optim_factory=ShampooHSDPDistributorTest._shampoo_optim_factory(
+                distributed_config=hsdp_config
+            ),
+            model_factory=partial(
+                ShampooHSDPDistributorTest._construct_model,
+                post_model_decoration=partial(
+                    FSDP1,
+                    device_mesh=hsdp_config.device_mesh,
+                    sharding_strategy=ShardingStrategy.HYBRID_SHARD,
+                    use_orig_params=True,
+                ),
+                distributed_config=hsdp_config,
+            ),
+            num_steps=steps_with_gradients,
+        )
+        assert isinstance(model, nn.Module)
+
+        steps_without_gradients = 3
+        for _ in range(steps_without_gradients):
+            objective = loss(model(data), target)
+            objective.backward()
+
+            # Experiment setup: all ranks get no gradients.
+            optimizer.zero_grad()
+
+            optimizer.step()
+
+        assert isinstance(optimizer, DistributedShampoo)
+        # For each rank, no matter getting gradients or not, the step should be updated.
+        self.assertEqual(
+            optimizer.distributed_state_dict(key_to_param=model.named_parameters())[
+                "state"
+            ]["_fsdp_wrapped_module.linear_layers.0.weight"]['["step"]'].item(),
+            steps_with_gradients + steps_without_gradients,
+        )
 
     @skip_if_lt_x_gpu(4)
     def test_number_of_trainers_per_group_out_of_range(self) -> None:
-        mesh_2d = init_device_mesh("cuda", (2, 2))
         hsdp_config = HSDPShampooConfig(
             param_to_metadata={},
-            device_mesh=mesh_2d,
+            device_mesh=init_device_mesh("cuda", (2, 2)),
             num_trainers_per_group=3,
         )
+        model = ShampooHSDPDistributorTest._construct_model(
+            post_model_decoration=partial(
+                FSDP1,
+                device_mesh=hsdp_config.device_mesh,
+                sharding_strategy=ShardingStrategy.HYBRID_SHARD,
+                use_orig_params=True,
+            ),
+            distributed_config=hsdp_config,
+        )[0]
+        assert isinstance(model, nn.Module)
 
         self.assertRaisesRegex(
             ValueError,
             re.escape(
                 "Invalid number of trainers per group: 3. Must be between [1, 2] or set to -1."
             ),
-            ShampooHSDPDistributorTest._train_model,
-            optim_factory=ShampooHSDPDistributorTest._shampoo_optim_factory(
+            ShampooHSDPDistributorTest._shampoo_optim_factory(
                 distributed_config=hsdp_config,
             ),
-            model_factory=ShampooHSDPDistributorTest._model_factory(hsdp_config),
-            device=torch.device("cuda"),
+            model.parameters(),
         )
 
     @skip_if_lt_x_gpu(4)
     def test_dist_is_initialized(self) -> None:
-        mesh_2d = init_device_mesh("cuda", (2, 2))
         hsdp_config = HSDPShampooConfig(
             param_to_metadata={},
-            device_mesh=mesh_2d,
+            device_mesh=init_device_mesh("cuda", (2, 2)),
         )
+        model = ShampooHSDPDistributorTest._construct_model(
+            post_model_decoration=partial(
+                FSDP1,
+                device_mesh=hsdp_config.device_mesh,
+                sharding_strategy=ShardingStrategy.HYBRID_SHARD,
+                use_orig_params=True,
+            ),
+            distributed_config=hsdp_config,
+        )[0]
 
         with mock.patch.object(torch.distributed, "is_initialized", return_value=False):
             self.assertRaisesRegex(
                 RuntimeError,
                 re.escape("HSDPDistributor needs torch.distributed to be initialized!"),
-                ShampooHSDPDistributorTest._train_model,
-                optim_factory=ShampooHSDPDistributorTest._shampoo_optim_factory(
-                    distributed_config=hsdp_config,
+                ShampooHSDPDistributorTest._shampoo_optim_factory(
+                    distributed_config=hsdp_config
                 ),
-                model_factory=ShampooHSDPDistributorTest._model_factory(hsdp_config),
-                device=torch.device("cuda"),
+                model.parameters(),
             )
 
     @skip_if_lt_x_gpu(4)
     def test_incompatible_replicated_group_size_and_num_trainers_per_group(
         self,
     ) -> None:
-        mesh_2d = init_device_mesh("cuda", (2, 2))
         hsdp_config = HSDPShampooConfig(
             param_to_metadata={},
-            device_mesh=mesh_2d,
+            device_mesh=init_device_mesh("cuda", (2, 2)),
             num_trainers_per_group=3,
         )
+        model = ShampooHSDPDistributorTest._construct_model(
+            post_model_decoration=partial(
+                FSDP1,
+                device_mesh=hsdp_config.device_mesh,
+                sharding_strategy=ShardingStrategy.HYBRID_SHARD,
+                use_orig_params=True,
+            ),
+            distributed_config=hsdp_config,
+        )[0]
 
         # Hijack the DeviceMesh.size() method to return 4 instead of 2 to bypass the check of num_trainers_per_group.
         with mock.patch.object(
@@ -340,32 +344,8 @@ class ShampooHSDPDistributorTest(FSDPTest):
                 re.escape(
                     "distributed_config.num_trainers_per_group=3 must divide self._replicated_group_size=4!"
                 ),
-                ShampooHSDPDistributorTest._train_model,
-                optim_factory=ShampooHSDPDistributorTest._shampoo_optim_factory(
-                    distributed_config=hsdp_config,
+                ShampooHSDPDistributorTest._shampoo_optim_factory(
+                    distributed_config=hsdp_config
                 ),
-                model_factory=ShampooHSDPDistributorTest._model_factory(hsdp_config),
-                device=torch.device("cuda"),
-            )
-
-    @skip_if_lt_x_gpu(4)
-    def test_unsupported_communication_dtype(self) -> None:
-        mesh_2d = init_device_mesh("cuda", (2, 2))
-        hsdp_config = HSDPShampooConfig(
-            param_to_metadata={},
-            device_mesh=mesh_2d,
-        )
-
-        with mock.patch.object(CommunicationDType, "__eq__", return_value=False):
-            self.assertRaisesRegex(
-                NotImplementedError,
-                re.escape(
-                    "Unsupported communication dtype: CommunicationDType.DEFAULT"
-                ),
-                ShampooHSDPDistributorTest._train_model,
-                optim_factory=ShampooHSDPDistributorTest._shampoo_optim_factory(
-                    distributed_config=hsdp_config,
-                ),
-                model_factory=ShampooHSDPDistributorTest._model_factory(hsdp_config),
-                device=torch.device("cuda"),
+                model.parameters(),
             )

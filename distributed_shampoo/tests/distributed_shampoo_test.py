@@ -11,11 +11,12 @@ LICENSE file in the root directory of this source tree.
 
 import abc
 import copy
+import gc
 import re
 import unittest
 from dataclasses import dataclass
 from itertools import chain
-from typing import Any
+from typing import Any, cast
 
 import torch
 from distributed_shampoo.distributed_shampoo import DistributedShampoo
@@ -202,34 +203,48 @@ class DistributedShampooTest(unittest.TestCase):
         )
 
     def test_step_with_closure(self) -> None:
+        layer_weight: torch.Tensor = cast(torch.Tensor, self._model[0].weight)
         # Test the case without closure, the loss returned by step() is None.
         self._optimizer.zero_grad()
-        self._model[0].weight.grad = torch.rand_like(self._model[0].weight)
+        layer_weight.grad = torch.rand_like(layer_weight)
         self.assertIsNone(self._optimizer.step(closure=None))
 
         # Test the case that the closure returns a scalar.
         def closure() -> float:
             self._optimizer.zero_grad()
-            self._model[0].weight.grad = torch.rand_like(self._model[0].weight)
+            layer_weight.grad = torch.rand_like(layer_weight)
             return 1.0
 
         self.assertEqual(self._optimizer.step(closure=closure), 1.0)
 
-    def test_step_with_empty_grad_list(self) -> None:
-        # Because the grad_list is empty, after taking five steps, the internal step should be 0.
-        for _ in range(5):
-            self._optimizer.zero_grad()
-            self._optimizer.step()
+    def test_optimizer_zero_grad(self) -> None:
+        layer_weight: torch.Tensor = cast(torch.Tensor, self._model[0].weight)
+        layer_weight.grad = torch.ones_like(layer_weight)
 
-        actual_step = self._optimizer.distributed_state_dict(
-            key_to_param=self._model.named_parameters(),
-            save_param_groups=True,
-        )["state"]["0.weight"]['["step"]']
-        torch.testing.assert_close(
-            actual_step,
-            torch.as_tensor(0),
-            rtol=0,
-            atol=0,
+        # Store the data pointer of the current gradient to check if it gets freed later.
+        grad_data_ptr = layer_weight.grad.data_ptr()
+
+        self._optimizer.step()
+
+        # Call zero_grad with set_to_none=True to explicitly release gradient memory rather than just zeroing it out.
+        self._optimizer.zero_grad(set_to_none=True)
+
+        # Verify that the gradient has been set to None.
+        self.assertIsNone(layer_weight.grad)
+
+        # Get all tensor objects currently tracked by the garbage collector.
+        all_alive_tensors = tuple(
+            obj
+            for obj in gc.get_objects()
+            # Using type(obj) here to prevent the garbage collector from including non-real tensors like FakeTensor.
+            if type(obj) in (torch.Tensor, nn.Parameter)
+        )
+
+        # Check that the stored gradient data pointer is not in the list of alive tensors, ensuring it was freed.
+        self.assertNotIn(
+            grad_data_ptr,
+            (t.data_ptr() for t in all_alive_tensors),
+            msg="Found gradients space is still not freed, check Shampoo code for properly free gradients pointers.",
         )
 
 
@@ -979,30 +994,30 @@ class DistributedShampooNoneGradTest(unittest.TestCase):
             max_preconditioner_dim=5,
             precondition_frequency=1,
             start_preconditioning_step=1,
-            shampoo_pt2_compile_config=ShampooPT2CompileConfig(
-                pytorch_compile_backend="eager"
-            ),
+            shampoo_pt2_compile_config=ShampooPT2CompileConfig(backend="eager"),
             distributed_config=None,
             # Explicity set grafting_config=None to test the case that no grafting is used.
             grafting_config=None,
         )
 
     def test_step_with_consistent_grads(self) -> None:
+        layer_weight: torch.Tensor = cast(torch.Tensor, self._model[0].weight)
         with self.assertNoLogs(level="WARNING"):
             self._optimizer.zero_grad()
-            self._model[0].weight.grad = torch.rand_like(self._model[0].weight)
+            layer_weight.grad = torch.rand_like(layer_weight)
             self._optimizer.step()
 
             self._optimizer.zero_grad()
-            self._model[0].weight.grad = torch.rand_like(self._model[0].weight)
+            layer_weight.grad = torch.rand_like(layer_weight)
             self._optimizer.step()
 
     def test_step_with_none_grads(self) -> None:
+        layer_weight: torch.Tensor = cast(torch.Tensor, self._model[0].weight)
         expected_msg = "PT2 will recompile because the gradient selction of model parameters have changed from the previous step. Possible reasons include some gradients are None. If this is not intended, please check the data and/or model."
         ending_msg = "Changed gradient selector indices: [0, 1]"
         with self.assertLogs(level="WARNING") as cm:
             self._optimizer.zero_grad()
-            self._model[0].weight.grad = torch.rand_like(self._model[0].weight)
+            layer_weight.grad = torch.rand_like(layer_weight)
             self._optimizer.step()
 
             self._optimizer.zero_grad()  # Implicitly set grad=None in second step

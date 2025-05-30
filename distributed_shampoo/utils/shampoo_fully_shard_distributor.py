@@ -8,6 +8,7 @@ LICENSE file in the root directory of this source tree.
 """
 
 from collections.abc import Iterable
+from typing import Literal, overload
 
 import torch
 
@@ -27,6 +28,18 @@ class FullyShardDistributor(Distributor):
     No communication is performed in FullyShard Distributor.
 
     """
+
+    @overload
+    @torch.no_grad()
+    def _get_params_or_grads(
+        self, get_grad: Literal[True]
+    ) -> Iterable[Tensor | None]: ...
+
+    @overload
+    @torch.no_grad()
+    def _get_params_or_grads(
+        self, get_grad: Literal[False] = False
+    ) -> Iterable[Tensor]: ...
 
     @torch.no_grad()
     def _get_params_or_grads(self, get_grad: bool = False) -> Iterable[Tensor | None]:
@@ -74,8 +87,8 @@ class FullyShardDistributor(Distributor):
 
         # Call `super()` instead of `self` as a performance optimization.
         # This leads to O(1) instead of O(N) complexity to retrieve the parameters.
-        non_empty_params: Iterable[DTensor] = filter(
-            lambda p: p.to_local().numel() > 0,  # type: ignore[arg-type]
+        non_empty_params: Iterable[Tensor] = filter(
+            lambda p: isinstance(p, DTensor) and p.to_local().numel() > 0,
             super()._get_params_or_grads(),
         )
         return tuple(

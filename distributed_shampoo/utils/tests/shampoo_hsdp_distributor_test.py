@@ -15,10 +15,15 @@ import torch
 
 from distributed_shampoo.utils.shampoo_hsdp_distributor import HSDPDistributor
 from torch import Tensor
+from torch.testing._internal.common_utils import (
+    instantiate_parametrized_tests,
+    parametrize,
+)
 
 logger: logging.Logger = logging.getLogger(__name__)
 
 
+@instantiate_parametrized_tests
 class SplitTensorBlockRecoveryTest(unittest.TestCase):
     def _test_split_tensor_block_recovery(
         self,
@@ -48,98 +53,67 @@ class SplitTensorBlockRecoveryTest(unittest.TestCase):
             end_idx=16,
         )
 
-    def test_split_tensor_block_recovery_for_one_dim(self) -> None:
+    @parametrize(
+        "start_idx, end_idx, expected_split_tensors",
+        ((0, 5, [torch.arange(5)]), (1, 4, [torch.arange(1, 4)])),
+    )
+    def test_split_tensor_block_recovery_for_one_dim(
+        self, start_idx: int, end_idx: int, expected_split_tensors: list[Tensor]
+    ) -> None:
         original_tensor = torch.arange(5)
-        with self.subTest("Test tensor without modification"):
-            self._test_split_tensor_block_recovery(
-                original_tensor=original_tensor,
-                expected_split_tensors=[torch.arange(5)],
-                start_idx=0,
-                end_idx=5,
-            )
-        with self.subTest("Test tensor with indices [1, 4)"):
-            self._test_split_tensor_block_recovery(
-                original_tensor=original_tensor,
-                expected_split_tensors=[torch.arange(1, 4)],
-                start_idx=1,
-                end_idx=4,
-            )
 
-    def test_split_tensor_block_recovery_for_two_dim(self) -> None:
+        self._test_split_tensor_block_recovery(
+            original_tensor=original_tensor,
+            expected_split_tensors=expected_split_tensors,
+            start_idx=start_idx,
+            end_idx=end_idx,
+        )
+
+    @parametrize(
+        "start_idx, end_idx, expected_split_tensors",
+        (
+            (0, 11, [torch.arange(10).reshape(2, 5), torch.tensor([10])]),
+            (3, 15, [torch.arange(3, 5), torch.arange(5, 15).reshape(2, 5)]),
+            (3, 4, [torch.tensor([3])]),
+        ),
+    )
+    def test_split_tensor_block_recovery_for_two_dim(
+        self, start_idx: int, end_idx: int, expected_split_tensors: list[Tensor]
+    ) -> None:
         original_tensor = torch.arange(15).reshape(3, 5)
 
-        with self.subTest("Test with indices [0, 11)"):
-            actual_split_tensors = [
-                torch.arange(10).reshape(2, 5),
-                torch.tensor([10]),
-            ]
-            self._test_split_tensor_block_recovery(
-                original_tensor=original_tensor,
-                expected_split_tensors=actual_split_tensors,
-                start_idx=0,
-                end_idx=11,
-            )
+        self._test_split_tensor_block_recovery(
+            original_tensor=original_tensor,
+            expected_split_tensors=expected_split_tensors,
+            start_idx=start_idx,
+            end_idx=end_idx,
+        )
 
-        with self.subTest("Test with indices [3, 15)"):
-            actual_split_tensors = [
-                torch.arange(3, 5),
-                torch.arange(5, 15).reshape(2, 5),
-            ]
-            self._test_split_tensor_block_recovery(
-                original_tensor=original_tensor,
-                expected_split_tensors=actual_split_tensors,
-                start_idx=3,
-                end_idx=15,
-            )
-
-        with self.subTest("Test with indices [3, 4)"):
-            actual_split_tensors = [
-                torch.tensor([3]),
-            ]
-            self._test_split_tensor_block_recovery(
-                original_tensor=original_tensor,
-                expected_split_tensors=actual_split_tensors,
-                start_idx=3,
-                end_idx=4,
-            )
-
-    def test_split_tensor_block_recovery_for_three_dim(self) -> None:
+    @parametrize(
+        "start_idx, end_idx, expected_split_tensors",
+        (
+            (0, 9, [torch.arange(9).reshape(1, 3, 3)]),
+            (8, 10, [torch.tensor([8]), torch.tensor([9])]),
+            (
+                7,
+                22,
+                [
+                    torch.tensor([7, 8]),
+                    torch.tensor([[[9, 10, 11], [12, 13, 14], [15, 16, 17]]]),
+                    torch.tensor([[18, 19, 20]]),
+                    torch.tensor([21]),
+                ],
+            ),
+        ),
+    )
+    def test_split_tensor_block_recovery_for_three_dim(
+        self, start_idx: int, end_idx: int, expected_split_tensors: list[Tensor]
+    ) -> None:
         original_tensor = torch.arange(27).reshape(3, 3, 3)
 
-        with self.subTest("Test with indices [0, 9)"):
-            actual_split_tensors = [
-                torch.arange(9).reshape(1, 3, 3),
-            ]
-            self._test_split_tensor_block_recovery(
-                original_tensor=original_tensor,
-                expected_split_tensors=actual_split_tensors,
-                start_idx=0,
-                end_idx=9,
-            )
-
-        with self.subTest("Test with indices [8, 10)"):
-            actual_split_tensors = [
-                torch.tensor([8]),
-                torch.tensor([9]),
-            ]
-            self._test_split_tensor_block_recovery(
-                original_tensor=original_tensor,
-                expected_split_tensors=actual_split_tensors,
-                start_idx=8,
-                end_idx=10,
-            )
-
-        with self.subTest("Test with indices [7, 22)"):
-            actual_split_tensors = [
-                torch.tensor([7, 8]),
-                torch.tensor([[[9, 10, 11], [12, 13, 14], [15, 16, 17]]]),
-                torch.tensor([[18, 19, 20]]),
-                torch.tensor([21]),
-            ]
-
-            self._test_split_tensor_block_recovery(
-                original_tensor=original_tensor,
-                expected_split_tensors=actual_split_tensors,
-                start_idx=7,
-                end_idx=22,
-            )
+        self._test_split_tensor_block_recovery(
+            original_tensor=original_tensor,
+            expected_split_tensors=expected_split_tensors,
+            start_idx=start_idx,
+            end_idx=end_idx,
+        )

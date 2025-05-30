@@ -13,7 +13,6 @@ from distributed_shampoo.shampoo_types import (
     AdamGraftingConfig,
     AdaptiveAmortizedComputationFrequencyConfig,
     AmortizedComputationFrequencyConfig,
-    CommunicationDType,
     ConstantAmortizedComputationFrequencyConfig,
     DDPShampooConfig,
     DefaultAmortizedComputationFrequencyConfig,
@@ -91,5 +90,4 @@ __all__ = [
     "CoupledHigherOrderConfig",  # Based on `RootInvConfig`.
     # Other utilities.
     "compile_fsdp_parameter_metadata",  # For `FSDPShampooConfig` and `HSDPShampooConfig`.
-    "CommunicationDType",  # For `DDPShampooConfig` and `HSDPShampooConfig`.
 ]

@@ -22,11 +22,13 @@ from torch.testing._internal.common_utils import (
 
 @instantiate_parametrized_tests
 class QREigendecompositionConfigSubclassesTest(unittest.TestCase):
+    subclasses_types: list[type[QREigendecompositionConfig]] = get_all_subclasses(
+        QREigendecompositionConfig
+    )
+
     # tolerance has to be in the interval [0.0, 1.0].
     @parametrize("tolerance", (-1.0, 1.1))
-    @parametrize(  # type: ignore
-        "cls", get_all_subclasses(QREigendecompositionConfig)
-    )
+    @parametrize("cls", subclasses_types)
     def test_illegal_tolerance(
         self, cls: type[QREigendecompositionConfig], tolerance: float
     ) -> None:
@@ -39,9 +41,7 @@ class QREigendecompositionConfigSubclassesTest(unittest.TestCase):
             tolerance=tolerance,
         )
 
-    @parametrize(  # type: ignore
-        "cls", get_all_subclasses(QREigendecompositionConfig)
-    )
+    @parametrize("cls", subclasses_types)
     def test_illegal_eigenvectors_estimate(
         self, cls: type[QREigendecompositionConfig]
     ) -> None:

@@ -28,8 +28,12 @@ from torch.testing._internal.common_utils import (
 
 @instantiate_parametrized_tests
 class AdaGradGraftingConfigSubclassesTest(unittest.TestCase):
+    subclasses_types: list[type[AdaGradGraftingConfig]] = get_all_subclasses(
+        AdaGradGraftingConfig
+    )
+
     @parametrize("epsilon", (0.0, -1.0))
-    @parametrize("cls", get_all_subclasses(AdaGradGraftingConfig))  # type: ignore
+    @parametrize("cls", subclasses_types)
     def test_illegal_epsilon(
         self, cls: type[AdaGradGraftingConfig], epsilon: float
     ) -> None:
@@ -43,8 +47,12 @@ class AdaGradGraftingConfigSubclassesTest(unittest.TestCase):
 
 @instantiate_parametrized_tests
 class RMSpropGraftingConfigSubclassesTest(unittest.TestCase):
+    subclasses_types: list[type[RMSpropGraftingConfig]] = get_all_subclasses(
+        RMSpropGraftingConfig
+    )
+
     @parametrize("beta2", (-1.0, 0.0, 1.3))
-    @parametrize("cls", get_all_subclasses(RMSpropGraftingConfig))  # type: ignore
+    @parametrize("cls", subclasses_types)
     def test_illegal_beta2(
         self, cls: type[RMSpropGraftingConfig], beta2: float
     ) -> None:
@@ -60,10 +68,13 @@ class RMSpropGraftingConfigSubclassesTest(unittest.TestCase):
 
 @instantiate_parametrized_tests
 class PreconditionerConfigSubclassesTest(unittest.TestCase):
-    # Not testing for the base class PreconditionerConfig because it is an abstract class.
-    @parametrize(  # type: ignore
-        "cls", get_all_subclasses(PreconditionerConfig, include_cls_self=False)
+    subclasses_types: list[type[PreconditionerConfig]] = get_all_subclasses(
+        PreconditionerConfig,  # type: ignore[type-abstract]
+        include_cls_self=False,
     )
+
+    # Not testing for the base class PreconditionerConfig because it is an abstract class.
+    @parametrize("cls", subclasses_types)
     def test_illegal_num_tolerated_failed_amortized_computations(
         self, cls: type[PreconditionerConfig]
     ) -> None:
@@ -102,13 +113,15 @@ class AdaptiveAmortizedComputationFrequencyConfigSubclassesTest(unittest.TestCas
 
 @instantiate_parametrized_tests
 class ShampooPreconditionerConfigSubclassesTest(unittest.TestCase):
-    @parametrize(  # type: ignore
-        "cls", get_all_subclasses(ShampooPreconditionerConfig, include_cls_self=True)
+    subclasses_types: list[type[ShampooPreconditionerConfig]] = get_all_subclasses(
+        ShampooPreconditionerConfig, include_cls_self=True
     )
+
+    @parametrize("cls", subclasses_types)
     def test_illegal_inverse_exponent_override(
         self, cls: type[ShampooPreconditionerConfig]
     ) -> None:
-        non_positive_orders_config: dict[int, dict[int, float]] = {
+        non_positive_orders_config: dict[int, dict[int, float] | float] = {
             -1: {},
             -2: {},
         }
@@ -122,42 +135,56 @@ class ShampooPreconditionerConfigSubclassesTest(unittest.TestCase):
         )
 
         # illegal_dimensions_config[1] is the problematic one.
-        illegal_dimensions_config: dict[int, dict[int, float]] = {
-            0: {0: 0.2},
+        illegal_dimensions_config: dict[int, dict[int, float] | float] = {
+            0: 0.2,
             1: {0: 0.3, 1: 0.2},
         }
         self.assertRaisesRegex(
             ValueError,
             re.escape(
-                f"Invalid dimensions in self.inverse_exponent_override[order]={illegal_dimensions_config[1]}: [1]. All dimensions must be within [0, 0]."
+                f"Invalid dimensions in self.inverse_exponent_override[1]={illegal_dimensions_config[1]}: [1]. All dimensions must be within [0, 0]."
             ),
             cls,
             inverse_exponent_override=illegal_dimensions_config,
         )
 
-        # non_positive_overrides_config[1] is the problematic one.
-        non_positive_overrides_config: dict[int, dict[int, float]] = {
+        # non_positive_dim_overrides_config[1] is the problematic one.
+        non_positive_dim_overrides_config: dict[int, dict[int, float] | float] = {
             1: {0: -0.3},
-            2: {0: 0.2, 1: 0.5},
+            2: 0.2,
         }
         self.assertRaisesRegex(
             ValueError,
             re.escape(
-                f"Invalid override value in self.inverse_exponent_override[order]={non_positive_overrides_config[1]}: [-0.3]. All overrides must be >= 0."
+                f"Invalid override value in self.inverse_exponent_override[1]={non_positive_dim_overrides_config[1]}: [-0.3]. All overrides must be >= 0."
             ),
             cls,
-            inverse_exponent_override=non_positive_overrides_config,
+            inverse_exponent_override=non_positive_dim_overrides_config,
+        )
+
+        non_positive_universal_overrides_config: dict[int, dict[int, float] | float] = {
+            1: -0.2,
+            2: {0: 0.3, 1: 0.2},
+        }
+        self.assertRaisesRegex(
+            ValueError,
+            re.escape(
+                f"Invalid override value in self.inverse_exponent_override[1]={non_positive_universal_overrides_config[1]}: {non_positive_universal_overrides_config[1]}. All overrides must be >= 0."
+            ),
+            cls,
+            inverse_exponent_override=non_positive_universal_overrides_config,
         )
 
 
 @instantiate_parametrized_tests
 class EigenvalueCorrectedShampooPreconditionerConfigSubclassesTest(unittest.TestCase):
-    @parametrize(  # type: ignore
-        "cls",
+    subclasses_types: list[type[EigenvalueCorrectedShampooPreconditionerConfig]] = (
         get_all_subclasses(
             EigenvalueCorrectedShampooPreconditionerConfig, include_cls_self=True
-        ),
+        )
     )
+
+    @parametrize("cls", subclasses_types)
     def test_illegal_ignored_basis_change_dims(
         self, cls: type[EigenvalueCorrectedShampooPreconditionerConfig]
     ) -> None:
@@ -199,12 +226,7 @@ class EigenvalueCorrectedShampooPreconditionerConfigSubclassesTest(unittest.Test
             ignored_basis_change_dims=duplicate_ignored_basis_change_dims_config,
         )
 
-    @parametrize(  # type: ignore
-        "cls",
-        get_all_subclasses(
-            EigenvalueCorrectedShampooPreconditionerConfig, include_cls_self=True
-        ),
-    )
+    @parametrize("cls", subclasses_types)
     def test_illegal_inverse_exponent_override(
         self, cls: type[EigenvalueCorrectedShampooPreconditionerConfig]
     ) -> None:

@@ -8,16 +8,14 @@ LICENSE file in the root directory of this source tree.
 """
 
 import logging
+from collections.abc import Iterable
 from functools import partial
 from itertools import islice
-from typing import Any, Iterable
+from typing import Any, Literal, overload
 
 import torch
-from distributed_shampoo.shampoo_types import (
-    CommunicationDType,
-    HybridShardShampooConfig,
-    PARAMS,
-)
+from commons import batched
+from distributed_shampoo.shampoo_types import HybridShardShampooConfig, PARAMS
 from distributed_shampoo.utils.shampoo_block_info import DTensorBlockInfo
 from distributed_shampoo.utils.shampoo_dist_utils import get_device_mesh
 from distributed_shampoo.utils.shampoo_distributor import DistributorInterface
@@ -88,7 +86,6 @@ class HybridShardDistributor(DistributorInterface):
         self._hybrid_shard_device_mesh: torch.distributed.device_mesh.DeviceMesh = (
             distributed_config.device_mesh
         )
-        self._global_num_blocks_per_param: tuple[int, ...] = ()
 
         super().__init__(param_group)
         if not dist.is_initialized():
@@ -137,19 +134,6 @@ class HybridShardDistributor(DistributorInterface):
         # Create flag for distributing parameters instead of search directions.
         self._communicate_params: bool = distributed_config.communicate_params
 
-        # Determine communication type.
-        match distributed_config.communication_dtype:
-            case CommunicationDType.BF16:
-                communication_dtype = torch.bfloat16
-            case CommunicationDType.FP16:
-                communication_dtype = torch.float16
-            case CommunicationDType.FP32 | CommunicationDType.DEFAULT:
-                communication_dtype = torch.float32
-            case _:
-                raise NotImplementedError(
-                    f"Unsupported communication dtype: {distributed_config.communication_dtype}"
-                )
-
         # Initialize _dist_group and _group_rank.
         # Note that this requires initializing all process groups.
         # Splits replicated ranks group into smaller groups of size self._dist_group_size.
@@ -159,10 +143,12 @@ class HybridShardDistributor(DistributorInterface):
             device_mesh = get_device_mesh(
                 device_type=self._hybrid_shard_device_mesh.device_type,
                 mesh=tuple(
-                    tuple(ranks_in_replicated_subgroup)
-                    for ranks_in_replicated_subgroup in ranks_in_replicated_group.view(
-                        -1, self._dist_group_size
-                    ).tolist()
+                    map(
+                        partial(tuple),
+                        ranks_in_replicated_group.view(
+                            -1, self._dist_group_size
+                        ).tolist(),
+                    )
                 ),
                 mesh_dim_names=("replicate", "shard"),
             )
@@ -181,7 +167,8 @@ class HybridShardDistributor(DistributorInterface):
         # Assign ranks to blocks with their respective buffer size.
         buffer_size_ranks = distribute_buffer_sizes(
             buffer_sizes=tuple(
-                blocked_param.numel() * get_dtype_size(communication_dtype)
+                blocked_param.numel()
+                * get_dtype_size(distributed_config.communication_dtype)
                 for blocked_param in self._global_blocked_params
             ),
             group_size=self._dist_group_size,
@@ -213,9 +200,21 @@ class HybridShardDistributor(DistributorInterface):
 
         self._construct_distributed_buffers(
             buffer_size_ranks=buffer_size_ranks,
-            communication_dtype=communication_dtype,
+            communication_dtype=distributed_config.communication_dtype,
             comms_group_rank=comms_group_rank,
         )
+
+    @overload
+    @torch.no_grad()
+    def _get_params_or_grads(
+        self, get_grad: Literal[True]
+    ) -> Iterable[Tensor | None]: ...
+
+    @overload
+    @torch.no_grad()
+    def _get_params_or_grads(
+        self, get_grad: Literal[False] = False
+    ) -> Iterable[Tensor]: ...
 
     @torch.no_grad()
     def _get_params_or_grads(self, get_grad: bool = False) -> Iterable[Tensor | None]:
@@ -237,10 +236,10 @@ class HybridShardDistributor(DistributorInterface):
     # NOTE: Remove this function once PT2 supports all_gather with functional collective
     @torch.no_grad()
     @torch.compiler.disable
-    def all_gather_into_tensor(self) -> None:
+    def _all_gather_into_tensor(self) -> None:
         dist.all_gather_into_tensor(
-            self._global_dist_buffer,
-            self._local_dist_buffer,
+            output_tensor=self._global_dist_buffer,
+            input_tensor=self._local_dist_buffer,
             group=self._comms_dist_group,
         )
 
@@ -254,45 +253,59 @@ class HybridShardDistributor(DistributorInterface):
         Args:
             masked_blocked_search_directions (tuple[Tensor, ...]): Search directions for each local blocked parameter.
 
-        See the comment in the parent class for details.
-
         """
         if self._communicate_params:
-            # Perform your update to your local masked parameters and copy into buffers.
-            torch._foreach_add_(
-                self._local_masked_blocked_params,
-                masked_blocked_search_directions,
-            )
-            torch._foreach_copy_(
-                self._local_masked_dist_blocked_buffers,
-                self._local_masked_blocked_params,
-            )
+            assert (
+                len(self._local_masked_blocked_params)
+                == len(masked_blocked_search_directions)
+            ), f"Expected {len(self._local_masked_blocked_params)=} to be equal to {len(masked_blocked_search_directions)=}."
 
-            self.all_gather_into_tensor()
+            # torch._foreach only accepts non-empty list
+            if masked_blocked_search_directions:
+                # Perform your update to your local masked parameters and copy into buffers.
+                torch._foreach_add_(
+                    self._local_masked_blocked_params,
+                    masked_blocked_search_directions,
+                )
+                torch._foreach_copy_(
+                    self._local_masked_dist_blocked_buffers,
+                    self._local_masked_blocked_params,
+                )
 
-            # Copy updated blocked params in global_masked_dist_blocked_buffers
-            # into global_masked_blocked_params.
-            torch._foreach_copy_(
-                self._global_masked_blocked_params,
-                self._global_masked_dist_blocked_buffers,
-            )
+            self._all_gather_into_tensor()
+
+            # torch._foreach only accepts non-empty list
+            if self._global_masked_blocked_params:
+                # Copy updated blocked params in global_masked_dist_blocked_buffers into global_masked_blocked_params.
+                torch._foreach_copy_(
+                    self._global_masked_blocked_params,
+                    self._global_masked_dist_blocked_buffers,
+                )
 
         else:
-            # Search directions multiplied by alpha are distributed.
-            # Copy the local search directions to the communication buffer.
-            torch._foreach_copy_(
-                self._local_masked_dist_blocked_buffers,
-                masked_blocked_search_directions,
-            )
+            assert (
+                len(self._local_masked_dist_blocked_buffers)
+                == len(masked_blocked_search_directions)
+            ), f"Expected {len(self._local_masked_dist_blocked_buffers)=} to be equal to {len(masked_blocked_search_directions)=}."
 
-            self.all_gather_into_tensor()
+            # torch._foreach only accepts non-empty list
+            if masked_blocked_search_directions:
+                # Search directions multiplied by alpha are distributed.
+                # Copy the local search directions to the communication buffer.
+                torch._foreach_copy_(
+                    self._local_masked_dist_blocked_buffers,
+                    masked_blocked_search_directions,
+                )
 
-            # Add search directions in global_masked_dist_blocked_buffers
-            # to global_masked_blocked_params.
-            torch._foreach_add_(
-                self._global_masked_blocked_params,
-                self._global_masked_dist_blocked_buffers,
-            )
+            self._all_gather_into_tensor()
+
+            # torch._foreach only accepts non-empty list
+            if self._global_masked_blocked_params:
+                # Add search directions in global_masked_dist_blocked_buffers to global_masked_blocked_params.
+                torch._foreach_add_(
+                    self._global_masked_blocked_params,
+                    self._global_masked_dist_blocked_buffers,
+                )
 
     def _construct_composable_block_ids(
         self,
@@ -332,8 +345,8 @@ class HybridShardDistributor(DistributorInterface):
         """
         # Call `super()` instead of `self` as a performance optimization.
         # This leads to O(1) instead of O(N) complexity to retrieve the parameters.
-        non_empty_params: Iterable[DTensor] = filter(
-            lambda p: p.to_local().numel() > 0,  # type: ignore[arg-type]
+        non_empty_params: Iterable[Tensor] = filter(
+            lambda p: isinstance(p, DTensor) and p.to_local().numel() > 0,
             super()._get_params_or_grads(),
         )
 
@@ -409,24 +422,16 @@ class HybridShardDistributor(DistributorInterface):
             assert (
                 remainder_size >= 0
             ), f"Local distributed buffer size {local_dist_buffer.size(0)} is "
-            "not larger than or equal to the sum of buffer sizes {sum(required_buffer_sizes)}!"
+            f"not larger than or equal to the sum of buffer sizes {sum(required_buffer_sizes)}!"
             split_tensors = torch.split(
                 local_dist_buffer, required_buffer_sizes + [remainder_size]
             )
             split_tensors_list.append(split_tensors)
 
-        # Obtain ordered buffer ranks containing (view of local buffer, rank).
-        splitted_local_dist_buffers = []
-        buffer_indices = [0] * len(
-            local_dist_buffers
-        )  # index counter for each rank for obtaining right buffer
-        for _, rank in buffer_size_ranks:
-            splitted_local_dist_buffers.append(
-                split_tensors_list[rank][buffer_indices[rank]]
-            )
-            buffer_indices[rank] += 1
-
-        return tuple(splitted_local_dist_buffers)
+        split_tensors_iterators = list(map(iter, split_tensors_list))
+        return tuple(
+            next(split_tensors_iterators[rank]) for _, rank in buffer_size_ranks
+        )
 
     def _construct_distributed_buffers(
         self,
@@ -546,17 +551,12 @@ class HybridShardDistributor(DistributorInterface):
             out (Tensor): Desired Tensor.
 
         """
-        ranks_in_replicated_group = torch.tensor(
-            dist.get_process_group_ranks(self._hybrid_shard_device_mesh.get_group(0))
+        ranks_in_replicated_group = dist.get_process_group_ranks(
+            self._hybrid_shard_device_mesh.get_group(0)
         )
         device_mesh_2d = get_device_mesh(
             device_type=device.type,
-            mesh=tuple(
-                tuple(ranks_in_replicated_subgroup)
-                for ranks_in_replicated_subgroup in ranks_in_replicated_group.view(
-                    -1, self._dist_group_size
-                ).tolist()
-            ),
+            mesh=tuple(batched(ranks_in_replicated_group, self._dist_group_size)),
             mesh_dim_names=("replicate", "shard"),
         )
         # NOTE: We get all submeshes along the "replicate" dimension, then pick out

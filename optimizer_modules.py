@@ -10,12 +10,14 @@ LICENSE file in the root directory of this source tree.
 import logging
 from collections.abc import Iterable
 from copy import deepcopy
-from typing import Any
+from typing import TypeVar
 
 import torch
 from torch.optim.optimizer import StateDict
 
 logger: logging.Logger = logging.getLogger(__name__)
+
+_StateType = TypeVar("_StateType")
 
 
 class OptimizerModule:
@@ -63,9 +65,7 @@ class OptimizerModule:
         """
 
         def save_to_state_dict(
-            # type: ignore
-            states: Iterable[Any],
-            destination: StateDict,
+            states: Iterable[tuple[str, _StateType]], destination: StateDict
         ) -> None:
             r"""Saves module state to `destination` dictionary, containing a state
             of the module, but not its descendants. This is called on every
@@ -75,7 +75,7 @@ class OptimizerModule:
             overriding this method with custom logic.
 
             Args:
-                states (Iterable[Any]): iterable that gives tuples of values to be stored
+                states (Iterable[tuple[str, StateType]]): iterable that gives tuples of values to be stored
                     in destination dict
                 destination (StateDict): a dict where state will be stored
 
@@ -100,7 +100,8 @@ class OptimizerModule:
                 elif isinstance(value, (list, tuple, set)):
                     destination[key] = {}
                     save_to_state_dict(
-                        states=enumerate(value),
+                        # Note: mypy is right on this typing error but it is impossible to flatten one more level of codes to eliminate this.
+                        states=enumerate(value),  # type: ignore[arg-type]
                         destination=destination[key],
                     )
                 elif store_non_tensors:

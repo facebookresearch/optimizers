@@ -10,8 +10,9 @@ LICENSE file in the root directory of this source tree.
 import logging
 from collections.abc import Callable, Iterator
 from copy import deepcopy
+from dataclasses import asdict
 from functools import partial
-from typing import Any
+from typing import Any, overload
 
 import torch
 
@@ -89,8 +90,8 @@ from distributed_shampoo.utils.shampoo_preconditioner_list import (
     EigendecomposedShampooPreconditionerList,
     EigenvalueCorrectedShampooPreconditionerList,
     PreconditionerList,
+    RootInvShampooPreconditionerList,
     SGDPreconditionerList,
-    ShampooPreconditionerList,
 )
 from distributed_shampoo.utils.shampoo_utils import compress_list
 from matrix_functions_types import EigendecompositionConfig, RootInvConfig
@@ -250,13 +251,6 @@ class DistributedShampoo(torch.optim.Optimizer):
             shampoo_pt2_compile_config = None.
 
         Shampoo PT2 compilation can also be customized for the backend and options via ShampooPT2CompileConfig.
-            ShampooPT2CompileConfig
-                - pytorch_compile_backend: PT2 backend to use. All available backends in pytorch 2.0 is available for Shampoo. Typical backends to use
-                    include 'inductor', 'aot_eager'. For more details: https://pytorch.org/docs/stable/torch.compiler.html
-                - enable_shampoo_pt2_dynamic_shape: if true, PT2 will compile Shampoo data/tensors with `dynamic shape` mode. Default is False and use
-                    `static` mode. `dynamic shape` means the tensor shapes can change from run to run, and PT2 will generate kernels not specialized to
-                    particular tensor shape. Recommended to use `static` mode here for Shampoo.
-                    More about dynamic shape: https://pytorch.org/docs/stable/torch.compiler_dynamic_shapes.html
 
     5. [EXPERIMENTAL] Eigenvalue correction (SOAP): We can (approximately) correct the eigenvalues of Shampoo's preconditioner by accumulating a running
         average of the squared gradient in the eigenbasis of Shampoo's preconditioner. This running average (with hyperparameter `betas[1]`) is
@@ -277,7 +271,7 @@ class DistributedShampoo(torch.optim.Optimizer):
             This can be used to replicate a version of NAdam if set appropriately. For example, if beta1 = 0.9, then applying
             beta1 interpolation a second time is equivalent to setting beta3 = 0.9 * 0.9 = 0.81.
             If set to -1.0, will set equal to beta1. (Default: -1.0)
-        epsilon (float): Term added to the denominator to improve numerical stability. (Default: 1e-12)
+        epsilon (float): Term added to the denominator to improve numerical stability, also known as the damping term. (Default: 1e-12)
         momentum (float): Momentum parameter. (Default: 0.)
         dampening (float): Dampening parameter for momentum. (Default: 0.)
         weight_decay (float): Weight decay (L2 penalty). (Default: 0.)
@@ -289,7 +283,7 @@ class DistributedShampoo(torch.optim.Optimizer):
             (Default: 1)
         start_preconditioning_step (int): Iteration to start computing inverse preconditioner. If -1, uses
             the same value as precondition_frequency. (Default: -1)
-        use_nesterov (bool): Flag for using Nesterov momentum. (default: False)
+        use_nesterov (bool): Flag for using Nesterov momentum. (Default: False)
         use_bias_correction (bool): Flag for using bias correction. (Default: True)
         use_decoupled_weight_decay (bool): Flag for using AdamW-style decoupled weight decay. (Default: True)
         grafting_config (GraftingConfig | None): Configuration for grafting method. If None, ignores grafting.
@@ -458,25 +452,25 @@ class DistributedShampoo(torch.optim.Optimizer):
     ) -> None:
         match distributed_config:
             case None:
-                distributor: Callable[..., DistributorInterface] = Distributor
+                distributor_cls: Callable[..., DistributorInterface] = Distributor
             case HSDPShampooConfig():
-                distributor = partial(
+                distributor_cls = partial(
                     HSDPDistributor, distributed_config=distributed_config
                 )
             case HybridShardShampooConfig():
-                distributor = partial(
+                distributor_cls = partial(
                     HybridShardDistributor, distributed_config=distributed_config
                 )
             case DDPShampooConfig():
-                distributor = partial(
+                distributor_cls = partial(
                     DDPDistributor, distributed_config=distributed_config
                 )
             case FSDPShampooConfig():
-                distributor = partial(
+                distributor_cls = partial(
                     FSDPDistributor, distributed_config=distributed_config
                 )
             case FullyShardShampooConfig():
-                distributor = FullyShardDistributor
+                distributor_cls = FullyShardDistributor
             case _:
                 raise NotImplementedError(f"{distributed_config=} not supported!")
 
@@ -484,7 +478,7 @@ class DistributedShampoo(torch.optim.Optimizer):
             self._per_group_state_lists, self.param_groups, strict=True
         ):
             # Instantiate distributors for each group.
-            state_lists[DISTRIBUTOR] = distributor(group)
+            state_lists[DISTRIBUTOR] = distributor_cls(group)
 
             # If the number of trainers is more than the number of blocks,
             # some workers might not get any parameters which cause wasting resources because
@@ -510,7 +504,7 @@ class DistributedShampoo(torch.optim.Optimizer):
                     amortized_computation_config=RootInvConfig()
                 ):
                     preconditioner_list_cls: Callable[..., PreconditionerList] = (
-                        ShampooPreconditionerList
+                        RootInvShampooPreconditionerList
                     )
                 case ShampooPreconditionerConfig(
                     amortized_computation_config=EigendecompositionConfig()
@@ -679,36 +673,16 @@ class DistributedShampoo(torch.optim.Optimizer):
         self, shampoo_pt2_compile_config: ShampooPT2CompileConfig | None
     ) -> None:
         # Use PT2 to compile the step function for each parameter group.
-        self._per_group_step: Callable[
-            [
-                dict[str, Any],
-                torch.Tensor,
-                torch.Tensor,
-                float,
-                float,
-                float,
-                float,
-                float,
-                bool,
-                bool,
-                bool,
-                bool,
-                bool,
-                bool,
-            ],
-            None,
-        ] = (
+        self._per_group_step: Callable[..., None] = (
             torch.compile(
-                self._per_group_step_impl,
-                backend=shampoo_pt2_compile_config.pytorch_compile_backend,
-                dynamic=shampoo_pt2_compile_config.enable_shampoo_pt2_dynamic_shape,
+                self._per_group_step_impl, **asdict(shampoo_pt2_compile_config)
             )
             if shampoo_pt2_compile_config is not None
             else self._per_group_step_impl
         )
         if shampoo_pt2_compile_config is not None:
             logger.info(
-                f"DistributedShampoo optimizer initialization is using {shampoo_pt2_compile_config.pytorch_compile_backend} backend and enable_shampoo_pt2_dynamic_shape={shampoo_pt2_compile_config.enable_shampoo_pt2_dynamic_shape}"
+                f"DistributedShampoo optimizer initialization is using {shampoo_pt2_compile_config=}"
             )
 
     @staticmethod
@@ -945,7 +919,7 @@ class DistributedShampoo(torch.optim.Optimizer):
                 )
 
     @torch.no_grad()
-    def _per_group_step_impl(
+    def _compute_search_directions(
         self,
         state_lists: dict[str, Any],
         step: torch.Tensor,
@@ -961,7 +935,7 @@ class DistributedShampoo(torch.optim.Optimizer):
         use_bias_correction: bool,
         use_grafting_method: bool,
         use_nesterov: bool,
-    ) -> None:
+    ) -> tuple[torch.Tensor, ...]:
         # Incorporate L2-regularization or (coupled) weight decay if enabled.
         #   G <- G + lr * weight_decay * W
         self._add_l2_regularization(
@@ -1036,21 +1010,75 @@ class DistributedShampoo(torch.optim.Optimizer):
             use_nesterov,
         )
 
-        # Updates parameters in distributed fashion.
-        # If DDP, executes AllGather communication to ensure all parameters are updated after local updates.
         torch._foreach_mul_(masked_blocked_search_directions, -lr)
-        state_lists[DISTRIBUTOR].update_params(
-            masked_blocked_search_directions=masked_blocked_search_directions
-        )
+
+        return masked_blocked_search_directions
 
     @torch.no_grad()
-    def step(self, closure: Callable[[], float] | None = None) -> float | None:  # type: ignore[override]
+    def _per_group_step_impl(
+        self,
+        state_lists: dict[str, Any],
+        step: torch.Tensor,
+        lr: torch.Tensor,
+        beta1: float,
+        beta3: float,
+        weight_decay: float,
+        momentum_param: float,
+        dampening: float,
+        grafting_config_not_none: bool,
+        perform_amortized_computation: bool,
+        use_decoupled_weight_decay: bool,
+        use_bias_correction: bool,
+        use_grafting_method: bool,
+        use_nesterov: bool,
+    ) -> None:
+        # This method computes search directions and updates parameters in one step
+        # It's designed to be compiled with PyTorch 2.0 for performance optimization
+
+        # Call update_params on the distributor with the computed search directions
+        # The distributor is responsible for applying updates to the actual parameters
+        state_lists[DISTRIBUTOR].update_params(
+            # Compute search directions based on current state and optimization parameters
+            # This returns the directions in which parameters should be updated
+            masked_blocked_search_directions=self._compute_search_directions(
+                state_lists=state_lists,
+                step=step,
+                lr=lr,
+                beta1=beta1,
+                beta3=beta3,
+                weight_decay=weight_decay,
+                momentum_param=momentum_param,
+                dampening=dampening,
+                grafting_config_not_none=grafting_config_not_none,
+                perform_amortized_computation=perform_amortized_computation,
+                use_decoupled_weight_decay=use_decoupled_weight_decay,
+                use_bias_correction=use_bias_correction,
+                use_grafting_method=use_grafting_method,
+                use_nesterov=use_nesterov,
+            )
+            # Only update parameters if there are gradients to use
+            # Otherwise, return an empty tuple to avoid unnecessary computation
+            if state_lists[MASKED_BLOCKED_GRADS]
+            else ()
+        )
+
+    @overload
+    @torch.no_grad()
+    def step(self, closure: None = None) -> None: ...
+
+    @overload
+    @torch.no_grad()
+    def step(self, closure: Callable[[], float]) -> float: ...
+
+    @torch.no_grad()
+    def step(self, closure: Callable[[], float] | None = None) -> float | None:
         """Performs a single optimization step.
 
         Args:
-            closure (callable, optional): A closure that reevaluates the model
-                and returns the loss.
+            closure (Callable[[], float] | Nnoe): A closure that reevaluates the model and returns the loss. (Default: None)
 
+        Returns:
+            loss (float | None): The loss value returned by the closure if provided, otherwise None.
         """
         loss = None
         if closure is not None:
@@ -1071,10 +1099,6 @@ class DistributedShampoo(torch.optim.Optimizer):
                 group=group,
                 shampoo_pt2_enabled=self._shampoo_pt2_compile_config is not None,
             )
-
-            # Check if gradient list is empty. If so, continue.
-            if not state_lists[MASKED_BLOCKED_GRADS]:
-                continue
 
             # Iterate group step counter and define Python scalar step.
             step = state_lists[STEP].add_(1)
@@ -1120,6 +1144,9 @@ class DistributedShampoo(torch.optim.Optimizer):
                 use_grafting_method,
                 use_nesterov,
             )
+
+            # Explicitly set masked blocked gradients to None to save memory so the original param.grad has no pointer to it.
+            state_lists[MASKED_BLOCKED_GRADS] = None
 
         return loss
 
@@ -1255,16 +1282,15 @@ class DistributedShampoo(torch.optim.Optimizer):
         # Load param_groups.
         if save_param_groups:
             param_groups_to_load = state_dict["param_groups"]
-            param_groups = self.param_groups
 
-            if len(param_groups) != len(param_groups_to_load):
+            if len(self.param_groups) != len(param_groups_to_load):
                 raise ValueError(
-                    f"Different param_groups count: {len(param_groups)} vs {len(param_groups_to_load)}"
+                    f"Different param_groups count: {len(self.param_groups)} vs {len(param_groups_to_load)}"
                 )
             param_to_key = {param: key for key, param in key_to_param_mapping.items()}
 
             # Loading the parameter group based on the unique parameter group key.
-            for group in param_groups:
+            for group in self.param_groups:
                 param_group_key = DistributedShampoo._construct_param_group_key(
                     group, param_to_key
                 )
@@ -1272,6 +1298,7 @@ class DistributedShampoo(torch.optim.Optimizer):
                     raise ValueError(
                         f"Param group {param_group_key} not found in param_groups_to_load!"
                     )
-                param_group_to_load = param_groups_to_load[param_group_key]
-                for key, value in param_group_to_load.items():
-                    group[key] = deepcopy(value)
+                group |= {
+                    key: deepcopy(value)
+                    for key, value in param_groups_to_load[param_group_key].items()
+                }

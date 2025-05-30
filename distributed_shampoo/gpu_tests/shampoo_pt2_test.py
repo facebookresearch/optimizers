@@ -47,8 +47,6 @@ class DistributedShampooPytorchCompileTest(unittest.TestCase):
             DistributedShampoo,
             lr=0.01,
             betas=betas,
-            # TODO: comment out beta3 to unblock quantization changes; need to fix PT2 FMA changes for this test
-            # beta3=betas[0] * betas[0],
             epsilon=1e-10,
             momentum=0.9,
             dampening=0.9,
