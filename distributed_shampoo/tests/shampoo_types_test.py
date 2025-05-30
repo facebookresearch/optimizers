@@ -14,6 +14,7 @@ from commons import get_all_subclasses
 
 from distributed_shampoo.shampoo_types import (
     AdaGradGraftingConfig,
+    AdaptiveAmortizedComputationFrequencyConfig,
     EigenvalueCorrectedShampooPreconditionerConfig,
     PreconditionerConfig,
     RMSpropGraftingConfig,
@@ -87,6 +88,27 @@ class PreconditionerConfigSubclassesTest(unittest.TestCase):
             cls,
             num_tolerated_failed_amortized_computations=num_tolerated_failed_amortized_computations,
         )
+
+
+@instantiate_parametrized_tests
+class AdaptiveAmortizedComputationFrequencyConfigSubclassesTest(unittest.TestCase):
+    @parametrize(  # type: ignore
+        "cls", get_all_subclasses(AdaptiveAmortizedComputationFrequencyConfig)
+    )
+    def test_illegal_tolerance(
+        self, cls: type[AdaptiveAmortizedComputationFrequencyConfig]
+    ) -> None:
+        # tolerance has to be in the interval [0.0, 1.0].
+        for tolerance in [-1.0, 1.1]:
+            with self.subTest(cls=cls):
+                self.assertRaisesRegex(
+                    ValueError,
+                    re.escape(
+                        f"Invalid tolerance value: {tolerance}. Must be in the interval [0.0, 1.0]."
+                    ),
+                    cls,
+                    tolerance=tolerance,
+                )
 
 
 @instantiate_parametrized_tests
