@@ -21,6 +21,7 @@ from typing import Any, cast, Generic, get_args, TypeVar
 import torch
 from distributed_shampoo.shampoo_types import (
     AdaptiveAmortizedComputationFrequencyConfig,
+    AmortizedComputationFrequencyConfig,
     EigenvalueCorrectedShampooPreconditionerConfig,
     PreconditionerConfig,
     PreconditionerValueError,
@@ -1184,6 +1185,40 @@ class BaseShampooPreconditionerList(
             f"To mitigate, check factor matrix before the matrix computation: {source_matrix=}"
         )
 
+    @staticmethod
+    def _skip_eigendecomposition_computation(
+        factor_matrix_eigenvectors: Tensor,
+        factor_matrix: Tensor,
+        amortized_computation_frequency_config: AmortizedComputationFrequencyConfig,
+    ) -> bool:
+        """
+        Determines whether to skip eigendecomposition computation based on the current eigenvectors and factor matrix.
+
+        Args:
+            factor_matrix_eigenvectors (Tensor): The current estimate of the eigenvectors.
+            factor_matrix (Tensor): The factor matrix for which eigendecomposition is being computed.
+            amortized_computation_frequency_config (EigendecompositionConfig): Configuration for amortized computation frequency.
+
+        Returns:
+            bool: True if eigendecomposition computation should be skipped, False otherwise.
+        """
+        # The eigenvectors need to have the same dtype as the factor matrix,
+        # because we might want to compute matrix products with them, e.g.,
+        # to estimate the eigenvalues.
+        factor_matrix_eigenvectors = factor_matrix_eigenvectors.to(
+            dtype=factor_matrix.dtype
+        )
+        return (
+            type(amortized_computation_frequency_config)
+            is AdaptiveAmortizedComputationFrequencyConfig
+            and eigenvalues_estimate_criterion_below_or_equal_tolerance(
+                factor_matrix_eigenvectors.T
+                @ factor_matrix
+                @ factor_matrix_eigenvectors,
+                amortized_computation_frequency_config.tolerance,
+            )
+        )
+
 
 _ClassicShampooKroneckerFactorsStateType = TypeVar(
     "_ClassicShampooKroneckerFactorsStateType",
@@ -1438,6 +1473,10 @@ class EigendecomposedShampooPreconditionerList(
         # grad is not None. Implicitly, this assumes that there are no changes between the
         # selector or masking from iteration-to-iteration within a single precondition_frequency
         # interval.
+        preconditioner_config = cast(
+            EigenvalueCorrectedShampooPreconditionerConfig,
+            self._preconditioner_config,
+        )
         for idx, kronecker_factors in enumerate(
             self._masked_kronecker_factors_unwrapped
         ):
@@ -1462,10 +1501,19 @@ class EigendecomposedShampooPreconditionerList(
                     factor_matrix_index=factor_matrix_index,
                 )
 
+                if BaseShampooPreconditionerList._skip_eigendecomposition_computation(
+                    factor_matrix_eigenvectors,
+                    factor_matrix,
+                    preconditioner_config.amortized_computation_frequency_config,
+                ):
+                    # TODO: Add optional counter of skipped updates for debugging/research purposes.
+                    # Skip computation of eigendecomposition.
+                    continue
+
                 # Compute inverse preconditioner.
                 eigendecomposition_config = cast(
                     EigendecompositionConfig,
-                    self._preconditioner_config.amortized_computation_config,
+                    preconditioner_config.amortized_computation_config,
                 )
                 if isinstance(eigendecomposition_config, QREigendecompositionConfig):
                     # Due to the use of QR algorithm, we need to pass in the previous eigenvectors with the same dtype as the input matrix, i.e., bias_corrected_factor_matrix.
@@ -1702,21 +1750,10 @@ class EigenvalueCorrectedShampooPreconditionerList(
                     factor_matrix_index=factor_matrix_index,
                 )
 
-                # The eigenvectors need to have the same dtype as the factor matrix,
-                # because we might want to compute matrix products with them, e.g.,
-                # to estimate the eigenvalues.
-                factor_matrix_eigenvectors = factor_matrix_eigenvectors.to(
-                    dtype=factor_matrix.dtype
-                )
-                if (
-                    type(preconditioner_config.amortized_computation_frequency_config)
-                    is AdaptiveAmortizedComputationFrequencyConfig
-                    and eigenvalues_estimate_criterion_below_or_equal_tolerance(
-                        factor_matrix_eigenvectors.T
-                        @ factor_matrix
-                        @ factor_matrix_eigenvectors,
-                        preconditioner_config.amortized_computation_frequency_config.tolerance,
-                    )
+                if BaseShampooPreconditionerList._skip_eigendecomposition_computation(
+                    factor_matrix_eigenvectors,
+                    factor_matrix,
+                    preconditioner_config.amortized_computation_frequency_config,
                 ):
                     # TODO: Add optional counter of skipped updates for debugging/research purposes.
                     # Skip computation of eigenvectors.
@@ -1725,7 +1762,7 @@ class EigenvalueCorrectedShampooPreconditionerList(
                 # Compute eigenvectors of factor matrix.
                 eigendecomposition_config = cast(
                     EigendecompositionConfig,
-                    self._preconditioner_config.amortized_computation_config,
+                    preconditioner_config.amortized_computation_config,
                 )
                 if isinstance(eigendecomposition_config, QREigendecompositionConfig):
                     # To warm-start the QR iterations, we need to pass in the previous eigenvectors with the same dtype as the input matrix, i.e., factor_matrix.

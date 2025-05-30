@@ -98,7 +98,6 @@ class AdaptiveAmortizedComputationFrequencyConfig(AmortizedComputationFrequencyC
     and A is the current Kronecker factor. The approximate eigenvalues update criterion is then defined as
     ||B - diag(B)||_F <= tolerance * ||B||_F. The tolerance hyperparameter should therefore
     be in the interval [0.0, 1.0].
-    # TODO: Potentially improve the criterion.
     The precondition_frequency hyperparameter will be used as the minimum number of steps
     between each amortized computation.
 
@@ -235,9 +234,10 @@ class ShampooPreconditionerConfig(PreconditionerConfig):
                         f"Invalid override value in self.inverse_exponent_override[{order}]={self.inverse_exponent_override[order]}: {dim_override_or_universal_override}. All overrides must be >= 0."
                     )
 
-        if (
+        if not (
             type(self.amortized_computation_frequency_config)
-            is not ConstantAmortizedComputationFrequencyConfig
+            is ConstantAmortizedComputationFrequencyConfig
+            or isinstance(self.amortized_computation_config, EigendecompositionConfig)
         ):
             raise ValueError(
                 f"Invalid amortized_computation_frequency_config: {self.amortized_computation_frequency_config}."
