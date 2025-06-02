@@ -13,6 +13,7 @@ import re
 import unittest
 from collections.abc import Callable, Hashable
 from dataclasses import dataclass, field, replace
+from functools import partial
 from typing import Any
 from unittest import mock
 
@@ -767,7 +768,7 @@ class AbstractTest:
             )
 
             # Create a control preconditioner list, using identity matrices where not preconditioning.
-            control_preconditioner_list = [
+            control_preconditioner_list = tuple(
                 preconditioner
                 if should_precondition
                 else torch.eye(preconditioner.shape[0])
@@ -776,20 +777,20 @@ class AbstractTest:
                     experimental_preconditioned_dims_selector,
                     strict=True,
                 )
-            ]
+            )
 
+            assert isinstance(self._preconditioner_list, BaseShampooPreconditionerList)
+            precondition_grad = partial(
+                self._preconditioner_list._precondition_grad, grad=grad, dims=dims
+            )
             torch.testing.assert_close(
-                self._preconditioner_list._precondition_grad(  # type: ignore[attr-defined]
-                    grad=grad,
+                precondition_grad(
                     preconditioned_dims_selector=experimental_preconditioned_dims_selector,
                     preconditioner_list=experimental_preconditioner_list,
-                    dims=dims,
                 ),
-                self._preconditioner_list._precondition_grad(  # type: ignore[attr-defined]
-                    grad=grad,
+                precondition_grad(
                     preconditioned_dims_selector=control_preconditioned_dims_selector,
                     preconditioner_list=control_preconditioner_list,
-                    dims=dims,
                 ),
             )
 
