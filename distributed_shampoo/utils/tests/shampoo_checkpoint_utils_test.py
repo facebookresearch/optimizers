@@ -34,8 +34,12 @@ class DummyOptimizerModule(OptimizerModule):
         self._field: Tensor = field
         self._thl: list[Tensor] = thl
 
-    def __eq__(self, other: "DummyOptimizerModule") -> bool:  # type: ignore[override]
-        return bool((self._field == other._field).item()) and self._thl == other._thl
+    def __eq__(self, other: object) -> bool:
+        return (
+            isinstance(other, DummyOptimizerModule)
+            and bool((self._field == other._field).item())
+            and self._thl == other._thl
+        )
 
 
 class ExtractStateDictContentTest(unittest.TestCase):
