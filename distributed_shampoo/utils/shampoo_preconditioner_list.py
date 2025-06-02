@@ -831,7 +831,6 @@ class BaseShampooPreconditionerList(
         Returns:
             preconditioned_dims_selector (tuple[bool, ...]): A preconditioned dimensions selectors for a block.
         """
-        ...
 
     def _create_kronecker_factors_state(
         self,
@@ -898,7 +897,6 @@ class BaseShampooPreconditionerList(
         Returns:
             inverse_roots (tuple[float, ...]): Inverse roots for each preconditioner of a block.
         """
-        ...
 
     @abstractmethod
     def _amortized_computation(self) -> None:
@@ -906,7 +904,6 @@ class BaseShampooPreconditionerList(
         Computes the amortized computation needed for each Shampoo preconditioner implementation.
         This amortized computation is computation heavy work that cannot be done for each step.
         """
-        ...
 
     @staticmethod
     def _check_factor_matrix_for_nan_and_inf(
@@ -1267,7 +1264,6 @@ class ClassicShampooPreconditionerList(
         Returns:
             preconditioner_list (Iterable[tuple[Tensor, ...]]): An iterable of tuples, each containing tensors that serve as preconditioners for a block of parameters.
         """
-        ...
 
     @_profile_decorator
     def precondition(self, masked_grad_list: tuple[Tensor, ...]) -> tuple[Tensor, ...]:
