@@ -10,6 +10,7 @@ LICENSE file in the root directory of this source tree.
 #!/usr/bin/env python3
 
 import unittest
+from typing import cast
 
 import torch
 
@@ -24,13 +25,15 @@ PRECONDITIONER_DIM = 5
 
 class DistributorTest(unittest.TestCase):
     def setUp(self) -> None:
-        self._model = construct_training_problem(
-            (2 * PRECONDITIONER_DIM, PRECONDITIONER_DIM),
-            model_dead_layers_dims=None,
-            bias=True,
-            fill=0.0,
-        )[0]
-        assert isinstance(self._model, nn.Module)
+        self._model: nn.Module = cast(
+            nn.Module,
+            construct_training_problem(
+                (2 * PRECONDITIONER_DIM, PRECONDITIONER_DIM),
+                model_dead_layers_dims=None,
+                bias=True,
+                fill=0.0,
+            )[0],
+        )
         self._distributor = Distributor(
             param_group=DistributedShampoo(
                 self._model.parameters(),
@@ -48,13 +51,11 @@ class DistributorTest(unittest.TestCase):
     def test_update_params(self) -> None:
         # Explicitly disable the gradient of the scalar parameter and call merge_and_block_gradients()
         # to update the local gradient selector for the scalar parameter (i.e., 1st block) and bias layer (i.e., 4th block).
-        self._model.scalar.grad = None  # type: ignore[union-attr]
-        self._model.linear_layers[0].weight.grad = torch.ones_like(  # type: ignore[index, union-attr]
-            (
-                self._model.linear_layers[0].weight  # type: ignore[index, union-attr]
-            )
-        )
-        self._model.linear_layers[0].bias.grad = None  # type: ignore[index, union-attr]
+        cast(torch.Tensor, self._model.scalar).grad = None
+        linear_layers: nn.ModuleList = cast(nn.ModuleList, self._model.linear_layers)
+        layer_weight: torch.Tensor = cast(torch.Tensor, linear_layers[0].weight)
+        layer_weight.grad = torch.ones_like(layer_weight)
+        linear_layers[0].bias.grad = None
         self._distributor.merge_and_block_gradients()
 
         actual_masked_blocked_params = self._distributor.local_masked_blocked_params
@@ -90,11 +91,11 @@ class DistributorTest(unittest.TestCase):
     def test_local_grad_selector(self) -> None:
         # Explicitly disable the gradient of the scalar parameter and call merge_and_block_gradients()
         # to update the local gradient selector for the scalar parameter (i.e., 1st block) and bias layer (i.e., 4th block).
-        self._model.scalar.grad = None  # type: ignore[union-attr]
-        self._model.linear_layers[0].weight.grad = torch.ones_like(  # type: ignore[index, union-attr]
-            self._model.linear_layers[0].weight  # type: ignore[index, union-attr]
-        )
-        self._model.linear_layers[0].bias.grad = None  # type: ignore[index, union-attr]
+        cast(torch.Tensor, self._model.scalar).grad = None
+        linear_layers: nn.ModuleList = cast(nn.ModuleList, self._model.linear_layers)
+        layer_weight: torch.Tensor = cast(torch.Tensor, linear_layers[0].weight)
+        layer_weight.grad = torch.ones_like(layer_weight)
+        linear_layers[0].bias.grad = None
         self._distributor.merge_and_block_gradients()
 
         expected_local_grad_selector = (False, True, True, False)
@@ -128,23 +129,17 @@ class DistributorTest(unittest.TestCase):
 
         self.addTypeEqualityFunc(BlockInfo, block_info_equality)
 
+        linear_layers: nn.ModuleList = cast(nn.ModuleList, self._model.linear_layers)
+        layer_weight: torch.Tensor = cast(torch.Tensor, linear_layers[0].weight)
+        layer_bias: torch.Tensor = cast(torch.Tensor, linear_layers[0].bias)
         expected_local_block_info_list = (
             BlockInfo(
-                param=self._model.scalar,  # type: ignore[arg-type, union-attr]
+                param=cast(torch.Tensor, self._model.scalar),
                 composable_block_ids=(0, "block_0"),
             ),
-            BlockInfo(
-                param=self._model.linear_layers[0].weight,  # type: ignore[index, union-attr]
-                composable_block_ids=(1, "block_0"),
-            ),
-            BlockInfo(
-                param=self._model.linear_layers[0].weight,  # type: ignore[index, union-attr]
-                composable_block_ids=(1, "block_1"),
-            ),
-            BlockInfo(
-                param=self._model.linear_layers[0].bias,  # type: ignore[index, union-attr]
-                composable_block_ids=(2, "block_0"),
-            ),
+            BlockInfo(param=layer_weight, composable_block_ids=(1, "block_0")),
+            BlockInfo(param=layer_weight, composable_block_ids=(1, "block_1")),
+            BlockInfo(param=layer_bias, composable_block_ids=(2, "block_0")),
         )
         for index, (a, b) in enumerate(
             zip(
@@ -160,14 +155,15 @@ class DistributorTest(unittest.TestCase):
             )
 
     def test_merge_and_block_gradients(self) -> None:
-        self._model.scalar.grad = torch.ones_like(self._model.scalar)  # type: ignore[arg-type, union-attr]
-        self._model.linear_layers[0].weight.grad = torch.ones_like(  # type: ignore[index, union-attr]
-            self._model.linear_layers[0].weight  # type: ignore[index, union-attr]
-        )
-        self._model.linear_layers[0].bias.grad = None  # type: ignore[index, union-attr]
+        scalar_tensor: torch.Tensor = cast(torch.Tensor, self._model.scalar)
+        scalar_tensor.grad = torch.ones_like(scalar_tensor)
+        linear_layers: nn.ModuleList = cast(nn.ModuleList, self._model.linear_layers)
+        layer_weight: torch.Tensor = cast(torch.Tensor, linear_layers[0].weight)
+        layer_weight.grad = torch.ones_like(layer_weight)
+        linear_layers[0].bias.grad = None
         actual_local_masked_block_grads = self._distributor.merge_and_block_gradients()
         expected_local_masked_block_grads = (
-            torch.ones((1,)),  # type: ignore[arg-type, union-attr]
+            torch.ones((1,)),
             torch.ones((PRECONDITIONER_DIM, PRECONDITIONER_DIM)),
             torch.ones((PRECONDITIONER_DIM, PRECONDITIONER_DIM)),
         )
