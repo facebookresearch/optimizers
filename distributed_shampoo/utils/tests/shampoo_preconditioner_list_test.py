@@ -828,7 +828,7 @@ class RootInvShampooPreconditionerListTest(
     AbstractTest.BaseShampooPreconditionerListTest
 ):
     @property
-    def _amortized_computation_properties(self) -> InverseRootProperties:
+    def _amortized_computation_properties(self) -> AmortizedComputationProperties:
         return InverseRootProperties()
 
     @property
@@ -1243,7 +1243,7 @@ class EigendecomposedShampooPreconditionerListTest(
     RootInvShampooPreconditionerListTest
 ):
     @property
-    def _amortized_computation_properties(self) -> EigendecompositionProperties:  # type: ignore[override]
+    def _amortized_computation_properties(self) -> AmortizedComputationProperties:
         return EigendecompositionProperties()
 
     @property
@@ -1261,7 +1261,7 @@ class EigenvalueCorrectedShampooPreconditionerListTest(
     AbstractTest.BaseShampooPreconditionerListTest
 ):
     @property
-    def _amortized_computation_properties(self) -> EigendecompositionProperties:
+    def _amortized_computation_properties(self) -> AmortizedComputationProperties:
         return EigendecompositionProperties()
 
     @property
