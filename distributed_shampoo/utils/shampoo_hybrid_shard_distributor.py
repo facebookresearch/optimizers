@@ -401,8 +401,8 @@ class HybridShardDistributor(DistributorInterface):
                 local distributed buffer for each tensor block.
 
         Example:
-            tensor0 = tensor(1024)
-            tensor1 = tensor(1024)
+            tensor0 = tensor(512)
+            tensor1 = tensor(512)
             buffer_size_ranks = [(128, 0), (64, 0), (512, 1), (256, 0)]
             local_dist_buffers = [tensor0, tensor1]
             -> splitted_local_dist_buffers = [
