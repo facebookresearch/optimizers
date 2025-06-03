@@ -36,7 +36,7 @@ from distributed_shampoo.tests.shampoo_test_utils import (
 )
 from matrix_functions_types import DefaultEigendecompositionConfig
 
-from torch import distributed as dist, nn, tensor
+from torch import distributed as dist, tensor
 from torch.distributed.device_mesh import DeviceMesh
 from torch.distributed.tensor import DTensor
 from torch.distributed.tensor.placement_types import Replicate
@@ -191,7 +191,6 @@ class AbstractTest:
                 num_steps=num_steps,
             )
 
-            assert isinstance(model, nn.Module)
             assert isinstance(optimizer, DistributedShampoo)
             # Retrieve the distributed state dictionary of the first layer (i.e., the only layer) from the optimizer.
             distributed_state_dict = optimizer.distributed_state_dict(
@@ -413,7 +412,6 @@ class AbstractTest:
                 ),
                 num_steps=steps_with_gradients,
             )
-            assert isinstance(model, nn.Module)
 
             steps_without_gradients = 3
             for _ in range(steps_without_gradients):
@@ -457,7 +455,6 @@ class AbstractTest:
                 ),
                 num_steps=num_steps,
             )
-            assert isinstance(model, nn.Module)
 
             assert isinstance(optimizer, DistributedShampoo)
             # For each rank, no matter getting gradients or not, the step should be updated.

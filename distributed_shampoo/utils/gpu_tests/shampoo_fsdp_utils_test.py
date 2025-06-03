@@ -38,7 +38,6 @@ def _create_model_and_params(
         enable_learnable_scalar=False,  # Disable 0D learable parameter because FSDP doesn't support it.
         fill=(1.0, 2.0),
     )
-    assert isinstance(model, nn.Module)
     return model, list(model.parameters())
 
 
