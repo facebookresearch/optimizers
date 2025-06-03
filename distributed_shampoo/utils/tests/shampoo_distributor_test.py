@@ -25,15 +25,12 @@ PRECONDITIONER_DIM = 5
 
 class DistributorTest(unittest.TestCase):
     def setUp(self) -> None:
-        self._model: nn.Module = cast(
-            nn.Module,
-            construct_training_problem(
-                (2 * PRECONDITIONER_DIM, PRECONDITIONER_DIM),
-                model_dead_layers_dims=None,
-                bias=True,
-                fill=0.0,
-            )[0],
-        )
+        self._model: nn.Module = construct_training_problem(
+            (2 * PRECONDITIONER_DIM, PRECONDITIONER_DIM),
+            model_dead_layers_dims=None,
+            bias=True,
+            fill=0.0,
+        )[0]
         self._distributor = Distributor(
             param_group=DistributedShampoo(
                 self._model.parameters(),
