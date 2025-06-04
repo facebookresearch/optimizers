@@ -237,7 +237,7 @@ class PreconditionerBenchmark:
                 f"{name} {self_cpu_pct} {cpu_time} {self_gpu_pct} {gpu_time} {calls}"
             )
 
-        top_ops = "\n".join(lines)
+        profiling_table = "\n".join(lines)
         gpu_utilization = (
             (total_device_time / (total_time * 1e6)) * 100 if total_time > 0 else 0
         )
@@ -248,7 +248,7 @@ class PreconditionerBenchmark:
             avg_time_per_epoch=total_time / num_epochs,
             memory_usage=memory_usage,
             gpu_utilization=gpu_utilization,
-            profiling_table=top_ops,
+            profiling_table=profiling_table,
         )
 
     def _generate_gradients(self, num_epochs: int) -> list[list[torch.Tensor]]:
