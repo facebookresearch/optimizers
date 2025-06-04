@@ -39,10 +39,10 @@ class HybridShardDistributor(DistributorInterface):
     The constructor internally sets up `DeviceMesh` objects as necessary for distributing memory
     and computation, so torch.distributed must be initialized in advance.
 
-    Unlike FullyShardDistributor, HybridShardDistributor requires the user to pass in a device mesh used for
-    Hybrid Shard. For example, suppose we have 48 GPUs and the Hybrid Shard group size is 8. Then:
+    Unlike FullyShardDistributor, HybridShardDistributor requires the user to pass in a device mesh specifiying the model level parallelism used for Hybrid Shard.
+    For example, suppose we have 48 GPUs and the Hybrid Shard group size is 8. Then:
 
-    Hybrid Shard Device Mesh with (Replicate, Shard) = (6, 8):
+    Hybrid Shard Device Mesh with (Replicate, Shard) = (6, 8); note that the Replicate and Shard here is referring to the model level parallelism:
 
         device_mesh = [[ 0,  1,  2,  3,  4,  5,  6,  7]
                        [ 8,  9, 10, 11, 12, 13, 14, 15]
@@ -63,7 +63,7 @@ class HybridShardDistributor(DistributorInterface):
     For example, suppose that the num_trainers_per_group = 3. We want to form a (2, 3)-submesh on
     the ranks [3, 11, 19, 27, 35, 43] (and similar).
 
-    HybridShardDistributor 2D Sub-Mesh Example with (Replicate, Shard) = (2, 3):
+    HybridShardDistributor 2D Sub-Mesh Example with (Replicate, Shard) = (2, 3); note that the Replicate and Shard here is referring to the optimizer level computating parallelism:
 
         submesh = [[ 3, 11, 19]
                    [27, 35, 43]]
