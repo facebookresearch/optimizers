@@ -110,13 +110,6 @@ def get_dtype_size(dtype: torch.dtype) -> int:
 def generate_pairwise_indices(input_list: Sequence[int]) -> Iterator[tuple[int, int]]:
     """Generates accumulated pairwise indices for a given input list.
 
-    For example, if input_list = (1, 3, 2),
-        - First element (1) generates index range [0, 1)
-        - Second element (3) generates index range [1, 4)
-        - Third element (2) generates index range [4, 6)
-
-    then this will output [(0, 1), (1, 4), (4, 6)].
-
     This is useful for generating interval indices for iterating through a list given the
     number of blocks within each parameter.
 
@@ -126,6 +119,14 @@ def generate_pairwise_indices(input_list: Sequence[int]) -> Iterator[tuple[int, 
     Returns:
         partition_indices: Iterator[tuple[int, int]]: An iterator containing pairs of indices which specify
             the start and the ending indices of each partition specified in the input_list.
+
+    Example:
+        If input_list = (1, 3, 2),
+            - First element (1) generates index range [0, 1)
+            - Second element (3) generates index range [1, 4)
+            - Third element (2) generates index range [4, 6)
+
+        then this will output [(0, 1), (1, 4), (4, 6)].
 
     """
     return pairwise(accumulate(chain([0], input_list)))
