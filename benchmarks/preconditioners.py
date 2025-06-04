@@ -1,6 +1,15 @@
+"""
+Copyright (c) Meta Platforms, Inc. and affiliates.
+All rights reserved.
+
+This source code is licensed under the BSD-style license found in the
+LICENSE file in the root directory of this source tree.
+
+"""
+
 import time
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Optional
 
 import torch
 
@@ -38,7 +47,6 @@ class BenchmarkResult:
         avg_time_per_epoch: Average time per epoch (in seconds).
         memory_usage: Memory usage in bytes.
         gpu_utilization: GPU utilization percentage (only for CUDA devices).
-        top_operations: List of tuples with (operation_name, time_ms) for most time-consuming operations.
     """
 
     preconditioner: str
@@ -46,7 +54,7 @@ class BenchmarkResult:
     avg_time_per_epoch: float
     memory_usage: float
     gpu_utilization: Optional[float] = None
-    top_operations: Optional[list[tuple[str, float]]] = None
+    profiling_table: Optional[str] = None
 
 
 class PreconditionerBenchmark:
@@ -57,7 +65,7 @@ class PreconditionerBenchmark:
     execution time, memory usage, and GPU utilization.
     """
 
-    # Mapping of preconditioner names to their respective implementation classes
+    # Mapping preconditioner names
     PRECONDITIONER_TYPES = {
         "SGD": SGDPreconditionerList,
         "AdaGrad": AdagradPreconditionerList,
@@ -67,35 +75,10 @@ class PreconditionerBenchmark:
     }
 
     def __init__(self, param_shapes: list[tuple[int, ...]], device: str):
-        """Initialize benchmark with parameter shapes and device.
-
-        Args:
-            param_shapes: List of tensor shapes to benchmark.
-            device: Device to run benchmark on. If None, automatically selects
-                   "cuda" if available, otherwise "cpu".
-        """
+        """Initialize benchmark with parameter shapes and device."""
         self.param_shapes = param_shapes
-        self.device = device
         self.console = Console()
-        self.config = self._get_default_config()
         self._setup_parameters()
-
-    def _get_default_config(self):
-        """Create default configuration for preconditioners.
-
-        Returns:
-            A config object with default settings for the benchmark.
-        """
-        return type(
-            "Config",
-            (),
-            {
-                "beta2": 1.0,
-                "epsilon": 1e-12,
-                "use_bias_correction": True,
-                "factor_matrix_dtype": torch.float,
-            },
-        )()
 
     def _setup_parameters(self):
         """Initialize parameters, blocks, and block_infos.
@@ -105,12 +88,12 @@ class PreconditionerBenchmark:
         - self.blocks: List of parameter tensors
         - self.block_infos: List of BlockInfo objects
         """
-        self.state: dict[torch.Tensor, Any] = {}
+        self.state: dict[torch.Tensor] = {}
         self.blocks: list[torch.Tensor] = []
         self.block_infos: list[BlockInfo] = []
 
         for i, shape in enumerate(self.param_shapes):
-            param = torch.nn.Parameter(torch.randn(shape, device=self.device))
+            param = torch.nn.Parameter(torch.randn(shape, device="cuda"))
             self.state[param] = {}
             self.blocks.append(param.data)
             self.block_infos.append(
@@ -151,7 +134,7 @@ class PreconditionerBenchmark:
         """
         preconditioner_class = self.PRECONDITIONER_TYPES[preconditioner_type]
 
-        # SGD only needs block_list
+        # SGD only needs block_list (no preconditioner config)
         if preconditioner_type == "SGD":
             return preconditioner_class(block_list=tuple(self.blocks))
 
@@ -160,17 +143,10 @@ class PreconditionerBenchmark:
             "block_list": tuple(self.blocks),
             "state": self.state,
             "block_info_list": tuple(self.block_infos),
-            "beta2": self.config.beta2,
-            "epsilon": self.config.epsilon,
+            "beta2": 0.999,
+            "epsilon": 1e-8,
+            "use_bias_correction": preconditioner_type != "AdaGrad",
         }
-
-        # AdaGrad doesn't use bias correction
-        if preconditioner_type == "AdaGrad":
-            kwargs["use_bias_correction"] = False
-        else:
-            kwargs["use_bias_correction"] = self.config.use_bias_correction
-
-        # Shampoo variants need additional config
         if preconditioner_type in [
             "Shampoo",
             "EigendecomposedShampoo",
@@ -180,30 +156,23 @@ class PreconditionerBenchmark:
                 {
                     "preconditioner_config": self._get_preconditioner_config(
                         preconditioner_type
-                    ),
-                    "factor_matrix_dtype": self.config.factor_matrix_dtype,
+                    )
                 }
             )
 
         return preconditioner_class(**kwargs)
 
     def _benchmark_single(
-        self,
-        preconditioner_type: str,
-        num_epochs: int = 200,
-        precondition_frequency: int = 40,
+        self, preconditioner_type: str, num_epochs=200
     ) -> BenchmarkResult:
         """Benchmark a single preconditioner with profiler."""
         preconditioner = self._create_preconditioner(preconditioner_type)
         gradients = self._generate_gradients(num_epochs)
         memory_usage = getattr(preconditioner, "num_bytes", lambda: 0)()
 
-        # Configure profiler
-        activities = [ProfilerActivity.CPU, ProfilerActivity.CUDA]
-
-        # Build PyTorch profiler
+        torch.cuda.empty_cache()
         with profile(
-            activities=activities,
+            activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
             record_shapes=True,
             profile_memory=True,
             with_stack=True,
@@ -223,16 +192,12 @@ class PreconditionerBenchmark:
                 )
 
                 for epoch in range(num_epochs):
-                    step = torch.tensor(
-                        epoch + 1, dtype=torch.int64, device=self.device
-                    )
-                    grad_list = gradients[epoch]
-
+                    step = torch.tensor(epoch + 1, dtype=torch.float, device="cuda")
                     # Perform amortized computation per the frequency epochs (40)
-                    perform_amortized = (epoch + 1) % precondition_frequency == 0
+                    perform_amortized = (epoch + 1) % 40 == 0
 
                     preconditioner.update_preconditioners(
-                        masked_grad_list=tuple(grad_list),
+                        masked_grad_list=tuple(gradients[epoch]),
                         step=step,
                         perform_amortized_computation=perform_amortized,
                     )
@@ -242,31 +207,40 @@ class PreconditionerBenchmark:
 
         # Extract profiling results
         key_averages = prof.key_averages()
+        top_ops = sorted(
+            key_averages, key=lambda x: getattr(x, "cuda_time_total", 0), reverse=True
+        )[:8]
 
-        # Select time attribute based on device
-        time_attr = "device_time_total" if self.device == "cuda" else "cpu_time_total"
+        # Calculate total CPU and GPU times
+        total_cpu_time = sum(x.cpu_time_total for x in key_averages)
+        total_device_time = sum(x.device_time_total for x in key_averages)
 
-        # Sort key_averages by time
-        sorted_events = sorted(
-            key_averages, key=lambda x: getattr(x, time_attr, 0), reverse=True
-        )
+        lines = [
+            "Name                               Self CPU %  CPU Time  Self GPU %  GPU Time  Calls",
+            "-" * 85,
+        ]
 
-        top_ops: list[tuple[str, float]] = []
-        for event in sorted_events:
-            if len(top_ops) >= 5:
-                break
-            if "randn" not in event.key and "normal" not in event.key:
-                time_ms = getattr(event, time_attr, 0) / 1000
-                top_ops.append((event.key, time_ms))
-
-        # Calculate GPU-usage if device is CUDA
-        gpu_utilization = None
-        if self.device == "cuda":
-            device_time = sum(getattr(event, time_attr, 0) for event in key_averages)
-            total_time_us = total_time * 1e6
-            gpu_utilization = (
-                (device_time / total_time_us) * 100 if total_time_us > 0 else 0
+        # Format the top operations
+        for op in top_ops:
+            name = op.key[:35].ljust(35)
+            self_cpu_pct = (
+                f"{op.self_cpu_time_total / total_cpu_time * 100:.1f}%".rjust(9)
             )
+            cpu_time = f"{op.cpu_time_total / 1000:.1f}ms".rjust(9)
+            self_gpu_pct = (
+                f"{op.self_device_time_total / total_device_time * 100:.1f}%".rjust(9)
+            )
+            gpu_time = f"{op.device_time_total / 1000:.1f}ms".rjust(8)
+            calls = f"{op.count}".rjust(9)
+
+            lines.append(
+                f"{name} {self_cpu_pct} {cpu_time} {self_gpu_pct} {gpu_time} {calls}"
+            )
+
+        top_ops = "\n".join(lines)
+        gpu_utilization = (
+            (total_device_time / (total_time * 1e6)) * 100 if total_time > 0 else 0
+        )
 
         return BenchmarkResult(
             preconditioner=preconditioner_type,
@@ -274,7 +248,7 @@ class PreconditionerBenchmark:
             avg_time_per_epoch=total_time / num_epochs,
             memory_usage=memory_usage,
             gpu_utilization=gpu_utilization,
-            top_operations=top_ops,
+            profiling_table=top_ops,
         )
 
     def _generate_gradients(self, num_epochs: int) -> list[list[torch.Tensor]]:
@@ -299,8 +273,9 @@ class PreconditionerBenchmark:
         ) as progress:
             task = progress.add_task("[cyan]Generating gradients...", total=num_epochs)
             for _ in range(num_epochs):
-                grad_list = [torch.randn_like(block) * 0.01 for block in self.blocks]
-                gradients.append(grad_list)
+                gradients.append(
+                    [torch.randn_like(block) * 0.01 for block in self.blocks]
+                )
                 progress.update(task, advance=1)
         return gradients
 
@@ -317,56 +292,46 @@ class PreconditionerBenchmark:
         """
         # Main performance table
         table = Table(title="Performance Summary")
-        table.add_column("Preconditioner", style="cyan", no_wrap=True)
-        table.add_column("Total (s)", justify="right", style="magenta")
+        table.add_column("Preconditioner", style="cyan", justify="left")
+        table.add_column("Total time (s)", justify="right", style="magenta")
         table.add_column("Avg/Epoch (ms)", justify="right", style="yellow")
         table.add_column("Memory (MB)", justify="right", style="green")
         table.add_column("Relative", justify="right", style="red")
-
-        if self.device == "cuda":
-            table.add_column("GPU Util %", justify="right", style="blue")
+        table.add_column("GPU Util %", justify="right", style="blue")
 
         sgd_time = results["SGD"].avg_time_per_epoch
 
         for preconditioner_type, result in results.items():
-            relative_time = result.avg_time_per_epoch / sgd_time
             row = [
                 preconditioner_type,
-                f"{result.total_time:.3f}",
-                f"{result.avg_time_per_epoch * 1000:.2f}",
+                f"{result.total_time:.1f}",
+                f"{result.avg_time_per_epoch * 1000:.1f}",
                 f"{result.memory_usage / 1024 / 1024:.1f}",
-                f"{relative_time:.1f}x",
+                f"{result.avg_time_per_epoch / sgd_time:.1f}x",
+                f"{result.gpu_utilization or 0:.0f}",
             ]
-
-            if self.device == "cuda":
-                gpu_util = result.gpu_utilization or 0
-                row.append(f"{gpu_util:.1f}")
 
             table.add_row(*row)
 
         self.console.print(table)
 
-        # Show bottleneck analysis
+        # Show bottleneck analysis in rich Console
         self.console.print("\n[bold]Bottleneck Analysis[/bold]")
         for preconditioner_type, result in results.items():
-            if result.top_operations:
-                self.console.print(
-                    f"\n[cyan]{preconditioner_type}[/cyan] top operations:"
-                )
-                for i, (op_name, time_ms) in enumerate(result.top_operations[:10]):
-                    self.console.print(f"  {i+1}. {op_name}: {time_ms:.2f}ms")
+            if result.profiling_table:
+                self.console.print(f"\n[cyan]{preconditioner_type}[/cyan]:")
+                lines = result.profiling_table.split("\n")
+                for line in lines:
+                    self.console.print(f"  {line}")
 
-        # Quick comparison
-        self.console.print("\n[bold]Quick Comparison (SGD = 1.0x)[/bold]")
         comparisons = []
         for preconditioner_type, result in results.items():
-            relative_time = result.avg_time_per_epoch / sgd_time
-            comparisons.append(
-                f"{preconditioner_type}: [bold red]{relative_time:.1f}x[/bold red]"
-            )
-        self.console.print(" | ".join(comparisons))
+            ratio = result.avg_time_per_epoch / sgd_time
+            comparisons.append(f"{preconditioner_type}: {ratio:.1f}x")
 
-    def run_all_benchmarks(self, num_epochs: int = 100) -> dict[str, BenchmarkResult]:
+        self.console.print(f"Total time relative to SGD: {' | '.join(comparisons)}")
+
+    def run_all_benchmarks(self, num_epochs: int = 200) -> dict[str, BenchmarkResult]:
         """Run benchmarks for all preconditioners.
 
         Args:
@@ -377,8 +342,7 @@ class PreconditionerBenchmark:
         """
         self.console.print("\n[bold cyan]Preconditioner Benchmark[/bold cyan]")
         self.console.print(
-            f"[dim]Device: {self.device} | Param Shape: {self.param_shapes[0]} | "
-            f"Epochs: {num_epochs}[/dim]\n"
+            f"[dim]Device: cuda  | Shape: {self.param_shapes[0]} | Epochs: {num_epochs}[/dim]\n"
         )
 
         results = {}
@@ -392,7 +356,5 @@ class PreconditionerBenchmark:
 
 if __name__ == "__main__":
     # Run benchmark with a single 2048x2048 parameter matrix
-    benchmark = PreconditionerBenchmark(
-        [(2048, 2048)], device="cuda" if torch.cuda.is_available() else "cpu"
-    )
+    benchmark = PreconditionerBenchmark([(2048, 2048)], device="cuda")
     benchmark.run_all_benchmarks(num_epochs=200)
