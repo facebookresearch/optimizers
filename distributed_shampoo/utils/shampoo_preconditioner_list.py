@@ -1167,10 +1167,9 @@ class BaseShampooPreconditionerList(
             logger.warning(f"Failed to save matrix to {file_path}: {str(e)}")
 
         torch.set_printoptions(
-            precision=10,  # Set the precision for floating point numbers to 10 decimal places.
+            precision=16,  # Set the precision for floating point numbers to 16 decimal places.
             linewidth=10000,  # Set the line width to 10000, allowing for long lines without wrapping.
             profile="full",  # Use the 'full' profile to display all elements of tensors.
-            sci_mode=False,  # Disable scientific notation for floating point numbers.
         )
 
         raise PreconditionerValueError(

@@ -215,13 +215,11 @@ def stabilize_and_pow_eigenvalues(
                     L, epsilon=-min(lambda_min - epsilon, 0.0), is_eigenvalues=True
                 )
             else:
-                # NOTE: Although combining the two additions below is mathematically equivalent (and potentially numerically more accurate),
-                #       it will cause a numerics discrepancy that can lead to NaN/inf values in the computed inverse root.
-                # TODO: Investigate why this happens.
+                # In that case, do a 2 step perturbation: first by -min(lambda_min, 0.0), and then by epsilon;
+                # this approach is more stable when dealing with matrices that have large magnitude eigenvalues because it ensures epsilon doesn't get "absorbed" by large values.
                 L = _matrix_perturbation(
                     L, epsilon=-min(lambda_min, 0.0), is_eigenvalues=True
                 )
-                # and add the epsilon
                 L = _matrix_perturbation(L, epsilon=epsilon, is_eigenvalues=True)
 
             inv_power_L = L.pow_(-1.0 / root)
@@ -264,6 +262,14 @@ def matrix_inverse_root(
             A=A,
             root=root,
             epsilon=epsilon,
+            # If the config does not contain rank_deficient_stability_config attribute,
+            # we use DefaultPerturbationConfig as the fallback option for handling
+            # rank-deficient matrices during diagonal matrix inverse root computation.
+            rank_deficient_stability_config=getattr(
+                root_inv_config,
+                "rank_deficient_stability_config",
+                DefaultPerturbationConfig,
+            ),
         )
 
     match root_inv_config:
@@ -319,6 +325,7 @@ def _matrix_inverse_root_diagonal(
     A: Tensor,
     root: Fraction,
     epsilon: float = 0.0,
+    rank_deficient_stability_config: RankDeficientStabilityConfig = DefaultPerturbationConfig,
 ) -> Tensor:
     """Computes matrix inverse root for a diagonal matrix by taking inverse square root of diagonal entries.
 
@@ -326,6 +333,7 @@ def _matrix_inverse_root_diagonal(
         A (Tensor): A diagonal matrix.
         root (Fraction): Root of interest. Any rational number.
         epsilon (float): Adds epsilon * I to matrix before taking matrix root. (Default: 0.0)
+        rank_deficient_stability_config (RankDeficientStabilityConfig): Configuration for handling/stabilizing rank-deficient matrices. (Default: DefaultPerturbationConfig)
 
     Returns:
         X (Tensor): Inverse root of diagonal entries.
@@ -339,7 +347,12 @@ def _matrix_inverse_root_diagonal(
         raise ValueError(f"Root {root} should be positive!")
 
     return torch.diag(
-        stabilize_and_pow_eigenvalues(torch.diagonal(A), root=root, epsilon=epsilon)
+        stabilize_and_pow_eigenvalues(
+            torch.diagonal(A),
+            root=root,
+            epsilon=epsilon,
+            rank_deficient_stability_config=rank_deficient_stability_config,
+        )
     )
 
 

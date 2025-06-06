@@ -146,6 +146,30 @@ class StabilizeAndPowEigenvaluesTest(unittest.TestCase):
             ),
         )
 
+    def test_stabilize_and_pow_eigenvalues_perturbation_after_with_disportionate_epsilon(
+        self,
+    ) -> None:
+        # This test verifies that stabilize_and_pow_eigenvalues handles matrices with large values correctly
+        # Note that the smallest entries in L have absolute magnitude of 100000.0, which is much larger
+        # than epsilon (1e-5). In a numerically unstable implementation, such a small epsilon would get
+        # "absorbed" or lost when added to these large values, causing potential numerical instability.
+        L = torch.tensor(
+            [
+                [30000.0, 30000.0, -100000.0],
+                [40000.0, 40000.0, -100000.0],
+                [-100000.0, -100000.0, 400000.0],
+            ]
+        )
+        inv_power_L = stabilize_and_pow_eigenvalues(
+            L=L,
+            root=Fraction(2),
+            epsilon=1e-5,
+            rank_deficient_stability_config=PerturbationConfig(
+                perturb_before_computation=False,
+            ),
+        )
+        self.assertTrue(torch.isfinite(inv_power_L).all())
+
     def test_pseudoinverse_with_invalid_epsilon(self) -> None:
         L = torch.tensor([1.0, 4.0, 0.0])
         epsilon = 1e-8
@@ -372,8 +396,9 @@ class MatrixRootDiagonalTest(unittest.TestCase):
             is_diagonal=True,
         )
 
-    def test_matrix_root(self) -> None:
-        A = torch.tensor([[1.0, 0.0], [0.0, 4.0]])
+    @parametrize("perturb_before_computation", (True, False))
+    def test_matrix_root(self, perturb_before_computation: bool) -> None:
+        A = torch.tensor([[0.1, 0.0], [0.0, 3.1]])
         root = Fraction(2)
         expected_root_list = torch.tensor([[1.0, 0.0], [0.0, 0.5]])
 
@@ -383,6 +408,12 @@ class MatrixRootDiagonalTest(unittest.TestCase):
                 A=A,
                 root=root,
                 is_diagonal=True,
+                epsilon=1.0 - torch.diag(A).min() * (not perturb_before_computation),
+                root_inv_config=EigenConfig(
+                    rank_deficient_stability_config=PerturbationConfig(
+                        perturb_before_computation=perturb_before_computation
+                    )
+                ),
             ),
         )
 
