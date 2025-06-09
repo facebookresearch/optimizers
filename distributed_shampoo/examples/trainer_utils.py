@@ -347,16 +347,12 @@ class LossMetrics(Metrics):
             self._global_lifetime_loss = self._lifetime_loss / self._world_size
             dist.all_reduce(self._global_window_loss, op=dist.ReduceOp.SUM)
             dist.all_reduce(self._global_lifetime_loss, op=dist.ReduceOp.SUM)
-        else:
-            pass
 
     def log_global_metrics(self):
         if self._world_size > 1:
             logger.info(
                 f"Epoch: {self._epoch} | Iteration: {self._iteration} | Global Lifetime Loss: {self._global_lifetime_loss} | Global Window Loss: {self._global_window_loss}"
             )
-        else:
-            pass
 
 
 ###### OPTIMIZER INSTANTIATION ######
