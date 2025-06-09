@@ -688,7 +688,7 @@ def _matrix_inverse_root_newton(
     identity = torch.eye(dim, dtype=A.dtype, device=A.device)
 
     # add regularization
-    A_ridge = A.add(identity, alpha=epsilon)
+    A_ridge = _matrix_perturbation(A, epsilon=epsilon, is_eigenvalues=False)
 
     # initialize matrices
     A_nrm = torch.linalg.norm(A_ridge)
@@ -817,7 +817,7 @@ def _matrix_inverse_root_higher_order(
         # Now scale and setup our variables
         epsilon = max(rel_epsilon * lambda_max_approx, abs_epsilon)
         identity = torch.eye(n, dtype=dtype, device=A.device)
-        A_ridge = torch.add(A, identity, alpha=epsilon)
+        A_ridge = _matrix_perturbation(A, epsilon=epsilon, is_eigenvalues=False)
         lambda_max_approx += epsilon
 
         # Figure out a constant that gives good starting location
