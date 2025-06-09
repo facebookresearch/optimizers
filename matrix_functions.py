@@ -135,9 +135,13 @@ def _matrix_perturbation(
 
     """
     return (
-        A.add(torch.eye(A.shape[0], dtype=A.dtype, device=A.device), alpha=epsilon)
-        if not is_eigenvalues
-        else A + epsilon
+        (
+            A.add(torch.eye(A.shape[0], dtype=A.dtype, device=A.device), alpha=epsilon)
+            if not is_eigenvalues
+            else A + epsilon
+        )
+        if epsilon != 0.0
+        else A  # Fast path when epsilon is 0.0, return A without modification
     )
 
 
@@ -401,17 +405,17 @@ def matrix_eigendecomposition(
         raise ValueError(f"{epsilon=} should be 0.0 when using pseudo-inverse!")
 
     # Add epsilon to the diagonal to help with numerical stability of the eigenvalue decomposition
-    # Only do it when damp_before_computation is True (root_inv_config must be a DampingConfig)
-    if (
-        isinstance(
+    # Only do it when perturb_before_computation is True
+    A_ridge = _matrix_perturbation(
+        A,
+        epsilon=epsilon
+        * getattr(
             eigendecomposition_config.rank_deficient_stability_config,
-            PerturbationConfig,
-        )
-        and eigendecomposition_config.rank_deficient_stability_config.perturb_before_computation
-    ):
-        A_ridge = _matrix_perturbation(A, epsilon=epsilon, is_eigenvalues=False)
-    else:
-        A_ridge = A
+            "perturb_before_computation",
+            0.0,
+        ),
+        is_eigenvalues=False,
+    )
 
     match eigendecomposition_config:
         case EighEigendecompositionConfig():
@@ -611,14 +615,13 @@ def _matrix_inverse_root_eigen(
         raise ValueError(f"{epsilon=} should be 0.0 when using pseudo-inverse!")
 
     # Add epsilon to the diagonal to help with numerical stability of the eigenvalue decomposition
-    # Only do it when damp_before_computation is True (root_inv_config must be a DampingConfig)
-    if (
-        isinstance(rank_deficient_stability_config, PerturbationConfig)
-        and rank_deficient_stability_config.perturb_before_computation
-    ):
-        A_ridge = _matrix_perturbation(A, epsilon=epsilon, is_eigenvalues=False)
-    else:
-        A_ridge = A
+    # Only do it when perturb_before_computation is True
+    A_ridge = _matrix_perturbation(
+        A,
+        epsilon=epsilon
+        * getattr(rank_deficient_stability_config, "perturb_before_computation", 0.0),
+        is_eigenvalues=False,
+    )
 
     # compute eigendecomposition and compute minimum eigenvalue
     L, Q = _eigh_eigenvalue_decomposition(
