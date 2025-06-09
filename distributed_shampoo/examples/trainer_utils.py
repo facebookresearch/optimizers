@@ -47,26 +47,29 @@ default_device = torch.device("cpu")
 
 
 ###### ENUM CLASSES ######
+@enum.unique
 class OptimizerType(enum.Enum):
-    SGD = 0
-    ADAM = 1
-    DISTRIBUTED_SHAMPOO = 2
+    SGD = enum.auto()
+    ADAM = enum.auto()
+    DISTRIBUTED_SHAMPOO = enum.auto()
 
 
+@enum.unique
 class GraftingType(enum.Enum):
-    NONE = 0
-    SGD = 1
-    ADAGRAD = 2
-    RMSPROP = 3
-    ADAM = 4
+    NONE = enum.auto()
+    SGD = enum.auto()
+    ADAGRAD = enum.auto()
+    RMSPROP = enum.auto()
+    ADAM = enum.auto()
 
 
+@enum.unique
 class PreconditionerComputationType(enum.Enum):
-    EIGEN_ROOT_INV = 0
-    COUPLED_NEWTON_ROOT_INV = 1
-    COUPLED_HIGHER_ORDER_ROOT_INV = 2
-    EIGH_EIGENVALUE_CORRECTION = 3
-    QR_EIGENVALUE_CORRECTION = 4
+    EIGEN_ROOT_INV = enum.auto()
+    COUPLED_NEWTON_ROOT_INV = enum.auto()
+    COUPLED_HIGHER_ORDER_ROOT_INV = enum.auto()
+    EIGH_EIGENVALUE_CORRECTION = enum.auto()
+    QR_EIGENVALUE_CORRECTION = enum.auto()
 
 
 ###### ARGPARSER ######
