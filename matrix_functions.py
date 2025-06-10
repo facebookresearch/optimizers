@@ -135,13 +135,9 @@ def _matrix_perturbation(
 
     """
     return (
-        (
-            A.add(torch.eye(A.shape[0], dtype=A.dtype, device=A.device), alpha=epsilon)
-            if not is_eigenvalues
-            else A + epsilon
-        )
-        if epsilon != 0.0
-        else A  # Fast path when epsilon is 0.0, return A without modification
+        A.add(torch.eye(A.shape[0], dtype=A.dtype, device=A.device), alpha=epsilon)
+        if not is_eigenvalues
+        else A + epsilon
     )
 
 
@@ -406,16 +402,16 @@ def matrix_eigendecomposition(
 
     # Add epsilon to the diagonal to help with numerical stability of the eigenvalue decomposition
     # Only do it when perturb_before_computation is True
-    A_ridge = _matrix_perturbation(
-        A,
-        epsilon=epsilon
-        * getattr(
+    if (
+        isinstance(
             eigendecomposition_config.rank_deficient_stability_config,
-            "perturb_before_computation",
-            0.0,
-        ),
-        is_eigenvalues=False,
-    )
+            PerturbationConfig,
+        )
+        and eigendecomposition_config.rank_deficient_stability_config.perturb_before_computation
+    ):
+        A_ridge = _matrix_perturbation(A, epsilon=epsilon, is_eigenvalues=False)
+    else:
+        A_ridge = A
 
     match eigendecomposition_config:
         case EighEigendecompositionConfig():
@@ -616,12 +612,13 @@ def _matrix_inverse_root_eigen(
 
     # Add epsilon to the diagonal to help with numerical stability of the eigenvalue decomposition
     # Only do it when perturb_before_computation is True
-    A_ridge = _matrix_perturbation(
-        A,
-        epsilon=epsilon
-        * getattr(rank_deficient_stability_config, "perturb_before_computation", 0.0),
-        is_eigenvalues=False,
-    )
+    if (
+        isinstance(rank_deficient_stability_config, PerturbationConfig)
+        and rank_deficient_stability_config.perturb_before_computation
+    ):
+        A_ridge = _matrix_perturbation(A, epsilon=epsilon, is_eigenvalues=False)
+    else:
+        A_ridge = A
 
     # compute eigendecomposition and compute minimum eigenvalue
     L, Q = _eigh_eigenvalue_decomposition(
