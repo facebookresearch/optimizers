@@ -146,8 +146,9 @@ class StabilizeAndPowEigenvaluesTest(unittest.TestCase):
             ),
         )
 
+    @parametrize("perturb_before_computation", (True, False))
     def test_stabilize_and_pow_eigenvalues_perturbation_after_with_disportionate_epsilon(
-        self,
+        self, perturb_before_computation: bool
     ) -> None:
         # This test verifies that stabilize_and_pow_eigenvalues handles matrices with large values correctly
         # Note that the smallest entries in L have absolute magnitude of 100000.0, which is much larger
@@ -165,7 +166,7 @@ class StabilizeAndPowEigenvaluesTest(unittest.TestCase):
             root=Fraction(2),
             epsilon=1e-5,
             rank_deficient_stability_config=PerturbationConfig(
-                perturb_before_computation=False,
+                perturb_before_computation=perturb_before_computation,
             ),
         )
         self.assertTrue(torch.isfinite(inv_power_L).all())

@@ -210,10 +210,17 @@ def stabilize_and_pow_eigenvalues(
             lambda_min = torch.min(L).item()
 
             # make eigenvalues > 0 (if necessary)
+            # Note that our input matrix may not be PSD, even though it mathematically should be in Shampoo.
+            # So, exercise great care in the below logic!
             if rank_deficient_stability_config.perturb_before_computation:
-                L = _matrix_perturbation(
-                    L, epsilon=-min(lambda_min - epsilon, 0.0), is_eigenvalues=True
-                )
+                # The happy path/mathematically ideal case: lambda_min >= epsilon, do nothing!
+                # The unhappy path: lambda_min could be anything (even large negative value)
+                # In that case, do a 2 step perturbation: first by -lambda_min, and then by epsilon
+                if lambda_min < epsilon:
+                    L = _matrix_perturbation(
+                        L, epsilon=-lambda_min, is_eigenvalues=True
+                    )
+                    L = _matrix_perturbation(L, epsilon=epsilon, is_eigenvalues=True)
             else:
                 # In that case, do a 2 step perturbation: first by -min(lambda_min, 0.0), and then by epsilon;
                 # this approach is more stable when dealing with matrices that have large magnitude eigenvalues because it ensures epsilon doesn't get "absorbed" by large values.
@@ -222,7 +229,7 @@ def stabilize_and_pow_eigenvalues(
                 )
                 L = _matrix_perturbation(L, epsilon=epsilon, is_eigenvalues=True)
 
-            inv_power_L = L.pow_(-1.0 / root)
+            inv_power_L = L.pow(-1.0 / root)
         case _:
             raise NotImplementedError(
                 f"{rank_deficient_stability_config=} is not supported."
