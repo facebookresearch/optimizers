@@ -615,7 +615,7 @@ def train_model(
             loss.backward()
 
             optimizer.step()
-            metrics.update(loss)
+            metrics.update(loss.detach())
             metrics.log()
             metrics.update_global_metrics()
             if local_rank == 0:
