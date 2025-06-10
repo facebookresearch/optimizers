@@ -31,7 +31,11 @@ from distributed_shampoo.shampoo_types import (
     ShampooPreconditionerConfig,
     ShampooPT2CompileConfig,
 )
-from matrix_functions_types import DefaultEigendecompositionConfig, EigenConfig
+from matrix_functions_types import (
+    DefaultEigendecompositionConfig,
+    EigenConfig,
+    PseudoInverseConfig,
+)
 from torch import nn
 from torch.testing._internal.common_utils import (
     instantiate_parametrized_tests,
@@ -98,6 +102,17 @@ class DistributedShampooInitTest(unittest.TestCase):
             (
                 {"epsilon": 0.0},
                 "Invalid epsilon value: 0.0. Must be > 0.0.",
+            ),
+            (
+                {
+                    "epsilon": 0.1,
+                    "preconditioner_config": ShampooPreconditionerConfig(
+                        amortized_computation_config=EigenConfig(
+                            rank_deficient_stability_config=PseudoInverseConfig()
+                        )
+                    ),
+                },
+                "Invalid epsilon value: 0.1. Must be == 0.0 when PseudoInverseConfig is used.",
             ),
             (
                 {"momentum": 3.14},
