@@ -56,11 +56,10 @@ class NewtonConvergenceFlag(enum.Enum):
 
 
 _FuncReturnType = TypeVar("_FuncReturnType")
-_DataclassType = TypeVar("_DataclassType")
 
 
 def _get_function_args_from_config(
-    func: Callable[..., _FuncReturnType], config: _DataclassType
+    func: Callable[..., _FuncReturnType], config: object
 ) -> dict[str, Any]:
     """
     Returns a dict of arguments for func that are defined in config. Note that config is not expected to contain all arguments for func, nor are all fields in config expected to be applicable to func.
