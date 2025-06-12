@@ -16,7 +16,7 @@ from functools import reduce, wraps
 from itertools import chain
 from operator import attrgetter
 from pathlib import Path
-from typing import Any, cast, Generic, get_args, TypeVar
+from typing import Any, cast, Generic, get_args, NoReturn, overload, TypeVar
 
 import torch
 from distributed_shampoo.shampoo_types import (
@@ -835,7 +835,6 @@ class BaseShampooPreconditionerList(
         Returns:
             preconditioned_dims_selector (tuple[bool, ...]): A preconditioned dimensions selectors for a block.
         """
-        ...
 
     def _create_kronecker_factors_state(
         self,
@@ -902,7 +901,6 @@ class BaseShampooPreconditionerList(
         Returns:
             inverse_roots (tuple[float, ...]): Inverse roots for each preconditioner of a block.
         """
-        ...
 
     @abstractmethod
     def _amortized_computation(self) -> None:
@@ -910,7 +908,6 @@ class BaseShampooPreconditionerList(
         Computes the amortized computation needed for each Shampoo preconditioner implementation.
         This amortized computation is computation heavy work that cannot be done for each step.
         """
-        ...
 
     @staticmethod
     def _check_factor_matrix_for_nan_and_inf(
@@ -930,24 +927,26 @@ class BaseShampooPreconditionerList(
 
     def _raise_exception_if_failure_tolerance_exceeded(
         self,
-        success_tracker: bool,
+        last_seen_exception: Exception | None,
         preconditioner_index: int,
-        exception: Exception,
+        exception_message: str,
     ) -> None:
         """Raises an exception if the number of failed amortized computations exceeds the tolerance.
 
         Resets the counter at the given index when all amortized computations are successful.
 
         Args:
-            success_tracker (bool): A boolean indicating whether the amortized computation was successful.
-            preconditioner_index (int): The index of the preconditioner.
-            exception (Exception): The exception to raise.
+            last_seen_exception (Exception | None): The last exception encountered, or None if no exception occurred.
+                When None, the counter is reset.
+                When an Exception, the counter is incremented and checked against tolerance.
+            preconditioner_index (int): The index of the preconditioner in the counter list.
+            exception_message (str): The message to include in the raised exception.
 
         Raises:
-            exception (Exception): The exception to raise.
-
+            ValueError: If the number of failed computations exceeds the allowed tolerance.
+                The original exception is attached as the cause.
         """
-        if success_tracker:
+        if last_seen_exception is None:
             # Reset counter for failed amortized computations.
             self._masked_failed_amortized_computation_counter_list[
                 preconditioner_index
@@ -965,7 +964,7 @@ class BaseShampooPreconditionerList(
                 self._preconditioner_config.num_tolerated_failed_amortized_computations
             )
             if failure_counter > tolerance:
-                raise exception
+                raise ValueError(exception_message) from last_seen_exception
 
     @_profile_decorator
     def update_preconditioners(
@@ -1141,12 +1140,78 @@ class BaseShampooPreconditionerList(
             grad,
         )
 
+    @overload
+    @staticmethod
+    def _save_and_handle_matrix_error(
+        factor_matrix_index: str,
+        source_matrix: Tensor,
+        error_handler: Callable[[], NoReturn],
+    ) -> NoReturn: ...
+
+    @overload
+    @staticmethod
+    def _save_and_handle_matrix_error(
+        factor_matrix_index: str,
+        source_matrix: Tensor,
+        error_handler: Callable[[], None],
+    ) -> None: ...
+
+    @staticmethod
+    def _save_and_handle_matrix_error(
+        factor_matrix_index: str,
+        source_matrix: Tensor,
+        error_handler: Callable[[], NoReturn | None],
+    ) -> NoReturn | None:
+        """
+        Saves a problematic matrix for debugging and configures detailed tensor printing.
+
+        When numerical issues occur in matrix operations, this method:
+        1. Creates a temporary directory and saves the matrix for later analysis
+        2. Configures PyTorch's print options to show full tensor details
+        3. Executes the provided error handler function
+
+        This approach facilitates debugging of numerical instabilities in preconditioner computations.
+
+        Args:
+            factor_matrix_index: Identifier for the factor matrix used in the filename
+            source_matrix: The problematic matrix to be saved
+            error_handler: Function to execute after saving the matrix. This function may:
+                - Raise an exception (NoReturn), which will propagate to the caller
+                - Return None to continue execution
+                - Implement other error handling logic
+
+        Returns:
+            NoReturn: If the error_handler raises an exception
+            None: If the error_handler returns normally
+
+        Examples of error_handler:
+            - Raise a custom exception with a detailed error message.
+            - Log a warning message and continue execution.
+            - Trigger a fallback mechanism to use default values.
+        """
+        # Save the problematic matrix to a file for debugging.
+        tmp_dir = Path("tmp").resolve()
+        tmp_dir.mkdir(exist_ok=True)
+        file_path = tmp_dir / f"{factor_matrix_index.replace('.', '_')}.pt"
+        try:
+            torch.save(source_matrix, file_path)
+            logger.info(f"Matrix has been saved to {file_path} for debugging.")
+        except Exception as e:
+            logger.warning(f"Failed to save matrix to {file_path}: {str(e)}")
+
+        torch.set_printoptions(
+            precision=16,  # Set the precision for floating point numbers to 16 decimal places.
+            linewidth=10000,  # Set the line width to 10000, allowing for long lines without wrapping.
+            profile="full",  # Use the 'full' profile to display all elements of tensors.
+        )
+        error_handler()
+
     @staticmethod
     def _handle_preconditioner_error(
         factor_matrix_index: str,
         source_matrix: Tensor,
         quantity_name: str,
-    ) -> None:
+    ) -> NoReturn:
         """
         Handles errors related to preconditioner computation by saving the problematic matrix
         and raising a detailed error message.
@@ -1163,26 +1228,52 @@ class BaseShampooPreconditionerList(
         Raises:
             PreconditionerValueError: Error with details about the problematic matrix.
         """
-        # Save the problematic matrix to a file for debugging.
-        tmp_dir = Path("tmp").resolve()
-        tmp_dir.mkdir(exist_ok=True)
-        file_path = tmp_dir / f"{factor_matrix_index.replace('.', '_')}.pt"
-        try:
-            torch.save(source_matrix, file_path)
-            logger.info(f"Matrix has been saved to {file_path} for debugging.")
-        except Exception as e:
-            logger.warning(f"Failed to save matrix to {file_path}: {str(e)}")
 
-        torch.set_printoptions(
-            precision=10,  # Set the precision for floating point numbers to 10 decimal places.
-            linewidth=10000,  # Set the line width to 10000, allowing for long lines without wrapping.
-            profile="full",  # Use the 'full' profile to display all elements of tensors.
-            sci_mode=False,  # Disable scientific notation for floating point numbers.
+        def raise_preconditioner_value_error() -> NoReturn:
+            raise PreconditionerValueError(
+                f"Encountered nan or inf values in {quantity_name} of factor matrix {factor_matrix_index}! "
+                f"To mitigate, check factor matrix before the matrix computation: {source_matrix=}"
+            )
+
+        BaseShampooPreconditionerList._save_and_handle_matrix_error(
+            factor_matrix_index=factor_matrix_index,
+            source_matrix=source_matrix,
+            error_handler=raise_preconditioner_value_error,
         )
 
-        raise PreconditionerValueError(
-            f"Encountered nan or inf values in {quantity_name} of factor matrix {factor_matrix_index}! "
-            f"To mitigate, check factor matrix before the matrix computation: {source_matrix=}"
+    @staticmethod
+    def _handle_amortized_computation_internal_error(
+        factor_matrix_index: str,
+        source_matrix: Tensor,
+        exception: Exception,
+        preconditioner_name: str,
+    ) -> None:
+        """
+        Handles internal errors during amortized computation by saving the problematic matrix
+        and logging a warning message.
+
+        This method is called when an exception occurs during matrix computations in the amortized
+        computation phase. It saves the source matrix to a file for debugging purposes and logs
+        a warning with detailed information about the error, allowing the optimization to continue
+        using the previous preconditioner.
+
+        Args:
+            factor_matrix_index (str): The index identifier for the factor matrix.
+            source_matrix (Tensor): The source matrix that caused the computation error.
+            exception (Exception): The exception that was raised during computation.
+            preconditioner_name (str): Name of the preconditioner being computed.
+
+        Returns:
+            None
+        """
+        BaseShampooPreconditionerList._save_and_handle_matrix_error(
+            factor_matrix_index=factor_matrix_index,
+            source_matrix=source_matrix,
+            error_handler=lambda: logger.warning(
+                f"Matrix computation failed for factor matrix {factor_matrix_index} with {exception=}. "
+                f"To investigate, check factor matrix before the matrix computation: {source_matrix=}. "
+                f"Using previous {preconditioner_name} and continuing..."
+            ),
         )
 
     @staticmethod
@@ -1305,7 +1396,6 @@ class ClassicShampooPreconditionerList(
         Returns:
             preconditioner_list (Iterable[tuple[Tensor, ...]]): An iterable of tuples, each containing tensors that serve as preconditioners for a block of parameters.
         """
-        ...
 
     @_profile_decorator
     def precondition(self, masked_grad_list: tuple[Tensor, ...]) -> tuple[Tensor, ...]:
@@ -1360,7 +1450,7 @@ class RootInvShampooPreconditionerList(
                 strict=True,
             )
         ):
-            success_tracker: bool = True
+            last_seen_exception: Exception | None = None
             for (
                 factor_matrix,
                 inv_factor_matrix,
@@ -1394,14 +1484,14 @@ class RootInvShampooPreconditionerList(
                         epsilon=self._epsilon,
                         is_diagonal=False,
                     ).to(dtype=inv_factor_matrix.dtype)
-                    # Add success to success tracker.
-                    success_tracker &= True
                 except Exception as exception:
-                    # Add failure to success tracker.
-                    success_tracker &= False
-                    logger.warning(
-                        f"Matrix computation failed for factor matrix {factor_matrix_index} "
-                        f"with {exception=}. Using previous inverted factor matrix and continuing..."
+                    # Track the last seen exception.
+                    last_seen_exception = exception
+                    BaseShampooPreconditionerList._handle_amortized_computation_internal_error(
+                        factor_matrix_index=factor_matrix_index,
+                        source_matrix=bias_corrected_factor_matrix,
+                        exception=exception,
+                        preconditioner_name="inverted factor matrix",
                     )
                     # Define computed_inv_factor_matrix to prevent undefined local variable error.
                     computed_inv_factor_matrix = inv_factor_matrix
@@ -1417,11 +1507,10 @@ class RootInvShampooPreconditionerList(
 
             # Only reuse previous inverse roots if tolerance is not exceeded.
             self._raise_exception_if_failure_tolerance_exceeded(
-                success_tracker=success_tracker,
+                last_seen_exception=last_seen_exception,
                 preconditioner_index=idx,
-                exception=ValueError(
-                    f"The number of failed inverse root computations for factors {kronecker_factors.factor_matrix_indices} exceeded the allowed tolerance."
-                ),
+                exception_message=f"The number of failed inverse root computations for factors {kronecker_factors.factor_matrix_indices} exceeded the allowed tolerance."
+                f"The last seen exception was {last_seen_exception}.",
             )
 
 
@@ -1480,7 +1569,7 @@ class EigendecomposedShampooPreconditionerList(
         for idx, kronecker_factors in enumerate(
             self._masked_kronecker_factors_unwrapped
         ):
-            success_tracker: bool = True
+            last_seen_exception: Exception | None = None
             for (
                 factor_matrix,
                 factor_matrix_eigenvectors,
@@ -1531,14 +1620,14 @@ class EigendecomposedShampooPreconditionerList(
                     )
                     computed_eigenvalues.to(dtype=factor_matrix_eigenvalues.dtype)
                     computed_eigenvectors.to(dtype=factor_matrix_eigenvectors.dtype)
-                    # Add success to success tracker.
-                    success_tracker &= True
                 except Exception as exception:
-                    # Add failure to success tracker.
-                    success_tracker &= False
-                    logger.warning(
-                        f"Matrix computation failed for factor matrix {factor_matrix_index} "
-                        f"with {exception=}. Using previous inverted factor matrix and continuing..."
+                    # Track the last seen exception.
+                    last_seen_exception = exception
+                    BaseShampooPreconditionerList._handle_amortized_computation_internal_error(
+                        factor_matrix_index=factor_matrix_index,
+                        source_matrix=bias_corrected_factor_matrix,
+                        exception=exception,
+                        preconditioner_name="inverted factor matrix",
                     )
                     # Define computed_eigenvalues and computed_eigenvectors to prevent undefined local variable error.
                     computed_eigenvalues = factor_matrix_eigenvalues
@@ -1561,11 +1650,10 @@ class EigendecomposedShampooPreconditionerList(
 
             # Only reuse previous inverse roots if tolerance is not exceeded.
             self._raise_exception_if_failure_tolerance_exceeded(
-                success_tracker=success_tracker,
+                last_seen_exception=last_seen_exception,
                 preconditioner_index=idx,
-                exception=ValueError(
-                    f"The number of failed eigendecompositions for factors {kronecker_factors.factor_matrix_indices} exceeded the allowed tolerance."
-                ),
+                exception_message=f"The number of failed eigendecompositions for factors {kronecker_factors.factor_matrix_indices} exceeded the allowed tolerance."
+                f"The last seen exception was {last_seen_exception}.",
             )
 
 
@@ -1734,7 +1822,7 @@ class EigenvalueCorrectedShampooPreconditionerList(
         for idx, kronecker_factors in enumerate(
             self._masked_kronecker_factors_unwrapped
         ):
-            success_tracker: bool = True
+            last_seen_exception: Exception | None = None
             for (
                 factor_matrix,
                 factor_matrix_eigenvectors,
@@ -1776,14 +1864,14 @@ class EigenvalueCorrectedShampooPreconditionerList(
                         is_diagonal=False,
                         epsilon=self._epsilon,
                     )[1].to(dtype=factor_matrix_eigenvectors.dtype)
-                    # Add success to success tracker.
-                    success_tracker &= True
                 except Exception as exception:
-                    # Add failure to success tracker.
-                    success_tracker &= False
-                    logger.warning(
-                        f"Matrix computation failed for factor matrix {factor_matrix_index} "
-                        f"with {exception=}. Using previous factor matrix eigenvectors and continuing..."
+                    # Track the last seen exception.
+                    last_seen_exception = exception
+                    BaseShampooPreconditionerList._handle_amortized_computation_internal_error(
+                        factor_matrix_index=factor_matrix_index,
+                        source_matrix=factor_matrix,
+                        exception=exception,
+                        preconditioner_name="factor matrix eigenvectors",
                     )
                     # Define computed_eigenvectors to prevent undefined local variable error.
                     computed_eigenvectors = factor_matrix_eigenvectors
@@ -1799,9 +1887,8 @@ class EigenvalueCorrectedShampooPreconditionerList(
 
             # Only reuse previous eigenvectors if tolerance is not exceeded.
             self._raise_exception_if_failure_tolerance_exceeded(
-                success_tracker=success_tracker,
+                last_seen_exception=last_seen_exception,
                 preconditioner_index=idx,
-                exception=ValueError(
-                    f"The number of failed eigenvector computations for factors {kronecker_factors.factor_matrix_indices} exceeded the allowed tolerance."
-                ),
+                exception_message=f"The number of failed eigenvector computations for factors {kronecker_factors.factor_matrix_indices} exceeded the allowed tolerance."
+                f"The last seen exception was {last_seen_exception}.",
             )

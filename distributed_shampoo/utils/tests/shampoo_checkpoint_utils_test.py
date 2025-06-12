@@ -34,27 +34,35 @@ class DummyOptimizerModule(OptimizerModule):
         self._field: Tensor = field
         self._thl: list[Tensor] = thl
 
-    def __eq__(self, other: "DummyOptimizerModule") -> bool:  # type: ignore[override]
-        return bool((self._field == other._field).item()) and self._thl == other._thl
+    def __eq__(self, other: object) -> bool:
+        return (
+            isinstance(other, DummyOptimizerModule)
+            and bool((self._field == other._field).item())
+            and self._thl == other._thl
+        )
 
 
 class ExtractStateDictContentTest(unittest.TestCase):
     def test_extract_state_dict_content(self) -> None:
         state_dict = {
-            "foo": torch.tensor(0),
-            "bar": DummyOptimizerModule(
-                field=torch.tensor(1.0), thl=[torch.tensor(2.0), torch.tensor(3.0)]
-            ),
+            "inner_dict": {
+                "foo": torch.tensor(0),
+                "bar": DummyOptimizerModule(
+                    field=torch.tensor(1.0), thl=[torch.tensor(2.0), torch.tensor(3.0)]
+                ),
+            },
         }
-        self.assertDictEqual(
+        self.assertEqual(
             extract_state_dict_content(state_dict),
             {
-                "foo": torch.tensor(0),
-                "bar": {
-                    "_field": torch.tensor(1.0),
-                    "_thl": {
-                        0: torch.tensor(2.0),
-                        1: torch.tensor(3.0),
+                "inner_dict": {
+                    "foo": torch.tensor(0),
+                    "bar": {
+                        "_field": torch.tensor(1.0),
+                        "_thl": {
+                            0: torch.tensor(2.0),
+                            1: torch.tensor(3.0),
+                        },
                     },
                 },
             },
@@ -95,13 +103,13 @@ class FlattenAndUnflattenTest(unittest.TestCase):
         }
 
     def test_flatten(self) -> None:
-        self.assertDictEqual(
+        self.assertEqual(
             flatten(self._extracted_state_dict),
             self._flattened_state_dict,
         )
 
     def test_unflatten(self) -> None:
-        self.assertDictEqual(
+        self.assertEqual(
             unflatten(self._flattened_state_dict),
             self._extracted_state_dict,
         )
@@ -159,7 +167,7 @@ class UpdateParamStateDictObjectTest(unittest.TestCase):
             param_state_dict_to_load=self._extracted_state_dict,
         )
 
-        self.assertDictEqual(
+        self.assertEqual(
             self._current_state_dict,
             {
                 "123": {
@@ -200,7 +208,7 @@ class UpdateParamStateDictObjectTest(unittest.TestCase):
             param_state_dict_to_load=self._extracted_state_dict,
             enable_missing_key_check=False,
         )
-        self.assertDictEqual(
+        self.assertEqual(
             self._current_state_dict,
             {
                 "123": {

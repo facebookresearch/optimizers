@@ -94,7 +94,11 @@ from distributed_shampoo.utils.shampoo_preconditioner_list import (
     SGDPreconditionerList,
 )
 from distributed_shampoo.utils.shampoo_utils import compress_list
-from matrix_functions_types import EigendecompositionConfig, RootInvConfig
+from matrix_functions_types import (
+    EigendecompositionConfig,
+    PseudoInverseConfig,
+    RootInvConfig,
+)
 
 from torch.optim.optimizer import ParamsT, StateDict
 
@@ -342,7 +346,18 @@ class DistributedShampoo(torch.optim.Optimizer):
             raise ValueError(
                 f"Invalid beta3 parameter: {beta3}. Must be in [0.0, 1.0)."
             )
-        if not epsilon > 0.0:
+        if isinstance(
+            preconditioner_config.amortized_computation_config,
+            EigendecompositionConfig,
+        ) and isinstance(
+            preconditioner_config.amortized_computation_config.rank_deficient_stability_config,
+            PseudoInverseConfig,
+        ):
+            if epsilon != 0.0:
+                raise ValueError(
+                    f"Invalid epsilon value: {epsilon}. Must be == 0.0 when PseudoInverseConfig is used."
+                )
+        elif not epsilon > 0.0:
             raise ValueError(f"Invalid epsilon value: {epsilon}. Must be > 0.0.")
         if not 0.0 <= momentum < 1.0:
             raise ValueError(

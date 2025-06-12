@@ -56,11 +56,10 @@ class NewtonConvergenceFlag(enum.Enum):
 
 
 _FuncReturnType = TypeVar("_FuncReturnType")
-_DataclassType = TypeVar("_DataclassType")
 
 
 def _get_function_args_from_config(
-    func: Callable[..., _FuncReturnType], config: _DataclassType
+    func: Callable[..., _FuncReturnType], config: object
 ) -> dict[str, Any]:
     """
     Returns a dict of arguments for func that are defined in config. Note that config is not expected to contain all arguments for func, nor are all fields in config expected to be applicable to func.
@@ -210,21 +209,26 @@ def stabilize_and_pow_eigenvalues(
             lambda_min = torch.min(L).item()
 
             # make eigenvalues > 0 (if necessary)
+            # Note that our input matrix may not be PSD, even though it mathematically should be in Shampoo.
+            # So, exercise great care in the below logic!
             if rank_deficient_stability_config.perturb_before_computation:
-                L = _matrix_perturbation(
-                    L, epsilon=-min(lambda_min - epsilon, 0.0), is_eigenvalues=True
-                )
+                # The happy path/mathematically ideal case: lambda_min >= epsilon, do nothing!
+                # The unhappy path: lambda_min could be anything (even large negative value)
+                # In that case, do a 2 step perturbation: first by -lambda_min, and then by epsilon
+                if lambda_min < epsilon:
+                    L = _matrix_perturbation(
+                        L, epsilon=-lambda_min, is_eigenvalues=True
+                    )
+                    L = _matrix_perturbation(L, epsilon=epsilon, is_eigenvalues=True)
             else:
-                # NOTE: Although combining the two additions below is mathematically equivalent (and potentially numerically more accurate),
-                #       it will cause a numerics discrepancy that can lead to NaN/inf values in the computed inverse root.
-                # TODO: Investigate why this happens.
+                # In that case, do a 2 step perturbation: first by -min(lambda_min, 0.0), and then by epsilon;
+                # this approach is more stable when dealing with matrices that have large magnitude eigenvalues because it ensures epsilon doesn't get "absorbed" by large values.
                 L = _matrix_perturbation(
                     L, epsilon=-min(lambda_min, 0.0), is_eigenvalues=True
                 )
-                # and add the epsilon
                 L = _matrix_perturbation(L, epsilon=epsilon, is_eigenvalues=True)
 
-            inv_power_L = L.pow_(-1.0 / root)
+            inv_power_L = L.pow(-1.0 / root)
         case _:
             raise NotImplementedError(
                 f"{rank_deficient_stability_config=} is not supported."
@@ -264,6 +268,14 @@ def matrix_inverse_root(
             A=A,
             root=root,
             epsilon=epsilon,
+            # If the config does not contain rank_deficient_stability_config attribute,
+            # we use DefaultPerturbationConfig as the fallback option for handling
+            # rank-deficient matrices during diagonal matrix inverse root computation.
+            rank_deficient_stability_config=getattr(
+                root_inv_config,
+                "rank_deficient_stability_config",
+                DefaultPerturbationConfig,
+            ),
         )
 
     match root_inv_config:
@@ -319,6 +331,7 @@ def _matrix_inverse_root_diagonal(
     A: Tensor,
     root: Fraction,
     epsilon: float = 0.0,
+    rank_deficient_stability_config: RankDeficientStabilityConfig = DefaultPerturbationConfig,
 ) -> Tensor:
     """Computes matrix inverse root for a diagonal matrix by taking inverse square root of diagonal entries.
 
@@ -326,6 +339,7 @@ def _matrix_inverse_root_diagonal(
         A (Tensor): A diagonal matrix.
         root (Fraction): Root of interest. Any rational number.
         epsilon (float): Adds epsilon * I to matrix before taking matrix root. (Default: 0.0)
+        rank_deficient_stability_config (RankDeficientStabilityConfig): Configuration for handling/stabilizing rank-deficient matrices. (Default: DefaultPerturbationConfig)
 
     Returns:
         X (Tensor): Inverse root of diagonal entries.
@@ -339,7 +353,12 @@ def _matrix_inverse_root_diagonal(
         raise ValueError(f"Root {root} should be positive!")
 
     return torch.diag(
-        stabilize_and_pow_eigenvalues(torch.diagonal(A), root=root, epsilon=epsilon)
+        stabilize_and_pow_eigenvalues(
+            torch.diagonal(A),
+            root=root,
+            epsilon=epsilon,
+            rank_deficient_stability_config=rank_deficient_stability_config,
+        )
     )
 
 
@@ -388,7 +407,7 @@ def matrix_eigendecomposition(
         raise ValueError(f"{epsilon=} should be 0.0 when using pseudo-inverse!")
 
     # Add epsilon to the diagonal to help with numerical stability of the eigenvalue decomposition
-    # Only do it when damp_before_computation is True (root_inv_config must be a DampingConfig)
+    # Only do it when perturb_before_computation is True
     if (
         isinstance(
             eigendecomposition_config.rank_deficient_stability_config,
@@ -461,7 +480,9 @@ def _eigh_eigenvalue_decomposition(
             # If retry_double_precision is False or the computation fails in double precision, raise the exception
             raise exception
 
-    return L.to(device=current_device), Q.to(device=current_device, dtype=A.dtype)
+    return L.to(device=current_device, dtype=A.dtype), Q.to(
+        device=current_device, dtype=A.dtype
+    )
 
 
 def eigenvalues_estimate_criterion_below_or_equal_tolerance(
@@ -598,7 +619,7 @@ def _matrix_inverse_root_eigen(
         raise ValueError(f"{epsilon=} should be 0.0 when using pseudo-inverse!")
 
     # Add epsilon to the diagonal to help with numerical stability of the eigenvalue decomposition
-    # Only do it when damp_before_computation is True (root_inv_config must be a DampingConfig)
+    # Only do it when perturb_before_computation is True
     if (
         isinstance(rank_deficient_stability_config, PerturbationConfig)
         and rank_deficient_stability_config.perturb_before_computation
@@ -672,7 +693,7 @@ def _matrix_inverse_root_newton(
     identity = torch.eye(dim, dtype=A.dtype, device=A.device)
 
     # add regularization
-    A_ridge = A.add(identity, alpha=epsilon)
+    A_ridge = _matrix_perturbation(A, epsilon=epsilon, is_eigenvalues=False)
 
     # initialize matrices
     A_nrm = torch.linalg.norm(A_ridge)
@@ -801,7 +822,7 @@ def _matrix_inverse_root_higher_order(
         # Now scale and setup our variables
         epsilon = max(rel_epsilon * lambda_max_approx, abs_epsilon)
         identity = torch.eye(n, dtype=dtype, device=A.device)
-        A_ridge = torch.add(A, identity, alpha=epsilon)
+        A_ridge = _matrix_perturbation(A, epsilon=epsilon, is_eigenvalues=False)
         lambda_max_approx += epsilon
 
         # Figure out a constant that gives good starting location
@@ -955,7 +976,9 @@ def compute_matrix_root_inverse_residuals(
         root_inv_config=root_inv_config,
         epsilon=epsilon,
     )
-    relative_error = torch.dist(X, X_hat, p=torch.inf) / torch.norm(X, p=torch.inf)
+    relative_error = torch.dist(X, X_hat, p=torch.inf) / torch.linalg.vector_norm(
+        X, ord=torch.inf
+    )
 
     # compute residual
     X_invr, _, _ = _matrix_inverse_root_eigen(
@@ -970,8 +993,8 @@ def compute_matrix_root_inverse_residuals(
     A_reg = A.double() + epsilon * torch.eye(
         A.shape[0], dtype=torch.float64, device=A.device
     )
-    relative_residual = torch.dist(X_invr, A_reg, p=torch.inf) / torch.norm(
-        A_reg, p=torch.inf
-    )
+    relative_residual = torch.dist(
+        X_invr, A_reg, p=torch.inf
+    ) / torch.linalg.vector_norm(A_reg, ord=torch.inf)
 
     return relative_error, relative_residual

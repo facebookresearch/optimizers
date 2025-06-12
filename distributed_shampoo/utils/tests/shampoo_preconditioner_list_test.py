@@ -13,7 +13,7 @@ import re
 import unittest
 from collections.abc import Callable, Hashable
 from dataclasses import dataclass, field, replace
-from operator import methodcaller
+from functools import partial
 from typing import Any
 from unittest import mock
 
@@ -341,58 +341,6 @@ class AdagradPreconditionerListTest(AbstractPreconditionerListTest.Interface):
     @property
     def _expected_compress_list_call_count(self) -> int:
         return 1
-
-
-class BaseShampooPreconditionerListTest(unittest.TestCase):
-    def test_abstract_methods(self) -> None:
-        # Basic setup for instantiating BaseShampooPreconditionerList.
-        param = torch.tensor([1.0, 2.0])
-
-        # Disable the abstract methods check from the interface so it is possible to instantiate BaseShampooPreconditionerList.
-        BaseShampooPreconditionerList.__abstractmethods__ = frozenset()
-
-        with (
-            mock.patch.object(
-                # Mock compress_list() to enable the instantiation of BaseShampooPreconditionerList.
-                shampoo_preconditioner_list,
-                "compress_list",
-                return_value=(True,) * max(param.dim(), 1),
-            ) as mock_compress_list,
-            mock.patch.object(
-                BaseShampooPreconditionerList,
-                "_create_kronecker_factors_state",
-            ) as mock_create_kronecker_factor_state,
-            mock.patch.object(
-                # Mock _update_factor_matrices() otherwise the access of factor_matrices will throw errors.
-                BaseShampooPreconditionerList,
-                "_update_factor_matrices",
-            ) as mock_update_factor_matrices,
-        ):
-            # Test the abstract methods _create_preconditioned_dims_selector() and _get_inverse_roots_from_override().
-            preconditioner_list = methodcaller(
-                "__call__",
-                block_list=(param,),
-                state={param: {}},
-                block_info_list=(
-                    BlockInfo(
-                        param=param,
-                        composable_block_ids=(0, "block_0"),
-                    ),
-                ),
-                preconditioner_config=DefaultShampooConfig,
-                beta2=1.0,
-            )(BaseShampooPreconditionerList)
-
-            # Test the abstract_method _amortized_computation().
-            preconditioner_list.update_preconditioners(
-                masked_grad_list=(torch.tensor([1.0, 1.0]),),
-                step=torch.tensor(1),
-                perform_amortized_computation=True,
-            )
-
-            mock_compress_list.assert_called_once()
-            mock_create_kronecker_factor_state.assert_called_once()
-            mock_update_factor_matrices.assert_called_once()
 
 
 @dataclass(init=False)
@@ -924,7 +872,7 @@ class AbstractTest:
             )
 
             # Create a control preconditioner list, using identity matrices where not preconditioning.
-            control_preconditioner_list = [
+            control_preconditioner_list = tuple(
                 preconditioner
                 if should_precondition
                 else torch.eye(preconditioner.shape[0])
@@ -933,20 +881,20 @@ class AbstractTest:
                     experimental_preconditioned_dims_selector,
                     strict=True,
                 )
-            ]
+            )
 
+            assert isinstance(self._preconditioner_list, BaseShampooPreconditionerList)
+            precondition_grad = partial(
+                self._preconditioner_list._precondition_grad, grad=grad, dims=dims
+            )
             torch.testing.assert_close(
-                self._preconditioner_list._precondition_grad(  # type: ignore[attr-defined]
-                    grad=grad,
+                precondition_grad(
                     preconditioned_dims_selector=experimental_preconditioned_dims_selector,
                     preconditioner_list=experimental_preconditioner_list,
-                    dims=dims,
                 ),
-                self._preconditioner_list._precondition_grad(  # type: ignore[attr-defined]
-                    grad=grad,
+                precondition_grad(
                     preconditioned_dims_selector=control_preconditioned_dims_selector,
                     preconditioner_list=control_preconditioner_list,
-                    dims=dims,
                 ),
             )
 
@@ -984,7 +932,7 @@ class RootInvShampooPreconditionerListTest(
     AbstractTest.BaseShampooPreconditionerListTest
 ):
     @property
-    def _amortized_computation_properties(self) -> InverseRootProperties:
+    def _amortized_computation_properties(self) -> AmortizedComputationProperties:
         return InverseRootProperties()
 
     @property
@@ -1405,7 +1353,7 @@ class EigendecomposedShampooPreconditionerListTest(
     RootInvShampooPreconditionerListTest
 ):
     @property
-    def _amortized_computation_properties(self) -> EigendecompositionProperties:  # type: ignore[override]
+    def _amortized_computation_properties(self) -> AmortizedComputationProperties:
         return EigendecompositionProperties()
 
     @property
@@ -1434,7 +1382,7 @@ class EigenvalueCorrectedShampooPreconditionerListTest(
     AbstractTest.BaseShampooPreconditionerListTest
 ):
     @property
-    def _amortized_computation_properties(self) -> EigendecompositionProperties:
+    def _amortized_computation_properties(self) -> AmortizedComputationProperties:
         return EigendecompositionProperties()
 
     @property

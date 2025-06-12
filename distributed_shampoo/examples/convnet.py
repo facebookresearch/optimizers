@@ -7,6 +7,8 @@ LICENSE file in the root directory of this source tree.
 
 """
 
+#!/usr/bin/env python3
+
 import math
 
 import torch
@@ -40,8 +42,8 @@ class ConvNet(nn.Module):
     """
 
     def __init__(
-        self, height: int, width: int, channels: int, use_combined_linear=False
-    ):
+        self, height: int, width: int, channels: int, use_combined_linear: bool = False
+    ) -> None:
         super(ConvNet, self).__init__()
         self.conv = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
         self.activation = nn.ReLU()
@@ -55,5 +57,5 @@ class ConvNet(nn.Module):
             10,
         )
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.linear(torch.flatten(self.activation(self.conv(x)), 1))

@@ -24,6 +24,10 @@ from torch.distributed.fsdp import FullyShardedDataParallel as FSDP, ShardingStr
 from torch.nn.parameter import Parameter
 from torch.testing._internal.common_distributed import skip_if_lt_x_gpu
 from torch.testing._internal.common_fsdp import FSDPTest
+from torch.testing._internal.common_utils import (
+    instantiate_parametrized_tests,
+    parametrize,
+)
 
 
 # Note: Ideally this function should be resided inside Test as part of setUp() but FSDPTest
@@ -38,7 +42,6 @@ def _create_model_and_params(
         enable_learnable_scalar=False,  # Disable 0D learable parameter because FSDP doesn't support it.
         fill=(1.0, 2.0),
     )
-    assert isinstance(model, nn.Module)
     return model, list(model.parameters())
 
 
@@ -112,6 +115,7 @@ class CompileFSDPParameterMetadataTest(FSDPTest):
         )
 
 
+@instantiate_parametrized_tests
 @unittest.skipIf(not torch.cuda.is_available(), "Skip when CUDA is not available")
 class ParseFSDPParamsTest(FSDPTest):
     @property
@@ -119,11 +123,11 @@ class ParseFSDPParamsTest(FSDPTest):
         return 4
 
     @skip_if_lt_x_gpu(4)
-    def test_parse_fsdp_params(self) -> None:
-        HYBRID_SHARDING_STRATEGIES_TO_EXPECTED_KEYS: dict[
-            ShardingStrategy, tuple[list[str], list[str], list[str]]
-        ] = {
-            ShardingStrategy.HYBRID_SHARD: (
+    @parametrize(
+        "sharding_strategy, expected_fsdp_keys, expected_hsdp_keys, expected_other_keys",
+        (
+            (
+                ShardingStrategy.HYBRID_SHARD,
                 [],
                 [
                     "0._fsdp_wrapped_module.linear_layers.0.weight",
@@ -131,7 +135,8 @@ class ParseFSDPParamsTest(FSDPTest):
                 ],
                 ["1.weight"],
             ),
-            ShardingStrategy._HYBRID_SHARD_ZERO2: (
+            (
+                ShardingStrategy._HYBRID_SHARD_ZERO2,
                 [],
                 [
                     "0._fsdp_wrapped_module.linear_layers.0.weight",
@@ -139,11 +144,8 @@ class ParseFSDPParamsTest(FSDPTest):
                 ],
                 ["1.weight"],
             ),
-        }
-        SHARDING_STRATEGIES_TO_EXPECTED_KEYS: dict[
-            ShardingStrategy, tuple[list[str], list[str], list[str]]
-        ] = {
-            ShardingStrategy.NO_SHARD: (
+            (
+                ShardingStrategy.NO_SHARD,
                 [],
                 [],
                 [
@@ -152,7 +154,8 @@ class ParseFSDPParamsTest(FSDPTest):
                     "1.weight",
                 ],
             ),
-            ShardingStrategy.SHARD_GRAD_OP: (
+            (
+                ShardingStrategy.SHARD_GRAD_OP,
                 [
                     "0._fsdp_wrapped_module.linear_layers.0.weight",
                     "0._fsdp_wrapped_module.linear_layers.1.weight",
@@ -160,7 +163,8 @@ class ParseFSDPParamsTest(FSDPTest):
                 [],
                 ["1.weight"],
             ),
-            ShardingStrategy.FULL_SHARD: (
+            (
+                ShardingStrategy.FULL_SHARD,
                 [
                     "0._fsdp_wrapped_module.linear_layers.0.weight",
                     "0._fsdp_wrapped_module.linear_layers.1.weight",
@@ -168,48 +172,48 @@ class ParseFSDPParamsTest(FSDPTest):
                 [],
                 ["1.weight"],
             ),
-        } | HYBRID_SHARDING_STRATEGIES_TO_EXPECTED_KEYS
+        ),
+    )
+    def test_parse_fsdp_params(
+        self,
+        sharding_strategy: ShardingStrategy,
+        expected_fsdp_keys: list[str],
+        expected_hsdp_keys: list[str],
+        expected_other_keys: list[str],
+    ) -> None:
+        HYBRID_SHARDING_STRATEGIES: tuple[ShardingStrategy, ...] = (
+            ShardingStrategy.HYBRID_SHARD,
+            ShardingStrategy._HYBRID_SHARD_ZERO2,
+        )
 
-        for sharding_strategy, (
-            expected_fsdp_keys,
-            expected_hsdp_keys,
-            expected_other_keys,
-        ) in SHARDING_STRATEGIES_TO_EXPECTED_KEYS.items():
-            with self.subTest(sharding_strategy=sharding_strategy):
-                fsdp_module = FSDP(
-                    _create_model_and_params()[0],
-                    sharding_strategy=sharding_strategy,
-                    device_mesh=(
-                        init_device_mesh("cuda", (2, 2))
-                        if sharding_strategy
-                        in HYBRID_SHARDING_STRATEGIES_TO_EXPECTED_KEYS
-                        else None
-                    ),
-                    use_orig_params=True,
-                )
+        fsdp_module = FSDP(
+            _create_model_and_params()[0],
+            sharding_strategy=sharding_strategy,
+            device_mesh=(
+                init_device_mesh("cuda", (2, 2))
+                if sharding_strategy in HYBRID_SHARDING_STRATEGIES
+                else None
+            ),
+            use_orig_params=True,
+        )
 
-                model = nn.Sequential(
-                    fsdp_module,
-                    nn.Linear(3, 2, bias=False),
-                )
-                model[1].weight.data.fill_(3.0)
+        model = nn.Sequential(fsdp_module, nn.Linear(3, 2, bias=False))
+        model[1].weight.data.fill_(3.0)
 
-                fsdp_parameter_metadata = compile_fsdp_parameter_metadata(model)
-                named_params = dict(model.named_parameters())
-                actual_fsdp_params, actual_hsdp_params, actual_other_params = (
-                    parse_fsdp_params(
-                        named_params,
-                        fsdp_parameter_metadata,
-                    )
-                )
+        fsdp_parameter_metadata = compile_fsdp_parameter_metadata(model)
+        named_params = dict(model.named_parameters())
+        actual_fsdp_params, actual_hsdp_params, actual_other_params = parse_fsdp_params(
+            named_params,
+            fsdp_parameter_metadata,
+        )
 
-                actual_fsdp_keys = list(actual_fsdp_params.keys())
-                actual_hsdp_keys = list(actual_hsdp_params.keys())
-                actual_other_keys = list(actual_other_params.keys())
+        actual_fsdp_keys = list(actual_fsdp_params.keys())
+        actual_hsdp_keys = list(actual_hsdp_params.keys())
+        actual_other_keys = list(actual_other_params.keys())
 
-                self.assertEqual(actual_fsdp_keys, expected_fsdp_keys)
-                self.assertEqual(actual_hsdp_keys, expected_hsdp_keys)
-                self.assertEqual(actual_other_keys, expected_other_keys)
+        self.assertEqual(actual_fsdp_keys, expected_fsdp_keys)
+        self.assertEqual(actual_hsdp_keys, expected_hsdp_keys)
+        self.assertEqual(actual_other_keys, expected_other_keys)
 
     @skip_if_lt_x_gpu(4)
     def test_parse_fully_shard_params(self) -> None:

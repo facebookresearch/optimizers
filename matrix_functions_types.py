@@ -151,14 +151,10 @@ class EigenConfig(RootInvConfig, EighEigendecompositionConfig):
         eigendecomposition_offload_device (str): Device to offload eigendecomposition to. If value is empty string, we don't perform offloading. (Default: "")
         exponent_multiplier (float): Number to be multiplied to the numerator of the inverse root, i.e., eta where the
             exponent is -eta / (2 * p). (Default: 1.0)
-        rank_deficient_stability_config (RankDeficientStabilityConfig): Configuration for handling/stabilizing rank-deficient matrices. (Default: DefaultPerturbationConfig)
 
     """
 
     exponent_multiplier: float = 1.0
-    rank_deficient_stability_config: RankDeficientStabilityConfig = field(
-        default_factory=lambda: DefaultPerturbationConfig
-    )
 
 
 DefaultEigenConfig = EigenConfig()

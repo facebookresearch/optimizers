@@ -10,10 +10,11 @@ LICENSE file in the root directory of this source tree.
 from collections.abc import Callable
 from functools import partial
 from itertools import pairwise, repeat
+from typing import overload
 
 import torch
 from torch import nn
-from torch.distributed.fsdp import FSDPModule, FullyShardedDataParallel
+from torch.distributed.fsdp import FSDPModule, fully_shard, FullyShardedDataParallel
 from torch.distributed.tensor import DTensor
 from torch.optim.optimizer import ParamsT
 
@@ -47,6 +48,30 @@ class _ModelWithScalarAndLinearAndDeadLayers(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.linear_layers(x) + self.scalar
+
+
+@overload
+def construct_training_problem(
+    model_linear_layers_dims: tuple[int, ...],
+    model_dead_layers_dims: tuple[int, ...] | None = (10, 10),
+    enable_learnable_scalar: bool = True,
+    device: torch.device | None = None,
+    bias: bool = False,
+    fill: float | tuple[float, ...] = 0.0,
+    post_model_decoration: Callable[[nn.Module], nn.Module] = lambda x: x,
+) -> tuple[nn.Module, nn.Module, torch.Tensor, torch.Tensor]: ...
+
+
+@overload
+def construct_training_problem(
+    model_linear_layers_dims: tuple[int, ...],
+    model_dead_layers_dims: tuple[int, ...] | None = (10, 10),
+    enable_learnable_scalar: bool = True,
+    device: torch.device | None = None,
+    bias: bool = False,
+    fill: float | tuple[float, ...] = 0.0,
+    post_model_decoration: Callable[[nn.Module], FSDPModule] = lambda x: fully_shard(x),
+) -> tuple[FSDPModule, nn.Module, torch.Tensor, torch.Tensor]: ...
 
 
 def construct_training_problem(
@@ -103,6 +128,28 @@ def construct_training_problem(
     target = torch.tensor([0.0] * model_linear_layers_dims[-1]).to(device=device)
 
     return post_model_decoration(model), loss, data, target
+
+
+@overload
+def train_model(
+    optim_factory: Callable[[ParamsT], torch.optim.Optimizer],
+    model_factory: Callable[
+        [], tuple[nn.Module, nn.Module, torch.Tensor, torch.Tensor]
+    ],
+    num_steps: int = 5,
+) -> tuple[nn.Module, nn.Module, torch.Tensor, torch.Tensor, torch.optim.Optimizer]: ...
+
+
+@overload
+def train_model(
+    optim_factory: Callable[[ParamsT], torch.optim.Optimizer],
+    model_factory: Callable[
+        [], tuple[FSDPModule, nn.Module, torch.Tensor, torch.Tensor]
+    ],
+    num_steps: int = 5,
+) -> tuple[
+    FSDPModule, nn.Module, torch.Tensor, torch.Tensor, torch.optim.Optimizer
+]: ...
 
 
 def train_model(
@@ -194,11 +241,10 @@ def compare_two_optimizers_models_devices_on_weight_and_loss(
             trained_weights (list[torch.Tensor]): A list of trained model parameters.
             final_loss (torch.Tensor): The final loss value after training.
         """
-        model, loss, data, target, _ = train_model(
-            optim_factory=optim_factory,
-            model_factory=model_factory,
-            num_steps=total_steps,
-        )
+        # Using partial here to prevent Pyre complain on incompatible parameter type.
+        model, loss, data, target, _ = partial(
+            train_model, model_factory=model_factory
+        )(optim_factory=optim_factory, num_steps=total_steps)
 
         # We only care model_linear_layers_dim params, not model_dead_layer params.
         assert isinstance(model, nn.Module)

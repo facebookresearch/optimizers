@@ -7,12 +7,18 @@ LICENSE file in the root directory of this source tree.
 
 """
 
+#!/usr/bin/env python3
+
 import argparse
 import enum
+import importlib
 import logging
 import random
+import shutil
 from abc import ABC, abstractmethod
 from operator import attrgetter
+from pathlib import Path
+from typing import Type
 
 import numpy as np
 
@@ -40,37 +46,42 @@ from distributed_shampoo.examples.convnet import ConvNet
 from torch import nn
 from torchvision import datasets, transforms  # type: ignore[import-untyped]
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 # create default device
 default_device = torch.device("cpu")
 
+CIFAR_10_DATASET_FILENAME = "cifar-10-python.tar.gz"
+
 
 ###### ENUM CLASSES ######
+@enum.unique
 class OptimizerType(enum.Enum):
-    SGD = 0
-    ADAM = 1
-    DISTRIBUTED_SHAMPOO = 2
+    SGD = enum.auto()
+    ADAM = enum.auto()
+    DISTRIBUTED_SHAMPOO = enum.auto()
 
 
+@enum.unique
 class GraftingType(enum.Enum):
-    NONE = 0
-    SGD = 1
-    ADAGRAD = 2
-    RMSPROP = 3
-    ADAM = 4
+    NONE = enum.auto()
+    SGD = enum.auto()
+    ADAGRAD = enum.auto()
+    RMSPROP = enum.auto()
+    ADAM = enum.auto()
 
 
+@enum.unique
 class PreconditionerComputationType(enum.Enum):
-    EIGEN_ROOT_INV = 0
-    COUPLED_NEWTON_ROOT_INV = 1
-    COUPLED_HIGHER_ORDER_ROOT_INV = 2
-    EIGH_EIGENVALUE_CORRECTION = 3
-    QR_EIGENVALUE_CORRECTION = 4
+    EIGEN_ROOT_INV = enum.auto()
+    COUPLED_NEWTON_ROOT_INV = enum.auto()
+    COUPLED_HIGHER_ORDER_ROOT_INV = enum.auto()
+    EIGH_EIGENVALUE_CORRECTION = enum.auto()
+    QR_EIGENVALUE_CORRECTION = enum.auto()
 
 
 ###### ARGPARSER ######
-def enum_type_parse(s: str, enum_type: enum.Enum):
+def enum_type_parse(s: str, enum_type: Type[enum.Enum]) -> enum.Enum:
     try:
         return enum_type[s]  # type: ignore[index]
     except KeyError:
@@ -81,7 +92,7 @@ def enum_type_parse(s: str, enum_type: enum.Enum):
 
 class Parser:
     @staticmethod
-    def get_args():
+    def get_args() -> argparse.Namespace:
         parser = argparse.ArgumentParser(description="Arguments for Shampoo run.")
 
         # Arguments for training script.
@@ -285,13 +296,13 @@ class Parser:
 ###### METRICS CLASSES ######
 class Metrics(ABC):
     @abstractmethod
-    def log(self): ...
+    def log(self) -> None: ...
 
     @abstractmethod
-    def reset(self): ...
+    def reset(self) -> None: ...
 
     @abstractmethod
-    def update(self, loss: torch.Tensor): ...
+    def update(self, loss: torch.Tensor) -> None: ...
 
 
 class LossMetrics(Metrics):
@@ -300,7 +311,7 @@ class LossMetrics(Metrics):
         window_size: int = 100,
         device: torch.device = default_device,
         world_size: int = 0,
-    ):
+    ) -> None:
         super().__init__()
         self._world_size = world_size
         self._window_size = window_size
@@ -308,15 +319,15 @@ class LossMetrics(Metrics):
         self._epoch = 0
         self._iteration = 0
         self._window_losses: list[torch.Tensor] = []
-        self._window_loss = torch.tensor(0.0, device=device)
-        self._accumulated_loss = torch.tensor(0.0, device=device)
-        self._lifetime_loss = torch.tensor(0.0, device=device)
+        self._window_loss: torch.Tensor = torch.tensor(0.0, device=device)
+        self._accumulated_loss: torch.Tensor = torch.tensor(0.0, device=device)
+        self._lifetime_loss: torch.Tensor = torch.tensor(0.0, device=device)
 
         if self._world_size > 1:
-            self._global_window_loss = torch.tensor(0.0, device=device)
-            self._global_lifetime_loss = torch.tensor(0.0, device=device)
+            self._global_window_loss: torch.Tensor = torch.tensor(0.0, device=device)
+            self._global_lifetime_loss: torch.Tensor = torch.tensor(0.0, device=device)
 
-    def reset(self):
+    def reset(self) -> None:
         self._epoch = 0
         self._iteration = 0
         self._window_losses = []
@@ -324,7 +335,7 @@ class LossMetrics(Metrics):
         self._accumulated_loss = torch.tensor(0.0, device=self._device)
         self._lifetime_loss = torch.tensor(0.0, device=self._device)
 
-    def update(self, loss: torch.Tensor):
+    def update(self, loss: torch.Tensor) -> None:
         self._iteration += 1
         self._window_losses.append(loss)
         if len(self._window_losses) > self._window_size:
@@ -333,27 +344,23 @@ class LossMetrics(Metrics):
         self._accumulated_loss += loss
         self._lifetime_loss = self._accumulated_loss / self._iteration
 
-    def log(self):
+    def log(self) -> None:
         logger.info(
             f"Epoch: {self._epoch} | Iteration: {self._iteration} | Local Lifetime Loss: {self._lifetime_loss} | Local Window Loss: {self._window_loss}"
         )
 
-    def update_global_metrics(self):
+    def update_global_metrics(self) -> None:
         if dist.is_initialized() and self._world_size > 1:
             self._global_window_loss = self._window_loss / self._world_size
             self._global_lifetime_loss = self._lifetime_loss / self._world_size
             dist.all_reduce(self._global_window_loss, op=dist.ReduceOp.SUM)
             dist.all_reduce(self._global_lifetime_loss, op=dist.ReduceOp.SUM)
-        else:
-            pass
 
-    def log_global_metrics(self):
+    def log_global_metrics(self) -> None:
         if self._world_size > 1:
             logger.info(
                 f"Epoch: {self._epoch} | Iteration: {self._iteration} | Global Lifetime Loss: {self._global_lifetime_loss} | Global Window Loss: {self._global_window_loss}"
             )
-        else:
-            pass
 
 
 ###### OPTIMIZER INSTANTIATION ######
@@ -520,21 +527,32 @@ def instantiate_preconditioner_config(
 
 ###### DATA LOADER ######
 def get_data_loader_and_sampler(
-    data_path: str, world_size: int, rank: int, local_batch_size: int
+    data_path: Path, world_size: int, rank: int, local_batch_size: int
 ) -> tuple[
-    torch.utils.data.DataLoader, torch.utils.data.distributed.DistributedSampler
+    torch.utils.data.DataLoader,
+    torch.utils.data.distributed.DistributedSampler[torch.utils.data.Dataset],
 ]:
     # instantiate data loader
     transform = transforms.Compose(
         [transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))]
     )
+
+    data_path = Path(data_path) / str(rank)
+    # If data is available as a packaged resource, skip download and use it directly.
+    with importlib.resources.path(
+        __package__, CIFAR_10_DATASET_FILENAME
+    ) as resource_path:
+        if resource_path.exists():
+            data_path.mkdir(parents=True, exist_ok=True)
+            shutil.copy(resource_path, data_path)
+
     dataset = datasets.CIFAR10(
         data_path, train=True, download=True, transform=transform
     )
-    sampler: torch.utils.data.distributed.DistributedSampler = (
-        torch.utils.data.distributed.DistributedSampler(
-            dataset, num_replicas=world_size, rank=rank, shuffle=True
-        )
+    sampler: torch.utils.data.distributed.DistributedSampler[
+        torch.utils.data.Dataset
+    ] = torch.utils.data.distributed.DistributedSampler(
+        dataset, num_replicas=world_size, rank=rank, shuffle=True
     )
     return (
         torch.utils.data.DataLoader(
@@ -548,7 +566,7 @@ def get_data_loader_and_sampler(
 
 
 ###### SET UP ######
-def set_seed(seed: int):
+def set_seed(seed: int) -> None:
     # set seed for reproducibility
     torch.manual_seed(seed)
     np.random.seed(seed)
@@ -599,7 +617,7 @@ def train_model(
     epochs: int = 1,
     window_size: int = 100,
     local_rank: int = 0,
-):
+) -> tuple[torch.Tensor, torch.Tensor, int]:
     # initialize metrics
     metrics = LossMetrics(window_size=window_size, device=device, world_size=world_size)
 
@@ -616,7 +634,7 @@ def train_model(
             loss.backward()
 
             optimizer.step()
-            metrics.update(loss)
+            metrics.update(loss.detach())
             metrics.log()
             metrics.update_global_metrics()
             if local_rank == 0:

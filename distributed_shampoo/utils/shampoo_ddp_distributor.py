@@ -32,6 +32,93 @@ from torch.distributed.tensor import zeros as dtensor_zeros
 logger: logging.Logger = logging.getLogger(__name__)
 
 
+"""
+The following is a visualization of how DDP Distributor computing parallelism functions. 
+Users specify num_trainers_per_group, which is the number of workers within a model replication group to manage computing parallelism.
+Note that num_trainers_per_group must be a divisor of the total number of workers.
+
+Assuming we have 4 GPUs within a model replication group, each GPU holds identical model parameters, 
+and there are 8 computationally expensive tasks for computing search directions or weight updates associated with the model. 
+In practice, tasks may not be evenly distributed among workers.
+
+One approach is to let each worker perform these tasks independently without any subsequent communication.
+This occurs when num_trainers_per_group = 1.
+
+## num_trainers_per_group = 1
+
+      GPU 0           GPU 1           GPU 2           GPU 3
+     -------         -------         -------         ------- 
+    | W0 W1 |       | W0 W1 |       | W0 W1 |       | W0 W1 |
+    | W2 W3 |       | W2 W3 |       | W2 W3 |       | W2 W3 |
+    | W4 W5 |       | W4 W5 |       | W4 W5 |       | W4 W5 |
+    | W6 W7 |       | W6 W7 |       | W6 W7 |       | W6 W7 |
+     -------         -------         -------         ------- 
+
+
+
+Alternatively, we could partition these 8 tasks evenly among the 4 GPUs, 
+allowing each GPU to compute its own partition.
+
+## num_trainers_per_group = -1 or 4
+
+  +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+  +   GPU 0           GPU 1           GPU 2           GPU 3   +
+  +  -------         -------         -------         -------  +
+  + | W0 W1 |       |       |       |       |       |       | +
+  + |       |       | W2 W3 |       |       |       |       | +
+  + |       |       |       |       | W4 W5 |       |       | +
+  + |       |       |       |       |       |       | W6 W7 | +
+  +  -------         -------         -------         -------  +
+  +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+  After all-gather, each GPU will have all 8 computed search directions or weight updates:
+  +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+  +   GPU 0           GPU 1           GPU 2           GPU 3   +
+  +  -------         -------         -------         -------  +
+  + | W0 W1 |       | W0 W1 |       | W0 W1 |       | W0 W1 | +
+  + | W2 W3 |       | W2 W3 |       | W2 W3 |       | W2 W3 | +
+  + | W4 W5 |       | W4 W5 |       | W4 W5 |       | W4 W5 | +
+  + | W6 W7 |       | W6 W7 |       | W6 W7 |       | W6 W7 | +
+  +  -------         -------         -------         -------  +
+  +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+
+
+We could also find a middle ground by splitting the 4 GPUs into two independent groups, 
+each completing their own 8 search directions or weight updates independently. 
+Here, GPU 0 and 1 form one group, and GPU 2 and 3 form another group. 
+For GPU 0 and 1, each needs to compute 4 search directions or weight updates, and similarly for GPU 2 and 3.
+
+## num_trainers_per_group = 2
+
+  +++++++++++++++++++++++++++++   +++++++++++++++++++++++++++++
+  +   GPU 0           GPU 1   +   +   GPU 2           GPU 3   +
+  +  -------         -------  +   +  -------         -------  +
+  + | W0 W1 |       |       | +   + | W0 W1 |       |       | +
+  + | W2 W3 |       |       | +   + | W2 W3 |       |       | +
+  + |       |       | W4 W5 | +   + |       |       | W4 W5 | +
+  + |       |       | W6 W7 | +   + |       |       | W6 W7 | +
+  +  -------         -------  +   +  -------         -------  +
+  +++++++++++++++++++++++++++++   +++++++++++++++++++++++++++++
+
+
+  Within each group, once the computations are complete, each group performs its own synchronizations independently. 
+  This approach balances computational and communication costs.
+
+  After all-gather, the result is:
+  +++++++++++++++++++++++++++++   +++++++++++++++++++++++++++++
+  +   GPU 0           GPU 1   +   +   GPU 2           GPU 3   +
+  +  -------         -------  +   +  -------         -------  +
+  + | W0 W1 |       | W0 W1 | +   + | W0 W1 |       | W0 W1 | +
+  + | W2 W3 |       | W2 W3 | +   + | W2 W3 |       | W2 W3 | +
+  + | W4 W5 |       | W4 W5 | +   + | W4 W5 |       | W4 W5 | +
+  + | W6 W7 |       | W6 W7 | +   + | W6 W7 |       | W6 W7 | +
+  +  -------         -------  +   +  -------         -------  +
+  +++++++++++++++++++++++++++++   +++++++++++++++++++++++++++++
+
+"""
+
+
 class DDPDistributor(DistributorInterface):
     """DDP Distributor class.
 
@@ -256,8 +343,8 @@ class DDPDistributor(DistributorInterface):
                 local distributed buffer for each tensor block.
 
         Example:
-            tensor0 = tensor(1024)
-            tensor1 = tensor(1024)
+            tensor0 = tensor(512)
+            tensor1 = tensor(512)
             buffer_size_ranks = [(128, 0), (64, 0), (512, 1), (256, 0)]
             local_dist_buffers = [tensor0, tensor1]
             -> splitted_local_dist_buffers = [

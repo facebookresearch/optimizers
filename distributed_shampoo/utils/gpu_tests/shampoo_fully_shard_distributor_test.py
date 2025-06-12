@@ -12,6 +12,7 @@ LICENSE file in the root directory of this source tree.
 import unittest
 from collections.abc import Callable
 from functools import partial
+from typing import overload
 
 import torch
 from distributed_shampoo.distributed_shampoo import DistributedShampoo
@@ -50,6 +51,20 @@ class ShampooFullyShardDistributorTest(DTensorTestBase):
     def world_size(self) -> int:
         return 2
 
+    @overload
+    @staticmethod
+    def _construct_model(
+        post_model_decoration: Callable[[nn.Module], nn.Module] = lambda x: x,
+    ) -> tuple[nn.Module, nn.Module, torch.Tensor, torch.Tensor]: ...
+
+    @overload
+    @staticmethod
+    def _construct_model(
+        post_model_decoration: Callable[
+            [nn.Module], FSDPModule
+        ] = lambda x: fully_shard(x),
+    ) -> tuple[FSDPModule, nn.Module, torch.Tensor, torch.Tensor]: ...
+
     @staticmethod
     def _construct_model(
         post_model_decoration: Callable[
@@ -78,13 +93,15 @@ class ShampooFullyShardDistributorTest(DTensorTestBase):
         model_linear_layers_dims = (4 * PRECONDITIONER_DIM, 2 * PRECONDITIONER_DIM, 1)
         # model dead layers won't parpicipate in the training and thus don't have grads.
         model_dead_layers_dims = (PRECONDITIONER_DIM, 1)
-        return construct_training_problem(
+        # Using partial here to prevent Pyre complain on incompatible parameter type.
+        return partial(
+            construct_training_problem, post_model_decoration=post_model_decoration
+        )(
             model_linear_layers_dims=model_linear_layers_dims,
             model_dead_layers_dims=model_dead_layers_dims,
             enable_learnable_scalar=False,  # Disable 0D learable parameter because FSDP doesn't support it.
             device=torch.device("cuda"),
             fill=0.1,
-            post_model_decoration=post_model_decoration,
         )
 
     @staticmethod
