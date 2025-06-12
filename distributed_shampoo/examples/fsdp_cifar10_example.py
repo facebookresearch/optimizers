@@ -7,8 +7,13 @@ LICENSE file in the root directory of this source tree.
 
 """
 
+#!/usr/bin/env python3
+
+import argparse
 import logging
 import os
+
+import torch
 
 import torch.distributed as dist
 
@@ -22,13 +27,15 @@ from distributed_shampoo.examples.trainer_utils import (
     setup_distribution,
     train_model,
 )
+from torch import nn
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+from torchvision.datasets import VisionDataset  # type: ignore[import-untyped]
 
 logging.basicConfig(
     format="[%(filename)s:%(lineno)d] %(levelname)s: %(message)s",
     level=logging.DEBUG,
 )
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 # for reproducibility, set environmental variable for CUBLAS
 os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
@@ -66,13 +73,13 @@ if __name__ == "__main__":
 
     """
 
-    args = Parser.get_args()
+    args: argparse.Namespace = Parser.get_args()
 
     # set seed for reproducibility
     set_seed(args.seed)
 
     # initialize distributed process group
-    device = setup_distribution(
+    device: torch.device = setup_distribution(
         backend=args.backend,
         world_rank=WORLD_RANK,
         world_size=WORLD_SIZE,
@@ -80,16 +87,22 @@ if __name__ == "__main__":
     )
 
     # instantiate model and loss function
+    model: nn.Module
+    loss_function: nn.Module
     model, loss_function = get_model_and_loss_fn(device)
     model = FSDP(model, use_orig_params=True)
 
     # instantiate data loader
+    data_loader: torch.utils.data.DataLoader[VisionDataset]
+    sampler: torch.utils.data.distributed.DistributedSampler[
+        torch.utils.data.Dataset[VisionDataset]
+    ]
     data_loader, sampler = get_data_loader_and_sampler(
         args.data_path, WORLD_SIZE, WORLD_RANK, args.local_batch_size
     )
 
     # instantiate optimizer (SGD, Adam, DistributedShampoo)
-    optimizer = instantiate_optimizer(
+    optimizer: torch.optim.Optimizer = instantiate_optimizer(
         args.optimizer_type,
         model,
         lr=args.lr,

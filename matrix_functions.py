@@ -481,7 +481,9 @@ def _eigh_eigenvalue_decomposition(
             # If retry_double_precision is False or the computation fails in double precision, raise the exception
             raise exception
 
-    return L.to(device=current_device), Q.to(device=current_device, dtype=A.dtype)
+    return L.to(device=current_device, dtype=A.dtype), Q.to(
+        device=current_device, dtype=A.dtype
+    )
 
 
 def _eigenvalues_estimate_criterion_below_or_equal_tolerance(

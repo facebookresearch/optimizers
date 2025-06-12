@@ -7,6 +7,9 @@ LICENSE file in the root directory of this source tree.
 
 """
 
+#!/usr/bin/env python3
+
+import argparse
 import logging
 import os
 
@@ -21,12 +24,13 @@ from distributed_shampoo.examples.trainer_utils import (
     set_seed,
 )
 from torch import nn
+from torchvision.datasets import VisionDataset  # type: ignore[import-untyped]
 
 logging.basicConfig(
     format="[%(filename)s:%(lineno)d] %(levelname)s: %(message)s",
     level=logging.DEBUG,
 )
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 # for reproducibility, set environmental variable for CUBLAS
 os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
@@ -93,7 +97,7 @@ if __name__ == "__main__":
     """
 
     # parse arguments
-    args = Parser.get_args()
+    args: argparse.Namespace = Parser.get_args()
 
     # set seed for reproducibility
     set_seed(args.seed)
@@ -102,14 +106,18 @@ if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # instantiate model and loss function
+    model: nn.Module
+    loss_function: nn.Module
     model, loss_function = get_model_and_loss_fn(device)
 
     # instantiate data loader. Note that this is a single GPU training example,
     # so we do not need to instantiate a sampler.
+    data_loader: torch.utils.data.DataLoader[VisionDataset]
+    # type: ignore
     data_loader, _ = get_data_loader_and_sampler(args.data_path, 1, 0, args.batch_size)
 
     # instantiate optimizer (SGD, Adam, DistributedShampoo)
-    optimizer = instantiate_optimizer(
+    optimizer: torch.optim.Optimizer = instantiate_optimizer(
         args.optimizer_type,
         model,
         lr=args.lr,
