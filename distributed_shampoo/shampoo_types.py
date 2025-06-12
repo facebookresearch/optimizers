@@ -71,18 +71,68 @@ class PreconditionerValueError(ValueError):
 
 ###### DATACLASSES ######
 @dataclass(init=False)
+class AmortizedComputationFrequencyConfig(AbstractDataclass):
+    """Configuration for determining amortized computation frequency."""
+
+
+@dataclass(kw_only=True)
+class ConstantAmortizedComputationFrequencyConfig(AmortizedComputationFrequencyConfig):
+    """Configuration for constant amortized computation frequency.
+
+    Will use precondition_frequency as the amortized computation frequency.
+
+    """
+
+
+DefaultAmortizedComputationFrequencyConfig = (
+    ConstantAmortizedComputationFrequencyConfig()  # type: ignore[abstract]
+)
+
+
+@dataclass(kw_only=True)
+class AdaptiveAmortizedComputationFrequencyConfig(AmortizedComputationFrequencyConfig):
+    """Configuration for adaptively determining amortized computation frequency.
+
+    Determines whether the eigenbasis for a factor matrix should be updated based on computing
+    the approximate eigenvalues Q^T A Q =: B, where Q is the latest eigenbasis transformation matrix
+    and A is the current Kronecker factor. The approximate eigenvalues update criterion is then defined as
+    ||B - diag(B)||_F <= tolerance * ||B||_F. The tolerance hyperparameter should therefore
+    be in the interval [0.0, 1.0].
+    The precondition_frequency hyperparameter will be used as the minimum number of steps
+    between each amortized computation.
+
+    Args:
+        tolerance (float): Tolerance for criterion (must be in the interval [0.0, 1.0]).
+
+    """
+
+    tolerance: float
+
+    def __post_init__(self):
+        if not (0.0 <= self.tolerance <= 1.0):
+            raise ValueError(
+                f"Invalid tolerance value: {self.tolerance}. Must be in the interval [0.0, 1.0]."
+            )
+
+
+@dataclass(init=False)
 class PreconditionerConfig(AbstractDataclass):
     """Configuration for preconditioner computation in DistributedShampoo.
 
     Attributes:
         amortized_computation_config (MatrixFunctionConfig): Configuration for the amortized computation, e.g., inverse-root computation or eigendecomposition.
         num_tolerated_failed_amortized_computations (int): Number of failed amortized computations to tolerate before raising an error. (Default: 3)
+        amortized_computation_frequency_config (AmortizedComputationFrequencyConfig): Configuration for determining the amortized computation frequency.
+            (Default: DefaultAmortizedComputationFrequencyConfig)
 
     """
 
     # repr=False prevents __repr__() from accessing this field to avoid linter complaints
     amortized_computation_config: MatrixFunctionConfig = field(repr=False)
     num_tolerated_failed_amortized_computations: int = 3
+    amortized_computation_frequency_config: AmortizedComputationFrequencyConfig = field(
+        default_factory=lambda: DefaultAmortizedComputationFrequencyConfig
+    )
 
     def __post_init__(self) -> None:
         if self.num_tolerated_failed_amortized_computations < 0:
@@ -98,6 +148,8 @@ class ShampooPreconditionerConfig(PreconditionerConfig):
     Attributes:
         amortized_computation_config (MatrixFunctionConfig): Configuration for the inverse-root computation. (Default: DefaultEigenConfig)
         num_tolerated_failed_amortized_computations (int): Number of failed amortized computations to tolerate before raising an error. (Default: 3)
+        amortized_computation_frequency_config (AmortizedComputationFrequencyConfig): Configuration for determining the amortized computation frequency.
+            (Default: DefaultAmortizedComputationFrequencyConfig)
         inverse_exponent_override (dict[int, dict[int, float] | float]): The inverse_exponent_override attribute is a dictionary that allows for customizing the inverse exponent used in the Shampoo preconditioner computation.
             The keys of the dictionary represent the order of the tensor, and the values are either dictionaries with dimension indices as keys and override values as values, or a single float value for all dimensions. All unspecified dimensions use a default exponent of 1/(2*max(o,1)), where o is the order of the tensor. (Default: {})
 
@@ -182,6 +234,16 @@ class ShampooPreconditionerConfig(PreconditionerConfig):
                         f"Invalid override value in self.inverse_exponent_override[{order}]={self.inverse_exponent_override[order]}: {dim_override_or_universal_override}. All overrides must be >= 0."
                     )
 
+        if not (
+            type(self.amortized_computation_frequency_config)
+            is ConstantAmortizedComputationFrequencyConfig
+            or isinstance(self.amortized_computation_config, EigendecompositionConfig)
+        ):
+            raise ValueError(
+                f"Invalid amortized_computation_frequency_config: {self.amortized_computation_frequency_config}."
+                " Must be ConstantAmortizedComputationFrequencyConfig."
+            )
+
 
 DefaultShampooConfig = ShampooPreconditionerConfig()
 
@@ -197,6 +259,8 @@ class EigenvalueCorrectedShampooPreconditionerConfig(PreconditionerConfig):
         amortized_computation_config (EigendecompositionConfig): Configuration for the eigenvector computation.
             (Default: DefaultEigendecompositionConfig)
         num_tolerated_failed_amortized_computations (int): Number of failed amortized computations to tolerate before raising an error. (Default: 3)
+        amortized_computation_frequency_config (AmortizedComputationFrequencyConfig): Configuration for determining the amortized computation frequency.
+            (Default: DefaultAmortizedComputationFrequencyConfig)
         ignored_basis_change_dims (dict[int, list[int]]): The ignored_basis_change_dims attribute is a dictionary that specifies the dimensions of the gradient to ignore when transforming the basis of the gradient using the corresponding factor matrix's eigenvectors. 
             (This is analogous to turning off preconditioning for the specified dimensions in default Shampoo.)
             The keys of the dictionary represent the order of the tensor, and the values are lists of dimension indices to ignore. (Default: {})

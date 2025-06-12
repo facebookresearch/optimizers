@@ -485,7 +485,7 @@ def _eigh_eigenvalue_decomposition(
     )
 
 
-def _eigenvalues_estimate_criterion_below_or_equal_tolerance(
+def eigenvalues_estimate_criterion_below_or_equal_tolerance(
     eigenvalues_estimate: Tensor, tolerance: float
 ) -> bool:
     """Evaluates if a criterion using estimated eigenvalues is below or equal to the tolerance.
@@ -553,7 +553,7 @@ def _qr_algorithm(
     # NOTE: This will skip the QR iterations if the criterion is already below or equal to the tolerance given the initial eigenvectors_estimate.
     while (
         iteration < max_iterations
-        and not _eigenvalues_estimate_criterion_below_or_equal_tolerance(
+        and not eigenvalues_estimate_criterion_below_or_equal_tolerance(
             eigenvalues_estimate, tolerance
         )
     ):
