@@ -7,6 +7,9 @@ LICENSE file in the root directory of this source tree.
 
 """
 
+#!/usr/bin/env python3
+
+import argparse
 import logging
 import os
 
@@ -27,13 +30,14 @@ from distributed_shampoo.examples.trainer_utils import (
 
 from torch import nn
 from torch.distributed._composable.fsdp import fully_shard
-from torch.distributed.device_mesh import init_device_mesh
+from torch.distributed.device_mesh import DeviceMesh, init_device_mesh
+from torchvision.datasets import VisionDataset  # type: ignore[import-untyped]
 
 logging.basicConfig(
     format="[%(filename)s:%(lineno)d] %(levelname)s: %(message)s",
     level=logging.DEBUG,
 )
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 # for reproducibility, set environmental variable for CUBLAS
 os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
@@ -106,11 +110,13 @@ def train_hybrid_shard_model(
     )
 
 
-def create_model_and_optimizer_and_loss_fn(args, device, device_mesh):
+def create_model_and_optimizer_and_loss_fn(
+    args: argparse.Namespace, device: torch.device, device_mesh: DeviceMesh
+) -> tuple[nn.Module, torch.optim.Optimizer, nn.Module]:
     # instantiate model and loss function
     model, loss_function = get_model_and_loss_fn(device)
 
-    model = fully_shard(model, mesh=device_mesh)
+    model = fully_shard(model, mesh=device_mesh)  # type: ignore[assignment] # see fully_shard docstring
     # instantiate optimizer (SGD, Adam, DistributedShampoo)
     optimizer = instantiate_optimizer(
         args.optimizer_type,
@@ -161,7 +167,7 @@ if __name__ == "__main__":
         torchrun --standalone --nnodes=1 --nproc_per_node=$NUM_TRAINERS -m distributed_shampoo.examples.hybrid_shard_cifar10_example --optimizer-type ADAM
 
     Distributed Shampoo (with default Adam grafting, precondition frequency = 100):
-        torchrun --standalone --nnodes=1 --nproc_per_node=$NUM_TRAINERS -m distributed_shampoo.examples.hybrid_shard_cifar10_example --optimizer-type DISTRIBUTED_SHAMPOO --precondition-frequency 100 --grafting-type ADAM --num-trainers-per-group -1 --use-bias-correction --use-decoupled-weight-decay --use-merge-dims --dp-replicate-degree 2 
+        torchrun --standalone --nnodes=1 --nproc_per_node=$NUM_TRAINERS -m distributed_shampoo.examples.hybrid_shard_cifar10_example --optimizer-type DISTRIBUTED_SHAMPOO --precondition-frequency 100 --grafting-type ADAM --num-trainers-per-group -1 --use-bias-correction --use-decoupled-weight-decay --use-merge-dims --dp-replicate-degree 2
 
     To use distributed checkpointing, append the flag --use-distributed-checkpoint with optional --checkpoint-dir argument.
 
@@ -170,13 +176,13 @@ if __name__ == "__main__":
 
     """
 
-    args = Parser.get_args()
+    args: argparse.Namespace = Parser.get_args()
 
     # set seed for reproducibility
     set_seed(args.seed)
 
     # initialize distributed process group
-    device = setup_distribution(
+    device: torch.device = setup_distribution(
         backend=args.backend,
         world_rank=WORLD_RANK,
         world_size=WORLD_SIZE,
@@ -184,17 +190,24 @@ if __name__ == "__main__":
     )
 
     # initialize device_mesh for hybrid shard data parallel
-    device_mesh = init_device_mesh(
+    device_mesh: DeviceMesh = init_device_mesh(
         "cuda",
         (args.dp_replicate_degree, WORLD_RANK // args.dp_replicate_degree),
         mesh_dim_names=("dp_replicate", "dp_shard"),
     )
 
+    model: nn.Module
+    optimizer: torch.optim.Optimizer
+    loss_fn: nn.Module
     model, optimizer, loss_fn = create_model_and_optimizer_and_loss_fn(
         args, device, device_mesh
     )
 
     # instantiate data loader
+    data_loader: torch.utils.data.DataLoader[VisionDataset]
+    sampler: torch.utils.data.distributed.DistributedSampler[
+        torch.utils.data.Dataset[VisionDataset]
+    ]
     data_loader, sampler = get_data_loader_and_sampler(
         args.data_path, WORLD_SIZE, WORLD_RANK, args.local_batch_size
     )

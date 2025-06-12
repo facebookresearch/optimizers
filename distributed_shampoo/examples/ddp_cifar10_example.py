@@ -7,8 +7,14 @@ LICENSE file in the root directory of this source tree.
 
 """
 
+#!/usr/bin/env python3
+
+import argparse
 import logging
 import os
+from typing import Any
+
+import torch
 
 import torch.distributed as dist
 import torch.distributed.checkpoint as dist_checkpoint
@@ -24,12 +30,13 @@ from distributed_shampoo.examples.trainer_utils import (
     train_model,
 )
 from torch import nn
+from torchvision.datasets import VisionDataset  # type: ignore[import-untyped]
 
 logging.basicConfig(
     format="[%(filename)s:%(lineno)d] %(levelname)s: %(message)s",
     level=logging.DEBUG,
 )
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 # for reproducibility, set environmental variable for CUBLAS
 os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
@@ -67,13 +74,13 @@ if __name__ == "__main__":
 
     """
 
-    args = Parser.get_args()
+    args: argparse.Namespace = Parser.get_args()
 
     # set seed for reproducibility
     set_seed(args.seed)
 
     # initialize distributed process group
-    device = setup_distribution(
+    device: torch.device = setup_distribution(
         backend=args.backend,
         world_rank=WORLD_RANK,
         world_size=WORLD_SIZE,
@@ -81,8 +88,10 @@ if __name__ == "__main__":
     )
 
     # instantiate model and loss function
+    model: nn.Module
+    loss_function: nn.Module
     model, loss_function = get_model_and_loss_fn(device)
-    device_kwargs = (
+    device_kwargs: dict[str, Any] = (
         {"device_ids": [LOCAL_RANK], "output_device": LOCAL_RANK}
         if args.backend == "nccl"
         else {}
@@ -90,12 +99,16 @@ if __name__ == "__main__":
     model = nn.parallel.DistributedDataParallel(model, **device_kwargs)  # type: ignore
 
     # instantiate data loader
+    data_loader: torch.utils.data.DataLoader[VisionDataset]
+    sampler: torch.utils.data.distributed.DistributedSampler[
+        torch.utils.data.Dataset[VisionDataset]
+    ]
     data_loader, sampler = get_data_loader_and_sampler(
         args.data_path, WORLD_SIZE, WORLD_RANK, args.local_batch_size
     )
 
     # instantiate optimizer (SGD, Adam, DistributedShampoo)
-    optimizer = instantiate_optimizer(
+    optimizer: torch.optim.Optimizer = instantiate_optimizer(
         args.optimizer_type,
         model,
         lr=args.lr,
@@ -143,7 +156,7 @@ if __name__ == "__main__":
         and isinstance(optimizer, DistributedShampoo)
         and os.path.exists(args.checkpoint_dir + "/.metadata")
     ):
-        state_dict = {
+        state_dict: dict[str, Any] = {
             "model": model.state_dict(),
             "optim": optimizer.distributed_state_dict(
                 key_to_param=model.named_parameters()
