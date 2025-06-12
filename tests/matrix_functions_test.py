@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from fractions import Fraction
 from functools import partial
 from types import ModuleType
+from typing import Any
 from unittest import mock
 
 import matrix_functions
@@ -602,26 +603,40 @@ class EigenRootTest(unittest.TestCase):
         mock_eigh.assert_called()
         self.assertEqual(mock_eigh.call_count, 2)
 
-    @mock.patch.object(
-        torch_linalg_module,
-        "eigh",
-        side_effect=[
-            RuntimeError("Mock Eigen Error"),
-            (torch.ones(2), torch.eye(2)),
-        ],
-    )
-    def test_retry_double_precision_double_precision(
-        self, mock_eigh: mock.Mock
-    ) -> None:
-        A = torch.tensor([[1.0, 0.0], [0.0, 1.0]])
-        X = matrix_inverse_root(
-            A=A,
-            root=Fraction(2),
-            epsilon=0.0,
-        )
-        torch.testing.assert_close(X, torch.eye(2))
-        mock_eigh.assert_called()
-        self.assertEqual(mock_eigh.call_count, 2)
+    def test_retry_double_precision_double_precision(self) -> None:
+        """Test that matrix_inverse_root retries with double precision when eigh fails."""
+        # Store the original eigh function to use in our mock
+        original_eigh: Callable[..., tuple[Tensor, Tensor]] = torch.linalg.eigh
+
+        # Mock the eigh function
+        mock_eigh: mock.Mock
+        with mock.patch.object(torch.linalg, "eigh") as mock_eigh:
+            # Define a side effect function that fails on first call but succeeds on subsequent calls
+            def only_first_call_runtime_error(
+                *args: Any, **kwargs: Any
+            ) -> tuple[Tensor, Tensor]:
+                if mock_eigh.call_count == 1:
+                    raise RuntimeError("Mock Eigen Error")
+                return original_eigh(*args, **kwargs)
+
+            mock_eigh.side_effect = only_first_call_runtime_error
+
+            # Create identity matrix for testing
+            A = torch.tensor([[1.0, 0.0], [0.0, 1.0]])
+
+            # Call the function under test - should retry after first failure
+            X = matrix_inverse_root(
+                A=A,
+                root=Fraction(2),
+                epsilon=0.0,
+            )
+
+            # Verify the result is correct (identity matrix)
+            torch.testing.assert_close(X, torch.eye(2))
+
+            # Verify eigh was called and retried
+            mock_eigh.assert_called()
+            self.assertEqual(mock_eigh.call_count, 2)
 
 
 @instantiate_parametrized_tests
