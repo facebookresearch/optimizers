@@ -36,12 +36,14 @@ Key distinctives of this implementation include:
 - Incorporates momentum and Nesterov acceleration.
 - Offers multiple approaches for computing the root inverse, including:
     - Using symmetric eigendecomposition (used by default).
+    - Using the QR algorithm to compute an approximate eigendecomposition.
     - Coupled inverse Newton iteration [4].
     - Higher-order coupled iterations with relative epsilon based on estimate of largest eigenvalue.
 - Choice of precision for preconditioner accumulation and root inverse computation.
 - Ability to cache split parameters.
 - Merging of small dimensions.
-- [EXPERIMENTAL] Option to (approximately) correct the eigenvalues/run Adam in the eigenbasis of Shampoo's preconditioner (SOAP) [2,6,7].
+- Option to (approximately) correct the eigenvalues/run Adam in the eigenbasis of Shampoo's preconditioner (SOAP) [2,6,7].
+- Option to use an adaptive preconditioner update frequency when symmetric eigendecompositions or the QR algorithm is used [8].
 
 ## Requirements
 
@@ -718,4 +720,5 @@ If you use PyTorch Distributed Shampoo in your work, please use the following Bi
 4. [Functions of Matrices: Theory and Computation](https://epubs.siam.org/doi/book/10.1137/1.9780898717778). Nicholas J. Higham. SIAM, 2008.
 5. [A Distributed Data-Parallel PyTorch Implementation of the Distributed Shampoo Optimizer for Training Neural Networks At-Scale](https://arxiv.org/pdf/2309.06497.pdf). Hao-Jun Michael Shi, Tsung-Hsien Lee, Shintaro Iwasaki, Jose Gallego-Posada, Zhijing Li, Kaushik Rangadurai, Dheevatsa Mudigere, and Michael Rabbat. Tech Report, 2023.
 6. [Fast Approximate Natural Gradient Descent in a Kronecker-factored Eigenbasis](https://arxiv.org/abs/1806.03884). Thomas George, César Laurent, Xavier Bouthillier, Nicolas Ballas, Pascal Vincent. NeurIPS, 2018.
-7. [SOAP: Improving and Stabilizing Shampoo using Adam](https://arxiv.org/abs/2409.11321). Nikhil Vyas, Depen Morwani, Rosie Zhao, Itai Shapira, David Brandfonbrener, Lucas Janson, Sham Kakade. Tech Report, 2024.
+7. [SOAP: Improving and Stabilizing Shampoo using Adam](https://arxiv.org/abs/2409.11321). Nikhil Vyas, Depen Morwani, Rosie Zhao, Itai Shapira, David Brandfonbrener, Lucas Janson, Sham Kakade. ICLR, 2025.
+8. [Purifying Shampoo: Investigating Shampoo's Heuristics by Decomposing its Preconditioner](https://www.arxiv.org/abs/2506.03595). Runa Eschenhagen, Aaron Defazio, Tsung-Hsien Lee, Richard E. Turner, Hao-Jun Michael Shi. Tech Report, 2025.

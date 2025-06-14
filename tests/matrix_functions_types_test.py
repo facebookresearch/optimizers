@@ -13,7 +13,7 @@ import unittest
 import torch
 
 from commons import get_all_subclasses
-from matrix_functions_types import QREigendecompositionConfig
+from matrix_functions_types import EigendecompositionConfig
 from torch.testing._internal.common_utils import (
     instantiate_parametrized_tests,
     parametrize,
@@ -21,16 +21,16 @@ from torch.testing._internal.common_utils import (
 
 
 @instantiate_parametrized_tests
-class QREigendecompositionConfigSubclassesTest(unittest.TestCase):
-    subclasses_types: list[type[QREigendecompositionConfig]] = get_all_subclasses(
-        QREigendecompositionConfig
+class EigendecompositionConfigSubclassesTest(unittest.TestCase):
+    subclasses_types: list[type[EigendecompositionConfig]] = get_all_subclasses(
+        EigendecompositionConfig, include_cls_self=False
     )
 
     # tolerance has to be in the interval [0.0, 1.0].
     @parametrize("tolerance", (-1.0, 1.1))
     @parametrize("cls", subclasses_types)
     def test_illegal_tolerance(
-        self, cls: type[QREigendecompositionConfig], tolerance: float
+        self, cls: type[EigendecompositionConfig], tolerance: float
     ) -> None:
         self.assertRaisesRegex(
             ValueError,
@@ -43,7 +43,7 @@ class QREigendecompositionConfigSubclassesTest(unittest.TestCase):
 
     @parametrize("cls", subclasses_types)
     def test_illegal_eigenvectors_estimate(
-        self, cls: type[QREigendecompositionConfig]
+        self, cls: type[EigendecompositionConfig]
     ) -> None:
         self.assertRaisesRegex(
             TypeError,

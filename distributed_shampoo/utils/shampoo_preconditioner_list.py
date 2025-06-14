@@ -31,11 +31,7 @@ from matrix_functions import (
     stabilize_and_pow_eigenvalues,
 )
 
-from matrix_functions_types import (
-    EigendecompositionConfig,
-    QREigendecompositionConfig,
-    RootInvConfig,
-)
+from matrix_functions_types import EigendecompositionConfig, RootInvConfig
 from optimizer_modules import OptimizerModule
 from torch import Tensor
 from torch.autograd import profiler
@@ -1121,17 +1117,17 @@ class BaseShampooPreconditionerList(
     ) -> Tensor:
         # TODO: Need to refactor this function to be more efficient. Ideally eliminate those branches.
         # Might consider einsum?
-        assert (
-            sum(preconditioned_dims_selector) == len(preconditioner_list)
+        assert sum(preconditioned_dims_selector) == len(
+            preconditioner_list
         ), f"The number of dimensions to precondition ({sum(preconditioned_dims_selector)}) must match the number of preconditioners ({len(preconditioner_list)})."
         preconditioner_list_iter = iter(preconditioner_list)
         return reduce(
-            lambda grad, should_precondition: torch.tensordot(
-                grad, next(preconditioner_list_iter), dims=dims
-            )
-            if should_precondition
-            # Perform a left rotation on grad if not preconditioned.
-            else grad.permute(*range(1, grad.ndim), 0),
+            lambda grad, should_precondition: (
+                torch.tensordot(grad, next(preconditioner_list_iter), dims=dims)
+                if should_precondition
+                # Perform a left rotation on grad if not preconditioned.
+                else grad.permute(*range(1, grad.ndim), 0)
+            ),
             preconditioned_dims_selector,
             grad,
         )
@@ -1490,7 +1486,9 @@ class EigendecomposedShampooPreconditionerList(
             self._preconditioner_config.amortized_computation_config,
             EigendecompositionConfig,
         )
-        rank_deficient_stability_config = self._preconditioner_config.amortized_computation_config.rank_deficient_stability_config
+        rank_deficient_stability_config = (
+            self._preconditioner_config.amortized_computation_config.rank_deficient_stability_config
+        )
 
         yield from (
             tuple(
@@ -1553,11 +1551,10 @@ class EigendecomposedShampooPreconditionerList(
                     EigendecompositionConfig,
                     self._preconditioner_config.amortized_computation_config,
                 )
-                if isinstance(eigendecomposition_config, QREigendecompositionConfig):
-                    # Due to the use of QR algorithm, we need to pass in the previous eigenvectors with the same dtype as the input matrix, i.e., bias_corrected_factor_matrix.
-                    eigendecomposition_config.eigenvectors_estimate = (
-                        factor_matrix_eigenvectors
-                    ).to(dtype=bias_corrected_factor_matrix.dtype)
+                # To estimate the eigenvalues based on the previous eigenvectors, we need to pass in the previous eigenvectors with the same dtype as the input matrix, i.e., bias_corrected_factor_matrix.
+                eigendecomposition_config.eigenvectors_estimate = (
+                    factor_matrix_eigenvectors
+                ).to(dtype=bias_corrected_factor_matrix.dtype)
                 try:
                     computed_eigenvalues, computed_eigenvectors = (
                         matrix_eigendecomposition(
@@ -1735,7 +1732,9 @@ class EigenvalueCorrectedShampooPreconditionerList(
                 self._preconditioner_config.amortized_computation_config,
                 EigendecompositionConfig,
             )
-            rank_deficient_stability_config = self._preconditioner_config.amortized_computation_config.rank_deficient_stability_config
+            rank_deficient_stability_config = (
+                self._preconditioner_config.amortized_computation_config.rank_deficient_stability_config
+            )
             # Precondition with inverse root of corrected eigenvalues.
             # Note that stabilize_and_pow_eigenvalues() takes the inverse of the root, so the result can be directly multiplied to the gradient.
             preconditioned_grad.mul_(
@@ -1788,11 +1787,10 @@ class EigenvalueCorrectedShampooPreconditionerList(
                     EigendecompositionConfig,
                     self._preconditioner_config.amortized_computation_config,
                 )
-                if isinstance(eigendecomposition_config, QREigendecompositionConfig):
-                    # Due to the use of QR algorithm, we need to pass in the previous eigenvectors with the same dtype as the input matrix, i.e., factor_matrix.
-                    eigendecomposition_config.eigenvectors_estimate = (
-                        factor_matrix_eigenvectors
-                    ).to(dtype=factor_matrix.dtype)
+                # To estimate the eigenvalues based on the previous eigenvectors, we need to pass in the previous eigenvectors with the same dtype as the input matrix, i.e., factor_matrix.
+                eigendecomposition_config.eigenvectors_estimate = (
+                    factor_matrix_eigenvectors
+                ).to(dtype=factor_matrix.dtype)
                 try:
                     computed_eigenvectors = matrix_eigendecomposition(
                         A=factor_matrix,

@@ -931,11 +931,11 @@ class MatrixEigendecompositionTest(unittest.TestCase):
         class NotSupportedEigendecompositionConfig(EigendecompositionConfig):
             """A dummy class eigendecomposition config that is not supported."""
 
-            unsupoorted_field: int = 0
+            unsupported_field: int = 0
 
         self.assertRaisesRegex(
             NotImplementedError,
-            r"Eigendecomposition config is not implemented! Specified eigendecomposition config is eigendecomposition_config=.*\.NotSupportedEigendecompositionConfig\(.*\).",
+            "Eigendecomposition config is not implemented! Specified eigendecomposition config is NotSupportedEigendecompositionConfig.",
             matrix_eigendecomposition,
             A=torch.tensor([[1.0, 0.0], [0.0, 4.0]]),
             eigendecomposition_config=NotSupportedEigendecompositionConfig(),
