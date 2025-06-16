@@ -239,10 +239,13 @@ class FSDPDistributor(DistributorInterface):
                 block_index:next_block_index
             ]
 
+            # Note: Gradients that are None or empty (grad.numel() == 0) still belong to a block
+            # with corresponding block_info, but are filtered out for all updates.
+            is_invalid_grad = flattened_grad is None or flattened_grad.numel() == 0
             # Update the selector.
-            global_grad_selector.extend([flattened_grad is not None] * num_blocks)
+            global_grad_selector.extend([not is_invalid_grad] * num_blocks)
 
-            if flattened_grad is None or not any(param_distributor_selector):
+            if is_invalid_grad or not any(param_distributor_selector):
                 # Skip split_tensor_block_recovery and multi_dim_split if this blocked grad will not be used locally.
                 continue
 

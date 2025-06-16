@@ -102,8 +102,6 @@ class DistributorTest(unittest.TestCase):
         )
 
     def test_local_blocked_params(self) -> None:
-        # In Distributor, because there is no global vs. local boundary concept,
-        # global and local blocked params are always identical.
         expected_local_params = (
             torch.zeros((1,), dtype=torch.float),
             torch.zeros(PRECONDITIONER_DIM, PRECONDITIONER_DIM, dtype=torch.float),
@@ -164,6 +162,175 @@ class DistributorTest(unittest.TestCase):
             torch.ones((PRECONDITIONER_DIM, PRECONDITIONER_DIM)),
             torch.ones((PRECONDITIONER_DIM, PRECONDITIONER_DIM)),
         )
+        torch.testing.assert_close(
+            actual_local_masked_block_grads, expected_local_masked_block_grads
+        )
+
+
+class DistributorOnEmptyParamTest(unittest.TestCase):
+    def setUp(self) -> None:
+        # Note that this model has one empty parameter, and one scalar parameter.
+        self._model: nn.Module = construct_training_problem(
+            (PRECONDITIONER_DIM, 0),
+            model_dead_layers_dims=None,
+            bias=False,
+            fill=0.0,
+        )[0]
+        self._distributor = Distributor(
+            param_group=DistributedShampoo(
+                self._model.parameters(),
+                lr=0.01,
+                betas=(0.9, 1.0),
+                epsilon=1e-12,
+                momentum=0.0,
+                weight_decay=0.0,
+                max_preconditioner_dim=PRECONDITIONER_DIM,
+                precondition_frequency=1,
+                start_preconditioning_step=-1,
+            ).param_groups[0]
+        )
+
+    def test_update_params(self) -> None:
+        # Set up the scalar tensor with a gradient
+        scalar_tensor: torch.Tensor = cast(torch.Tensor, self._model.scalar)
+        scalar_tensor.grad = torch.ones_like(scalar_tensor)
+
+        # Get the linear layers module list - note that this contains an empty parameter
+        linear_layers: nn.ModuleList = cast(nn.ModuleList, self._model.linear_layers)
+
+        # Get the weight of the first layer (which is empty) and set its gradient
+        layer_weight: torch.Tensor = cast(torch.Tensor, linear_layers[0].weight)
+        self.assertEqual(layer_weight.numel(), 0)
+        layer_weight.grad = torch.ones_like(layer_weight)
+
+        # Process gradients and update the local gradient selector
+        # Since layer_weight is empty, it won't produce block params
+        self._distributor.merge_and_block_gradients()
+
+        # Get the current masked blocked parameters
+        actual_masked_blocked_params = self._distributor.local_masked_blocked_params
+
+        # Create search directions only for the scalar tensor
+        # No search directions for the empty layer_weight
+        masked_blocked_search_directions = (
+            torch.ones_like(scalar_tensor, dtype=torch.float),
+        )
+
+        # Update parameters using the search directions
+        self._distributor.update_params(
+            masked_blocked_search_directions=masked_blocked_search_directions
+        )
+
+        # Define expected masked blocked parameters
+        # Only contains the scalar tensor (unsqueezed to match dimensions)
+        expected_masked_blocked_params = (
+            torch.ones_like(scalar_tensor, dtype=torch.float).unsqueeze(0),
+        )
+
+        # Verify that the actual parameters match the expected ones
+        torch.testing.assert_close(
+            actual_masked_blocked_params, expected_masked_blocked_params
+        )
+
+    def test_local_grad_selector(self) -> None:
+        # Set up the scalar tensor with a gradient
+        scalar_tensor: torch.Tensor = cast(torch.Tensor, self._model.scalar)
+        scalar_tensor.grad = torch.ones_like(scalar_tensor)
+
+        # Get the linear layers module list - this contains an empty parameter
+        linear_layers: nn.ModuleList = cast(nn.ModuleList, self._model.linear_layers)
+
+        # Get the weight of the first layer (which is empty) and set its gradient
+        layer_weight: torch.Tensor = cast(torch.Tensor, linear_layers[0].weight)
+        self.assertEqual(layer_weight.numel(), 0)
+        layer_weight.grad = torch.ones_like(layer_weight)
+
+        # Process gradients and update the local gradient selector
+        self._distributor.merge_and_block_gradients()
+
+        # Since layer_weight is empty (shape contains 0), it won't produce block params
+        # The gradient selector will be True for scalar_tensor and False for the empty layer_weight
+        expected_local_grad_selector = (True, False)
+        self.assertEqual(
+            self._distributor.local_grad_selector,
+            expected_local_grad_selector,
+        )
+
+    def test_local_blocked_params(self) -> None:
+        # Expected local parameters:
+        # - First element: a scalar tensor (shape 1)
+        # - Second element: an empty tensor (shape 0) since layer_weight is empty
+        expected_local_params = (
+            torch.zeros((1,), dtype=torch.float),
+            torch.zeros((0,), dtype=torch.float),
+        )
+        torch.testing.assert_close(
+            self._distributor.local_blocked_params,
+            expected_local_params,
+        )
+
+    def test_local_block_info_list(self) -> None:
+        # Custom equality function for BlockInfo objects
+        # We only compare param and composable_block_ids fields
+        # The msg parameter is required by unittest but not used
+        def block_info_equality(
+            a: BlockInfo, b: BlockInfo, msg: str | None = None
+        ) -> None:
+            # Only comparing param and composable_block_ids fields but not others like get_tensor()
+            # because function objects are not comparable in BlockInfo.
+            torch.testing.assert_close(a.param, b.param)
+            self.assertEqual(a.composable_block_ids, b.composable_block_ids)
+
+        # Register the custom equality function for BlockInfo type
+        self.addTypeEqualityFunc(BlockInfo, block_info_equality)
+
+        # Get the linear layers and the empty layer weight
+        linear_layers: nn.ModuleList = cast(nn.ModuleList, self._model.linear_layers)
+        layer_weight: torch.Tensor = cast(torch.Tensor, linear_layers[0].weight)
+        self.assertEqual(layer_weight.numel(), 0)
+
+        # Expected block info list:
+        # - First element: the scalar tensor with block ID (0, "block_0")
+        # - Second element: the empty layer weight with block ID (1, "block_0")
+        expected_local_block_info_list = (
+            BlockInfo(
+                param=cast(torch.Tensor, self._model.scalar),
+                composable_block_ids=(0, "block_0"),
+            ),
+            BlockInfo(param=layer_weight, composable_block_ids=(1, "block_0")),
+        )
+
+        # Compare each element in the block info lists
+        for index, (a, b) in enumerate(
+            zip(
+                self._distributor.local_block_info_list,
+                expected_local_block_info_list,
+                strict=True,
+            )
+        ):
+            self.assertEqual(
+                a,
+                b,
+                f"Difference found at {index=}: {self._distributor.local_block_info_list[index]=} != {expected_local_block_info_list[index]=}",
+            )
+
+    def test_merge_and_block_gradients(self) -> None:
+        # Set up the scalar tensor with a gradient
+        scalar_tensor: torch.Tensor = cast(torch.Tensor, self._model.scalar)
+        scalar_tensor.grad = torch.ones_like(scalar_tensor)
+
+        # Get the linear layers and the empty layer weight
+        linear_layers: nn.ModuleList = cast(nn.ModuleList, self._model.linear_layers)
+        layer_weight: torch.Tensor = cast(torch.Tensor, linear_layers[0].weight)
+        self.assertEqual(layer_weight.numel(), 0)
+        layer_weight.grad = torch.ones_like(layer_weight)
+
+        # Process gradients - since layer_weight is empty, it won't produce block gradients
+        actual_local_masked_block_grads = self._distributor.merge_and_block_gradients()
+
+        # Only the scalar tensor produces a block gradient (shape 1)
+        # The empty layer_weight doesn't contribute to the masked block gradients
+        expected_local_masked_block_grads = (torch.ones((1,)),)
         torch.testing.assert_close(
             actual_local_masked_block_grads, expected_local_masked_block_grads
         )

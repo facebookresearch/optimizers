@@ -219,13 +219,17 @@ class DistributorInterface(ABC):
                 block_index:next_block_index
             ]
 
+            # Note: Gradients that are None or empty (grad.numel() == 0) still belong to a block
+            # with corresponding block_info, but are filtered out for all updates.
+            is_invalid_grad = grad is None or grad.numel() == 0
             # Update the selector
-            global_grad_selector.extend([grad is not None] * num_blocks)
+            global_grad_selector.extend([not is_invalid_grad] * num_blocks)
 
-            if grad is None or not any(param_distributor_selector):
+            if is_invalid_grad or not any(param_distributor_selector):
                 # Skip multi_dim_split if this blocked grad will not be used locally.
                 continue
 
+            assert grad is not None
             # Obtain blocks for each gradient after merging.
             blocks_within_grad = multi_dim_split(
                 grad.view(merge_dims(tensor_shape=grad.size())),

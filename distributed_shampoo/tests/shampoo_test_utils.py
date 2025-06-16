@@ -28,12 +28,13 @@ class _ModelWithScalarAndLinearAndDeadLayers(nn.Module):
         bias: bool = False,
     ) -> None:
         super().__init__()
-        # Choose torch.tenosr over nn.Parameter(requires_grad=False) to avoid model.parameters() including this scalar when enable_learnable_scalar is False.
+        # Choose torch.tensor over nn.Parameter(requires_grad=False) to avoid model.parameters() including this scalar when enable_learnable_scalar is False.
         self.scalar: torch.Tensor = (
             nn.Parameter(torch.zeros(()))
             if enable_learnable_scalar
             else torch.zeros(())
         )
+
         # fully_shard doesn't support containers so we fall back to use nn.Sequential
         self.linear_layers: nn.Sequential = nn.Sequential(
             *(nn.Linear(a, b, bias=bias) for a, b in pairwise(model_linear_layers_dims))
