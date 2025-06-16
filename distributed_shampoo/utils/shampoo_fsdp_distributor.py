@@ -365,8 +365,8 @@ class FSDPDistributor(DistributorInterface):
                                     Fig. 5
 
         Reshaped split tensors (i.e., the tensors in Fig. 3):
-                                     _______
-                                    |_______|  <- left split
+                                    _______
+                                   |_______|  <- left split
                              ______________
                             |              |  <- center split
                             |______________|
