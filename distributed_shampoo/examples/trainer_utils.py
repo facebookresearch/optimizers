@@ -599,7 +599,7 @@ def setup_distribution(
 
 def get_model_and_loss_fn(device: torch.device) -> tuple[nn.Module, nn.Module]:
     # instantiate model and loss function
-    model = ConvNet(32, 32, 3).to(device)
+    model = ConvNet(height=32, width=32).to(device)
     loss_fn = nn.CrossEntropyLoss()
 
     return model, loss_fn

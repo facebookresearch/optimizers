@@ -12,7 +12,7 @@ LICENSE file in the root directory of this source tree.
 import math
 
 import torch
-import torch.nn as nn
+from torch import nn
 
 
 def infer_conv_output_shape(
@@ -36,15 +36,11 @@ class ConvNet(nn.Module):
     Args:
         height (int): Height of image.
         width (int): Width of image.
-        channels (int): Channels of image.
-        use_combined_linear (bool): Uses CombinedLinear module in place of nn.Linear.
 
     """
 
-    def __init__(
-        self, height: int, width: int, channels: int, use_combined_linear: bool = False
-    ) -> None:
-        super(ConvNet, self).__init__()
+    def __init__(self, height: int, width: int) -> None:
+        super().__init__()
         self.conv = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
         self.activation = nn.ReLU()
         self.linear = nn.Linear(
