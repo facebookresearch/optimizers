@@ -45,14 +45,19 @@ def merge_small_dims(tensor_shape: tuple[int, ...], threshold: int) -> tuple[int
 
     # Squeeze tensor shape to remove dimension with 1; if all dimensions are 1,
     # then add a 1 to the tensor shape.
-    squeezed_tensor_shape = list(filter(lambda t: t != 1, tensor_shape)) or [1]
+    # We merge dimensions in reverse order to accommodate PyTorch's general tensor layout.
+    # This is particularly useful for convolution operations where kernel sizes are typically
+    # placed at the end of the tensor shape.
+    squeezed_tensor_shape = list(filter(lambda t: t != 1, reversed(tensor_shape))) or [
+        1
+    ]
     new_tensor_shape = [squeezed_tensor_shape[0]]
     for next_tensor_shape in islice(squeezed_tensor_shape, 1, None):
         if (new_dimension := new_tensor_shape[-1] * next_tensor_shape) <= threshold:
             new_tensor_shape[-1] = new_dimension
         else:
             new_tensor_shape.append(next_tensor_shape)
-    return tuple(new_tensor_shape)
+    return tuple(reversed(new_tensor_shape))
 
 
 def multi_dim_split(tensor: Tensor, split_size: int) -> tuple[Tensor, ...]:

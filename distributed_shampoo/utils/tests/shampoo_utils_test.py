@@ -73,6 +73,13 @@ class MergeSmallDimsTest(unittest.TestCase):
             expected_new_tensor_shape,
         )
 
+    def test_convolution_like_dims(self) -> None:
+        expected_new_tensor_shape = (96, 4096)
+        self.assertEqual(
+            merge_small_dims(tensor_shape=(32, 3, 64, 64), threshold=8192),
+            expected_new_tensor_shape,
+        )
+
 
 class MultiDimSplitTest(unittest.TestCase):
     def test_multi_dim_split_for_one_dim(self) -> None:
