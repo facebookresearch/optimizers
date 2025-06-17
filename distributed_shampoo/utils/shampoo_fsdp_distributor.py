@@ -20,7 +20,7 @@ from distributed_shampoo.shampoo_types import (
     USE_MERGE_DIMS,
 )
 from distributed_shampoo.utils.shampoo_block_info import BlockInfo
-from distributed_shampoo.utils.shampoo_distributor import DistributorInterface
+from distributed_shampoo.utils.shampoo_distributor import Distributor
 from distributed_shampoo.utils.shampoo_utils import (
     compress_list,
     generate_pairwise_indices,
@@ -31,7 +31,7 @@ from torch import distributed as dist, Tensor
 from torch.nn import Parameter
 
 
-class FSDPDistributor(DistributorInterface):
+class FSDPDistributor(Distributor):
     """FSDP Distributor class.
 
     Handles split tensor block recovery of different parameters, then merging and blocking of
@@ -56,43 +56,6 @@ class FSDPDistributor(DistributorInterface):
         self._global_num_blocks_per_split_param: tuple[int, ...] = ()
 
         super().__init__(param_group)
-
-        # Initialize selectors and local blocked (masked) parameters.
-        self._local_grad_selector: tuple[bool, ...] = (True,) * len(
-            self._global_blocked_params
-        )
-        self._distributor_selector: tuple[bool, ...] = self._local_grad_selector
-        self._local_masked_blocked_params: tuple[Tensor, ...] = (
-            self._global_blocked_params
-        )
-        self._local_blocked_params: tuple[Tensor, ...] = self._global_blocked_params
-        self._local_block_info_list: tuple[BlockInfo, ...] = (
-            self._construct_local_block_info_list()
-        )
-
-    @torch.no_grad()
-    def update_params(
-        self,
-        masked_blocked_search_directions: tuple[Tensor, ...],
-    ) -> None:
-        """Update params stored inside this distributor according to the input search directions argument.
-
-        Args:
-            masked_blocked_search_directions (tuple[Tensor, ...]): Search directions for each local blocked parameter.
-            This tuple might be empty if the parameters are not receiving gradients.
-
-        """
-        assert (
-            len(masked_blocked_search_directions)
-            == len(self._local_masked_blocked_params)
-        ), f"Expected {len(masked_blocked_search_directions)=} to be equal to {len(self._local_masked_blocked_params)=}."
-
-        # torch._foreach only accepts non-empty list
-        if masked_blocked_search_directions:
-            torch._foreach_add_(
-                self._local_masked_blocked_params,
-                masked_blocked_search_directions,
-            )
 
     def _construct_composable_block_ids(
         self,
@@ -289,34 +252,6 @@ class FSDPDistributor(DistributorInterface):
         self._global_grad_selector = tuple(global_grad_selector)
 
         return tuple(local_masked_blocked_grads)
-
-    def merge_and_block_gradients(
-        self,
-    ) -> tuple[Tensor, ...]:
-        """Merge and block gradients.
-
-        NOTE: This function MUST be called in the step function of the optimizer after the
-        gradient has been updated.
-
-        Returns:
-            local_masked_blocked_grads (tuple[Tensor, ...]): Local blocked gradients masked with grad existence.
-
-        """
-        local_masked_blocked_grads = self._merge_and_block_gradients()
-
-        if self._previous_global_grad_selector != self._global_grad_selector:
-            self._previous_global_grad_selector = self._global_grad_selector
-
-            # Update _local_grad_selector and _local_masked_blocked_params only when global_grad_selector is changed.
-            self._local_grad_selector = compress_list(
-                self._global_grad_selector,
-                self._distributor_selector,
-            )
-            self._local_masked_blocked_params = compress_list(
-                self._local_blocked_params, self._local_grad_selector
-            )
-
-        return local_masked_blocked_grads
 
     @staticmethod
     def _split_tensor_block_recovery(
