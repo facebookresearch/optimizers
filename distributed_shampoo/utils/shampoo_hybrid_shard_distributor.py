@@ -307,26 +307,6 @@ class HybridShardDistributor(DistributorInterface):
                     self._global_masked_dist_blocked_buffers,
                 )
 
-    def _construct_composable_block_ids(
-        self,
-        param_index: int,
-        block_index: int,
-        rank: int | None = None,
-    ) -> tuple[int, str]:
-        """Construct composable block ids for each parameter.
-
-        Args:
-            param_index (int): Index of the current parameter within self._param_group[PARAMS].
-            block_index (int): Block index that is accumulated across all parameters within a parameter group.
-            rank (int | None): Rank of this process group; should be non None in FullyShard/HybridShard setting. (Default: None)
-
-        Returns:
-            tuple[int, str]: Composable block id tuple containing global block index and local block name.
-                The latter will be used to identify blocks in the masked tensor.
-        """
-        assert rank is not None, "Rank must be provided in hybrid shard setting."
-        return (param_index, f"rank_{rank}-block_{block_index}")
-
     @torch.no_grad()
     def _construct_local_block_info_list(
         self, group_source_ranks: tuple[int, ...], group_rank: int

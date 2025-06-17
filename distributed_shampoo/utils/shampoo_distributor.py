@@ -103,11 +103,26 @@ class DistributorInterface(ABC):
             rank (int | None): Rank of this process group; used in FSDP/HSDP. (Default: None)
 
         Returns:
-            tuple[int, str]: Composable block id tuple containing global block index and local block name.
+            composable_block_ids (tuple[int, str]): Composable block id tuple containing global block index and local block name.
                 The latter will be used to identify blocks in the masked tensor.
 
+        Examples:
+            (0, "block_2") - For parameter index 0, block index 2, no rank
+            (1, "rank_3-block_0") - For parameter index 1, block index 0, rank 3
+
         """
-        return (param_index, f"block_{block_index}")
+        return (
+            param_index,
+            "-".join(
+                filter(
+                    None,
+                    (
+                        f"rank_{rank}" if rank is not None else None,
+                        f"block_{block_index}",
+                    ),
+                )
+            ),
+        )
 
     @overload
     @torch.no_grad()
