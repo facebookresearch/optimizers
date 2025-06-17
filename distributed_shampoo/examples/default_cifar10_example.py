@@ -45,11 +45,14 @@ def train_default_model(
     device: torch.device,
     epochs: int = 1,
     window_size: int = 100,
+    metrics_dir: str | None = None,
 ) -> tuple[float, float, int]:
     """Constructs the main training loop."""
 
     # initialize metrics
-    metrics = LossMetrics(window_size=window_size, device=device)
+    metrics = LossMetrics(
+        window_size=window_size, device=device, metrics_dir=metrics_dir
+    )
 
     # main training loop
     for epoch in range(epochs):
@@ -64,6 +67,7 @@ def train_default_model(
             metrics.update(loss)
             metrics.log()
 
+    metrics.flush()
     return (
         metrics._lifetime_loss.item(),
         metrics._window_loss.item(),
@@ -152,4 +156,5 @@ if __name__ == "__main__":
         device,
         epochs=args.epochs,
         window_size=args.window_size,
+        metrics_dir=args.metrics_dir,
     )

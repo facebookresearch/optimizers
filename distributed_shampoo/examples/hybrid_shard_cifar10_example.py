@@ -60,6 +60,7 @@ def train_hybrid_shard_model(
     window_size: int = 100,
     use_distributed_checkpoint: bool = False,
     checkpoint_dir: str | None = None,
+    metrics_dir: str | None = None,
 ) -> tuple[float, float, int]:
     """Constructs the main training loop.
 
@@ -68,7 +69,12 @@ def train_hybrid_shard_model(
     """
 
     # initialize metrics
-    metrics = LossMetrics(window_size=window_size, device=device, world_size=world_size)
+    metrics = LossMetrics(
+        window_size=window_size,
+        device=device,
+        world_size=world_size,
+        metrics_dir=metrics_dir,
+    )
 
     # main training loop
     for epoch in range(epochs):
@@ -103,6 +109,7 @@ def train_hybrid_shard_model(
             storage_writer=dist_checkpoint.FileSystemWriter(checkpoint_dir),
         )
 
+    metrics.flush()
     return (
         metrics._lifetime_loss.item(),
         metrics._window_loss.item(),
@@ -225,6 +232,7 @@ if __name__ == "__main__":
         window_size=args.window_size,
         use_distributed_checkpoint=args.use_distributed_checkpoint,
         checkpoint_dir=args.checkpoint_dir,
+        metrics_dir=args.metrics_dir if WORLD_RANK == 0 else None,
     )
 
     # clean up process group

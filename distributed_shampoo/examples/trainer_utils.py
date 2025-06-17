@@ -44,6 +44,7 @@ from distributed_shampoo import (
 from distributed_shampoo.examples.convnet import ConvNet
 
 from torch import nn
+from torch.utils.tensorboard import SummaryWriter
 from torchvision import datasets, transforms  # type: ignore[import-untyped]
 
 logger: logging.Logger = logging.getLogger(__name__)
@@ -290,6 +291,14 @@ class Parser:
             help="Default HSDP replicate degree.",
         )
 
+        # Arguments for metrics logging.
+        parser.add_argument(
+            "--metrics-dir",
+            type=str,
+            default=None,
+            help="Directory to save metrics logs if set.",
+        )
+
         return parser.parse_args()
 
 
@@ -311,6 +320,7 @@ class LossMetrics(Metrics):
         window_size: int = 100,
         device: torch.device = default_device,
         world_size: int = 0,
+        metrics_dir: str | None = None,
     ) -> None:
         super().__init__()
         self._world_size = world_size
@@ -326,6 +336,10 @@ class LossMetrics(Metrics):
         if self._world_size > 1:
             self._global_window_loss: torch.Tensor = torch.tensor(0.0, device=device)
             self._global_lifetime_loss: torch.Tensor = torch.tensor(0.0, device=device)
+
+        self._metrics_writer: SummaryWriter | None = (
+            SummaryWriter(log_dir=metrics_dir) if metrics_dir else None
+        )
 
     def reset(self) -> None:
         self._epoch = 0
@@ -348,6 +362,12 @@ class LossMetrics(Metrics):
         logger.info(
             f"Epoch: {self._epoch} | Iteration: {self._iteration} | Local Lifetime Loss: {self._lifetime_loss} | Local Window Loss: {self._window_loss}"
         )
+        if self._metrics_writer is not None:
+            self._metrics_writer.add_scalars(
+                "Local Loss",
+                {"Lifetime": self._lifetime_loss, "Window": self._window_loss},
+                self._iteration,
+            )
 
     def update_global_metrics(self) -> None:
         if dist.is_initialized() and self._world_size > 1:
@@ -361,6 +381,19 @@ class LossMetrics(Metrics):
             logger.info(
                 f"Epoch: {self._epoch} | Iteration: {self._iteration} | Global Lifetime Loss: {self._global_lifetime_loss} | Global Window Loss: {self._global_window_loss}"
             )
+            if self._metrics_writer is not None:
+                self._metrics_writer.add_scalars(
+                    "Global Loss",
+                    {
+                        "Lifetime": self._global_lifetime_loss,
+                        "Window": self._global_window_loss,
+                    },
+                    self._iteration,
+                )
+
+    def flush(self) -> None:
+        if self._metrics_writer is not None:
+            self._metrics_writer.flush()
 
 
 ###### OPTIMIZER INSTANTIATION ######
@@ -617,9 +650,15 @@ def train_model(
     epochs: int = 1,
     window_size: int = 100,
     local_rank: int = 0,
+    metrics_dir: str | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, int]:
     # initialize metrics
-    metrics = LossMetrics(window_size=window_size, device=device, world_size=world_size)
+    metrics = LossMetrics(
+        window_size=window_size,
+        device=device,
+        world_size=world_size,
+        metrics_dir=metrics_dir,
+    )
 
     # main training loop
     for epoch in range(epochs):
@@ -640,4 +679,5 @@ def train_model(
             if local_rank == 0:
                 metrics.log_global_metrics()
 
+    metrics.flush()
     return metrics._lifetime_loss, metrics._window_loss, metrics._iteration
