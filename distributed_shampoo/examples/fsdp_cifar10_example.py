@@ -142,6 +142,7 @@ if __name__ == "__main__":
         epochs=args.epochs,
         window_size=args.window_size,
         local_rank=LOCAL_RANK,
+        metrics_dir=args.metrics_dir if WORLD_RANK == 0 else None,
     )
 
     # clean up process group
