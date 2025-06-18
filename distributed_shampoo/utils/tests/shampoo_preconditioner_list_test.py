@@ -54,7 +54,7 @@ from torch.testing._internal.common_utils import (
 
 class AbstractPreconditionerListTest:
     class Interface(abc.ABC, unittest.TestCase):
-        """PreconditionerListTestInterface is the base class for testing all PreconditionerList implementations.
+        """AbstractPreconditionerListTest.Interface is the base class for testing all PreconditionerList implementations.
 
         This abstract class provides a standardized testing framework for various preconditioner list implementations.
         It defines a set of abstract methods that subclasses must implement, as well as concrete test methods that
