@@ -489,6 +489,8 @@ class AdamGraftingConfig(RMSpropGraftingConfig):
         epsilon (float): Epsilon term for regularizing square-root of the second moment to ensure positive definiteness.
             (Default: 1e-10)
 
+    Note:
+        The traditional beta1 parameter in Adam is set by betas[0] in DistributedShampoo's hyperparameters.
     """
 
     beta2: float = 0.999
