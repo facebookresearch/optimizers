@@ -140,9 +140,9 @@ class DistributorInterface(ABC):
     def _get_params_or_grads(self, get_grad: bool = False) -> Iterable[Tensor | None]:
         """Helper function that gets params or grads from the parameter group.
 
-        NOTE: The purpose of this function is for FullyShardShampooDistributor (supporting
-        Shampoo on per-parameter FSDP, a.k.a. FSDP2 or FullyShard) to override, in order to
-        get the local params/grads from DTensors.
+        NOTE: The purpose of this function is for FullyShardDistributor (supporting Shampoo on
+        per-parameter FSDP, a.k.a. FSDP2 or FullyShard) to override, in order to get the local
+        params/grads from DTensors.
 
         By default, we just return the original params/grads.
 
