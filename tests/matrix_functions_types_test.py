@@ -12,7 +12,7 @@ import unittest
 
 import torch
 
-from commons import get_all_subclasses
+from commons import get_all_non_abstract_subclasses
 from matrix_functions_types import QREigendecompositionConfig
 from torch.testing._internal.common_utils import (
     instantiate_parametrized_tests,
@@ -22,8 +22,8 @@ from torch.testing._internal.common_utils import (
 
 @instantiate_parametrized_tests
 class QREigendecompositionConfigSubclassesTest(unittest.TestCase):
-    subclasses_types: list[type[QREigendecompositionConfig]] = get_all_subclasses(
-        QREigendecompositionConfig
+    subclasses_types: list[type[QREigendecompositionConfig]] = list(
+        get_all_non_abstract_subclasses(QREigendecompositionConfig)
     )
 
     # tolerance has to be in the interval [0.0, 1.0].
