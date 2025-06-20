@@ -199,7 +199,7 @@ if __name__ == "__main__":
     # initialize device_mesh for hybrid shard data parallel
     device_mesh: DeviceMesh = init_device_mesh(
         "cuda",
-        (args.dp_replicate_degree, WORLD_RANK // args.dp_replicate_degree),
+        (args.dp_replicate_degree, WORLD_SIZE // args.dp_replicate_degree),
         mesh_dim_names=("dp_replicate", "dp_shard"),
     )
 
