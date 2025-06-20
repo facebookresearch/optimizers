@@ -56,7 +56,6 @@ if __name__ == "__main__":
     Requirements:
         - Python 3.12 or above
         - PyTorch / TorchVision
-        - 8 GPU machine
 
     To run this training script with a single node, one can run from the optimizers directory:
 
@@ -90,9 +89,11 @@ if __name__ == "__main__":
     )
 
     # Instantiate device mesh for HSDP Shampoo.
-    # Assuming 8 GPUs, will be initialized as 2 x 4 mesh.
+    # For example, with 8 GPUs and dp_replicate_degree set to 2, the device mesh will be:
     # ([[0, 1, 2, 3], [4, 5, 6, 7]])
-    device_mesh: DeviceMesh = init_device_mesh("cuda", (2, 4))
+    device_mesh: DeviceMesh = init_device_mesh(
+        "cuda", (args.dp_replicate_degree, WORLD_SIZE // args.dp_replicate_degree)
+    )
 
     # instantiate model and loss function
     model: nn.Module
