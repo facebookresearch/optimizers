@@ -1186,7 +1186,7 @@ class BaseShampooPreconditionerList(
             - Trigger a fallback mechanism to use default values.
         """
         # Save the problematic matrix to a file for debugging.
-        tmp_dir = Path("tmp").resolve()
+        tmp_dir = Path("/tmp").resolve()
         tmp_dir.mkdir(exist_ok=True)
         file_path = tmp_dir / f"{factor_matrix_index.replace('.', '_')}.pt"
         try:
