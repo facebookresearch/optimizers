@@ -1661,14 +1661,8 @@ class EigenvalueCorrectedShampooPreconditionerList(
             step=step,
             perform_amortized_computation=perform_amortized_computation,
         )
-        # Update the eigenvalue corrections of Shampoo's preconditioner.
-        self._update_eigenvalue_corrections(masked_grad_list=masked_grad_list)
 
-    @_profile_decorator
-    def _update_eigenvalue_corrections(
-        self, masked_grad_list: tuple[Tensor, ...]
-    ) -> None:
-        # NOTE: Unlike AdagradPreconditionerList, we will loop through each gradient individually.
+        # Update the eigenvalue corrections of Shampoo's preconditioner.
         for grad, preconditioned_dims_selector, kronecker_factors in zip(
             masked_grad_list,
             self._masked_preconditioned_dims_selector_list,
