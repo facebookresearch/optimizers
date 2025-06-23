@@ -9,6 +9,7 @@ LICENSE file in the root directory of this source tree.
 
 #!/usr/bin/env python3
 
+import math
 import re
 import unittest
 from collections.abc import Callable
@@ -123,6 +124,7 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
         | FullyShardShampooConfig
         | HybridShardShampooConfig
         | None,
+        start_preconditioning_step: int = 2,
     ) -> Callable[[ParamsT], torch.optim.Optimizer]:
         return partial(
             DistributedShampoo,
@@ -133,7 +135,7 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
             weight_decay=0.0,
             max_preconditioner_dim=PRECONDITIONER_DIM,
             precondition_frequency=1,
-            start_preconditioning_step=2,
+            start_preconditioning_step=start_preconditioning_step,
             use_decoupled_weight_decay=True,
             grafting_config=AdaGradGraftingConfig(epsilon=1e-8),
             distributed_config=distributed_config,
@@ -233,6 +235,9 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
     @with_comms
     @skip_if_lt_x_gpu(4)
     @parametrize(
+        "start_preconditioning_step", (2, math.inf)
+    )  # math.inf here is to test the grafting similarities between HSDP2 and DDP
+    @parametrize(
         "communication_dtype, communicate_params",
         (
             (torch.float32, False),
@@ -247,6 +252,7 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
         num_trainers_per_group: int,
         communication_dtype: torch.dtype,
         communicate_params: bool,
+        start_preconditioning_step: int,
     ) -> None:
         """
         Testing the correctness of hybrid shard Shampoo distributor of (n, 1) mesh
@@ -269,10 +275,12 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
         compare_two_optimizers_models_devices_on_weight_and_loss(
             control_optim_factory=ShampooHybridShardDistributorTest._shampoo_optim_factory(
                 distributed_config=ddp_config,
+                start_preconditioning_step=start_preconditioning_step,
             ),
             control_model_factory=ShampooHybridShardDistributorTest._construct_model,
             experimental_optim_factory=ShampooHybridShardDistributorTest._shampoo_optim_factory(
                 distributed_config=hybrid_shard_config,
+                start_preconditioning_step=start_preconditioning_step,
             ),
             experimental_model_factory=partial(
                 ShampooHybridShardDistributorTest._construct_model,
