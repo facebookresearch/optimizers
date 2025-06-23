@@ -203,9 +203,9 @@ class AbstractTest:
                     '["block_1", "shampoo", "factor_matrices", 0]': DTensor.from_local(
                         local_tensor=tensor(
                             [
-                                [0.0004, 0.0004, 0.0004],
-                                [0.0004, 0.0004, 0.0004],
-                                [0.0004, 0.0004, 0.0004],
+                                [9.7451e-06, 9.7451e-06, 9.7451e-06],
+                                [9.7451e-06, 9.7451e-06, 9.7451e-06],
+                                [9.7451e-06, 9.7451e-06, 9.7451e-06],
                             ]
                         ),
                         device_mesh=DeviceMesh(str(self._device), [0]),
@@ -214,9 +214,9 @@ class AbstractTest:
                     '["block_1", "shampoo", "factor_matrices", 1]': DTensor.from_local(
                         local_tensor=tensor(
                             [
-                                [0.0002, 0.0003, 0.0004],
-                                [0.0003, 0.0004, 0.0005],
-                                [0.0004, 0.0005, 0.0006],
+                                [1.1501e-06, -5.6068e-06, -9.3039e-07],
+                                [-5.6068e-06, 2.7333e-05, 4.5356e-06],
+                                [-9.3039e-07, 4.5356e-06, 7.5264e-07],
                             ]
                         ),
                         device_mesh=DeviceMesh(str(self._device), [0]),
@@ -225,9 +225,9 @@ class AbstractTest:
                     '["block_1", "shampoo", "inv_factor_matrices", 0]': DTensor.from_local(
                         local_tensor=tensor(
                             [
-                                [68.2723, -31.3830, -31.4793],
-                                [-31.3830, 68.3608, -31.5677],
-                                [-31.4793, -31.5677, 68.4570],
+                                [71.1973, -28.8003, -28.7987],
+                                [-28.8003, 71.1994, -28.8008],
+                                [-28.7987, -28.8008, 71.1979],
                             ]
                         ),
                         device_mesh=DeviceMesh(str(self._device), [0]),
@@ -236,9 +236,9 @@ class AbstractTest:
                     '["block_1", "shampoo", "inv_factor_matrices", 1]': DTensor.from_local(
                         local_tensor=tensor(
                             [
-                                [82.9738, -22.7016, -28.3770],
-                                [-22.7016, 69.6087, -37.7380],
-                                [-28.3770, -37.7380, 52.6266],
+                                [96.5949, 16.5691, 2.7488],
+                                [16.5691, 19.2215, -13.4046],
+                                [2.7488, -13.4046, 97.7756],
                             ]
                         ),
                         device_mesh=DeviceMesh(str(self._device), [0]),
@@ -247,9 +247,9 @@ class AbstractTest:
                     '["block_1", "adagrad"]': DTensor.from_local(
                         local_tensor=tensor(
                             [
-                                [7.0041e-05, 1.2452e-04, 1.9456e-04],
-                                [7.0041e-05, 1.2452e-04, 1.9456e-04],
-                                [7.0041e-05, 1.2452e-04, 1.9456e-04],
+                                [3.8337e-07, 9.1109e-06, 2.5088e-07],
+                                [3.8337e-07, 9.1109e-06, 2.5088e-07],
+                                [3.8337e-07, 9.1108e-06, 2.5088e-07],
                             ]
                         ),
                         device_mesh=DeviceMesh(str(self._device), [0]),
@@ -258,9 +258,9 @@ class AbstractTest:
                     '["block_1", "momentum"]': DTensor.from_local(
                         local_tensor=tensor(
                             [
-                                [1.6924, 1.9865, 2.2806],
-                                [1.6924, 1.9865, 2.2806],
-                                [1.6924, 1.9865, 2.2806],
+                                [-0.9379, 1.4338, 0.9135],
+                                [-0.9379, 1.4338, 0.9135],
+                                [-0.9379, 1.4338, 0.9135],
                             ]
                         ),
                         device_mesh=DeviceMesh(str(self._device), [0]),
@@ -269,9 +269,9 @@ class AbstractTest:
                     '["block_1", "filtered_grad"]': DTensor.from_local(
                         local_tensor=tensor(
                             [
-                                [0.0013, 0.0017, 0.0021],
-                                [0.0013, 0.0017, 0.0021],
-                                [0.0013, 0.0017, 0.0021],
+                                [1.5298e-05, -7.4576e-05, -1.2375e-05],
+                                [1.5298e-05, -7.4576e-05, -1.2375e-05],
+                                [1.5298e-05, -7.4576e-05, -1.2375e-05],
                             ]
                         ),
                         device_mesh=DeviceMesh(str(self._device), [0]),
@@ -282,9 +282,9 @@ class AbstractTest:
                     '["block_0", "shampoo", "factor_matrices", 0]': DTensor.from_local(
                         local_tensor=tensor(
                             [
-                                [3.8911e-05, 3.8911e-05, 3.8911e-05],
-                                [3.8911e-05, 3.8911e-05, 3.8911e-05],
-                                [3.8911e-05, 3.8911e-05, 3.8911e-05],
+                                [1.3363e-06, 1.3363e-06, 1.3363e-06],
+                                [1.3363e-06, 1.3363e-06, 1.3363e-06],
+                                [1.3363e-06, 1.3363e-06, 1.3363e-06],
                             ]
                         ),
                         device_mesh=DeviceMesh(str(self._device), [1]),
@@ -293,9 +293,9 @@ class AbstractTest:
                     '["block_0", "shampoo", "factor_matrices", 1]': DTensor.from_local(
                         local_tensor=tensor(
                             [
-                                [0.0000e00, 0.0000e00, 0.0000e00],
-                                [0.0000e00, 2.3347e-05, 4.6694e-05],
-                                [0.0000e00, 4.6694e-05, 9.3387e-05],
+                                [2.4575e-06, 9.4018e-07, 1.7113e-06],
+                                [9.4018e-07, 3.5969e-07, 6.5472e-07],
+                                [1.7113e-06, 6.5472e-07, 1.1917e-06],
                             ]
                         ),
                         device_mesh=DeviceMesh(str(self._device), [1]),
@@ -304,9 +304,9 @@ class AbstractTest:
                     '["block_0", "shampoo", "inv_factor_matrices", 0]': DTensor.from_local(
                         local_tensor=tensor(
                             [
-                                [69.8735, -30.1266, -30.1266],
-                                [-30.1266, 69.8674, -30.1204],
-                                [-30.1266, -30.1204, 69.8673],
+                                [74.1114, -25.8886, -25.8885],
+                                [-25.8886, 74.1112, -25.8882],
+                                [-25.8885, -25.8882, 74.1110],
                             ]
                         ),
                         device_mesh=DeviceMesh(str(self._device), [1]),
@@ -315,9 +315,9 @@ class AbstractTest:
                     '["block_0", "shampoo", "inv_factor_matrices", 1]': DTensor.from_local(
                         local_tensor=tensor(
                             [
-                                [100.0000, 0.0000, 0.0000],
-                                [0.0000, 81.9241, -36.1519],
-                                [0.0000, -36.1519, 27.6963],
+                                [52.3903, -18.2144, -33.1540],
+                                [-18.2144, 93.0316, -12.6838],
+                                [-33.1540, -12.6838, 76.9120],
                             ]
                         ),
                         device_mesh=DeviceMesh(str(self._device), [1]),
@@ -326,9 +326,9 @@ class AbstractTest:
                     '["block_0", "adagrad"]': DTensor.from_local(
                         local_tensor=tensor(
                             [
-                                [0.0000e00, 7.7823e-06, 3.1129e-05],
-                                [0.0000e00, 7.7823e-06, 3.1129e-05],
-                                [0.0000e00, 7.7823e-06, 3.1129e-05],
+                                [8.1917e-07, 1.1990e-07, 3.9724e-07],
+                                [8.1917e-07, 1.1990e-07, 3.9724e-07],
+                                [8.1917e-07, 1.1990e-07, 3.9724e-07],
                             ]
                         ),
                         device_mesh=DeviceMesh(str(self._device), [1]),
@@ -337,9 +337,9 @@ class AbstractTest:
                     '["block_0", "momentum"]': DTensor.from_local(
                         local_tensor=tensor(
                             [
-                                [0.0000, 1.5694, 2.3289],
-                                [0.0000, 1.5694, 2.3289],
-                                [0.0000, 1.5694, 2.3289],
+                                [-1.3151, -1.0032, -1.1617],
+                                [-1.3151, -1.0032, -1.1617],
+                                [-1.3151, -1.0032, -1.1617],
                             ]
                         ),
                         device_mesh=DeviceMesh(str(self._device), [1]),
@@ -348,9 +348,9 @@ class AbstractTest:
                     '["block_0", "filtered_grad"]': DTensor.from_local(
                         local_tensor=tensor(
                             [
-                                [0.0000, 0.0004, 0.0009],
-                                [0.0000, 0.0004, 0.0009],
-                                [0.0000, 0.0004, 0.0009],
+                                [2.2362e-05, 8.5550e-06, 1.5572e-05],
+                                [2.2362e-05, 8.5550e-06, 1.5572e-05],
+                                [2.2362e-05, 8.5550e-06, 1.5572e-05],
                             ]
                         ),
                         device_mesh=DeviceMesh(str(self._device), [1]),
@@ -385,8 +385,8 @@ class AbstractTest:
                     torch.testing.assert_close(
                         local_tensor_getter(actual_val),
                         local_tensor_getter(expected_val),
-                        atol=1e-4,
-                        rtol=2e-1,
+                        atol=1e-5,
+                        rtol=2e-3,
                     )
 
         @parametrize("communicate_params", (False, True))
