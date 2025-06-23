@@ -23,10 +23,11 @@ from commons import AbstractDataclass
 from distributed_shampoo.shampoo_types import (
     DefaultShampooConfig,
     DefaultSOAPConfig,
+    EigendecomposedShampooPreconditionerConfig,
     EigenvalueCorrectedShampooPreconditionerConfig,
     PreconditionerConfig,
     PreconditionerValueError,
-    ShampooPreconditionerConfig,
+    RootInvShampooPreconditionerConfig,
 )
 from distributed_shampoo.utils import shampoo_preconditioner_list
 from distributed_shampoo.utils.shampoo_block_info import BlockInfo
@@ -832,7 +833,7 @@ class RootInvShampooPreconditionerListTest(
         return InverseRootProperties()
 
     @property
-    def _default_preconditioner_config(self) -> ShampooPreconditionerConfig:
+    def _default_preconditioner_config(self) -> RootInvShampooPreconditionerConfig:
         return DefaultShampooConfig
 
     @property
@@ -1247,8 +1248,10 @@ class EigendecomposedShampooPreconditionerListTest(
         return EigendecompositionProperties()
 
     @property
-    def _default_preconditioner_config(self) -> ShampooPreconditionerConfig:
-        return ShampooPreconditionerConfig(
+    def _default_preconditioner_config(
+        self,
+    ) -> EigendecomposedShampooPreconditionerConfig:
+        return EigendecomposedShampooPreconditionerConfig(
             amortized_computation_config=QREigendecompositionConfig()
         )
 

@@ -21,6 +21,7 @@ from matrix_functions_types import (
     EigendecompositionConfig,
     MatrixFunctionConfig,
     QREigendecompositionConfig,
+    RootInvConfig,
 )
 from torch.distributed.device_mesh import DeviceMesh
 from torch.distributed.fsdp import ShardingStrategy
@@ -91,12 +92,12 @@ class PreconditionerConfig(AbstractDataclass):
             )
 
 
-@dataclass(kw_only=True)
+@dataclass(init=False)
 class ShampooPreconditionerConfig(PreconditionerConfig):
     """Configuration for Shampoo preconditioner computation.
 
     Attributes:
-        amortized_computation_config (MatrixFunctionConfig): Configuration for the inverse-root computation. (Default: DefaultEigenConfig)
+        amortized_computation_config (MatrixFunctionConfig): Configuration for the amortized computation, e.g., inverse-root computation or eigendecomposition.
         num_tolerated_failed_amortized_computations (int): Number of failed amortized computations to tolerate before raising an error. (Default: 3)
         inverse_exponent_override (dict[int, dict[int, float] | float]): The inverse_exponent_override attribute is a dictionary that allows for customizing the inverse exponent used in the Shampoo preconditioner computation.
             The keys of the dictionary represent the order of the tensor, and the values are either dictionaries with dimension indices as keys and override values as values, or a single float value for all dimensions. All unspecified dimensions use a default exponent of 1/(2*max(o,1)), where o is the order of the tensor. (Default: {})
@@ -131,15 +132,12 @@ class ShampooPreconditionerConfig(PreconditionerConfig):
                             |               |/\
                             +---------------+  \
                                     |          (^0.1667), the default inverse exponent 1/(2*3) since inverse_exponent_override[3][2] is not specified
-                                    |          
+                                    |
                             no preconditioning since inverse_exponent_override[3][0]=0.0
 
 
     """
 
-    amortized_computation_config: MatrixFunctionConfig = field(
-        default_factory=lambda: DefaultEigenConfig
-    )
     inverse_exponent_override: dict[int, dict[int, float] | float] = field(
         default_factory=dict
     )
@@ -183,7 +181,109 @@ class ShampooPreconditionerConfig(PreconditionerConfig):
                     )
 
 
-DefaultShampooConfig = ShampooPreconditionerConfig()
+@dataclass(kw_only=True)
+class RootInvShampooPreconditionerConfig(ShampooPreconditionerConfig):
+    """Configuration for Shampoo preconditioner computation with caching of the root inverse factor matrices.
+
+    Attributes:
+        amortized_computation_config (RootInvConfig): Configuration for the inverse-root computation. (Default: DefaultEigenConfig)
+        num_tolerated_failed_amortized_computations (int): Number of failed amortized computations to tolerate before raising an error. (Default: 3)
+        inverse_exponent_override (dict[int, dict[int, float] | float]): The inverse_exponent_override attribute is a dictionary that allows for customizing the inverse exponent used in the Shampoo preconditioner computation.
+            The keys of the dictionary represent the order of the tensor, and the values are either dictionaries with dimension indices as keys and override values as values, or a single float value for all dimensions. All unspecified dimensions use a default exponent of 1/(2*max(o,1)), where o is the order of the tensor. (Default: {})
+
+            As an example, suppose inverse_exponent_override={2: 0.2, 3: {0: 0.0, 1: 0.25}}. In this case, all 1-D tensors will use the default exponent of 0.5 for preconditioning the first (and only) dimension. All 2-D tensors will be preconditioned with an exponent of 0.2 on all dimensions. All 3-D tensors will have the first dimension be preconditioned with an exponent of 0.5, the second dimension not preconditioned, and the third dimension preconditioned with the default exponent 0.1667.
+            A visualization of this example can be seen below:
+            1-D:
+                            +-------x-------+
+                                    |
+                                    |
+                            (^0.5), the default inverse exponent 1/(2*1) since inverse_exponent_override[1] is not specified
+            2-D:
+                            +-----------+
+                            |           |
+                            |           |
+                            |           |-----(^0.2), as specified by inverse_exponent_override[2]=0.2
+                            |           |
+                            |           |
+                            +-----------+
+                                  |
+                                  |
+                                (^0.2), as specified by inverse_exponent_override[2]=0.2
+            3-D:
+                               +---------------+
+                              /               /|
+                             /               / |
+                            +---------------+  |
+                            |               |  |
+                            |               | -|---(^0.25), as specified by inverse_exponent_override[3][1]=0.25
+                            |               |  +
+                            |               | /
+                            |               |/\
+                            +---------------+  \
+                                    |          (^0.1667), the default inverse exponent 1/(2*3) since inverse_exponent_override[3][2] is not specified
+                                    |
+                            no preconditioning since inverse_exponent_override[3][0]=0.0
+
+
+    """
+
+    amortized_computation_config: RootInvConfig = field(
+        default_factory=lambda: DefaultEigenConfig
+    )
+
+
+DefaultShampooConfig = RootInvShampooPreconditionerConfig()
+
+
+@dataclass(kw_only=True)
+class EigendecomposedShampooPreconditionerConfig(ShampooPreconditionerConfig):
+    """Configuration for Shampoo preconditioner computation with caching of the eigendecomposed factor matrices.
+
+    Attributes:
+        amortized_computation_config (EigendecompositionConfig): Configuration for the eigendecomposition computation. (Default: DefaultEigendecompositionConfig)
+        num_tolerated_failed_amortized_computations (int): Number of failed amortized computations to tolerate before raising an error. (Default: 3)
+        inverse_exponent_override (dict[int, dict[int, float] | float]): The inverse_exponent_override attribute is a dictionary that allows for customizing the inverse exponent used in the Shampoo preconditioner computation.
+            The keys of the dictionary represent the order of the tensor, and the values are either dictionaries with dimension indices as keys and override values as values, or a single float value for all dimensions. All unspecified dimensions use a default exponent of 1/(2*max(o,1)), where o is the order of the tensor. (Default: {})
+
+            As an example, suppose inverse_exponent_override={2: 0.2, 3: {0: 0.0, 1: 0.25}}. In this case, all 1-D tensors will use the default exponent of 0.5 for preconditioning the first (and only) dimension. All 2-D tensors will be preconditioned with an exponent of 0.2 on all dimensions. All 3-D tensors will have the first dimension be preconditioned with an exponent of 0.5, the second dimension not preconditioned, and the third dimension preconditioned with the default exponent 0.1667.
+            A visualization of this example can be seen below:
+            1-D:
+                            +-------x-------+
+                                    |
+                                    |
+                            (^0.5), the default inverse exponent 1/(2*1) since inverse_exponent_override[1] is not specified
+            2-D:
+                            +-----------+
+                            |           |
+                            |           |
+                            |           |-----(^0.2), as specified by inverse_exponent_override[2]=0.2
+                            |           |
+                            |           |
+                            +-----------+
+                                  |
+                                  |
+                                (^0.2), as specified by inverse_exponent_override[2]=0.2
+            3-D:
+                               +---------------+
+                              /               /|
+                             /               / |
+                            +---------------+  |
+                            |               |  |
+                            |               | -|---(^0.25), as specified by inverse_exponent_override[3][1]=0.25
+                            |               |  +
+                            |               | /
+                            |               |/\
+                            +---------------+  \
+                                    |          (^0.1667), the default inverse exponent 1/(2*3) since inverse_exponent_override[3][2] is not specified
+                                    |
+                            no preconditioning since inverse_exponent_override[3][0]=0.0
+
+
+    """
+
+    amortized_computation_config: EigendecompositionConfig = field(
+        default_factory=lambda: DefaultEigendecompositionConfig
+    )
 
 
 @dataclass(kw_only=True)
@@ -197,7 +297,7 @@ class EigenvalueCorrectedShampooPreconditionerConfig(PreconditionerConfig):
         amortized_computation_config (EigendecompositionConfig): Configuration for the eigenvector computation.
             (Default: DefaultEigendecompositionConfig)
         num_tolerated_failed_amortized_computations (int): Number of failed amortized computations to tolerate before raising an error. (Default: 3)
-        ignored_basis_change_dims (dict[int, list[int]]): The ignored_basis_change_dims attribute is a dictionary that specifies the dimensions of the gradient to ignore when transforming the basis of the gradient using the corresponding factor matrix's eigenvectors. 
+        ignored_basis_change_dims (dict[int, list[int]]): The ignored_basis_change_dims attribute is a dictionary that specifies the dimensions of the gradient to ignore when transforming the basis of the gradient using the corresponding factor matrix's eigenvectors.
             (This is analogous to turning off preconditioning for the specified dimensions in default Shampoo.)
             The keys of the dictionary represent the order of the tensor, and the values are lists of dimension indices to ignore. (Default: {})
 

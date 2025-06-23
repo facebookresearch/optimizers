@@ -38,8 +38,8 @@ from distributed_shampoo import (
     GraftingConfig,
     PreconditionerConfig,
     RMSpropGraftingConfig,
+    RootInvShampooPreconditionerConfig,
     SGDGraftingConfig,
-    ShampooPreconditionerConfig,
 )
 from distributed_shampoo.examples.convnet import ConvNet
 
@@ -521,7 +521,7 @@ def instantiate_preconditioner_config(
         == PreconditionerComputationType.EIGEN_ROOT_INV
     ), "Exponent multiplier is only supported for EIGH root inverse computation."
     if preconditioner_computation_type == PreconditionerComputationType.EIGEN_ROOT_INV:
-        return ShampooPreconditionerConfig(
+        return RootInvShampooPreconditionerConfig(
             amortized_computation_config=EigenConfig(
                 exponent_multiplier=exponent_multiplier
             )
@@ -530,14 +530,14 @@ def instantiate_preconditioner_config(
         preconditioner_computation_type
         == PreconditionerComputationType.COUPLED_NEWTON_ROOT_INV
     ):
-        return ShampooPreconditionerConfig(
+        return RootInvShampooPreconditionerConfig(
             amortized_computation_config=CoupledNewtonConfig(),
         )
     elif (
         preconditioner_computation_type
         == PreconditionerComputationType.COUPLED_HIGHER_ORDER_ROOT_INV
     ):
-        return ShampooPreconditionerConfig(
+        return RootInvShampooPreconditionerConfig(
             amortized_computation_config=CoupledHigherOrderConfig(
                 rel_epsilon=0.0, abs_epsilon=0.0
             ),

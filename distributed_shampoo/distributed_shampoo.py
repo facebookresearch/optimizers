@@ -26,6 +26,7 @@ from distributed_shampoo.shampoo_types import (
     DefaultShampooConfig,
     DistributedConfig,
     DISTRIBUTOR,
+    EigendecomposedShampooPreconditionerConfig,
     EigenvalueCorrectedShampooPreconditionerConfig,
     EPSILON,
     FILTERED_GRAD,
@@ -52,9 +53,9 @@ from distributed_shampoo.shampoo_types import (
     PreconditionerConfig,
     PREVIOUS_GRAD_SELECTOR,
     RMSpropGraftingConfig,
+    RootInvShampooPreconditionerConfig,
     SGDGraftingConfig,
     SHAMPOO_PRECONDITIONER_LIST,
-    ShampooPreconditionerConfig,
     ShampooPT2CompileConfig,
     START_PRECONDITIONING_STEP,
     STEP,
@@ -94,11 +95,7 @@ from distributed_shampoo.utils.shampoo_preconditioner_list import (
     SGDPreconditionerList,
 )
 from distributed_shampoo.utils.shampoo_utils import compress_list
-from matrix_functions_types import (
-    EigendecompositionConfig,
-    PseudoInverseConfig,
-    RootInvConfig,
-)
+from matrix_functions_types import EigendecompositionConfig, PseudoInverseConfig
 
 from torch.optim.optimizer import ParamsT, StateDict
 
@@ -514,15 +511,11 @@ class DistributedShampoo(torch.optim.Optimizer):
             self._per_group_state_lists, self.param_groups, strict=True
         ):
             match group[PRECONDITIONER_CONFIG]:
-                case ShampooPreconditionerConfig(
-                    amortized_computation_config=RootInvConfig()
-                ):
+                case RootInvShampooPreconditionerConfig():
                     preconditioner_list_cls: Callable[..., PreconditionerList] = (
                         RootInvShampooPreconditionerList
                     )
-                case ShampooPreconditionerConfig(
-                    amortized_computation_config=EigendecompositionConfig()
-                ):
+                case EigendecomposedShampooPreconditionerConfig():
                     preconditioner_list_cls = EigendecomposedShampooPreconditionerList
                 case EigenvalueCorrectedShampooPreconditionerConfig():
                     preconditioner_list_cls = (
