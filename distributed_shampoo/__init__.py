@@ -24,8 +24,8 @@ from distributed_shampoo.shampoo_types import (
     HybridShardShampooConfig,
     PreconditionerConfig,
     RMSpropGraftingConfig,
+    RootInvShampooPreconditionerConfig,
     SGDGraftingConfig,
-    ShampooPreconditionerConfig,
     ShampooPT2CompileConfig,
 )
 from distributed_shampoo.utils.shampoo_fsdp_utils import compile_fsdp_parameter_metadata
@@ -63,7 +63,7 @@ __all__ = [
     # `precision_config`.
     # `preconditioner_config` options.
     "PreconditionerConfig",  # Abstract base class.
-    "ShampooPreconditionerConfig",  # Based on `PreconditionerConfig`.
+    "RootInvShampooPreconditionerConfig",  # Based on `PreconditionerConfig`.
     "DefaultShampooConfig",  # Default `ShampooPreconditionerConfig` using `EigenConfig`.
     "EigenvalueCorrectedShampooPreconditionerConfig",  # Based on `PreconditionerConfig`.
     "DefaultEigenvalueCorrectedShampooConfig",  # Default `EigenvalueCorrectedShampooPreconditionerConfig` using `EighEigendecompositionConfig`.

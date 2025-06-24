@@ -94,7 +94,7 @@ class PreconditionerConfigSubclassesTest(unittest.TestCase):
 class ShampooPreconditionerConfigSubclassesTest(unittest.TestCase):
     subclasses_types: list[type[ShampooPreconditionerConfig]] = list(
         get_all_non_abstract_subclasses(
-            ShampooPreconditionerConfig,
+            ShampooPreconditionerConfig,  # type: ignore[type-abstract]
         )
     )
 

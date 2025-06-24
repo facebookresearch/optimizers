@@ -1248,7 +1248,7 @@ class EigendecomposedShampooPreconditionerListTest(
         return EigendecompositionProperties()
 
     @property
-    def _default_preconditioner_config(
+    def _default_preconditioner_config(  # type: ignore[override]
         self,
     ) -> EigendecomposedShampooPreconditionerConfig:
         return EigendecomposedShampooPreconditionerConfig(
