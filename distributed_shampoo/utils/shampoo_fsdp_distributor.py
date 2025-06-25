@@ -19,7 +19,6 @@ from distributed_shampoo.shampoo_types import (
     PARAMS,
     USE_MERGE_DIMS,
 )
-from distributed_shampoo.utils.shampoo_block_info import BlockInfo
 from distributed_shampoo.utils.shampoo_distributor import Distributor
 from distributed_shampoo.utils.shampoo_utils import (
     compress_list,
@@ -27,7 +26,7 @@ from distributed_shampoo.utils.shampoo_utils import (
     merge_small_dims,
     multi_dim_split,
 )
-from torch import distributed as dist, Tensor
+from torch import Tensor
 from torch.nn import Parameter
 
 
@@ -56,28 +55,6 @@ class FSDPDistributor(Distributor):
         self._global_num_blocks_per_split_param: tuple[int, ...] = ()
 
         super().__init__(param_group)
-
-    @torch.no_grad()
-    def _construct_local_block_info_list(
-        self,
-    ) -> tuple[BlockInfo, ...]:
-        """Construct local block info list from param_group and num_blocks_within_param."""
-        rank = dist.get_rank()
-        return tuple(
-            BlockInfo(
-                param=param,
-                composable_block_ids=self._construct_composable_block_ids(
-                    param_index=param_index, block_index=block_index, rank=rank
-                ),
-            )
-            # Block index that is accumulated across all parameters within a parameter group.
-            for ((param_index, param), num_blocks_within_param) in zip(
-                enumerate(self._param_group[PARAMS]),
-                self._global_num_blocks_per_param,
-                strict=True,
-            )
-            for block_index in range(num_blocks_within_param)
-        )
 
     def _merge_and_block_parameters(
         self,

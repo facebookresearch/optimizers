@@ -26,7 +26,7 @@ from distributed_shampoo.utils.shampoo_utils import (
     merge_small_dims,
     multi_dim_split,
 )
-from torch import Tensor
+from torch import distributed as dist, Tensor
 
 
 ###### DISTRIBUTOR CLASSES ######
@@ -148,6 +148,7 @@ class DistributorInterface(ABC):
 
         Args:
             get_grad (bool): Whether to return the param or the grad of the param. (Default: False)
+
         Returns:
             local (Iterable[Tensor | None]): Local params (or gradients) from the param_group. Note
               that gradients can be None.
@@ -316,24 +317,32 @@ class Distributor(DistributorInterface):
             )
 
     @torch.no_grad()
-    def _construct_local_block_info_list(
-        self,
+    def _construct_local_block_info_list_with_params(
+        self, params: Iterable[Tensor]
     ) -> tuple[BlockInfo, ...]:
-        """Construct local block info list from param_group and num_blocks_within_param."""
         return tuple(
             BlockInfo(
                 param=param,
                 composable_block_ids=self._construct_composable_block_ids(
-                    param_index=param_index, block_index=block_index
+                    param_index=param_index,
+                    block_index=block_index,
+                    rank=dist.get_rank() if dist.is_initialized() else None,
                 ),
             )
             # Block index that is accumulated across all parameters within a parameter group.
             for ((param_index, param), num_blocks_within_param) in zip(
-                enumerate(self._param_group[PARAMS]),
+                enumerate(params),
                 self._global_num_blocks_per_param,
                 strict=True,
             )
             for block_index in range(num_blocks_within_param)
+        )
+
+    @torch.no_grad()
+    def _construct_local_block_info_list(self) -> tuple[BlockInfo, ...]:
+        """Construct local block info list from param_group and num_blocks_within_param."""
+        return self._construct_local_block_info_list_with_params(
+            params=self._get_params_or_grads()
         )
 
     def merge_and_block_gradients(

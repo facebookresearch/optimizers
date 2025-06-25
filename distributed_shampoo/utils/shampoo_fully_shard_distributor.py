@@ -15,7 +15,7 @@ import torch
 from distributed_shampoo.shampoo_types import PARAMS
 from distributed_shampoo.utils.shampoo_block_info import BlockInfo
 from distributed_shampoo.utils.shampoo_distributor import Distributor
-from torch import distributed as dist, Tensor
+from torch import Tensor
 from torch.distributed.tensor import DTensor
 
 
@@ -47,6 +47,7 @@ class FullyShardDistributor(Distributor):
 
         Args:
             get_grad (bool): Whether to return the param or the grad of the param.
+
         Returns:
             local (Iterable[Tensor | None]): Local params (or grad) from the param_group.
         """
@@ -59,30 +60,12 @@ class FullyShardDistributor(Distributor):
         )
 
     @torch.no_grad()
-    def _construct_local_block_info_list(
-        self,
-    ) -> tuple[BlockInfo, ...]:
+    def _construct_local_block_info_list(self) -> tuple[BlockInfo, ...]:
         """Construct local block info list from param_group and num_blocks_within_param."""
-        rank = dist.get_rank()
-
-        # Call `super()` instead of `self` as a performance optimization.
-        # This leads to O(1) instead of O(N) complexity to retrieve the parameters.
-        non_empty_params: Iterable[Tensor] = filter(
-            lambda p: isinstance(p, DTensor) and p.to_local().numel() > 0,
-            super()._get_params_or_grads(),
-        )
-        return tuple(
-            BlockInfo(
-                param=param,
-                composable_block_ids=self._construct_composable_block_ids(
-                    param_index=param_index, block_index=block_index, rank=rank
-                ),
+        return self._construct_local_block_info_list_with_params(
+            # Call `super()._get_param_or_grads()` instead of `self._get_param_or_grads()` because the need to to record the original DTensor parameter in the BlockInfo.
+            params=filter(
+                lambda p: isinstance(p, DTensor) and p.to_local().numel() > 0,
+                super()._get_params_or_grads(),
             )
-            # Block index that is accumulated across all parameters within a parameter group.
-            for ((param_index, param), num_blocks_within_param) in zip(
-                enumerate(non_empty_params),
-                self._global_num_blocks_per_param,
-                strict=True,
-            )
-            for block_index in range(num_blocks_within_param)
         )
