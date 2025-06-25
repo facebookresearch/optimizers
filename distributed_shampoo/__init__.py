@@ -16,6 +16,7 @@ from distributed_shampoo.shampoo_types import (
     DefaultShampooConfig,
     DefaultSOAPConfig,
     DistributedConfig,
+    EigendecomposedShampooPreconditionerConfig,
     EigenvalueCorrectedShampooPreconditionerConfig,
     FSDPShampooConfig,
     FullyShardShampooConfig,
@@ -26,6 +27,7 @@ from distributed_shampoo.shampoo_types import (
     RMSpropGraftingConfig,
     RootInvShampooPreconditionerConfig,
     SGDGraftingConfig,
+    ShampooPreconditionerConfig,
     ShampooPT2CompileConfig,
 )
 from distributed_shampoo.utils.shampoo_fsdp_utils import compile_fsdp_parameter_metadata
@@ -34,11 +36,15 @@ from matrix_functions_types import (
     CoupledNewtonConfig,
     DefaultEigenConfig,
     DefaultEigendecompositionConfig,
+    DefaultPerturbationConfig,
     EigenConfig,
     EigendecompositionConfig,
     EighEigendecompositionConfig,
     MatrixFunctionConfig,
+    PerturbationConfig,
+    PseudoInverseConfig,
     QREigendecompositionConfig,
+    RankDeficientStabilityConfig,
     RootInvConfig,
 )
 
@@ -63,12 +69,18 @@ __all__ = [
     # `precision_config`.
     # `preconditioner_config` options.
     "PreconditionerConfig",  # Abstract base class.
-    "RootInvShampooPreconditionerConfig",  # Based on `PreconditionerConfig`.
-    "DefaultShampooConfig",  # Default `ShampooPreconditionerConfig` using `EigenConfig`.
+    "ShampooPreconditionerConfig",  # Abstract base class (based on `PreconditionerConfig`).
+    "RootInvShampooPreconditionerConfig",  # Based on `ShampooPreconditionerConfig`.
+    "DefaultShampooConfig",  # Default `RootInvShampooPreconditionerConfig` using `EigenConfig`.
+    "EigendecomposedShampooPreconditionerConfig",  # Based on `ShampooPreconditionerConfig`.
     "EigenvalueCorrectedShampooPreconditionerConfig",  # Based on `PreconditionerConfig`.
     "DefaultEigenvalueCorrectedShampooConfig",  # Default `EigenvalueCorrectedShampooPreconditionerConfig` using `EighEigendecompositionConfig`.
     "DefaultSOAPConfig",  # Default `EigenvalueCorrectedShampooPreconditionerConfig` using `QREigendecompositionConfig`.
     # matrix functions configs.
+    "RankDeficientStabilityConfig",  # Abstract base class.
+    "PerturbationConfig",  # Based on `RankDeficientStabilityConfig`.
+    "DefaultPerturbationConfig",  # Default `PerturbationConfig`.
+    "PseudoInverseConfig",  # Based on `RankDeficientStabilityConfig`.
     "MatrixFunctionConfig",  # Abstract base class.
     "EigendecompositionConfig",  # Abstract base class (based on `MatrixFunctionConfig`).
     "EighEigendecompositionConfig",  # Based on `EigendecompositionConfig`.
