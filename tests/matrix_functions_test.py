@@ -931,7 +931,7 @@ class MatrixEigendecompositionTest(unittest.TestCase):
         class NotSupportedEigendecompositionConfig(EigendecompositionConfig):
             """A dummy class eigendecomposition config that is not supported."""
 
-            unsupoorted_field: int = 0
+            unsupported_field: int = 0
 
         self.assertRaisesRegex(
             NotImplementedError,
