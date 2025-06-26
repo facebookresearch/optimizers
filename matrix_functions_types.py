@@ -31,6 +31,7 @@ class PerturbationConfig(RankDeficientStabilityConfig):
     Attributes:
         perturb_before_computation (bool): Whether to apply epsilon before amortized computation instead of after. Note
             that both options are mathematically equivalent, but not necessarily numerically equivalent.
+            For eigenvalue-corrected Shampoo this will only affect the stability of the eigenbasis computation and epsilon will always also be added to the corrected eigenvalues.
             Recommended to be set to True for numerical stability.
             TODO: When generalizing to all MatrixFunctionConfigs, this is only applicable to EigendcompositionConfig.
             (Default: True)

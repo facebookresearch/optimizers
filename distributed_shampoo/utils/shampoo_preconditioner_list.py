@@ -1721,24 +1721,17 @@ class EigenvalueCorrectedShampooPreconditionerList(
                 preconditioned_dims_selector=preconditioned_dims_selector,
                 preconditioner_list=kronecker_factors.factor_matrices_eigenvectors,
             )
-
             # Verify that the number of roots is 1 in Eigenvalue-Corrected Shampoo preconditioner.
             assert len(roots) == 1, f"{len(roots)=} != 1"
-            # TODO: remove assertion when rank_deficient_stability_config is generalized to MatrixFunctionConfig
-            assert isinstance(
-                self._preconditioner_config.amortized_computation_config,
-                EigendecompositionConfig,
-            )
-            rank_deficient_stability_config = self._preconditioner_config.amortized_computation_config.rank_deficient_stability_config
             # Precondition with inverse root of corrected eigenvalues.
-            # Note that stabilize_and_pow_eigenvalues() takes the inverse of the root, so the result can be directly multiplied to the gradient.
-            preconditioned_grad.mul_(
-                stabilize_and_pow_eigenvalues(
-                    kronecker_factors.corrected_eigenvalues.div(self._bias_correction2),
-                    root=Fraction(roots[0]),
-                    epsilon=self._epsilon,
-                    rank_deficient_stability_config=rank_deficient_stability_config,
-                )
+            # NOTE: We don't use the stabilize_and_pow_eigenvalues function here because:
+            # 1. We have to add epsilon even it has been added to the factor matrices before the eigendecomposition already.
+            # 2. We compute the root before adding epsilon to be consistent with the PyTorch Adam(W) implementation.
+            # 3. We don't support a pseudo-inverse here.
+            preconditioned_grad.div_(
+                kronecker_factors.corrected_eigenvalues.div(self._bias_correction2)
+                .pow_(1 / roots[0])
+                .add_(self._epsilon)
             )
             # Convert back to basis of the parameters.
             preconditioned_grad = self._precondition_grad(

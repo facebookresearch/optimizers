@@ -20,6 +20,7 @@ from matrix_functions_types import (
     DefaultEigendecompositionConfig,
     EigendecompositionConfig,
     MatrixFunctionConfig,
+    PerturbationConfig,
     QREigendecompositionConfig,
     RootInvConfig,
 )
@@ -344,6 +345,15 @@ class EigenvalueCorrectedShampooPreconditionerConfig(PreconditionerConfig):
 
     def __post_init__(self) -> None:
         super().__post_init__()
+
+        if not isinstance(
+            self.amortized_computation_config.rank_deficient_stability_config,
+            PerturbationConfig,
+        ):
+            raise ValueError(
+                f"{type(self.amortized_computation_config.rank_deficient_stability_config).__name__} is an invalid rank_deficient_stability_config for {type(self).__name__}."
+                f" Please use an instance of {PerturbationConfig.__name__} instead."
+            )
 
         if non_positive_orders := [
             order for order in self.ignored_basis_change_dims.keys() if order < 0

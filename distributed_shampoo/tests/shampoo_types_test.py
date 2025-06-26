@@ -19,6 +19,7 @@ from distributed_shampoo.shampoo_types import (
     RMSpropGraftingConfig,
     ShampooPreconditionerConfig,
 )
+from matrix_functions_types import EighEigendecompositionConfig, PseudoInverseConfig
 from torch.testing._internal.common_utils import (
     instantiate_parametrized_tests,
     parametrize,
@@ -239,4 +240,21 @@ class EigenvalueCorrectedShampooPreconditionerConfigSubclassesTest(unittest.Test
             ),
             cls,
             inverse_exponent_override=negative_overrides_config,
+        )
+
+    @parametrize("cls", subclasses_types)
+    def test_illegal_rank_deficient_stability_config(
+        self, cls: type[EigenvalueCorrectedShampooPreconditionerConfig]
+    ) -> None:
+        invalid_amortized_computation_config = EighEigendecompositionConfig(
+            rank_deficient_stability_config=PseudoInverseConfig(),
+        )
+        self.assertRaisesRegex(
+            ValueError,
+            re.escape(
+                f"PseudoInverseConfig is an invalid rank_deficient_stability_config for {cls.__name__}."
+                " Please use an instance of PerturbationConfig instead."
+            ),
+            cls,
+            amortized_computation_config=invalid_amortized_computation_config,
         )
