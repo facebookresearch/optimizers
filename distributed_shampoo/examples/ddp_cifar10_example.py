@@ -181,24 +181,13 @@ if __name__ == "__main__":
         data_loader,
         optimizer,
         device=device,
+        checkpoint_dir=args.checkpoint_dir,
         epochs=args.epochs,
         window_size=args.window_size,
         local_rank=LOCAL_RANK,
+        use_distributed_checkpoint=args.use_distributed_checkpoint,
         metrics_dir=args.metrics_dir if WORLD_RANK == 0 else None,
     )
-
-    # checkpoint optimizer and model using distributed checkpointing solution
-    if args.use_distributed_checkpoint and isinstance(optimizer, DistributedShampoo):
-        state_dict = {
-            "model": model.state_dict(),
-            "optim": optimizer.distributed_state_dict(
-                key_to_param=model.named_parameters()
-            ),
-        }
-        dist_checkpoint.save_state_dict(
-            state_dict=state_dict,
-            storage_writer=dist_checkpoint.FileSystemWriter(args.checkpoint_dir),
-        )
 
     # clean up process group
     dist.destroy_process_group()
