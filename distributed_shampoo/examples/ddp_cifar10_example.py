@@ -12,6 +12,7 @@ LICENSE file in the root directory of this source tree.
 import argparse
 import logging
 import os
+from functools import partial
 from typing import Any
 
 import torch
@@ -90,13 +91,16 @@ if __name__ == "__main__":
     # instantiate model and loss function
     model: nn.Module
     loss_function: nn.Module
-    model, loss_function = get_model_and_loss_fn(device)
-    device_kwargs: dict[str, Any] = (
-        {"device_ids": [LOCAL_RANK], "output_device": LOCAL_RANK}
+    model, loss_function = get_model_and_loss_fn(
+        device=device,
+        post_model_decoration=partial(
+            nn.parallel.DistributedDataParallel,
+            device_ids=[LOCAL_RANK],
+            output_device=LOCAL_RANK,
+        )
         if args.backend == "nccl"
-        else {}
+        else nn.parallel.DistributedDataParallel,
     )
-    model = nn.parallel.DistributedDataParallel(model, **device_kwargs)  # type: ignore
 
     # instantiate data loader
     data_loader: torch.utils.data.DataLoader[VisionDataset]
@@ -110,7 +114,7 @@ if __name__ == "__main__":
     # instantiate optimizer (SGD, Adam, DistributedShampoo)
     optimizer: torch.optim.Optimizer = instantiate_optimizer(
         args.optimizer_type,
-        model,
+        model.parameters(),
         lr=args.lr,
         betas=(args.beta1, args.beta2),
         beta3=args.beta3,
