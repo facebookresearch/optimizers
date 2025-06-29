@@ -12,6 +12,7 @@ LICENSE file in the root directory of this source tree.
 import argparse
 import logging
 import os
+from functools import partial
 
 import torch
 
@@ -89,8 +90,9 @@ if __name__ == "__main__":
     # instantiate model and loss function
     model: nn.Module
     loss_function: nn.Module
-    model, loss_function = get_model_and_loss_fn(device)
-    model = FSDP(model, use_orig_params=True)
+    model, loss_function = get_model_and_loss_fn(
+        device=device, post_model_decoration=partial(FSDP, use_orig_params=True)
+    )
 
     # instantiate data loader
     data_loader: torch.utils.data.DataLoader[VisionDataset]
@@ -104,7 +106,7 @@ if __name__ == "__main__":
     # instantiate optimizer (SGD, Adam, DistributedShampoo)
     optimizer: torch.optim.Optimizer = instantiate_optimizer(
         args.optimizer_type,
-        model,
+        model.parameters(),
         lr=args.lr,
         betas=(args.beta1, args.beta2),
         beta3=args.beta3,
@@ -139,9 +141,11 @@ if __name__ == "__main__":
         data_loader,
         optimizer,
         device=device,
+        checkpoint_dir=args.checkpoint_dir,
         epochs=args.epochs,
         window_size=args.window_size,
         local_rank=LOCAL_RANK,
+        use_distributed_checkpoint=args.use_distributed_checkpoint,
         metrics_dir=args.metrics_dir if WORLD_RANK == 0 else None,
     )
 
