@@ -15,17 +15,16 @@ import os
 
 import torch
 import torch.distributed as dist
-import torch.distributed.checkpoint as dist_checkpoint
 
-from distributed_shampoo import DistributedShampoo, HybridShardShampooConfig
+from distributed_shampoo import HybridShardShampooConfig
 from distributed_shampoo.examples.trainer_utils import (
     get_data_loader_and_sampler,
     get_model_and_loss_fn,
     instantiate_optimizer,
-    LossMetrics,
     Parser,
     set_seed,
     setup_distribution,
+    train_model,
 )
 
 from torch import nn
@@ -46,75 +45,6 @@ os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
 LOCAL_RANK = int(os.environ["LOCAL_RANK"])
 WORLD_RANK = int(os.environ["RANK"])
 WORLD_SIZE = int(os.environ["WORLD_SIZE"])
-
-
-def train_hybrid_shard_model(
-    model: nn.Module,
-    world_size: int,
-    loss_function: nn.Module,
-    sampler: torch.utils.data.Sampler,
-    data_loader: torch.utils.data.DataLoader,
-    optimizer: torch.optim.Optimizer,
-    device: torch.device,
-    epochs: int = 1,
-    window_size: int = 100,
-    use_distributed_checkpoint: bool = False,
-    checkpoint_dir: str | None = None,
-    metrics_dir: str | None = None,
-) -> tuple[float, float, int]:
-    """Constructs the main training loop.
-
-    Assumes torch.distributed is initialized.
-
-    """
-
-    # initialize metrics
-    metrics = LossMetrics(
-        window_size=window_size,
-        device=device,
-        world_size=world_size,
-        metrics_dir=metrics_dir,
-    )
-
-    # main training loop
-    for epoch in range(epochs):
-        metrics._epoch = epoch
-        sampler.set_epoch(epoch)  # type: ignore[attr-defined]
-
-        for inputs, labels in data_loader:
-            inputs, labels = inputs.to(device), labels.to(device)
-            optimizer.zero_grad()
-            output = model(inputs)
-            loss = loss_function(output, labels)
-            loss.backward()
-
-            optimizer.step()
-            metrics.update(loss)
-            metrics.log()
-            metrics.update_global_metrics()
-            if LOCAL_RANK == 0:
-                metrics.log_global_metrics()
-
-    # checkpoint optimizer and model using distributed checkpointing solution
-    if use_distributed_checkpoint and isinstance(optimizer, DistributedShampoo):
-        assert checkpoint_dir is not None
-        state_dict = {
-            "model": model.state_dict(),
-            "optim": optimizer.distributed_state_dict(
-                key_to_param=model.named_parameters()
-            ),
-        }
-        dist_checkpoint.save_state_dict(
-            state_dict=state_dict,
-            storage_writer=dist_checkpoint.FileSystemWriter(checkpoint_dir),
-        )
-
-    metrics.flush()
-    return (
-        metrics._lifetime_loss.item(),
-        metrics._window_loss.item(),
-        metrics._iteration,
-    )
 
 
 def create_model_and_optimizer_and_loss_fn(
@@ -220,7 +150,7 @@ if __name__ == "__main__":
     )
 
     # train model
-    train_hybrid_shard_model(
+    train_model(
         model,
         WORLD_SIZE,
         loss_fn,
@@ -228,10 +158,11 @@ if __name__ == "__main__":
         data_loader,
         optimizer,
         device=device,
+        checkpoint_dir=args.checkpoint_dir,
         epochs=args.epochs,
         window_size=args.window_size,
+        local_rank=LOCAL_RANK,
         use_distributed_checkpoint=args.use_distributed_checkpoint,
-        checkpoint_dir=args.checkpoint_dir,
         metrics_dir=args.metrics_dir if WORLD_RANK == 0 else None,
     )
 

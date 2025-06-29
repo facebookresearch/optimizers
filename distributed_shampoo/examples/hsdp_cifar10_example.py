@@ -155,9 +155,11 @@ if __name__ == "__main__":
         data_loader,
         optimizer,
         device=device,
+        checkpoint_dir=args.checkpoint_dir,
         epochs=args.epochs,
         window_size=args.window_size,
         local_rank=LOCAL_RANK,
+        use_distributed_checkpoint=args.use_distributed_checkpoint,
         metrics_dir=args.metrics_dir if WORLD_RANK == 0 else None,
     )
 

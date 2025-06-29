@@ -44,6 +44,7 @@ from distributed_shampoo import (
 from distributed_shampoo.examples.convnet import ConvNet
 
 from torch import nn
+from torch.distributed import checkpoint as dist_checkpoint
 from torch.utils.tensorboard import SummaryWriter
 from torchvision import datasets, transforms  # type: ignore[import-untyped]
 
@@ -647,9 +648,11 @@ def train_model(
     data_loader: torch.utils.data.DataLoader,
     optimizer: torch.optim.Optimizer,
     device: torch.device,
+    checkpoint_dir: str,
     epochs: int = 1,
     window_size: int = 100,
     local_rank: int = 0,
+    use_distributed_checkpoint: bool = False,
     metrics_dir: str | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, int]:
     # initialize metrics
@@ -678,6 +681,19 @@ def train_model(
             metrics.update_global_metrics()
             if local_rank == 0:
                 metrics.log_global_metrics()
+
+    # checkpoint optimizer and model using distributed checkpointing solution
+    if use_distributed_checkpoint and isinstance(optimizer, DistributedShampoo):
+        state_dict = {
+            "model": model.state_dict(),
+            "optim": optimizer.distributed_state_dict(
+                key_to_param=model.named_parameters()
+            ),
+        }
+        dist_checkpoint.save_state_dict(
+            state_dict=state_dict,
+            storage_writer=dist_checkpoint.FileSystemWriter(checkpoint_dir),
+        )
 
     metrics.flush()
     return metrics._lifetime_loss, metrics._window_loss, metrics._iteration
