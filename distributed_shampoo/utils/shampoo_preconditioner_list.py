@@ -31,11 +31,7 @@ from matrix_functions import (
     stabilize_and_pow_eigenvalues,
 )
 
-from matrix_functions_types import (
-    EigendecompositionConfig,
-    QREigendecompositionConfig,
-    RootInvConfig,
-)
+from matrix_functions_types import EigendecompositionConfig, RootInvConfig
 from optimizer_modules import OptimizerModule
 from torch import Tensor
 from torch.autograd import profiler
@@ -1553,11 +1549,10 @@ class EigendecomposedShampooPreconditionerList(
                     EigendecompositionConfig,
                     self._preconditioner_config.amortized_computation_config,
                 )
-                if isinstance(eigendecomposition_config, QREigendecompositionConfig):
-                    # Due to the use of QR algorithm, we need to pass in the previous eigenvectors with the same dtype as the input matrix, i.e., bias_corrected_factor_matrix.
-                    eigendecomposition_config.eigenvectors_estimate = (
-                        factor_matrix_eigenvectors
-                    ).to(dtype=bias_corrected_factor_matrix.dtype)
+                # To estimate the eigenvalues based on the previous eigenvectors, we need to pass in the previous eigenvectors with the same dtype as the input matrix, i.e., bias_corrected_factor_matrix.
+                eigendecomposition_config.eigenvectors_estimate = (
+                    factor_matrix_eigenvectors
+                ).to(dtype=bias_corrected_factor_matrix.dtype)
                 try:
                     computed_eigenvalues, computed_eigenvectors = (
                         matrix_eigendecomposition(
@@ -1775,11 +1770,10 @@ class EigenvalueCorrectedShampooPreconditionerList(
                     EigendecompositionConfig,
                     self._preconditioner_config.amortized_computation_config,
                 )
-                if isinstance(eigendecomposition_config, QREigendecompositionConfig):
-                    # Due to the use of QR algorithm, we need to pass in the previous eigenvectors with the same dtype as the input matrix, i.e., factor_matrix.
-                    eigendecomposition_config.eigenvectors_estimate = (
-                        factor_matrix_eigenvectors
-                    ).to(dtype=factor_matrix.dtype)
+                # To estimate the eigenvalues based on the previous eigenvectors, we need to pass in the previous eigenvectors with the same dtype as the input matrix, i.e., factor_matrix.
+                eigendecomposition_config.eigenvectors_estimate = (
+                    factor_matrix_eigenvectors
+                ).to(dtype=factor_matrix.dtype)
                 try:
                     computed_eigenvectors = matrix_eigendecomposition(
                         A=factor_matrix,

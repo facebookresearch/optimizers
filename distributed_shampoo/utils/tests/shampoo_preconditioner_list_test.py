@@ -17,8 +17,9 @@ from functools import partial
 from typing import Any
 from unittest import mock
 
-import torch
+import matrix_functions
 
+import torch
 from commons import AbstractDataclass
 from distributed_shampoo.shampoo_types import (
     DefaultShampooConfig,
@@ -413,6 +414,106 @@ class AbstractTest:
         @property
         @abc.abstractmethod
         def _preconditioner_list_factory(self) -> Callable[..., PreconditionerList]: ...
+
+        @property
+        @abc.abstractmethod
+        def _preconditioner_config_with_adaptive_amortized_computation_frequency(
+            self,
+        ) -> PreconditionerConfig: ...
+
+        def test_adaptive_amortized_computation_frequency(self) -> None:
+            # Setup the preconditioner list with the adaptive amortized computation frequency.
+            try:
+                self._preconditioner_list = self._instantiate_preconditioner_list(
+                    preconditioner_config=self._preconditioner_config_with_adaptive_amortized_computation_frequency
+                )
+            except NotImplementedError:
+                # If the preconditioner list does not support adaptive amortized computation frequency, skip the test.
+                self.skipTest(
+                    "Adaptive amortized computation frequency is not supported by this preconditioner list."
+                )
+            # Create the masked gradients for the test.
+            masked_grad_list0 = (
+                torch.tensor([1.0, 0.0]),
+                torch.eye(2) / torch.tensor(2.0).sqrt(),
+                torch.tensor([[1.0, 0.0]]),
+                torch.tensor(1.0),
+            )
+            masked_grad_list = (
+                torch.tensor([0.0, 1.0]),
+                torch.eye(2) / torch.tensor(2.0).sqrt(),
+                torch.tensor([[0.0, 1.0]]),
+                torch.tensor(2.0),
+            )
+
+            # Setup the constants for the mock functions.
+            NUM_FACTOR_MATRICES = sum(grad.dim() for grad in masked_grad_list0)
+            # If criterion is False, amortized computation is performed.
+            # If criterion is True, amortized computation is not performed.
+            # We want to simulate two update steps.
+            CRITERION_RESULTS_STEP_ONE = [False, True, False, False, True]
+            assert len(CRITERION_RESULTS_STEP_ONE) == NUM_FACTOR_MATRICES
+            CRITERION_RESULTS_STEP_TWO = [True, True, False, True, False]
+            assert len(CRITERION_RESULTS_STEP_TWO) == NUM_FACTOR_MATRICES
+            # We will perform two update steps. If we performed the amortized computation
+            # for all factor matrices in both steps, we would have 2 * NUM_FACTOR_MATRICES
+            # calls. However, we will skip the update when the criterion result is mocked
+            # to be True, i.e. sum(CRITERION_RESULTS_STEP_ONE/TWO) times.
+            # Hence, the number of calls of the amortized computation function should be:
+            NUM_AMORTIZED_COMPUTATION_CALLS_STEP_ONE = NUM_FACTOR_MATRICES - sum(
+                CRITERION_RESULTS_STEP_ONE
+            )
+            NUM_AMORTIZED_COMPUTATION_CALLS_STEP_TWO = NUM_FACTOR_MATRICES - sum(
+                CRITERION_RESULTS_STEP_TWO
+            )
+            NUM_AMORTIZED_COMPUTATION_CALLS = (
+                NUM_AMORTIZED_COMPUTATION_CALLS_STEP_ONE
+                + NUM_AMORTIZED_COMPUTATION_CALLS_STEP_TWO
+            )
+
+            # Mock the amortized computation function and the criterion function.
+            with (
+                mock.patch.object(
+                    # shampoo_preconditioner_list,
+                    # self._amortized_computation_properties.amortized_computation_function_name,
+                    matrix_functions,
+                    "_eigh_eigenvalue_decomposition",
+                    side_effect=[
+                        *((torch.tensor([1.0]), torch.tensor([1.0])),)
+                        * NUM_AMORTIZED_COMPUTATION_CALLS
+                    ],
+                ) as mock_amortized_computation,
+                mock.patch.object(
+                    matrix_functions,
+                    "_eigenvalues_estimate_criterion_below_or_equal_tolerance",
+                    side_effect=CRITERION_RESULTS_STEP_ONE + CRITERION_RESULTS_STEP_TWO,
+                ) as mock_criterion,
+            ):
+                # First update step.
+                self._preconditioner_list.update_preconditioners(
+                    masked_grad_list=masked_grad_list0,
+                    step=torch.tensor(1),
+                    perform_amortized_computation=True,
+                )
+                # Amortized computation is performed for all factor matrices in the first step.
+                self.assertEqual(mock_criterion.call_count, NUM_FACTOR_MATRICES)
+                self.assertEqual(
+                    mock_amortized_computation.call_count,
+                    NUM_AMORTIZED_COMPUTATION_CALLS_STEP_ONE,
+                )
+                # Second update step.
+                self._preconditioner_list.update_preconditioners(
+                    masked_grad_list=masked_grad_list,
+                    step=torch.tensor(2),
+                    perform_amortized_computation=True,
+                )
+                # The criterion is evaluated for all factor matrices in the second step.
+                self.assertEqual(mock_criterion.call_count, 2 * NUM_FACTOR_MATRICES)
+                # Amortized computation is performed for the first, third, and fourth factor matrices in the second step.
+                self.assertEqual(
+                    mock_amortized_computation.call_count,
+                    NUM_AMORTIZED_COMPUTATION_CALLS,
+                )
 
         def _instantiate_block_list(self) -> tuple[Tensor, ...]:
             # Because maximum_preconditioner_dim = 2, self._params[0] forms a block by itself,
@@ -840,6 +941,12 @@ class RootInvShampooPreconditionerListTest(
     def _preconditioner_list_factory(self) -> Callable[..., PreconditionerList]:
         return RootInvShampooPreconditionerList
 
+    @property
+    def _preconditioner_config_with_adaptive_amortized_computation_frequency(
+        self,
+    ) -> RootInvShampooPreconditionerConfig:
+        raise NotImplementedError
+
     def test_update_preconditioners_and_precondition(self) -> None:
         """
         We provide examples where we update the preconditioners twice using specially
@@ -1259,6 +1366,15 @@ class EigendecomposedShampooPreconditionerListTest(
     def _preconditioner_list_factory(self) -> Callable[..., PreconditionerList]:
         return EigendecomposedShampooPreconditionerList
 
+    @property
+    def _preconditioner_config_with_adaptive_amortized_computation_frequency(
+        self,
+    ) -> EigendecomposedShampooPreconditionerConfig:
+        return EigendecomposedShampooPreconditionerConfig(
+            # Any tolerance in (0.0, 1.0] works here.
+            amortized_computation_config=EighEigendecompositionConfig(tolerance=0.01),
+        )
+
 
 class EigenvalueCorrectedShampooPreconditionerListTest(
     AbstractTest.BaseShampooPreconditionerListTest
@@ -1519,4 +1635,14 @@ class EigenvalueCorrectedShampooPreconditionerListTest(
             ),
             masked_grad_lists=[masked_grad_list1, masked_grad_list2],
             masked_expected_preconditioned_grad_list=masked_expected_preconditioned_grad_list,
+        )
+
+    @property
+    def _preconditioner_config_with_adaptive_amortized_computation_frequency(
+        self,
+    ) -> EigenvalueCorrectedShampooPreconditionerConfig:
+        return EigenvalueCorrectedShampooPreconditionerConfig(
+            amortized_computation_config=EighEigendecompositionConfig(
+                tolerance=0.01,  # Any tolerance in (0.0, 1.0] works here.
+            ),
         )

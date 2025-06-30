@@ -13,7 +13,7 @@ import unittest
 import torch
 
 from commons import get_all_non_abstract_subclasses
-from matrix_functions_types import QREigendecompositionConfig
+from matrix_functions_types import EigenConfig, EigendecompositionConfig
 from torch.testing._internal.common_utils import (
     instantiate_parametrized_tests,
     parametrize,
@@ -21,16 +21,16 @@ from torch.testing._internal.common_utils import (
 
 
 @instantiate_parametrized_tests
-class QREigendecompositionConfigSubclassesTest(unittest.TestCase):
-    subclasses_types: list[type[QREigendecompositionConfig]] = list(
-        get_all_non_abstract_subclasses(QREigendecompositionConfig)
+class EigendecompositionConfigSubclassesTest(unittest.TestCase):
+    subclasses_types: list[type[EigendecompositionConfig]] = list(
+        get_all_non_abstract_subclasses(EigendecompositionConfig)
     )
 
     # tolerance has to be in the interval [0.0, 1.0].
     @parametrize("tolerance", (-1.0, 1.1))
     @parametrize("cls", subclasses_types)
     def test_illegal_tolerance(
-        self, cls: type[QREigendecompositionConfig], tolerance: float
+        self, cls: type[EigendecompositionConfig], tolerance: float
     ) -> None:
         self.assertRaisesRegex(
             ValueError,
@@ -43,7 +43,7 @@ class QREigendecompositionConfigSubclassesTest(unittest.TestCase):
 
     @parametrize("cls", subclasses_types)
     def test_illegal_eigenvectors_estimate(
-        self, cls: type[QREigendecompositionConfig]
+        self, cls: type[EigendecompositionConfig]
     ) -> None:
         self.assertRaisesRegex(
             TypeError,
@@ -52,4 +52,22 @@ class QREigendecompositionConfigSubclassesTest(unittest.TestCase):
             ),
             cls,
             eigenvectors_estimate=torch.eye(3),
+        )
+
+
+@instantiate_parametrized_tests
+class EigenConfigSubclassesTest(unittest.TestCase):
+    subclasses_types: list[type[EigenConfig]] = list(
+        get_all_non_abstract_subclasses(EigenConfig)
+    )
+
+    @parametrize("cls", subclasses_types)
+    def test_illegal_tolerance(self, cls: type[EigenConfig]) -> None:
+        self.assertRaisesRegex(
+            ValueError,
+            re.escape(
+                f"Invalid tolerance value: 0.01. Must be 0.0 for {cls.__name__}."
+            ),
+            cls,
+            tolerance=0.01,
         )

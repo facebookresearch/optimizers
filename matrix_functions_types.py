@@ -72,25 +72,65 @@ class MatrixFunctionConfig(AbstractDataclass):
 class EigendecompositionConfig(MatrixFunctionConfig):
     """Configuration for eigenvalue decomposition.
 
+    The tolerance hyperparameter is used for a criterion that enables an adaptive eigendecomposition update frequency.
+    The criterion uses the estimated eigenvalues Q^T A Q =: B, where Q is the last computed eigenvectors and A is the current Kronecker factor.
+    The criterion is then defined as ||B - diag(B)||_F <= tolerance * ||B||_F.
+    The tolerance hyperparameter should therefore be in the interval [0.0, 1.0].
+
+    If the criterion is already below or equal to the tolerance given the initial eigenvectors_estimate, the eigendecomposition will be skipped and the estimated eigenvalues and initial eigenvectors will be returned.
+    When the QR algorithm is used, the criterion is also used to determine convergence of the QR algorithm.
+
+    This criterion can be motivated by considering A' = Q diag(B) Q^T as an approximation of A.
+    We have ||A - A'||_F = ||A - Q diag(B) Q^T||_F = ||Q^T A Q - diag(B)||_F = ||B - diag(B)||_F.
+    Moreover, we have ||B||_F = ||Q^T A Q||_F = ||A||_F.
+    Hence, the two relative errors are also equivalent: ||A - A'||_F / ||A||_F = ||B - diag(B)||_F / ||B||_F.
+
     Attributes:
         rank_deficient_stability_config (RankDeficientStabilityConfig): Configuration for handling/stabilizing rank-deficient matrices. (Default: DefaultPerturbationConfig)
             TODO: generalize this to MatrixFunctionConfig
+        tolerance (float): The tolerance for the error of the eigendecomposition based on the norm of the off-diagonal elements of the eigenvalue estimate.
+            (Default: 0.0)
+        eigenvectors_estimate (Tensor): The current estimate of the eigenvectors. Cannot be set at initialization.
+
     """
 
     rank_deficient_stability_config: RankDeficientStabilityConfig = field(
         default_factory=lambda: DefaultPerturbationConfig
     )
+    tolerance: float = 0.0
+    eigenvectors_estimate: torch.Tensor = field(init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        if not (0.0 <= self.tolerance <= 1.0):
+            raise ValueError(
+                f"Invalid tolerance value: {self.tolerance}. Must be in the interval [0.0, 1.0]."
+            )
 
 
 @dataclass(kw_only=True)
 class EighEigendecompositionConfig(EigendecompositionConfig):
     """Configuration for eigendecomposition with torch.linalg.eigh.
 
+    The tolerance hyperparameter is used for a criterion that enables an adaptive eigendecomposition update frequency.
+    The criterion uses the estimated eigenvalues Q^T A Q =: B, where Q is the last computed eigenvectors and A is the current Kronecker factor.
+    The criterion is then defined as ||B - diag(B)||_F <= tolerance * ||B||_F.
+    The tolerance hyperparameter should therefore be in the interval [0.0, 1.0].
+
+    If the criterion is already below or equal to the tolerance given the initial eigenvectors_estimate, the eigendecomposition will be skipped and the estimated eigenvalues and initial eigenvectors will be returned.
+
+    This criterion can be motivated by considering A' = Q diag(B) Q^T as an approximation of A.
+    We have ||A - A'||_F = ||A - Q diag(B) Q^T||_F = ||Q^T A Q - diag(B)||_F = ||B - diag(B)||_F.
+    Moreover, we have ||B||_F = ||Q^T A Q||_F = ||A||_F.
+    Hence, the two relative errors are also equivalent: ||A - A'||_F / ||A||_F = ||B - diag(B)||_F / ||B||_F.
+
     Attributes:
         rank_deficient_stability_config (RankDeficientStabilityConfig): Configuration for handling/stabilizing rank-deficient matrices. (Default: DefaultPerturbationConfig)
         retry_double_precision (bool): Whether to re-trying eigendecomposition with higher (double) precision if lower precision fails due
             to CuSOLVER failure. (Default: True)
         eigendecomposition_offload_device (str): Device to offload eigendecomposition to. If value is empty string, we don't perform offloading. (Default: "")
+        tolerance (float): The tolerance which can lead to skipping of the eigendecomposition based on the norm of the off-diagonal elements of the eigenvalue estimate.
+            (Default: 0.0)
+        eigenvectors_estimate (Tensor): The current estimate of the eigenvectors. Cannot be set at initialization.
 
     """
 
@@ -120,20 +160,12 @@ class QREigendecompositionConfig(EigendecompositionConfig):
         rank_deficient_stability_config (RankDeficientStabilityConfig): Configuration for handling/stabilizing rank-deficient matrices. (Default: DefaultPerturbationConfig)
         max_iterations (int): The maximum number of iterations to perform. (Default: 1)
         tolerance (float): The tolerance for determining convergence in terms of the norm of the off-diagonal elements of the eigenvalue estimate.
-            (Default: 0.01)
+            (Default: 0.0)
         eigenvectors_estimate (Tensor): The current estimate of the eigenvectors. Cannot be set at initialization.
 
     """
 
     max_iterations: int = 1
-    tolerance: float = 0.01
-    eigenvectors_estimate: torch.Tensor = field(init=False)
-
-    def __post_init__(self) -> None:
-        if not (0.0 <= self.tolerance <= 1.0):
-            raise ValueError(
-                f"Invalid tolerance value: {self.tolerance}. Must be in the interval [0.0, 1.0]."
-            )
 
 
 @dataclass(init=False)
@@ -156,6 +188,13 @@ class EigenConfig(RootInvConfig, EighEigendecompositionConfig):
     """
 
     exponent_multiplier: float = 1.0
+
+    def __post_init__(self) -> None:
+        EighEigendecompositionConfig.__post_init__(self)
+        if self.tolerance != 0.0:
+            raise ValueError(
+                f"Invalid tolerance value: {self.tolerance}. Must be 0.0 for {type(self).__name__}."
+            )
 
 
 DefaultEigenConfig = EigenConfig()
