@@ -66,7 +66,7 @@ if __name__ == "__main__":
     Distributed Shampoo (with default Adam grafting, precondition frequency = 100):
         torchrun --standalone --nnodes=1 --nproc_per_node=$NUM_TRAINERS -m distributed_shampoo.examples.fsdp_cifar10_example --optimizer-type DISTRIBUTED_SHAMPOO --precondition-frequency 100 --grafting-type ADAM --num-trainers-per-group -1 --use-bias-correction --use-decoupled-weight-decay --use-merge-dims
 
-    To use distributed checkpointing, append the flag --use-distributed-checkpoint with optional --checkpoint-dir argument.
+    To use distributed checkpointing on Distributed Shampoo, append the flag with --checkpoint-dir argument.
 
     The script will produce lifetime and window loss values retrieved from the forward pass over the data.
     Guaranteed reproducibility on a single GPU.
@@ -139,6 +139,7 @@ if __name__ == "__main__":
         data_loader,
         optimizer,
         device=device,
+        checkpoint_dir=args.checkpoint_dir,
         epochs=args.epochs,
         window_size=args.window_size,
         local_rank=LOCAL_RANK,
