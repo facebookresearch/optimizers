@@ -23,7 +23,9 @@ from torch.testing._internal.common_utils import (
 @instantiate_parametrized_tests
 class EigendecompositionConfigSubclassesTest(unittest.TestCase):
     subclasses_types: list[type[EigendecompositionConfig]] = list(
-        get_all_non_abstract_subclasses(EigendecompositionConfig)
+        get_all_non_abstract_subclasses(
+            EigendecompositionConfig  # type: ignore[type-abstract]
+        )
     )
 
     # tolerance has to be in the interval [0.0, 1.0].

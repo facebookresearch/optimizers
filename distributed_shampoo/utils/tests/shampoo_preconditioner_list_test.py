@@ -1367,7 +1367,7 @@ class EigendecomposedShampooPreconditionerListTest(
         return EigendecomposedShampooPreconditionerList
 
     @property
-    def _preconditioner_config_with_adaptive_amortized_computation_frequency(
+    def _preconditioner_config_with_adaptive_amortized_computation_frequency(  # type: ignore[override]
         self,
     ) -> EigendecomposedShampooPreconditionerConfig:
         return EigendecomposedShampooPreconditionerConfig(
