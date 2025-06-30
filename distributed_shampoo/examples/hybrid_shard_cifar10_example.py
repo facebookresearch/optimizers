@@ -12,6 +12,7 @@ LICENSE file in the root directory of this source tree.
 import argparse
 import logging
 import os
+from functools import partial
 
 import torch
 import torch.distributed as dist
@@ -30,6 +31,7 @@ from distributed_shampoo.examples.trainer_utils import (
 from torch import nn
 from torch.distributed._composable.fsdp import fully_shard
 from torch.distributed.device_mesh import DeviceMesh, init_device_mesh
+from torch.distributed.fsdp import FSDPModule
 from torchvision.datasets import VisionDataset  # type: ignore[import-untyped]
 
 logging.basicConfig(
@@ -51,13 +53,16 @@ def create_model_and_optimizer_and_loss_fn(
     args: argparse.Namespace, device: torch.device, device_mesh: DeviceMesh
 ) -> tuple[nn.Module, torch.optim.Optimizer, nn.Module]:
     # instantiate model and loss function
-    model, loss_function = get_model_and_loss_fn(device)
+    model, loss_function = get_model_and_loss_fn(
+        device=device,
+        post_model_decoration=partial(fully_shard, device_mesh=device_mesh),
+    )
+    assert isinstance(model, nn.Module)
 
-    model = fully_shard(model, mesh=device_mesh)  # type: ignore[assignment] # see fully_shard docstring
     # instantiate optimizer (SGD, Adam, DistributedShampoo)
     optimizer = instantiate_optimizer(
         args.optimizer_type,
-        model,
+        model.parameters(),
         lr=args.lr,
         betas=(args.beta1, args.beta2),
         beta3=args.beta3,
@@ -133,7 +138,7 @@ if __name__ == "__main__":
         mesh_dim_names=("dp_replicate", "dp_shard"),
     )
 
-    model: nn.Module
+    model: nn.Module | FSDPModule
     optimizer: torch.optim.Optimizer
     loss_fn: nn.Module
     model, optimizer, loss_fn = create_model_and_optimizer_and_loss_fn(

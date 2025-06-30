@@ -16,9 +16,10 @@ import logging
 import random
 import shutil
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from operator import attrgetter
 from pathlib import Path
-from typing import Type
+from typing import overload, Type
 
 import numpy as np
 
@@ -45,6 +46,8 @@ from distributed_shampoo.examples.convnet import ConvNet
 
 from torch import nn
 from torch.distributed import checkpoint as dist_checkpoint
+from torch.distributed.fsdp import FSDPModule, fully_shard
+from torch.optim.optimizer import ParamsT
 from torch.utils.tensorboard import SummaryWriter
 from torchvision import datasets, transforms  # type: ignore[import-untyped]
 
@@ -395,7 +398,7 @@ class LossMetrics(Metrics):
 ###### OPTIMIZER INSTANTIATION ######
 def instantiate_optimizer(
     optimizer_type: OptimizerType,
-    model: nn.Module,
+    parameters: ParamsT,
     lr: float,
     betas: tuple[float, float],
     beta3: float,
@@ -420,7 +423,7 @@ def instantiate_optimizer(
 ) -> torch.optim.Optimizer:
     if optimizer_type == OptimizerType.SGD:
         optimizer = torch.optim.SGD(
-            model.parameters(),
+            parameters,
             lr=lr,
             momentum=momentum,
             dampening=dampening,
@@ -430,7 +433,7 @@ def instantiate_optimizer(
     elif optimizer_type == OptimizerType.ADAM:
         if use_decoupled_weight_decay:
             optimizer = torch.optim.AdamW(
-                model.parameters(),
+                parameters,
                 lr=lr,
                 betas=betas,
                 eps=epsilon,
@@ -438,7 +441,7 @@ def instantiate_optimizer(
             )  # type: ignore[assignment]
         else:
             optimizer = torch.optim.Adam(
-                model.parameters(),
+                parameters,
                 lr=lr,
                 betas=betas,
                 eps=epsilon,
@@ -446,7 +449,7 @@ def instantiate_optimizer(
             )  # type: ignore[assignment]
     elif optimizer_type == OptimizerType.DISTRIBUTED_SHAMPOO:
         optimizer = DistributedShampoo(
-            model.parameters(),
+            parameters,
             lr=lr,
             betas=betas,
             beta3=beta3,
@@ -626,12 +629,40 @@ def setup_distribution(
     return device
 
 
-def get_model_and_loss_fn(device: torch.device) -> tuple[nn.Module, nn.Module]:
+@overload
+def get_model_and_loss_fn(
+    device: torch.device,
+    post_model_decoration: Callable[[nn.Module], nn.Module] = lambda x: x,
+) -> tuple[nn.Module, nn.Module]: ...
+
+
+@overload
+def get_model_and_loss_fn(
+    device: torch.device,
+    post_model_decoration: Callable[[nn.Module], FSDPModule] = lambda x: fully_shard(x),
+) -> tuple[FSDPModule, nn.Module]: ...
+
+
+def get_model_and_loss_fn(
+    device: torch.device,
+    post_model_decoration: Callable[[nn.Module], nn.Module | FSDPModule] = lambda x: x,
+) -> tuple[nn.Module | FSDPModule, nn.Module]:
+    """
+    Creates and returns a model and loss function for training.
+
+    Args:
+        device (torch.device): The device (CPU/GPU) where the model should be placed.
+        post_model_decoration (Callable[[nn.Module], nn.Module | FSDPModule]): Optional function to apply additional modifications to the model after creation (e.g., for distributed training). (Default: identity function)
+
+    Returns:
+        model (nn.Module | FSDPModule): The instantiated ConvNet model moved to the specified device and with any post-decoration applied.
+        loss_fn (nn.Module): The CrossEntropyLoss function for training.
+    """
     # instantiate model and loss function
     model = ConvNet(height=32, width=32).to(device)
     loss_fn = nn.CrossEntropyLoss()
 
-    return model, loss_fn
+    return post_model_decoration(model), loss_fn
 
 
 ###### TRAIN LOOP ######

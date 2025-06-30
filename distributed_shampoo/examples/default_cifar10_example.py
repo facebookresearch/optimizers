@@ -112,7 +112,7 @@ if __name__ == "__main__":
     # instantiate model and loss function
     model: nn.Module
     loss_function: nn.Module
-    model, loss_function = get_model_and_loss_fn(device)
+    model, loss_function = get_model_and_loss_fn(device=device)
 
     # instantiate data loader. Note that this is a single GPU training example,
     # so we do not need to instantiate a sampler.
@@ -123,7 +123,7 @@ if __name__ == "__main__":
     # instantiate optimizer (SGD, Adam, DistributedShampoo)
     optimizer: torch.optim.Optimizer = instantiate_optimizer(
         args.optimizer_type,
-        model,
+        model.parameters(),
         lr=args.lr,
         betas=(args.beta1, args.beta2),
         beta3=args.beta3,
