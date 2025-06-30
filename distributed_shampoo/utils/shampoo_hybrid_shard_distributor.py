@@ -321,7 +321,7 @@ class HybridShardDistributor(DistributorInterface):
             group_rank (int): Rank of the current process group.
 
         Returns:
-            tuple[DTensorBlockInfo, ...]: A tuple of DTensorBlockInfo objects for each parameter block.
+            block_info_list (tuple[DTensorBlockInfo, ...]): A tuple of DTensorBlockInfo objects for each parameter block.
         """
         # Call `super()` instead of `self` as a performance optimization.
         # This leads to O(1) instead of O(N) complexity to retrieve the parameters.

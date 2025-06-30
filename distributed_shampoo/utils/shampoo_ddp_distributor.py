@@ -294,7 +294,7 @@ class DDPDistributor(DistributorInterface):
             group_rank (int): Rank of the current process group.
 
         Returns:
-            tuple[DTensorBlockInfo, ...]: A tuple of DTensorBlockInfo objects for each parameter block.
+            block_info_list (tuple[DTensorBlockInfo, ...]): A tuple of DTensorBlockInfo objects for each parameter block.
         """
         return tuple(
             DTensorBlockInfo(

@@ -308,7 +308,7 @@ class HSDPDistributor(DistributorInterface):
             group_rank (int): Rank of the current process group.
 
         Returns:
-            tuple[DTensorBlockInfo, ...]: A tuple of DTensorBlockInfo objects for each parameter block.
+            block_info_list (tuple[DTensorBlockInfo, ...]): A tuple of DTensorBlockInfo objects for each parameter block.
         """
         # Note that for HSDP, we want to get the rank within each sharded group for the block id.
         # When using a device mesh, 0 corresponds to the replicated group and 1 corresponds to the sharded group.

@@ -61,7 +61,16 @@ class FullyShardDistributor(Distributor):
 
     @torch.no_grad()
     def _construct_local_block_info_list(self) -> tuple[BlockInfo, ...]:
-        """Construct local block info list from param_group and num_blocks_within_param."""
+        """Construct the local block info list.
+
+        This method creates a list of BlockInfo objects for DTensor parameters, which contain information
+        about each parameter block, including its composable block IDs and the original DTensor parameter
+        it belongs to. The BlockInfo objects are used throughout the optimizer to track and manage
+        parameter blocks in the fully sharded distributed training setup.
+
+        Returns:
+            block_info_list (tuple[BlockInfo, ...]): A tuple of BlockInfo objects for each parameter block.
+        """
         return self._construct_local_block_info_list_with_params(
             # Call `super()._get_param_or_grads()` instead of `self._get_param_or_grads()` because the need to to record the original DTensor parameter in the BlockInfo.
             params=filter(
