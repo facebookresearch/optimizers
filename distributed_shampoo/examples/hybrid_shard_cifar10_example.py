@@ -55,7 +55,7 @@ def create_model_and_optimizer_and_loss_fn(
     # instantiate model and loss function
     model, loss_function = get_model_and_loss_fn(
         device=device,
-        post_model_decoration=partial(fully_shard, device_mesh=device_mesh),
+        post_model_decoration=partial(fully_shard, mesh=device_mesh),
     )
     assert isinstance(model, nn.Module)
 
