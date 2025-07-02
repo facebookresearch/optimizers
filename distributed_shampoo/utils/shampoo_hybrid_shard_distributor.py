@@ -233,16 +233,6 @@ class HybridShardDistributor(DistributorInterface):
             if (local_p := p.to_local()).numel() > 0
         )
 
-    # NOTE: Remove this function once PT2 supports all_gather with functional collective
-    @torch.no_grad()
-    @torch.compiler.disable
-    def _all_gather_into_tensor(self) -> None:
-        dist.all_gather_into_tensor(
-            output_tensor=self._global_dist_buffer,
-            input_tensor=self._local_dist_buffer,
-            group=self._comms_dist_group,
-        )
-
     @torch.no_grad()
     def update_params(
         self,
@@ -254,6 +244,16 @@ class HybridShardDistributor(DistributorInterface):
             masked_blocked_search_directions (tuple[Tensor, ...]): Search directions for each local blocked parameter.
 
         """
+
+        # NOTE: Remove this function once PT2 supports all_gather with functional collective
+        @torch.compiler.disable
+        def all_gather_into_tensor() -> None:
+            dist.all_gather_into_tensor(
+                output_tensor=self._global_dist_buffer,
+                input_tensor=self._local_dist_buffer,
+                group=self._comms_dist_group,
+            )
+
         if self._communicate_params:
             assert (
                 len(self._local_masked_blocked_params)
@@ -272,7 +272,7 @@ class HybridShardDistributor(DistributorInterface):
                     self._local_masked_blocked_params,
                 )
 
-            self._all_gather_into_tensor()
+            all_gather_into_tensor()
 
             # torch._foreach only accepts non-empty list
             if self._global_masked_blocked_params:
@@ -297,7 +297,7 @@ class HybridShardDistributor(DistributorInterface):
                     masked_blocked_search_directions,
                 )
 
-            self._all_gather_into_tensor()
+            all_gather_into_tensor()
 
             # torch._foreach only accepts non-empty list
             if self._global_masked_blocked_params:
