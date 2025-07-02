@@ -923,7 +923,7 @@ class AbstractTest:
 
         @property
         def _expected_compress_list_call_count(self) -> int:
-            return 5
+            return 4
 
 
 class RootInvShampooPreconditionerListTest(
