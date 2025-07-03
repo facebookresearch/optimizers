@@ -931,14 +931,28 @@ class MatrixEigendecompositionTest(unittest.TestCase):
         class NotSupportedEigendecompositionConfig(EigendecompositionConfig):
             """A dummy class eigendecomposition config that is not supported."""
 
-            unsupoorted_field: int = 0
+            unsupported_field: int = 0
 
         self.assertRaisesRegex(
             NotImplementedError,
-            r"Eigendecomposition config is not implemented! Specified eigendecomposition config is eigendecomposition_config=.*\.NotSupportedEigendecompositionConfig\(.*\).",
+            re.escape(
+                f"Eigendecomposition config is not implemented! Specified eigendecomposition config is {NotSupportedEigendecompositionConfig.__name__}."
+            ),
             matrix_eigendecomposition,
             A=torch.tensor([[1.0, 0.0], [0.0, 4.0]]),
             eigendecomposition_config=NotSupportedEigendecompositionConfig(),
+        )
+
+    def test_non_zero_tolerance_eigh_without_eigenvectors_estimate(self) -> None:
+        eigendecomposition_config = EighEigendecompositionConfig(tolerance=0.01)
+        self.assertRaisesRegex(
+            ValueError,
+            re.escape(
+                f"{eigendecomposition_config=} should contain eigenvectors_estimate when using tolerance != 0.0."
+            ),
+            matrix_eigendecomposition,
+            A=torch.tensor([[1.0, 0.0], [0.0, 4.0]]),
+            eigendecomposition_config=eigendecomposition_config,
         )
 
 

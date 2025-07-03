@@ -62,21 +62,18 @@ class AbstractDataclass(ABC):
 _SubclassesType = TypeVar("_SubclassesType")
 
 
-def get_all_subclasses(
-    cls: _SubclassesType, include_cls_self: bool = True
-) -> list[_SubclassesType]:
+def get_all_non_abstract_subclasses(cls: _SubclassesType) -> Iterable[_SubclassesType]:
     """
-    Retrieves all subclasses of a given class, optionally including the class itself.
+    Retrieves all non-abstract (instantiable) subclasses of a given class.
 
     This function uses a helper function to recursively find all unique subclasses
-    of the specified class.
+    of the specified class, and then filters out any abstract classes.
 
     Args:
-        cls (SubclassesType): The class for which to find subclasses.
-        include_cls_self (bool): Whether to include the class itself in the result. (Default: True)
+        cls (_SubclassesType): The class for which to find subclasses.
 
     Returns:
-        list[SubclassesType]: A list of all unique subclasses of the given class.
+        non_abstract_subclasses (Iterable[_SubclassesType]): An iterable of all unique non-abstract subclasses of the given class.
     """
 
     def get_all_unique_subclasses(cls: _SubclassesType) -> set[_SubclassesType]:
@@ -87,7 +84,11 @@ def get_all_subclasses(
             {cls},
         )
 
-    return list(get_all_unique_subclasses(cls) - (set() if include_cls_self else {cls}))
+    return filter(
+        # Filters out abstract classes by checking if '__abstractmethods__' is an empty set or not present.
+        lambda sub_cls: not getattr(sub_cls, "__abstractmethods__", frozenset()),
+        get_all_unique_subclasses(cls),
+    )
 
 
 _BatchedInputType = TypeVar("_BatchedInputType")

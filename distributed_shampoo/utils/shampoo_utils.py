@@ -31,6 +31,8 @@ def merge_small_dims(tensor_shape: tuple[int, ...], threshold: int) -> tuple[int
     - Shampoo will promote 0D tensor (torch.Size([]) into an 1D tensor (torch.Size([1])).
     - Empty tensors (with a dimension of size 0) will return a shape of (0,).
     - Dimensions of size 1 are removed (squeezed) before merging.
+    - If all dimensions are 1, it returns (1,).
+    - Dimensions are merged in reverse order to accommodate PyTorch's tensor layout.
 
     Args:
         tensor_shape (tuple[int, ...]): The shape of the tensor.
@@ -38,6 +40,17 @@ def merge_small_dims(tensor_shape: tuple[int, ...], threshold: int) -> tuple[int
 
     Returns:
         new_tensor_shape (tuple[int, ...]): New tensor shape after merging dimensions.
+
+    Example:
+        - merge_small_dims((1, 2, 5, 1), threshold=10) -> (10,)
+          All dimensions are merged as their product (10) is equal to the threshold.
+
+        - merge_small_dims((1, 2, 5, 1), threshold=1) -> (2, 5)
+          Dimensions of size 1 are removed, and no merging occurs as 2*5 > threshold.
+
+        - merge_small_dims((32, 3, 64, 64), threshold=8192) -> (96, 4096)
+          For convolution-like dimensions, merges into (32*3, 64*64) as 96 < threshold
+          but 96*4096 > threshold.
 
     """
     if 0 in tensor_shape:
@@ -63,12 +76,35 @@ def merge_small_dims(tensor_shape: tuple[int, ...], threshold: int) -> tuple[int
 def multi_dim_split(tensor: Tensor, split_size: int) -> tuple[Tensor, ...]:
     """Chunks tensor across multiple dimensions based on splits.
 
+    This function recursively splits a tensor along all of its dimensions using the
+    specified split size. It applies torch.split() to each dimension sequentially,
+    resulting in a tuple of smaller tensors.
+
     Args:
         tensor (Tensor): Gradient or tensor to split.
-        split_size (int): Size of a single chunk.
+        split_size (int): Size of a single chunk along each dimension.
 
     Returns:
-        split_tensors (tuple[Tensor, ...]): List of tensors.
+        split_tensors (tuple[Tensor, ...]): Tuple of tensors after splitting.
+            If split_size is greater than or equal to any dimension size,
+            no splitting occurs along that dimension.
+
+    Example:
+        - multi_dim_split(tensor of shape (5, 2), split_size=3):
+          Returns (tensor([0, 1, 2], [0, 1]), tensor([3, 4], [0, 1]))
+          Splits only along dimension 0 since split_size > dimension 1 size.
+
+        - multi_dim_split(tensor of shape (5, 3), split_size=2):
+          First splits along dimension 0:
+          [(0-1, 0-2), (2-3, 0-2), (4, 0-2)]
+
+          Then splits each chunk along dimension 1:
+          [(0-1, 0-1), (0-1, 2), (2-3, 0-1), (2-3, 2), (4, 0-1), (4, 2)]
+
+          Returns 6 smaller tensors.
+
+        - multi_dim_split(tensor of shape (5, 3), split_size=5):
+          Returns (original tensor,) since split_size ≥ all dimensions.
 
     """
     return reduce(
@@ -91,18 +127,18 @@ def compress_list(
     NOTE: Despite the name, this function can compress both lists and tuples, but will always return
     a tuple in order to ensure downstream compatibility.
 
-    Example:
-        complete_list = ['a', 'b', 'c', 'd'] and selector = [True, False, True, False]:
-        Result: ('a', 'c')
-
-        Only elements from complete_list where the corresponding selector is True are included.
-
     Args:
         complete_list (Sequence[CompressListType]): Complete tuple of candidates.
         selector (Sequence[bool]): Mask that is True if state is active, False otherwise.
 
     Returns:
         compressed_tuple (tuple[CompressListType, ...]): Compressed list of candidates based on selector.
+
+    Example:
+        complete_list = ['a', 'b', 'c', 'd'] and selector = [True, False, True, False]:
+        Result: ('a', 'c')
+
+        Only elements from complete_list where the corresponding selector is True are included.
 
     """
     assert (

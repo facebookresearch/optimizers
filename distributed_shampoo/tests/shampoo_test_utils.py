@@ -103,7 +103,11 @@ def construct_training_problem(
         data (torch.Tensor): A randomly generated input tensor corresponding to the input dimension.
         target (torch.Tensor): A target tensor of zeros corresponding to the output dimension.
     """
-    data = torch.arange(model_linear_layers_dims[0], dtype=torch.float, device=device)
+    seed_value = 42
+    torch.manual_seed(seed_value)
+
+    # Note: Generate a random tensor first then moving it to device to avoid to guarantee the same tensor value on different devices.
+    data = torch.randn(model_linear_layers_dims[0], dtype=torch.float).to(device=device)
     data /= torch.linalg.norm(data)
 
     model = _ModelWithScalarAndLinearAndDeadLayers(

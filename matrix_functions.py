@@ -421,6 +421,20 @@ def matrix_eigendecomposition(
 
     match eigendecomposition_config:
         case EighEigendecompositionConfig():
+            if eigendecomposition_config.tolerance != 0.0:
+                if not hasattr(eigendecomposition_config, "eigenvectors_estimate"):
+                    raise ValueError(
+                        f"{eigendecomposition_config=} should contain eigenvectors_estimate when using tolerance != 0.0."
+                    )
+                eigenvectors_estimate = eigendecomposition_config.eigenvectors_estimate
+                eigenvalues_estimate = (
+                    eigenvectors_estimate.T @ A_ridge @ eigenvectors_estimate
+                )
+                if _eigenvalues_estimate_criterion_below_or_equal_tolerance(
+                    eigenvalues_estimate,
+                    eigendecomposition_config.tolerance,
+                ):
+                    return eigenvalues_estimate.diag(), eigenvectors_estimate
             return _eigh_eigenvalue_decomposition(
                 A_ridge,
                 **_get_function_args_from_config(
@@ -436,7 +450,7 @@ def matrix_eigendecomposition(
             )
         case _:
             raise NotImplementedError(
-                f"Eigendecomposition config is not implemented! Specified eigendecomposition config is {eigendecomposition_config=}."
+                f"Eigendecomposition config is not implemented! Specified eigendecomposition config is {type(eigendecomposition_config).__name__}."
             )
 
 

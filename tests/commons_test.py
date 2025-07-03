@@ -9,10 +9,11 @@ LICENSE file in the root directory of this source tree.
 
 import re
 import unittest
+from abc import ABC, abstractmethod
 
 from dataclasses import dataclass
 
-from commons import AbstractDataclass, batched, get_all_subclasses
+from commons import AbstractDataclass, batched, get_all_non_abstract_subclasses
 from torch.testing._internal.common_utils import (
     instantiate_parametrized_tests,
     parametrize,
@@ -32,30 +33,6 @@ class InvalidAbstractDataclassInitTest(unittest.TestCase):
             re.escape(f"Can't instantiate abstract class {abstract_cls.__name__} "),
             abstract_cls,
         )
-
-
-class DummyRootClass:
-    """Dummy root class for GetAllSubclassesTest."""
-
-
-class DummyFirstSubclass(DummyRootClass):
-    """First dummy subclass for GetAllSubclassesTest."""
-
-
-class DummySecondSubclass(DummyFirstSubclass):
-    """Second dummy subclass for GetAllSubclassesTest."""
-
-
-class DummySecondRootClass:
-    """Second dummy root class for GetAllSubclassesTest."""
-
-
-class DummyMixedSubclass(DummySecondRootClass, DummySecondSubclass):
-    """Dummy subclass with mixed inheritance for GetAllSubclassesTest."""
-
-
-class DummyLeafClass(DummyMixedSubclass):
-    """Dummy leaf class for GetAllSubclassesTest."""
 
 
 @instantiate_parametrized_tests
@@ -94,34 +71,71 @@ class BatchedTest(unittest.TestCase):
             list(batched(data, n=n))
 
 
+class DummyRootClass:
+    """Dummy root class for GetAllNonAbstractSubclassesTest."""
+
+
+class DummyFirstSubclass(DummyRootClass):
+    """First dummy subclass for GetAllNonAbstractSubclassesTest."""
+
+
+class DummySecondSubclass(DummyFirstSubclass):
+    """Second dummy subclass for GetAllNonAbstractSubclassesTest."""
+
+
+class DummySecondRootClass:
+    """Second dummy root class for GetAllNonAbstractSubclassesTest."""
+
+
+class DummyMixedSubclass(DummySecondRootClass, DummySecondSubclass):
+    """Dummy subclass with mixed inheritance for GetAllNonAbstractSubclassesTest."""
+
+
+class DummyAbstractSubclass(DummyMixedSubclass, ABC):
+    """Dummy abstract subclass for GetAllNonAbstractSubclassesTest."""
+
+    @abstractmethod
+    def __init__(self) -> None:
+        """An abstract method that must be implemented by all subclasses. This abstract method will be ignored by get_all_non_abstract_subclasses()."""
+
+
+class DummyLeafClass(DummyAbstractSubclass):
+    """Dummy leaf class for GetAllNonAbstractSubclassesTest."""
+
+    def __init__(self) -> None:
+        """This is a non-abstract method, so get_all_non_abstract_subclasses() will include this class."""
+
+
 @instantiate_parametrized_tests
-class GetAllSubclassesTest(unittest.TestCase):
-    @parametrize("include_cls_self", (True, False))
-    def test_class_hierarchy_and_multiple_inheritance(
-        self, include_cls_self: bool
+class GetAllNonAbstractSubclassesTest(unittest.TestCase):
+    @parametrize(
+        "cls, expected_subclasses",
+        (
+            (
+                DummyRootClass,
+                [
+                    DummyRootClass,
+                    DummyFirstSubclass,
+                    DummySecondSubclass,
+                    DummyMixedSubclass,
+                    DummyLeafClass,
+                ],
+            ),
+            (
+                DummySecondRootClass,
+                [DummySecondRootClass, DummyMixedSubclass, DummyLeafClass],
+            ),
+            (
+                DummySecondSubclass,
+                [DummySecondSubclass, DummyMixedSubclass, DummyLeafClass],
+            ),
+            (DummyAbstractSubclass, [DummyLeafClass]),
+            (DummyLeafClass, [DummyLeafClass]),
+        ),
+    )
+    def test_all_non_abstract_subclasses(
+        self, cls: object, expected_subclasses: list[object]
     ) -> None:
-        subclasses = [
-            DummyFirstSubclass,
-            DummySecondSubclass,
-            DummyMixedSubclass,
-            DummyLeafClass,
-        ]
         self.assertCountEqual(
-            get_all_subclasses(DummyRootClass, include_cls_self=include_cls_self),
-            subclasses + [DummyRootClass] * include_cls_self,
-        )
-
-    @parametrize("include_cls_self", (True, False))
-    def test_second_subclass(self, include_cls_self: bool) -> None:
-        subclasses = [DummyMixedSubclass, DummyLeafClass]
-        self.assertCountEqual(
-            get_all_subclasses(DummySecondSubclass, include_cls_self=include_cls_self),
-            subclasses + [DummySecondSubclass] * include_cls_self,
-        )
-
-    @parametrize("include_cls_self", (True, False))
-    def test_leaf_class(self, include_cls_self: bool) -> None:
-        self.assertCountEqual(
-            get_all_subclasses(DummyLeafClass, include_cls_self=include_cls_self),
-            [DummyLeafClass] * include_cls_self,
+            get_all_non_abstract_subclasses(cls=cls), expected_subclasses
         )

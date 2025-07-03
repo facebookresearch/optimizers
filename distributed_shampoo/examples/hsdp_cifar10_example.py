@@ -12,6 +12,7 @@ LICENSE file in the root directory of this source tree.
 import argparse
 import logging
 import os
+from functools import partial
 
 import torch
 
@@ -56,7 +57,6 @@ if __name__ == "__main__":
     Requirements:
         - Python 3.12 or above
         - PyTorch / TorchVision
-        - 8 GPU machine
 
     To run this training script with a single node, one can run from the optimizers directory:
 
@@ -69,7 +69,7 @@ if __name__ == "__main__":
     Distributed Shampoo (with default Adam grafting, precondition frequency = 100):
         torchrun --standalone --nnodes=1 --nproc_per_node=$NUM_TRAINERS -m distributed_shampoo.examples.hsdp_cifar10_example --optimizer-type DISTRIBUTED_SHAMPOO --precondition-frequency 100 --grafting-type ADAM --num-trainers-per-group 2 --use-bias-correction --use-decoupled-weight-decay --use-merge-dims
 
-    To use distributed checkpointing, append the flag --use-distributed-checkpoint with optional --checkpoint-dir argument.
+    To use distributed checkpointing on Distributed Shampoo, append the flag with --checkpoint-dir argument.
 
     The script will produce lifetime and window loss values retrieved from the forward pass over the data.
     Guaranteed reproducibility on a single GPU.
@@ -90,19 +90,23 @@ if __name__ == "__main__":
     )
 
     # Instantiate device mesh for HSDP Shampoo.
-    # Assuming 8 GPUs, will be initialized as 2 x 4 mesh.
+    # For example, with 8 GPUs and dp_replicate_degree set to 2, the device mesh will be:
     # ([[0, 1, 2, 3], [4, 5, 6, 7]])
-    device_mesh: DeviceMesh = init_device_mesh("cuda", (2, 4))
+    device_mesh: DeviceMesh = init_device_mesh(
+        "cuda", (args.dp_replicate_degree, WORLD_SIZE // args.dp_replicate_degree)
+    )
 
     # instantiate model and loss function
     model: nn.Module
     loss_function: nn.Module
-    model, loss_function = get_model_and_loss_fn(device)
-    model = FSDP(
-        model,
-        device_mesh=device_mesh,
-        sharding_strategy=ShardingStrategy.HYBRID_SHARD,
-        use_orig_params=True,
+    model, loss_function = get_model_and_loss_fn(
+        device=device,
+        post_model_decoration=partial(
+            FSDP,
+            device_mesh=device_mesh,
+            sharding_strategy=ShardingStrategy.HYBRID_SHARD,
+            use_orig_params=True,
+        ),
     )
 
     # instantiate data loader
@@ -117,7 +121,7 @@ if __name__ == "__main__":
     # instantiate optimizer (SGD, Adam, DistributedShampoo)
     optimizer: torch.optim.Optimizer = instantiate_optimizer(
         args.optimizer_type,
-        model,
+        model.parameters(),
         lr=args.lr,
         betas=(args.beta1, args.beta2),
         beta3=args.beta3,
@@ -154,6 +158,7 @@ if __name__ == "__main__":
         data_loader,
         optimizer,
         device=device,
+        checkpoint_dir=args.checkpoint_dir,
         epochs=args.epochs,
         window_size=args.window_size,
         local_rank=LOCAL_RANK,

@@ -12,6 +12,7 @@ LICENSE file in the root directory of this source tree.
 import argparse
 import logging
 import os
+from functools import partial
 from typing import Any
 
 import torch
@@ -67,7 +68,7 @@ if __name__ == "__main__":
     Distributed Shampoo (with default Adam grafting, precondition frequency = 100):
         torchrun --standalone --nnodes=1 --nproc_per_node=$NUM_TRAINERS -m distributed_shampoo.examples.ddp_cifar10_example --optimizer-type DISTRIBUTED_SHAMPOO --precondition-frequency 100 --grafting-type ADAM --num-trainers-per-group -1 --use-bias-correction --use-decoupled-weight-decay --use-merge-dims
 
-    To use distributed checkpointing, append the flag --use-distributed-checkpoint with optional --checkpoint-dir argument.
+    To use distributed checkpointing on Distributed Shampoo, append the flag with --checkpoint-dir argument.
 
     The script will produce lifetime and window loss values retrieved from the forward pass over the data.
     Guaranteed reproducibility on a single GPU.
@@ -90,13 +91,16 @@ if __name__ == "__main__":
     # instantiate model and loss function
     model: nn.Module
     loss_function: nn.Module
-    model, loss_function = get_model_and_loss_fn(device)
-    device_kwargs: dict[str, Any] = (
-        {"device_ids": [LOCAL_RANK], "output_device": LOCAL_RANK}
+    model, loss_function = get_model_and_loss_fn(
+        device=device,
+        post_model_decoration=partial(
+            nn.parallel.DistributedDataParallel,
+            device_ids=[LOCAL_RANK],
+            output_device=LOCAL_RANK,
+        )
         if args.backend == "nccl"
-        else {}
+        else nn.parallel.DistributedDataParallel,
     )
-    model = nn.parallel.DistributedDataParallel(model, **device_kwargs)  # type: ignore
 
     # instantiate data loader
     data_loader: torch.utils.data.DataLoader[VisionDataset]
@@ -110,7 +114,7 @@ if __name__ == "__main__":
     # instantiate optimizer (SGD, Adam, DistributedShampoo)
     optimizer: torch.optim.Optimizer = instantiate_optimizer(
         args.optimizer_type,
-        model,
+        model.parameters(),
         lr=args.lr,
         betas=(args.beta1, args.beta2),
         beta3=args.beta3,
@@ -139,20 +143,16 @@ if __name__ == "__main__":
     )
 
     # checks for checkpointing
-    if args.use_distributed_checkpoint and not isinstance(
+    if args.checkpoint_dir is not None and not isinstance(
         optimizer, DistributedShampoo
     ):
         raise ValueError(
             "Distributed checkpointing is only supported with DistributedShampoo!"
         )
-    if args.use_distributed_checkpoint and args.checkpoint_dir is None:
-        raise ValueError(
-            "Trying to use distributed checkpointing but checkpoint directory is not provided!"
-        )
 
     # load optimizer and model checkpoint if using Distributed Shampoo optimizer
     if (
-        args.use_distributed_checkpoint
+        args.checkpoint_dir is not None
         and isinstance(optimizer, DistributedShampoo)
         and os.path.exists(args.checkpoint_dir + "/.metadata")
     ):
@@ -181,24 +181,12 @@ if __name__ == "__main__":
         data_loader,
         optimizer,
         device=device,
+        checkpoint_dir=args.checkpoint_dir,
         epochs=args.epochs,
         window_size=args.window_size,
         local_rank=LOCAL_RANK,
         metrics_dir=args.metrics_dir if WORLD_RANK == 0 else None,
     )
-
-    # checkpoint optimizer and model using distributed checkpointing solution
-    if args.use_distributed_checkpoint and isinstance(optimizer, DistributedShampoo):
-        state_dict = {
-            "model": model.state_dict(),
-            "optim": optimizer.distributed_state_dict(
-                key_to_param=model.named_parameters()
-            ),
-        }
-        dist_checkpoint.save_state_dict(
-            state_dict=state_dict,
-            storage_writer=dist_checkpoint.FileSystemWriter(args.checkpoint_dir),
-        )
 
     # clean up process group
     dist.destroy_process_group()

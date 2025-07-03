@@ -10,7 +10,7 @@ LICENSE file in the root directory of this source tree.
 import re
 import unittest
 
-from commons import get_all_subclasses
+from commons import get_all_non_abstract_subclasses
 
 from distributed_shampoo.shampoo_types import (
     AdaGradGraftingConfig,
@@ -19,6 +19,7 @@ from distributed_shampoo.shampoo_types import (
     RMSpropGraftingConfig,
     ShampooPreconditionerConfig,
 )
+from matrix_functions_types import EighEigendecompositionConfig, PseudoInverseConfig
 from torch.testing._internal.common_utils import (
     instantiate_parametrized_tests,
     parametrize,
@@ -27,8 +28,8 @@ from torch.testing._internal.common_utils import (
 
 @instantiate_parametrized_tests
 class AdaGradGraftingConfigSubclassesTest(unittest.TestCase):
-    subclasses_types: list[type[AdaGradGraftingConfig]] = get_all_subclasses(
-        AdaGradGraftingConfig
+    subclasses_types: list[type[AdaGradGraftingConfig]] = list(
+        get_all_non_abstract_subclasses(AdaGradGraftingConfig)
     )
 
     @parametrize("epsilon", (0.0, -1.0))
@@ -46,8 +47,8 @@ class AdaGradGraftingConfigSubclassesTest(unittest.TestCase):
 
 @instantiate_parametrized_tests
 class RMSpropGraftingConfigSubclassesTest(unittest.TestCase):
-    subclasses_types: list[type[RMSpropGraftingConfig]] = get_all_subclasses(
-        RMSpropGraftingConfig
+    subclasses_types: list[type[RMSpropGraftingConfig]] = list(
+        get_all_non_abstract_subclasses(RMSpropGraftingConfig)
     )
 
     @parametrize("beta2", (-1.0, 0.0, 1.3))
@@ -67,9 +68,10 @@ class RMSpropGraftingConfigSubclassesTest(unittest.TestCase):
 
 @instantiate_parametrized_tests
 class PreconditionerConfigSubclassesTest(unittest.TestCase):
-    subclasses_types: list[type[PreconditionerConfig]] = get_all_subclasses(
-        PreconditionerConfig,  # type: ignore[type-abstract]
-        include_cls_self=False,
+    subclasses_types: list[type[PreconditionerConfig]] = list(
+        get_all_non_abstract_subclasses(
+            PreconditionerConfig,  # type: ignore[type-abstract]
+        )
     )
 
     # Not testing for the base class PreconditionerConfig because it is an abstract class.
@@ -91,8 +93,10 @@ class PreconditionerConfigSubclassesTest(unittest.TestCase):
 
 @instantiate_parametrized_tests
 class ShampooPreconditionerConfigSubclassesTest(unittest.TestCase):
-    subclasses_types: list[type[ShampooPreconditionerConfig]] = get_all_subclasses(
-        ShampooPreconditionerConfig, include_cls_self=True
+    subclasses_types: list[type[ShampooPreconditionerConfig]] = list(
+        get_all_non_abstract_subclasses(
+            ShampooPreconditionerConfig,  # type: ignore[type-abstract]
+        )
     )
 
     @parametrize("cls", subclasses_types)
@@ -156,10 +160,8 @@ class ShampooPreconditionerConfigSubclassesTest(unittest.TestCase):
 
 @instantiate_parametrized_tests
 class EigenvalueCorrectedShampooPreconditionerConfigSubclassesTest(unittest.TestCase):
-    subclasses_types: list[type[EigenvalueCorrectedShampooPreconditionerConfig]] = (
-        get_all_subclasses(
-            EigenvalueCorrectedShampooPreconditionerConfig, include_cls_self=True
-        )
+    subclasses_types: list[type[EigenvalueCorrectedShampooPreconditionerConfig]] = list(
+        get_all_non_abstract_subclasses(EigenvalueCorrectedShampooPreconditionerConfig)
     )
 
     @parametrize("cls", subclasses_types)
@@ -238,4 +240,21 @@ class EigenvalueCorrectedShampooPreconditionerConfigSubclassesTest(unittest.Test
             ),
             cls,
             inverse_exponent_override=negative_overrides_config,
+        )
+
+    @parametrize("cls", subclasses_types)
+    def test_illegal_rank_deficient_stability_config(
+        self, cls: type[EigenvalueCorrectedShampooPreconditionerConfig]
+    ) -> None:
+        invalid_amortized_computation_config = EighEigendecompositionConfig(
+            rank_deficient_stability_config=PseudoInverseConfig(),
+        )
+        self.assertRaisesRegex(
+            ValueError,
+            re.escape(
+                f"PseudoInverseConfig is an invalid rank_deficient_stability_config for {cls.__name__}."
+                " Please use an instance of PerturbationConfig instead."
+            ),
+            cls,
+            amortized_computation_config=invalid_amortized_computation_config,
         )

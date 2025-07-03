@@ -20,16 +20,15 @@ from distributed_shampoo.shampoo_types import (
     AdaGradGraftingConfig,
     AdamGraftingConfig,
     DefaultShampooConfig,
+    EigendecomposedShampooPreconditionerConfig,
     PreconditionerConfig,
     RMSpropGraftingConfig,
     SGDGraftingConfig,
-    ShampooPreconditionerConfig,
 )
 from distributed_shampoo.tests.shampoo_test_utils import (
     compare_optimizer_on_cpu_and_device,
     compare_two_optimizers_on_weight_and_loss,
 )
-from matrix_functions_types import DefaultEigendecompositionConfig
 from torch.optim.adagrad import Adagrad
 from torch.optim.adam import Adam
 from torch.optim.adamw import AdamW
@@ -60,9 +59,7 @@ class DistributedShampooGraftingTest(unittest.TestCase):
         "preconditioner_config",
         (
             DefaultShampooConfig,
-            ShampooPreconditionerConfig(
-                amortized_computation_config=DefaultEigendecompositionConfig,
-            ),
+            EigendecomposedShampooPreconditionerConfig(),
         ),
     )
     @parametrize("device", available_devices)
@@ -106,9 +103,7 @@ class DistributedShampooGraftingTest(unittest.TestCase):
         "preconditioner_config",
         (
             DefaultShampooConfig,
-            ShampooPreconditionerConfig(
-                amortized_computation_config=DefaultEigendecompositionConfig,
-            ),
+            EigendecomposedShampooPreconditionerConfig(),
         ),
     )
     @parametrize("device", available_devices)
@@ -152,9 +147,7 @@ class DistributedShampooGraftingTest(unittest.TestCase):
         "preconditioner_config",
         (
             DefaultShampooConfig,
-            ShampooPreconditionerConfig(
-                amortized_computation_config=DefaultEigendecompositionConfig,
-            ),
+            EigendecomposedShampooPreconditionerConfig(),
         ),
     )
     @parametrize("device", available_devices)
@@ -198,9 +191,7 @@ class DistributedShampooGraftingTest(unittest.TestCase):
         "preconditioner_config",
         (
             DefaultShampooConfig,
-            ShampooPreconditionerConfig(
-                amortized_computation_config=DefaultEigendecompositionConfig,
-            ),
+            EigendecomposedShampooPreconditionerConfig(),
         ),
     )
     @parametrize("device", available_devices)
@@ -250,9 +241,7 @@ class DistributedShampooGraftingTest(unittest.TestCase):
         "preconditioner_config",
         (
             DefaultShampooConfig,
-            ShampooPreconditionerConfig(
-                amortized_computation_config=DefaultEigendecompositionConfig,
-            ),
+            EigendecomposedShampooPreconditionerConfig(),
         ),
     )
     @parametrize("device", available_devices)

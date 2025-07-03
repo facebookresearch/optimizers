@@ -25,10 +25,11 @@ from distributed_shampoo.shampoo_types import (
     DefaultEigenvalueCorrectedShampooConfig,
     DefaultShampooConfig,
     DistributedConfig,
+    EigendecomposedShampooPreconditionerConfig,
     EigenvalueCorrectedShampooPreconditionerConfig,
     GraftingConfig,
     PreconditionerConfig,
-    ShampooPreconditionerConfig,
+    RootInvShampooPreconditionerConfig,
     ShampooPT2CompileConfig,
 )
 from matrix_functions_types import (
@@ -106,7 +107,7 @@ class DistributedShampooInitTest(unittest.TestCase):
             (
                 {
                     "epsilon": 0.1,
-                    "preconditioner_config": ShampooPreconditionerConfig(
+                    "preconditioner_config": RootInvShampooPreconditionerConfig(
                         amortized_computation_config=EigenConfig(
                             rank_deficient_stability_config=PseudoInverseConfig()
                         )
@@ -144,7 +145,7 @@ class DistributedShampooInitTest(unittest.TestCase):
             ),
             (
                 {
-                    "preconditioner_config": ShampooPreconditionerConfig(
+                    "preconditioner_config": RootInvShampooPreconditionerConfig(
                         amortized_computation_config=EigenConfig(
                             exponent_multiplier=0.5
                         )
@@ -465,7 +466,7 @@ class AbstractTest:
 
 class ShampooDistributedStateDictTest(AbstractTest.ShampooDistributedStateDictTestBase):
     @property
-    def _preconditioner_config(self) -> ShampooPreconditionerConfig:
+    def _preconditioner_config(self) -> RootInvShampooPreconditionerConfig:
         return DefaultShampooConfig
 
     @property
@@ -632,10 +633,8 @@ class EigendecomposedShampooDistributedStateDictTest(
     AbstractTest.ShampooDistributedStateDictTestBase
 ):
     @property
-    def _preconditioner_config(self) -> ShampooPreconditionerConfig:
-        return ShampooPreconditionerConfig(
-            amortized_computation_config=DefaultEigendecompositionConfig
-        )
+    def _preconditioner_config(self) -> EigendecomposedShampooPreconditionerConfig:
+        return EigendecomposedShampooPreconditionerConfig()
 
     @property
     def _distributed_state_dict(self) -> dict[str, Any]:
