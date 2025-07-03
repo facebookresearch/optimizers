@@ -9,7 +9,7 @@ LICENSE file in the root directory of this source tree.
 
 import logging
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Hashable, Iterable, Mapping
+from collections.abc import Callable, Hashable, Mapping
 from dataclasses import asdict, dataclass
 from fractions import Fraction
 from functools import reduce, wraps
@@ -1305,6 +1305,57 @@ class BaseShampooPreconditionerList(
             ),
         )
 
+    @abstractmethod
+    def _compute_preconditioned_gradient(
+        self,
+        grad: Tensor,
+        preconditioned_dims_selector: tuple[bool, ...],
+        kronecker_factors: _ShampooKroneckerFactorsUnwrappedType,
+    ) -> Tensor:
+        """
+        Applies the Shampoo preconditioner to a gradient tensor.
+
+        This method is implemented by subclasses to perform the actual preconditioning
+        operation using the specific preconditioner implementation (root inverse,
+        eigendecomposed, or eigenvalue-corrected).
+
+        Args:
+            grad (Tensor): The gradient tensor to be preconditioned.
+            preconditioned_dims_selector (tuple[bool, ...]): A boolean tuple indicating which
+                dimensions of the gradient should be preconditioned. Dimensions with True
+                values will be preconditioned, while dimensions with False values will not.
+            kronecker_factors (_ShampooKroneckerFactorsUnwrappedType): The unwrapped Kronecker
+                factors containing the necessary matrices for preconditioning.
+
+        Returns:
+            preconditioned_grad (Tensor): The preconditioned gradient tensor.
+        """
+
+    @_profile_decorator
+    def precondition(self, masked_grad_list: tuple[Tensor, ...]) -> tuple[Tensor, ...]:
+        """
+        Preconditions a list of gradients using the Shampoo preconditioner that rely on ShampooPreconditionerConfig.
+
+        Args:
+            masked_grad_list (tuple[Tensor, ...]): A list of gradients with their corresponding masks.
+
+        Returns:
+            preconditioned_grads (tuple[Tensor, ...]): A list of preconditioned gradients.
+        """
+        return tuple(
+            self._compute_preconditioned_gradient(
+                grad=masked_grad,
+                preconditioned_dims_selector=preconditioned_dims_selector,
+                kronecker_factors=kronecker_factors,
+            )
+            for masked_grad, preconditioned_dims_selector, kronecker_factors in zip(
+                masked_grad_list,
+                self._masked_preconditioned_dims_selector_list,
+                self._masked_kronecker_factors_unwrapped,
+                strict=True,
+            )
+        )
+
 
 _ClassicShampooKroneckerFactorsStateType = TypeVar(
     "_ClassicShampooKroneckerFactorsStateType",
@@ -1380,43 +1431,6 @@ class ClassicShampooPreconditionerList(
             if should_precondition
         )
 
-    @abstractmethod
-    def _get_preconditioner_lists(self) -> Iterable[tuple[Tensor, ...]]:
-        """
-        Abstract method to retrieve lists of preconditioners.
-
-        This method should be implemented by subclasses to return an iterable of tuples,
-        where each tuple contains tensors representing preconditioners for a block of parameters.
-
-        Returns:
-            preconditioner_list (Iterable[tuple[Tensor, ...]]): An iterable of tuples, each containing tensors that serve as preconditioners for a block of parameters.
-        """
-
-    @_profile_decorator
-    def precondition(self, masked_grad_list: tuple[Tensor, ...]) -> tuple[Tensor, ...]:
-        """
-        Preconditions a list of gradients using the Shampoo preconditioner that rely on ShampooPreconditionerConfig.
-
-        Args:
-            masked_grad_list (tuple[Tensor, ...]): A list of gradients with their corresponding masks.
-
-        Returns:
-            preconditioned_grads (tuple[Tensor, ...]): A list of preconditioned gradients.
-        """
-        return tuple(
-            self._precondition_grad(
-                grad=masked_grad,
-                preconditioned_dims_selector=preconditioned_dims_selector,
-                preconditioner_list=preconditioner_list,
-            )
-            for masked_grad, preconditioned_dims_selector, preconditioner_list in zip(
-                masked_grad_list,
-                self._masked_preconditioned_dims_selector_list,
-                self._get_preconditioner_lists(),
-                strict=True,
-            )
-        )
-
 
 class RootInvShampooPreconditionerList(
     ClassicShampooPreconditionerList[
@@ -1425,9 +1439,16 @@ class RootInvShampooPreconditionerList(
 ):
     """Root inverse Shampoo preconditioners for list of parameters."""
 
-    def _get_preconditioner_lists(self) -> Iterable[tuple[Tensor, ...]]:
-        yield from map(
-            attrgetter("inv_factor_matrices"), self._masked_kronecker_factors_unwrapped
+    def _compute_preconditioned_gradient(
+        self,
+        grad: Tensor,
+        preconditioned_dims_selector: tuple[bool, ...],
+        kronecker_factors: RootInvShampooKroneckerFactorsUnwrapped,
+    ) -> Tensor:
+        return self._precondition_grad(
+            grad=grad,
+            preconditioned_dims_selector=preconditioned_dims_selector,
+            preconditioner_list=kronecker_factors.inv_factor_matrices,
         )
 
     @torch.compiler.disable
@@ -1513,7 +1534,12 @@ class EigendecomposedShampooPreconditionerList(
 ):
     """Eigendecomposed Shampoo preconditioners for list of parameters."""
 
-    def _get_preconditioner_lists(self) -> Iterable[tuple[Tensor, ...]]:
+    def _compute_preconditioned_gradient(
+        self,
+        grad: Tensor,
+        preconditioned_dims_selector: tuple[bool, ...],
+        kronecker_factors: EigendecomposedShampooKroneckerFactorsUnwrapped,
+    ) -> Tensor:
         # TODO: remove assertion when rank_deficient_stability_config is generalized to MatrixFunctionConfig
         assert isinstance(
             self._preconditioner_config.amortized_computation_config,
@@ -1521,8 +1547,10 @@ class EigendecomposedShampooPreconditionerList(
         )
         rank_deficient_stability_config = self._preconditioner_config.amortized_computation_config.rank_deficient_stability_config
 
-        yield from (
-            tuple(
+        return self._precondition_grad(
+            grad=grad,
+            preconditioned_dims_selector=preconditioned_dims_selector,
+            preconditioner_list=tuple(
                 eigenvectors
                 * stabilize_and_pow_eigenvalues(
                     eigenvalues,
@@ -1537,8 +1565,7 @@ class EigendecomposedShampooPreconditionerList(
                     kronecker_factors.roots,
                     strict=True,
                 )
-            )
-            for kronecker_factors in self._masked_kronecker_factors_unwrapped
+            ),
         )
 
     @torch.compiler.disable
@@ -1712,56 +1739,39 @@ class EigenvalueCorrectedShampooPreconditionerList(
                 # NOTE: The case when self._beta2 == 1.0 is not well tested and might not be stable.
                 kronecker_factors.corrected_eigenvalues.addcmul_(grad, grad)
 
-    @_profile_decorator
-    def precondition(self, masked_grad_list: tuple[Tensor, ...]) -> tuple[Tensor, ...]:
-        """
-        Preconditions a list of gradients using the eigenvalue-corrected Shampoo preconditioner.
+    def _compute_preconditioned_gradient(
+        self,
+        grad: Tensor,
+        preconditioned_dims_selector: tuple[bool, ...],
+        kronecker_factors: EigenvalueCorrectedShampooKroneckerFactorsUnwrapped,
+    ) -> Tensor:
+        # Clone the masked gradient to avoid modifying the original tensor.
+        # This is only relevant when _precondition_grad is a no-op.
+        preconditioned_grad = grad.clone()
+        # Transform the gradient to eigenbasis of Shampoo's factor matrices.
+        preconditioned_grad = self._precondition_grad(
+            grad=preconditioned_grad,
+            preconditioned_dims_selector=preconditioned_dims_selector,
+            preconditioner_list=kronecker_factors.factor_matrices_eigenvectors,
+        )
 
-        Args:
-            masked_grad_list (tuple[Tensor, ...]): A list of gradients with their corresponding masks.
-
-        Returns:
-            preconditioned_grads (tuple[Tensor, ...]): A list of preconditioned gradients.
-        """
-        preconditioned_grad_list = []
-        for (
-            masked_grad,
-            preconditioned_dims_selector,
-            kronecker_factors,
-        ) in zip(
-            masked_grad_list,
-            self._masked_preconditioned_dims_selector_list,
-            self._masked_kronecker_factors_unwrapped,
-            strict=True,
-        ):
-            # Clone the masked gradient to avoid modifying the original tensor.
-            # This is only relevant when _precondition_grad is a no-op.
-            preconditioned_grad = masked_grad.clone()
-            # Transform the gradient to eigenbasis of Shampoo's factor matrices.
-            preconditioned_grad = self._precondition_grad(
-                grad=preconditioned_grad,
-                preconditioned_dims_selector=preconditioned_dims_selector,
-                preconditioner_list=kronecker_factors.factor_matrices_eigenvectors,
-            )
-            # Precondition with inverse root of corrected eigenvalues.
-            # NOTE: We don't use the stabilize_and_pow_eigenvalues function here because:
-            # 1. We have to add epsilon even it has been added to the factor matrices before the eigendecomposition already.
-            # 2. We compute the root before adding epsilon to be consistent with the PyTorch Adam(W) implementation.
-            # 3. We don't support a pseudo-inverse here.
-            preconditioned_grad.div_(
-                kronecker_factors.corrected_eigenvalues.div(self._bias_correction2)
-                .pow_(1 / kronecker_factors.roots[0])
-                .add_(self._epsilon)
-            )
-            # Convert back to basis of the parameters.
-            preconditioned_grad = self._precondition_grad(
-                grad=preconditioned_grad,
-                preconditioned_dims_selector=preconditioned_dims_selector,
-                preconditioner_list=kronecker_factors.factor_matrices_eigenvectors,
-                dims=([0], [1]),
-            )
-            preconditioned_grad_list.append(preconditioned_grad)
-        return tuple(preconditioned_grad_list)
+        # Precondition with inverse root of corrected eigenvalues.
+        # NOTE: We don't use the stabilize_and_pow_eigenvalues function here because:
+        # 1. We have to add epsilon even it has been added to the factor matrices before the eigendecomposition already.
+        # 2. We compute the root before adding epsilon to be consistent with the PyTorch Adam(W) implementation.
+        # 3. We don't support a pseudo-inverse here.
+        preconditioned_grad.div_(
+            kronecker_factors.corrected_eigenvalues.div(self._bias_correction2)
+            .pow_(1 / kronecker_factors.roots[0])
+            .add_(self._epsilon)
+        )
+        # Convert back to basis of the parameters.
+        return self._precondition_grad(
+            grad=preconditioned_grad,
+            preconditioned_dims_selector=preconditioned_dims_selector,
+            preconditioner_list=kronecker_factors.factor_matrices_eigenvectors,
+            dims=([0], [1]),
+        )
 
     @torch.compiler.disable
     @_profile_decorator
