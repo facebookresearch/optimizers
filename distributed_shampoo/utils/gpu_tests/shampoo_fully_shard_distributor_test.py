@@ -208,6 +208,7 @@ class ShampooFullyShardDistributorTest(DTensorTestBase):
                 ShampooFullyShardDistributorTest._construct_model,
                 post_model_decoration=partial(fully_shard, mesh=mesh_2d),
             ),
+            total_steps=100,
             rtol=0.0,
             atol=0.0,
         )

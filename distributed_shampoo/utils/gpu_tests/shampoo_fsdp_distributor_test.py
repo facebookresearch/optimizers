@@ -237,6 +237,7 @@ class ShampooFSDPDistributorTest(FSDPTest):
                 ),
                 distributed_config=hsdp_config,
             ),
+            total_steps=100,
             rtol=0.0,
             atol=0.0,
         )
