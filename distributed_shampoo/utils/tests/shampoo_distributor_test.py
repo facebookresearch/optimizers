@@ -119,8 +119,8 @@ class DistributorTest(unittest.TestCase):
         ) -> None:
             # Only comparing param and composable_block_ids fields but not others like get_tensor()
             # because function objects are not comparable in BlockInfo.
-            torch.testing.assert_close(a.param, b.param)
-            self.assertEqual(a.composable_block_ids, b.composable_block_ids)
+            torch.testing.assert_close(a.param, b.param, msg=msg)
+            self.assertEqual(a.composable_block_ids, b.composable_block_ids, msg=msg)
 
         self.addTypeEqualityFunc(BlockInfo, block_info_equality)
 
@@ -278,8 +278,8 @@ class DistributorOnEmptyParamTest(unittest.TestCase):
         ) -> None:
             # Only comparing param and composable_block_ids fields but not others like get_tensor()
             # because function objects are not comparable in BlockInfo.
-            torch.testing.assert_close(a.param, b.param)
-            self.assertEqual(a.composable_block_ids, b.composable_block_ids)
+            torch.testing.assert_close(a.param, b.param, msg=msg)
+            self.assertEqual(a.composable_block_ids, b.composable_block_ids, msg=msg)
 
         # Register the custom equality function for BlockInfo type
         self.addTypeEqualityFunc(BlockInfo, block_info_equality)
