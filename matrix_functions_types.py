@@ -9,8 +9,6 @@ LICENSE file in the root directory of this source tree.
 
 from dataclasses import dataclass, field
 
-import torch
-
 from commons import AbstractDataclass
 
 
@@ -77,7 +75,7 @@ class EigendecompositionConfig(MatrixFunctionConfig):
     The criterion is then defined as ||B - diag(B)||_F <= tolerance * ||B||_F.
     The tolerance hyperparameter should therefore be in the interval [0.0, 1.0].
 
-    If the criterion is already below or equal to the tolerance given the initial eigenvectors_estimate, the eigendecomposition will be skipped and the estimated eigenvalues and initial eigenvectors will be returned.
+    If the criterion is already below or equal to the tolerance given the initial eigenvectors estimate, the eigendecomposition will be skipped and the estimated eigenvalues and initial eigenvectors will be returned.
     When the QR algorithm is used, the criterion is also used to determine convergence of the QR algorithm.
 
     This criterion can be motivated by considering A' = Q diag(B) Q^T as an approximation of A.
@@ -90,7 +88,6 @@ class EigendecompositionConfig(MatrixFunctionConfig):
             TODO: generalize this to MatrixFunctionConfig
         tolerance (float): The tolerance for the error of the eigendecomposition based on the norm of the off-diagonal elements of the eigenvalue estimate.
             (Default: 0.0)
-        eigenvectors_estimate (Tensor): The current estimate of the eigenvectors. Cannot be set at initialization.
 
     """
 
@@ -98,7 +95,6 @@ class EigendecompositionConfig(MatrixFunctionConfig):
         default_factory=lambda: DefaultPerturbationConfig
     )
     tolerance: float = 0.0
-    eigenvectors_estimate: torch.Tensor = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if not (0.0 <= self.tolerance <= 1.0):
@@ -116,7 +112,7 @@ class EighEigendecompositionConfig(EigendecompositionConfig):
     The criterion is then defined as ||B - diag(B)||_F <= tolerance * ||B||_F.
     The tolerance hyperparameter should therefore be in the interval [0.0, 1.0].
 
-    If the criterion is already below or equal to the tolerance given the initial eigenvectors_estimate, the eigendecomposition will be skipped and the estimated eigenvalues and initial eigenvectors will be returned.
+    If the criterion is already below or equal to the tolerance given the initial eigenvectors estimate, the eigendecomposition will be skipped and the estimated eigenvalues and initial eigenvectors will be returned.
 
     This criterion can be motivated by considering A' = Q diag(B) Q^T as an approximation of A.
     We have ||A - A'||_F = ||A - Q diag(B) Q^T||_F = ||Q^T A Q - diag(B)||_F = ||B - diag(B)||_F.
@@ -130,7 +126,6 @@ class EighEigendecompositionConfig(EigendecompositionConfig):
         eigendecomposition_offload_device (str): Device to offload eigendecomposition to. If value is empty string, we don't perform offloading. (Default: "")
         tolerance (float): The tolerance which can lead to skipping of the eigendecomposition based on the norm of the off-diagonal elements of the eigenvalue estimate.
             (Default: 0.0)
-        eigenvectors_estimate (Tensor): The current estimate of the eigenvectors. Cannot be set at initialization.
 
     """
 
@@ -149,7 +144,7 @@ class QREigendecompositionConfig(EigendecompositionConfig):
     The convergence criterion based on the estimated eigenvalues is then defined as ||B - diag(B)||_F <= tolerance * ||B||_F.
     The tolerance hyperparameter should therefore be in the interval [0.0, 1.0].
 
-    Note that if the criterion based on the estimated eigenvalues is already below or equal to the tolerance given the initial eigenvectors_estimate, the QR iterations will be skipped.
+    Note that if the criterion based on the estimated eigenvalues is already below or equal to the tolerance given the initial eigenvectors estimate, the QR iterations will be skipped.
 
     This convergence criterion can be motivated by considering A' = Q diag(B) Q^T as an approximation of A.
     We have ||A - A'||_F = ||A - Q diag(B) Q^T||_F = ||Q^T A Q - diag(B)||_F = ||B - diag(B)||_F.
@@ -161,7 +156,6 @@ class QREigendecompositionConfig(EigendecompositionConfig):
         max_iterations (int): The maximum number of iterations to perform. (Default: 1)
         tolerance (float): The tolerance for determining convergence in terms of the norm of the off-diagonal elements of the eigenvalue estimate.
             (Default: 0.0)
-        eigenvectors_estimate (Tensor): The current estimate of the eigenvectors. Cannot be set at initialization.
 
     """
 

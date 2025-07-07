@@ -367,6 +367,7 @@ def matrix_eigendecomposition(
     A: Tensor,
     epsilon: float = 0.0,
     eigendecomposition_config: EigendecompositionConfig = DefaultEigendecompositionConfig,
+    eigenvectors_estimate: Tensor | None = None,
     is_diagonal: bool = False,
 ) -> tuple[Tensor, Tensor]:
     """Compute the eigendecomposition of a symmetric matrix.
@@ -375,6 +376,7 @@ def matrix_eigendecomposition(
         A (Tensor): The input symmetric matrix.
         epsilon (float): Adds epsilon * I to matrix before taking matrix root for numerical stability. (Default: 0.0)
         eigendecomposition_config (EigendecompositionConfig): Determines how eigendecomposition is computed. (Default: DefaultEigendecompositionConfig)
+        eigenvectors_estimate (Tensor | None): Current estimate of eigenvectors. (Default: None)
         is_diagonal (bool): Whether A is diagonal. (Default: False)
 
     Returns:
@@ -384,6 +386,7 @@ def matrix_eigendecomposition(
     Raises:
         ValueError: If the matrix is not 2-dimensional or not square.
         ValueError: If epsilon is 0.0 when using pseudo-inverse.
+        ValueError: If eigenvectors_estimate is None and eigendecomposition_config.tolerance != 0.0.
         NotImplementedError: If the eigendecomposition config is not implemented.
 
     """
@@ -422,11 +425,10 @@ def matrix_eigendecomposition(
     match eigendecomposition_config:
         case EighEigendecompositionConfig():
             if eigendecomposition_config.tolerance != 0.0:
-                if not hasattr(eigendecomposition_config, "eigenvectors_estimate"):
+                if eigenvectors_estimate is None:
                     raise ValueError(
-                        f"{eigendecomposition_config=} should contain eigenvectors_estimate when using tolerance != 0.0."
+                        "eigenvectors_estimate should be passed to matrix_eigendecomposition when using tolerance != 0.0."
                     )
-                eigenvectors_estimate = eigendecomposition_config.eigenvectors_estimate
                 eigenvalues_estimate = (
                     eigenvectors_estimate.T @ A_ridge @ eigenvectors_estimate
                 )
@@ -442,8 +444,12 @@ def matrix_eigendecomposition(
                 ),
             )
         case QREigendecompositionConfig():
+            assert (
+                eigenvectors_estimate is not None
+            ), "eigenvectors_estimate should not be None when QR algorithm is used."
             return _qr_algorithm(
                 A_ridge,
+                eigenvectors_estimate,
                 **_get_function_args_from_config(
                     _qr_algorithm, eigendecomposition_config
                 ),

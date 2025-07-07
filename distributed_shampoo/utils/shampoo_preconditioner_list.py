@@ -1606,14 +1606,15 @@ class EigendecomposedShampooPreconditionerList(
                     self._preconditioner_config.amortized_computation_config,
                 )
                 # To estimate the eigenvalues based on the previous eigenvectors, we need to pass in the previous eigenvectors with the same dtype as the input matrix, i.e., bias_corrected_factor_matrix.
-                eigendecomposition_config.eigenvectors_estimate = (
-                    factor_matrix_eigenvectors
-                ).to(dtype=bias_corrected_factor_matrix.dtype)
+                eigenvectors_estimate = factor_matrix_eigenvectors.to(
+                    dtype=bias_corrected_factor_matrix.dtype
+                )
                 try:
                     computed_eigenvalues, computed_eigenvectors = (
                         matrix_eigendecomposition(
                             A=bias_corrected_factor_matrix,
                             eigendecomposition_config=eigendecomposition_config,
+                            eigenvectors_estimate=eigenvectors_estimate,
                             is_diagonal=False,
                             epsilon=self._epsilon,
                         )
@@ -1806,13 +1807,14 @@ class EigenvalueCorrectedShampooPreconditionerList(
                     self._preconditioner_config.amortized_computation_config,
                 )
                 # To estimate the eigenvalues based on the previous eigenvectors, we need to pass in the previous eigenvectors with the same dtype as the input matrix, i.e., factor_matrix.
-                eigendecomposition_config.eigenvectors_estimate = (
-                    factor_matrix_eigenvectors
-                ).to(dtype=factor_matrix.dtype)
+                eigenvectors_estimate = factor_matrix_eigenvectors.to(
+                    dtype=factor_matrix.dtype
+                )
                 try:
                     computed_eigenvectors = matrix_eigendecomposition(
                         A=factor_matrix,
                         eigendecomposition_config=eigendecomposition_config,
+                        eigenvectors_estimate=eigenvectors_estimate,
                         is_diagonal=False,
                         epsilon=self._epsilon,
                     )[1].to(dtype=factor_matrix_eigenvectors.dtype)

@@ -10,8 +10,6 @@ LICENSE file in the root directory of this source tree.
 import re
 import unittest
 
-import torch
-
 from commons import get_all_non_abstract_subclasses
 from matrix_functions_types import EigenConfig, EigendecompositionConfig
 from torch.testing._internal.common_utils import (
@@ -41,19 +39,6 @@ class EigendecompositionConfigSubclassesTest(unittest.TestCase):
             ),
             cls,
             tolerance=tolerance,
-        )
-
-    @parametrize("cls", subclasses_types)
-    def test_illegal_eigenvectors_estimate(
-        self, cls: type[EigendecompositionConfig]
-    ) -> None:
-        self.assertRaisesRegex(
-            TypeError,
-            re.escape(
-                f"{cls.__name__}.__init__() got an unexpected keyword argument 'eigenvectors_estimate'"
-            ),
-            cls,
-            eigenvectors_estimate=torch.eye(3),
         )
 
 

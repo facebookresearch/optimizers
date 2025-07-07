@@ -907,9 +907,9 @@ class MatrixEigendecompositionTest(unittest.TestCase):
         rtol = 1e-5
 
         qr_config = QREigendecompositionConfig(max_iterations=10_000)
-        qr_config.eigenvectors_estimate = initialization_fn(A)
         eigenvalues_estimate, eigenvectors_estimate = matrix_eigendecomposition(
             A=A,
+            eigenvectors_estimate=initialization_fn(A),
             is_diagonal=False,
             eigendecomposition_config=qr_config,
         )
@@ -948,7 +948,7 @@ class MatrixEigendecompositionTest(unittest.TestCase):
         self.assertRaisesRegex(
             ValueError,
             re.escape(
-                f"{eigendecomposition_config=} should contain eigenvectors_estimate when using tolerance != 0.0."
+                "eigenvectors_estimate should be passed to matrix_eigendecomposition when using tolerance != 0.0."
             ),
             matrix_eigendecomposition,
             A=torch.tensor([[1.0, 0.0], [0.0, 4.0]]),
