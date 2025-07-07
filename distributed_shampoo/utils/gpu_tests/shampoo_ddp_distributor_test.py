@@ -64,7 +64,10 @@ class AbstractTest:
         def _init_distributed(self) -> None:
             if not dist.is_initialized():
                 dist.init_process_group(
-                    "cpu:gloo,cuda:nccl",
+                    {
+                        torch.device("cuda"): dist.Backend.NCCL,
+                        torch.device("cpu"): dist.Backend.GLOO,
+                    }[self._device],
                     init_method=f"file://{self.file_name}",
                     rank=self.rank,
                     world_size=self.world_size,
