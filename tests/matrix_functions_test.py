@@ -38,7 +38,6 @@ from matrix_functions import (
 from matrix_functions_types import (
     CoupledHigherOrderConfig,
     CoupledNewtonConfig,
-    DefaultEigendecompositionConfig,
     EigenConfig,
     EigendecompositionConfig,
     EighEigendecompositionConfig,
@@ -803,13 +802,8 @@ class MatrixEigendecompositionTest(unittest.TestCase):
             ),
         )
 
-    @parametrize(
-        "eigendecomposition_config",
-        (
-            DefaultEigendecompositionConfig,
-            EighEigendecompositionConfig(eigendecomposition_offload_device="cpu"),
-        ),
-    )
+    @parametrize("perturb_before_computation", (False, True))
+    @parametrize("eigendecomposition_offload_device", ("cpu", ""))
     @parametrize(
         "A, expected_eigenvalues, expected_eigenvectors",
         (
@@ -839,12 +833,13 @@ class MatrixEigendecompositionTest(unittest.TestCase):
             ),
         ),
     )
-    def test_matrix_eigendecomposition(
+    def test_matrix_eigendecomposition_with_eigh(
         self,
         A: Tensor,
         expected_eigenvalues: Tensor,
         expected_eigenvectors: Tensor,
-        eigendecomposition_config: EigendecompositionConfig,
+        perturb_before_computation: bool,
+        eigendecomposition_offload_device: str,
     ) -> None:
         atol = 1e-4
         rtol = 1e-5
@@ -853,11 +848,36 @@ class MatrixEigendecompositionTest(unittest.TestCase):
             (expected_eigenvalues, expected_eigenvectors),
             matrix_eigendecomposition(
                 A=A,
-                eigendecomposition_config=eigendecomposition_config,
+                eigendecomposition_config=EighEigendecompositionConfig(
+                    rank_deficient_stability_config=PerturbationConfig(
+                        perturb_before_computation=perturb_before_computation
+                    ),
+                    eigendecomposition_offload_device=eigendecomposition_offload_device,
+                ),
                 is_diagonal=False,
             ),
             atol=atol,
             rtol=rtol,
+        )
+
+    def test_matrix_eigendecomposition_with_eigh_and_eigenvectors_estimate(
+        self,
+    ) -> None:
+        A = torch.tensor([[1.0, 0.0], [0.0, 4.0]])
+        eigendecomposition_config = EighEigendecompositionConfig(tolerance=0.01)
+        expected_eigenvalues, expected_eigenvectors = (
+            torch.tensor([1.0, 4.0]),
+            torch.tensor([[1.0, 0.0], [0.0, 1.0]]),
+        )
+
+        torch.testing.assert_close(
+            (expected_eigenvalues, expected_eigenvectors),
+            matrix_eigendecomposition(
+                A=A,
+                eigendecomposition_config=eigendecomposition_config,
+                eigenvectors_estimate=torch.eye(2),
+                is_diagonal=False,
+            ),
         )
 
     @parametrize(
