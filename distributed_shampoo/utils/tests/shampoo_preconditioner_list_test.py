@@ -415,23 +415,17 @@ class AbstractTest:
         @abc.abstractmethod
         def _preconditioner_list_factory(self) -> Callable[..., PreconditionerList]: ...
 
-        @property
-        @abc.abstractmethod
-        def _preconditioner_config_with_adaptive_amortized_computation_frequency(
-            self,
-        ) -> PreconditionerConfig: ...
-
         def test_adaptive_amortized_computation_frequency(self) -> None:
             # Setup the preconditioner list with the adaptive amortized computation frequency.
-            try:
-                self._preconditioner_list = self._instantiate_preconditioner_list(
-                    preconditioner_config=self._preconditioner_config_with_adaptive_amortized_computation_frequency
+            self._preconditioner_list = self._instantiate_preconditioner_list(
+                preconditioner_config=replace(
+                    self._default_preconditioner_config,
+                    amortized_computation_config=EighEigendecompositionConfig(
+                        tolerance=0.01,  # Any tolerance in (0.0, 1.0] works here.
+                    ),
                 )
-            except NotImplementedError:
-                # If the preconditioner list does not support adaptive amortized computation frequency, skip the test.
-                self.skipTest(
-                    "Adaptive amortized computation frequency is not supported by this preconditioner list."
-                )
+            )
+
             # Create the masked gradients for the test.
             masked_grad_list0 = (
                 torch.tensor([1.0, 0.0]),
@@ -941,11 +935,10 @@ class RootInvShampooPreconditionerListTest(
     def _preconditioner_list_factory(self) -> Callable[..., PreconditionerList]:
         return RootInvShampooPreconditionerList
 
-    @property
-    def _preconditioner_config_with_adaptive_amortized_computation_frequency(
-        self,
-    ) -> RootInvShampooPreconditionerConfig:
-        raise NotImplementedError
+    @unittest.skip(
+        "RootInvShampooPreconditionerList does not support adaptive computation frequency."
+    )
+    def test_adaptive_amortized_computation_frequency(self) -> None: ...
 
     def test_update_preconditioners_and_precondition(self) -> None:
         """
@@ -1366,15 +1359,6 @@ class EigendecomposedShampooPreconditionerListTest(
     def _preconditioner_list_factory(self) -> Callable[..., PreconditionerList]:
         return EigendecomposedShampooPreconditionerList
 
-    @property
-    def _preconditioner_config_with_adaptive_amortized_computation_frequency(  # type: ignore[override]
-        self,
-    ) -> EigendecomposedShampooPreconditionerConfig:
-        return EigendecomposedShampooPreconditionerConfig(
-            # Any tolerance in (0.0, 1.0] works here.
-            amortized_computation_config=EighEigendecompositionConfig(tolerance=0.01),
-        )
-
 
 class EigenvalueCorrectedShampooPreconditionerListTest(
     AbstractTest.BaseShampooPreconditionerListTest
@@ -1635,14 +1619,4 @@ class EigenvalueCorrectedShampooPreconditionerListTest(
             ),
             masked_grad_lists=[masked_grad_list1, masked_grad_list2],
             masked_expected_preconditioned_grad_list=masked_expected_preconditioned_grad_list,
-        )
-
-    @property
-    def _preconditioner_config_with_adaptive_amortized_computation_frequency(
-        self,
-    ) -> EigenvalueCorrectedShampooPreconditionerConfig:
-        return EigenvalueCorrectedShampooPreconditionerConfig(
-            amortized_computation_config=EighEigendecompositionConfig(
-                tolerance=0.01,  # Any tolerance in (0.0, 1.0] works here.
-            ),
         )
