@@ -627,32 +627,17 @@ def _matrix_inverse_root_eigen(
     if root <= 0:
         raise ValueError(f"Root {root} should be positive!")
 
-    # TODO: reduce redundant code when rank_deficient_stability_config is generalized to all methods
-    # check epsilon is 0 when using pseudo-inverse
-    if (
-        isinstance(
-            rank_deficient_stability_config,
-            PseudoInverseConfig,
-        )
-        and epsilon != 0.0
-    ):
-        raise ValueError(f"{epsilon=} should be 0.0 when using pseudo-inverse!")
-
-    # Add epsilon to the diagonal to help with numerical stability of the eigenvalue decomposition
-    # Only do it when perturb_before_computation is True
-    if (
-        isinstance(rank_deficient_stability_config, PerturbationConfig)
-        and rank_deficient_stability_config.perturb_before_computation
-    ):
-        A_ridge = _matrix_perturbation(A, epsilon=epsilon, is_eigenvalues=False)
-    else:
-        A_ridge = A
-
     # compute eigendecomposition and compute minimum eigenvalue
-    L, Q = _eigh_eigenvalue_decomposition(
-        A_ridge,
-        retry_double_precision=retry_double_precision,
-        eigendecomposition_offload_device=eigendecomposition_offload_device,
+    L, Q = matrix_eigendecomposition(
+        A=A,
+        epsilon=epsilon,
+        eigendecomposition_config=EighEigendecompositionConfig(
+            rank_deficient_stability_config=rank_deficient_stability_config,
+            retry_double_precision=retry_double_precision,
+            eigendecomposition_offload_device=eigendecomposition_offload_device,
+            tolerance=0.0,
+        ),
+        is_diagonal=False,
     )
 
     inv_power_L = stabilize_and_pow_eigenvalues(

@@ -551,21 +551,6 @@ class EigenRootTest(unittest.TestCase):
             root=root,
         )
 
-    def test_pseudoinverse_with_invalid_epsilon(self) -> None:
-        A = torch.tensor([[1.0, 0.0], [0.0, 0.0]])
-        epsilon = 1e-8
-        self.assertRaisesRegex(
-            ValueError,
-            re.escape(f"{epsilon=} should be 0.0 when using pseudo-inverse!"),
-            matrix_inverse_root,
-            A=A,
-            root=Fraction(2),
-            epsilon=epsilon,
-            root_inv_config=EigenConfig(
-                rank_deficient_stability_config=PseudoInverseConfig()
-            ),
-        )
-
     torch_linalg_module: ModuleType = torch.linalg
 
     @mock.patch.object(
