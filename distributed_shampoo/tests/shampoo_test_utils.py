@@ -106,9 +106,10 @@ def construct_training_problem(
     seed_value = 42
     torch.manual_seed(seed_value)
 
-    # Note: Generate a random tensor first then moving it to device to avoid to guarantee the same tensor value on different devices.
-    data = torch.randn(model_linear_layers_dims[0], dtype=torch.float).to(device=device)
+    # Note: Generate a random tensor first then moving it to device to guarantee the same tensor value on different devices.
+    data = torch.randn(model_linear_layers_dims[0], dtype=torch.float)
     data /= torch.linalg.norm(data)
+    data = data.to(device=device)
 
     model = _ModelWithScalarAndLinearAndDeadLayers(
         model_linear_layers_dims=model_linear_layers_dims,
@@ -175,27 +176,41 @@ def train_model(
 
     Args:
         optim_factory (Callable[[ParamsT], torch.optim.Optimizer]): A factory function that returns an optimizer instance.
-        model_factory (Callable[[], tuple[nn.Module | FSDPModule, nn.Module, torch.Tensor, torch.Tensor]]): A factory function that returns a tuple containing the model, loss function, input data, and target data.
+        model_factory (Callable[[], tuple[nn.Module | FSDPModule, nn.Module, torch.Tensor, torch.Tensor]]): A factory function that returns a tuple containing the model, loss function, validation data, and target data.
         num_steps (int): The number of training steps to perform. (Default: 5)
 
     Returns:
         model (nn.Module | FSDPModule): The trained model.
         loss (nn.Module): The loss function used during training.
-        data (torch.Tensor): The input data used for training.
+        validation_data (torch.Tensor): The input data used for validation.
         target (torch.Tensor): The target data used for training.
         optimizer (torch.optim.Optimizer): The optimizer used for training.
     """
-    model, loss, data, target = model_factory()
+    # Get model, loss, validation_data, and target from the factory.
+    model, loss, validation_data, target = model_factory()
     assert isinstance(model, nn.Module)
     optimizer = optim_factory(model.parameters())
 
-    for _ in range(num_steps):
+    # Pregenerate num_steps of tensor and put into a PyTorch dataset with seed
+    seed_value = 42
+    torch.manual_seed(seed_value)
+
+    train_data = torch.randn(num_steps, *validation_data.shape, dtype=torch.float)
+    train_data /= torch.linalg.norm(train_data, dim=1, keepdim=True)
+    train_data = train_data.to(device=validation_data.device)
+    train_dataset = torch.utils.data.TensorDataset(train_data)
+    train_loader = torch.utils.data.DataLoader(
+        train_dataset, batch_size=1, shuffle=False
+    )
+
+    # Train for the specified number of steps
+    for _, (step_data,) in enumerate(train_loader):
         optimizer.zero_grad()
-        objective = loss(model(data), target)
+        objective = loss(model(step_data), target)
         objective.backward()
         optimizer.step()
 
-    return model, loss, data, target, optimizer
+    return model, loss, validation_data, target, optimizer
 
 
 def compare_two_optimizers_models_devices_on_weight_and_loss(
@@ -247,7 +262,7 @@ def compare_two_optimizers_models_devices_on_weight_and_loss(
             final_loss (torch.Tensor): The final loss value after training.
         """
         # Using partial here to prevent Pyre complain on incompatible parameter type.
-        model, loss, data, target, _ = partial(
+        model, loss, validation_data, target, _ = partial(
             train_model, model_factory=model_factory
         )(optim_factory=optim_factory, num_steps=total_steps)
 
@@ -275,7 +290,7 @@ def compare_two_optimizers_models_devices_on_weight_and_loss(
                     for param in linear_layers.parameters()
                 ]
 
-        return trained_weights, loss(model(data), target).detach()
+        return trained_weights, loss(model(validation_data), target).detach()
 
     control_params, control_loss = generated_comparable_trained_weights_and_final_loss(
         optim_factory=control_optim_factory,
