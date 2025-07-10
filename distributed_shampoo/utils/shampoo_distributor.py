@@ -160,6 +160,7 @@ class DistributorInterface(ABC):
             else self._param_group[PARAMS]
         )
 
+    @torch.no_grad()
     def _merge_and_block_parameters(
         self,
     ) -> None:
