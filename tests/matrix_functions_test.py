@@ -24,6 +24,7 @@ import numpy as np
 
 import torch
 from matrix_functions import (
+    _check_2d_tensor,
     _check_square_matrix,
     _matrix_inverse_root_eigen,
     _matrix_inverse_root_newton,
@@ -32,6 +33,7 @@ from matrix_functions import (
     compute_matrix_root_inverse_residuals,
     matrix_eigendecomposition,
     matrix_inverse_root,
+    matrix_orthogonalization,
     NewtonConvergenceFlag,
     stabilize_and_pow_eigenvalues,
 )
@@ -41,11 +43,14 @@ from matrix_functions_types import (
     EigenConfig,
     EigendecompositionConfig,
     EighEigendecompositionConfig,
+    NewtonSchulzOrthogonalizationConfig,
+    OrthogonalizationConfig,
     PerturbationConfig,
     PseudoInverseConfig,
     QREigendecompositionConfig,
     RankDeficientStabilityConfig,
     RootInvConfig,
+    SVDOrthogonalizationConfig,
 )
 from torch import Tensor
 from torch.testing._internal.common_utils import (
@@ -54,37 +59,47 @@ from torch.testing._internal.common_utils import (
 )
 
 
-class CheckSquareMatrixTest(unittest.TestCase):
+@instantiate_parametrized_tests
+class Check2DTensorTest(unittest.TestCase):
     @staticmethod
-    @_check_square_matrix
-    def check_square_matrix_func(A: Tensor) -> Tensor:
-        """Helper function decorated with _check_square_matrix for testing."""
+    @_check_2d_tensor
+    def check_tensor_func(A: Tensor) -> Tensor:
+        """Helper function decorated with _check_2d_tensor for testing."""
         return A
 
-    def test_check_square_matrix_for_not_two_dim_matrix(self) -> None:
-        # Test with a 3D tensor
-        A = torch.zeros((2, 2, 2))
+    @parametrize("A", (torch.tensor(5), torch.zeros((2, 2, 2))))
+    def test_check_tensor_for_non_two_dim_matrix(self, A: Tensor) -> None:
         self.assertRaisesRegex(
             ValueError,
             re.escape("Matrix is not 2-dimensional!"),
-            CheckSquareMatrixTest.check_square_matrix_func,
+            self.check_tensor_func,
             A=A,
         )
 
-    def test_check_square_matrix_for_not_square_matrix(self) -> None:
+    def test_check_tensor_for_square_matrix(self) -> None:
+        A = torch.eye(2)
+        # Verify the function was called and returned the input
+        torch.testing.assert_close(A, self.check_tensor_func(A=A))
+
+    def test_check_tensor_for_rectangle_matrix(self) -> None:
         A = torch.zeros((2, 3))
+        # Verify the function was called and returned the input
+        torch.testing.assert_close(A, self.check_tensor_func(A=A))
+
+
+class CheckSquareMatrixTest(Check2DTensorTest):
+    @staticmethod
+    @_check_square_matrix
+    def check_tensor_func(A: Tensor) -> Tensor:
+        """Helper function decorated with _check_square_matrix for testing."""
+        return A
+
+    def test_check_tensor_for_rectangle_matrix(self) -> None:
+        """Override the test from Check2DTensorTest to test non-square matrix."""
         self.assertRaisesRegex(
             ValueError,
             re.escape("Matrix is not square!"),
-            CheckSquareMatrixTest.check_square_matrix_func,
-            A=A,
-        )
-
-    def test_check_square_matrix_for_square_matrix(self) -> None:
-        A = torch.eye(2)
-        # Verify the function was called and returned the input
-        torch.testing.assert_close(
-            A, CheckSquareMatrixTest.check_square_matrix_func(A=A)
+            super().test_check_tensor_for_rectangle_matrix,
         )
 
 
@@ -975,4 +990,79 @@ class MatrixEigendecompositionDiagonalTest(unittest.TestCase):
                 A=A,
                 is_diagonal=True,
             ),
+        )
+
+
+@instantiate_parametrized_tests
+class MatrixOrthogonalizationTest(unittest.TestCase):
+    @parametrize("scale_by_nuclear_norm", (True, False))
+    @parametrize(
+        "scale_by_dims_fn",
+        (lambda d_in, d_out: 1.0, lambda d_in, d_out: d_out * d_in),
+    )
+    def test_orthogonalization_with_svd(
+        self, scale_by_nuclear_norm: bool, scale_by_dims_fn: Callable[[int, int], float]
+    ) -> None:
+        A = torch.tensor([[1.0, 0.0], [0.0, 4.0]])
+        expected_singular_values = torch.tensor([4.0, 1.0])
+        expected_orthogonalized_matrix = (
+            torch.tensor([[1.0, 0.0], [0.0, 1.0]])
+            .mul_(expected_singular_values.sum() if scale_by_nuclear_norm else 1.0)
+            .mul_(scale_by_dims_fn(A.shape[1], A.shape[0]))
+        )
+
+        torch.testing.assert_close(
+            expected_orthogonalized_matrix,
+            matrix_orthogonalization(
+                A=A,
+                orthogonalization_config=SVDOrthogonalizationConfig(
+                    scale_by_nuclear_norm=scale_by_nuclear_norm,
+                    scale_by_dims_fn=scale_by_dims_fn,
+                ),
+            ),
+        )
+
+    @parametrize(
+        "scale_by_dims_fn",
+        # Choose different function compared to test_orthogonalization_with_svd here to allow for the same atol.
+        (lambda d_in, d_out: 1.0, lambda d_in, d_out: 1 / (d_out * d_in)),
+    )
+    def test_orthogonalization_with_newton_schulz(
+        self, scale_by_dims_fn: Callable[[int, int], float]
+    ) -> None:
+        atol = 0.3
+        rtol = 1e-6
+
+        A = torch.tensor([[1.0, 0.0], [0.0, 4.0]])
+        expected_orthogonalized_matrix = torch.tensor([[1.0, 0.0], [0.0, 1.0]]).mul_(
+            scale_by_dims_fn(A.shape[1], A.shape[0])
+        )
+
+        torch.testing.assert_close(
+            expected_orthogonalized_matrix,
+            matrix_orthogonalization(
+                A=A,
+                orthogonalization_config=NewtonSchulzOrthogonalizationConfig(
+                    scale_by_dims_fn=scale_by_dims_fn,
+                ),
+            ),
+            atol=atol,
+            rtol=rtol,
+        )
+
+    def test_invalid_orthogonalization_config(self) -> None:
+        @dataclass
+        class NotSupportedOrthogonalizationConfig(OrthogonalizationConfig):
+            """A dummy class orthogonalization config that is not supported."""
+
+            unsupported_field: int = 0
+
+        self.assertRaisesRegex(
+            NotImplementedError,
+            re.escape(
+                f"Orthogonalization config is not implemented! Specified orthogonalization config is {NotSupportedOrthogonalizationConfig.__name__}."
+            ),
+            matrix_orthogonalization,
+            A=torch.tensor([[1.0, 0.0], [0.0, 4.0]]),
+            orthogonalization_config=NotSupportedOrthogonalizationConfig(),
         )
