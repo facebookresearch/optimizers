@@ -20,7 +20,7 @@ from typing import Any, cast, Generic, get_args, NoReturn, overload, TypeVar
 
 import torch
 from distributed_shampoo.shampoo_types import (
-    PreconditionerConfig,
+    AmortizedPreconditionerConfig,
     PreconditionerValueError,
 )
 from distributed_shampoo.utils.shampoo_block_info import BlockInfo
@@ -788,7 +788,7 @@ class BaseShampooPreconditionerList(
         state (Mapping[Tensor, _StateValueType]): Mapping containing optimizer state.
         block_info_list (tuple[BlockInfo, ...]): List containing corresponding BlockInfo for each block/parameter in block_list.
             Note that this should have the same length as block_list.
-        preconditioner_config (PreconditionerConfig): Configuration for preconditioner computation.
+        preconditioner_config (AmortizedPreconditionerConfig): Configuration for preconditioner computation.
         beta2 (float): Exponential moving average factor for Shampoo factor matrices. If beta2 = 1., will use unweighted sum.
             (Default: 1.0)
         epsilon (float): Epsilon term for regularizing preconditioner to ensure positive definiteness. (Default: 1e-12)
@@ -802,7 +802,7 @@ class BaseShampooPreconditionerList(
         block_list: tuple[Tensor, ...],
         state: Mapping[Tensor, _StateValueType],
         block_info_list: tuple[BlockInfo, ...],
-        preconditioner_config: PreconditionerConfig,
+        preconditioner_config: AmortizedPreconditionerConfig,
         beta2: float = 1.0,
         epsilon: float = 1e-12,
         use_bias_correction: bool = True,
