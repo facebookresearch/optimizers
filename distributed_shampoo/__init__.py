@@ -11,6 +11,7 @@ from distributed_shampoo.distributed_shampoo import DistributedShampoo
 from distributed_shampoo.shampoo_types import (
     AdaGradGraftingConfig,
     AdamGraftingConfig,
+    AmortizedPreconditionerConfig,
     DDPShampooConfig,
     DefaultEigenvalueCorrectedShampooConfig,
     DefaultShampooConfig,
@@ -36,16 +37,20 @@ from matrix_functions_types import (
     CoupledNewtonConfig,
     DefaultEigenConfig,
     DefaultEigendecompositionConfig,
+    DefaultNewtonSchulzOrthogonalizationConfig,
     DefaultPerturbationConfig,
     EigenConfig,
     EigendecompositionConfig,
     EighEigendecompositionConfig,
     MatrixFunctionConfig,
+    NewtonSchulzOrthogonalizationConfig,
+    OrthogonalizationConfig,
     PerturbationConfig,
     PseudoInverseConfig,
     QREigendecompositionConfig,
     RankDeficientStabilityConfig,
     RootInvConfig,
+    SVDOrthogonalizationConfig,
 )
 
 
@@ -69,11 +74,12 @@ __all__ = [
     # `precision_config`.
     # `preconditioner_config` options.
     "PreconditionerConfig",  # Abstract base class.
-    "ShampooPreconditionerConfig",  # Abstract base class (based on `PreconditionerConfig`).
+    "AmortizedPreconditionerConfig",  # Abstract base class (based on `PreconditionerConfig`).
+    "ShampooPreconditionerConfig",  # Abstract base class (based on `AmortizedPreconditionerConfig`).
     "RootInvShampooPreconditionerConfig",  # Based on `ShampooPreconditionerConfig`.
     "DefaultShampooConfig",  # Default `RootInvShampooPreconditionerConfig` using `EigenConfig`.
     "EigendecomposedShampooPreconditionerConfig",  # Based on `ShampooPreconditionerConfig`.
-    "EigenvalueCorrectedShampooPreconditionerConfig",  # Based on `PreconditionerConfig`.
+    "EigenvalueCorrectedShampooPreconditionerConfig",  # Based on `AmortizedPreconditionerConfig`.
     "DefaultEigenvalueCorrectedShampooConfig",  # Default `EigenvalueCorrectedShampooPreconditionerConfig` using `EighEigendecompositionConfig`.
     "DefaultSOAPConfig",  # Default `EigenvalueCorrectedShampooPreconditionerConfig` using `QREigendecompositionConfig`.
     # matrix functions configs.
@@ -91,6 +97,10 @@ __all__ = [
     "DefaultEigenConfig",  # Default `RootInvConfig` using `EigenConfig`.
     "CoupledNewtonConfig",  # Based on `RootInvConfig`.
     "CoupledHigherOrderConfig",  # Based on `RootInvConfig`.
+    "OrthogonalizationConfig",  # Abstract base class (based on `MatrixFunctionConfig`).
+    "SVDOrthogonalizationConfig",  # Based on `OrthogonalizationConfig`.
+    "NewtonSchulzOrthogonalizationConfig",  # Based on `OrthogonalizationConfig`.
+    "DefaultNewtonSchulzOrthogonalizationConfig",  # Default `OrthogonalizationConfig` using `NewtonSchulzOrthogonalizationConfig`.
     # Other utilities.
     "compile_fsdp_parameter_metadata",  # For `FSDPShampooConfig` and `HSDPShampooConfig`.
 ]

@@ -74,7 +74,12 @@ class PreconditionerValueError(ValueError):
 ###### DATACLASSES ######
 @dataclass(init=False)
 class PreconditionerConfig(AbstractDataclass):
-    """Configuration for preconditioner computation in DistributedShampoo.
+    """Configuration for preconditioner computation in DistributedShampoo."""
+
+
+@dataclass(init=False)
+class AmortizedPreconditionerConfig(PreconditionerConfig):
+    """Configuration for amortized preconditioner computation in DistributedShampoo.
 
     Attributes:
         amortized_computation_config (MatrixFunctionConfig): Configuration for the amortized computation, e.g., inverse-root computation or eigendecomposition.
@@ -94,7 +99,7 @@ class PreconditionerConfig(AbstractDataclass):
 
 
 @dataclass(init=False)
-class ShampooPreconditionerConfig(PreconditionerConfig):
+class ShampooPreconditionerConfig(AmortizedPreconditionerConfig):
     """Configuration for Shampoo preconditioner computation.
 
     Attributes:
@@ -288,7 +293,7 @@ class EigendecomposedShampooPreconditionerConfig(ShampooPreconditionerConfig):
 
 
 @dataclass(kw_only=True)
-class EigenvalueCorrectedShampooPreconditionerConfig(PreconditionerConfig):
+class EigenvalueCorrectedShampooPreconditionerConfig(AmortizedPreconditionerConfig):
     """Configuration for eigenvalue-corrected Shampoo/SOAP preconditioner computation.
 
     Recall that in eigenvalue-corrected Shampoo, the eigenvectors and eigenvalues of the factor matrices are computed separately and stored in place of the full inverted preconditioner, as opposed to the single inverse-root computation of the factor matrices in Shampoo.

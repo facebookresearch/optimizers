@@ -12,11 +12,12 @@ import inspect
 import logging
 import math
 import time
+from collections.abc import Callable
 from dataclasses import fields
 from fractions import Fraction
 from functools import wraps
 from math import isfinite
-from typing import Any, Callable, TypeVar
+from typing import Any, TypeVar
 
 import torch
 from matrix_functions_types import (
@@ -24,15 +25,19 @@ from matrix_functions_types import (
     CoupledNewtonConfig,
     DefaultEigenConfig,
     DefaultEigendecompositionConfig,
+    DefaultNewtonSchulzOrthogonalizationConfig,
     DefaultPerturbationConfig,
     EigenConfig,
     EigendecompositionConfig,
     EighEigendecompositionConfig,
+    NewtonSchulzOrthogonalizationConfig,
+    OrthogonalizationConfig,
     PerturbationConfig,
     PseudoInverseConfig,
     QREigendecompositionConfig,
     RankDeficientStabilityConfig,
     RootInvConfig,
+    SVDOrthogonalizationConfig,
 )
 
 from torch import Tensor
@@ -71,13 +76,39 @@ def _get_function_args_from_config(
     }
 
 
+def _check_2d_tensor(
+    func: Callable[..., _FuncReturnType],
+) -> Callable[..., _FuncReturnType]:
+    """
+    Decorator to check if the input tensor is 2-dimensional.
+
+    This decorator checks if the input tensor `A` is 2-dimensional.
+    If not, it raises a ValueError. If the tensor is valid, it calls the decorated function.
+
+    Args:
+        func (Callable[..., FuncReturnType]): The function to be decorated.
+
+    Returns:
+        wrapped_func (Callable[..., FuncReturnType]): The wrapped function that includes the 2D tensor check.
+
+    """
+
+    @wraps(func)
+    def wrapper(A: Tensor, *args: Any, **kwargs: Any) -> _FuncReturnType:
+        if len(A.shape) != 2:
+            raise ValueError(f"Matrix is not 2-dimensional! {A.shape=}")
+        return func(A, *args, **kwargs)
+
+    return wrapper
+
+
 def _check_square_matrix(
     func: Callable[..., _FuncReturnType],
 ) -> Callable[..., _FuncReturnType]:
     """
     Decorator to check if the input matrix is square.
 
-    This decorator checks if the input matrix `A` is a 2-dimensional square matrix.
+    This decorator first checks if input A is 2-dimensional, then checks if A is square.
     If not, it raises a ValueError. If the matrix is valid, it calls the decorated function.
 
     Args:
@@ -88,10 +119,9 @@ def _check_square_matrix(
 
     """
 
+    @_check_2d_tensor
     @wraps(func)
     def wrapper(A: Tensor, *args: Any, **kwargs: Any) -> _FuncReturnType:
-        if len(A.shape) != 2:
-            raise ValueError(f"Matrix is not 2-dimensional! {A.shape=}")
         if A.shape[0] != A.shape[1]:
             raise ValueError(f"Matrix is not square! {A.shape=}")
         return func(A, *args, **kwargs)
@@ -1003,3 +1033,123 @@ def compute_matrix_root_inverse_residuals(
     ) / torch.linalg.vector_norm(A_reg, ord=torch.inf)
 
     return relative_error, relative_residual
+
+
+@_check_2d_tensor
+def matrix_orthogonalization(
+    A: Tensor,
+    orthogonalization_config: OrthogonalizationConfig = DefaultNewtonSchulzOrthogonalizationConfig,
+) -> Tensor:
+    """Compute the orthogonalization of a matrix.
+
+    Args:
+        A (Tensor): The input matrix.
+        orthogonalization_config (OrthogonalizationConfig): Determines how orthogonalization is computed.
+            (Default: DefaultNewtonSchulzOrthogonalizationConfig)
+
+    Returns:
+        Tensor: The orthogonalized matrix.
+
+    Raises:
+        NotImplementedError: If the orthogonalization config is not implemented.
+
+    """
+    # Compute scaling based on dimensions of A.
+    d_in, d_out = A.shape[1], A.shape[0]
+    scaling = orthogonalization_config.scale_by_dims_fn(d_in, d_out)
+
+    match orthogonalization_config:
+        case SVDOrthogonalizationConfig():
+            return _svd_orthogonalization(
+                A,
+                **_get_function_args_from_config(
+                    _svd_orthogonalization, orthogonalization_config
+                ),
+            ).mul_(scaling)
+        case NewtonSchulzOrthogonalizationConfig():
+            return _newton_schulz(
+                A,
+                **_get_function_args_from_config(
+                    _newton_schulz, orthogonalization_config
+                ),
+            ).mul_(scaling)
+        case _:
+            raise NotImplementedError(
+                f"Orthogonalization config is not implemented! Specified orthogonalization config is {type(orthogonalization_config).__name__}."
+            )
+
+
+def _svd_orthogonalization(
+    A: Tensor,
+    scale_by_nuclear_norm: bool = False,
+) -> Tensor:
+    """Compute the orthogonalization of a matrix using SVD.
+
+    Args:
+        A (Tensor): The input matrix.
+        scale_by_nuclear_norm (bool): Whether to scale the orthogonalized matrix by the nuclear norm of A.
+            (Default: False)
+
+    Returns:
+        Tensor: The orthogonalized matrix.
+
+    """
+    # Orthogonalize A via reduced SVD.
+    U, s, V = torch.linalg.svd(A, full_matrices=False)
+    A_orthogonal = U @ V.T
+
+    # Scale by nuclear norm if specified.
+    if scale_by_nuclear_norm:
+        A_orthogonal.mul_(s.sum())
+
+    return A_orthogonal
+
+
+def _newton_schulz(
+    A: Tensor,
+    num_iterations: int = 5,
+    coefficients: tuple[float, float, float] = (3.4445, -4.7750, 2.0315),
+) -> Tensor:
+    """
+    Perform quintic Newton-Schulz iteration to compute the semi-orthogonalization of a matrix A.
+
+    This iteratively performs the iteration:
+        X <- p(X) = a * X + b * X * X^T * X + c * (X * X^T)^2 * X.
+
+    NOTE: In order to guarantee convergence, the coefficients must satisfy p(1) = 1.
+        This is not true for the Muon coefficients, which only guarantee convergence to [0.7, 1.3].
+        Another alternative is to use the coefficients (3., -16./5., 6./5.) as used in Modula.
+
+    References:
+        - https://arxiv.org/abs/2409.20325
+        - https://kellerjordan.github.io/posts/muon/
+        - https://docs.modula.systems/algorithms/newton-schulz/
+
+    Args:
+        A (Tensor): The input matrix to be semi-orthogonalized.
+        num_iterations (int): Number of iterations for the Newton-Schulz iteration.
+        coefficients (tuple[float, float, float]): Coefficients for the quintic Newton-Schulz iteration.
+            (Default: (3.4445, -4.7750, 2.0315) based on suggestion in Muon.)
+
+    Returns:
+        Tensor: The semi-orthogonalized matrix.
+
+    """
+    # Normalize the matrix A in order to ensure spectral norm <= 1.
+    X = A / max(torch.linalg.matrix_norm(A), 1e-8)
+
+    transpose = A.shape[0] < A.shape[1]
+    if transpose:
+        X = X.T
+
+    # Compute X <- p(X) = a * X + b * X * X^T * X + c * (X * X^T)^2 * X.
+    a, b, c = coefficients
+    for _ in range(num_iterations):
+        A = X.T @ X
+        B = b * A + c * A @ A
+        X = a * X + X @ B
+
+    if transpose:
+        X = X.T
+
+    return X

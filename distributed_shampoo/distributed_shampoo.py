@@ -88,6 +88,7 @@ from distributed_shampoo.utils.shampoo_hybrid_shard_distributor import (
 
 from distributed_shampoo.utils.shampoo_preconditioner_list import (
     AdagradPreconditionerList,
+    AmortizedPreconditionerConfig,
     EigendecomposedShampooPreconditionerList,
     EigenvalueCorrectedShampooPreconditionerList,
     PreconditionerList,
@@ -342,12 +343,19 @@ class DistributedShampoo(torch.optim.Optimizer):
             raise ValueError(
                 f"Invalid beta3 parameter: {beta3}. Must be in [0.0, 1.0)."
             )
-        if isinstance(
-            preconditioner_config.amortized_computation_config,
-            EigendecompositionConfig,
-        ) and isinstance(
-            preconditioner_config.amortized_computation_config.rank_deficient_stability_config,
-            PseudoInverseConfig,
+        if (
+            isinstance(
+                preconditioner_config,
+                AmortizedPreconditionerConfig,
+            )
+            and isinstance(
+                preconditioner_config.amortized_computation_config,
+                EigendecompositionConfig,
+            )
+            and isinstance(
+                preconditioner_config.amortized_computation_config.rank_deficient_stability_config,
+                PseudoInverseConfig,
+            )
         ):
             if epsilon != 0.0:
                 raise ValueError(
@@ -401,7 +409,8 @@ class DistributedShampoo(torch.optim.Optimizer):
 
         # No use of preconditioner_config.amortized_computation_config.exponent_multiplier.
         if (
-            getattr(
+            isinstance(preconditioner_config, AmortizedPreconditionerConfig)
+            and getattr(
                 preconditioner_config.amortized_computation_config,
                 "exponent_multiplier",
                 1.0,
@@ -409,7 +418,7 @@ class DistributedShampoo(torch.optim.Optimizer):
             != 1.0
         ):
             raise ValueError(
-                "preconditioner_config.amortized_computation_config.exponent_multiplier is not supported. Please use PreconditionerConfig.inverse_exponent_override instead."
+                "preconditioner_config.amortized_computation_config.exponent_multiplier is not supported. Please use AmortizedPreconditionerConfig.inverse_exponent_override instead."
             )
 
         super().__init__(
