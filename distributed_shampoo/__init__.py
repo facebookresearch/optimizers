@@ -36,16 +36,20 @@ from matrix_functions_types import (
     CoupledNewtonConfig,
     DefaultEigenConfig,
     DefaultEigendecompositionConfig,
+    DefaultNewtonSchulzOrthogonalizationConfig,
     DefaultPerturbationConfig,
     EigenConfig,
     EigendecompositionConfig,
     EighEigendecompositionConfig,
     MatrixFunctionConfig,
+    NewtonSchulzOrthogonalizationConfig,
+    OrthogonalizationConfig,
     PerturbationConfig,
     PseudoInverseConfig,
     QREigendecompositionConfig,
     RankDeficientStabilityConfig,
     RootInvConfig,
+    SVDOrthogonalizationConfig,
 )
 
 
@@ -91,6 +95,10 @@ __all__ = [
     "DefaultEigenConfig",  # Default `RootInvConfig` using `EigenConfig`.
     "CoupledNewtonConfig",  # Based on `RootInvConfig`.
     "CoupledHigherOrderConfig",  # Based on `RootInvConfig`.
+    "OrthogonalizationConfig",  # Abstract base class (based on `MatrixFunctionConfig`).
+    "SVDOrthogonalizationConfig",  # Based on `OrthogonalizationConfig`.
+    "NewtonSchulzOrthogonalizationConfig",  # Based on `OrthogonalizationConfig`.
+    "DefaultNewtonSchulzOrthogonalizationConfig",  # Default `OrthogonalizationConfig` using `NewtonSchulzOrthogonalizationConfig`.
     # Other utilities.
     "compile_fsdp_parameter_metadata",  # For `FSDPShampooConfig` and `HSDPShampooConfig`.
 ]
