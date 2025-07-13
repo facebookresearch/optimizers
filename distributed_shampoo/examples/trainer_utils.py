@@ -49,7 +49,7 @@ from torch.distributed import checkpoint as dist_checkpoint
 from torch.distributed.fsdp import FSDPModule, fully_shard
 from torch.optim.optimizer import ParamsT
 from torch.utils.tensorboard import SummaryWriter
-from torchvision import datasets, transforms  # type: ignore[import-untyped]
+from torchvision import datasets, transforms
 
 logger: logging.Logger = logging.getLogger(__name__)
 

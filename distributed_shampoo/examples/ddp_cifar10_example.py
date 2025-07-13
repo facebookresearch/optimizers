@@ -31,7 +31,7 @@ from distributed_shampoo.examples.trainer_utils import (
     train_model,
 )
 from torch import nn
-from torchvision.datasets import VisionDataset  # type: ignore[import-untyped]
+from torchvision.datasets import VisionDataset
 
 logging.basicConfig(
     format="[%(filename)s:%(lineno)d] %(levelname)s: %(message)s",

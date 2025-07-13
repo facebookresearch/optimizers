@@ -49,6 +49,9 @@ dev = [
 Repository = "https://github.com/facebookresearch/optimizers.git"
 "Bug Tracker" = "https://github.com/facebookresearch/optimizers/issues"
 
+[tool.mypy]
+follow_untyped_imports = true
+
 [tool.setuptools]
 include-package-data = false
 py-modules = [
