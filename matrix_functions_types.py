@@ -7,6 +7,7 @@ LICENSE file in the root directory of this source tree.
 
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from commons import AbstractDataclass
@@ -233,3 +234,64 @@ class CoupledHigherOrderConfig(RootInvConfig):
     tolerance: float = 1e-8
     order: int = 3
     disable_tf32: bool = True
+
+
+@dataclass(init=False)
+class OrthogonalizationConfig(MatrixFunctionConfig):
+    """Configuration for matrix orthogonalization.
+
+    If the reduced SVD of the matrix A is given by A = U S V^T, then the orthogonalized/closest orthogonal matrix is U V^T.
+
+    Attributes:
+        scale_by_dims_fn (Callable[[int, int], float]): Function to scale the orthogonalized matrix by some function of the dimensions of the matrix.
+            (Default: lambda d_in, d_out: 1.0)
+
+    """
+
+    scale_by_dims_fn: Callable[[int, int], float] = lambda d_in, d_out: 1.0
+
+
+@dataclass(kw_only=True)
+class SVDOrthogonalizationConfig(OrthogonalizationConfig):
+    """Configuration for matrix orthogonalization via reduced SVD.
+
+    Attributes:
+        scale_by_nuclear_norm (bool): Whether to scale by nuclear norm of the matrix. (Default: False)
+        scale_by_dims_fn (Callable[[int, int], float]): Function to scale the orthogonalized matrix by some function of the dimensions of the matrix.
+            (Default: lambda d_in, d_out: 1.0)
+
+    """
+
+    scale_by_nuclear_norm: bool = False
+
+
+@dataclass(kw_only=True)
+class NewtonSchulzOrthogonalizationConfig(OrthogonalizationConfig):
+    """Configuration for matrix semi-orthogonalization via quintic Newton-Schulz iteration.
+
+    This iteratively performs the iteration:
+        X <- p(X) = a * X + b * X * X^T * X + c * (X * X^T)^2 * X.
+
+    NOTE: In order to guarantee convergence, the coefficients must satisfy p(1) = 1.
+        This is not true for the Muon coefficients, which only guarantee convergence to [0.7, 1.3].
+        Another alternative is to use the coefficients (3., -16./5., 6./5.) as used in Modula.
+
+    References:
+        - https://arxiv.org/abs/2409.20325
+        - https://kellerjordan.github.io/posts/muon/
+        - https://docs.modula.systems/algorithms/newton-schulz/
+
+    Attributes:
+        num_iterations (int): Number of iterations for Newton-Schulz iteration. (Default: 5)
+        coefficients (tuple[float, float, float]): Coefficients for Newton-Schulz iteration.
+            (Default: (3.4445, -4.7750, 2.0315) based on suggestion in Muon.)
+        scale_by_dims_fn (Callable[[int, int], float]): Function to scale the orthogonalized matrix by some function of the dimensions of the matrix.
+            (Default: lambda d_in, d_out: 1.0)
+
+    """
+
+    num_iterations: int = 5
+    coefficients: tuple[float, float, float] = (3.4445, -4.7750, 2.0315)
+
+
+DefaultNewtonSchulzOrthogonalizationConfig = NewtonSchulzOrthogonalizationConfig()
