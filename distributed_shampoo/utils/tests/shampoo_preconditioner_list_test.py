@@ -30,6 +30,7 @@ from distributed_shampoo.shampoo_types import (
     EigenvalueCorrectedShampooPreconditionerConfig,
     PreconditionerValueError,
     RootInvShampooPreconditionerConfig,
+    ShampooPreconditionerConfig,
     SpectralDescentPreconditionerConfig,
 )
 from distributed_shampoo.utils import shampoo_preconditioner_list
@@ -994,6 +995,10 @@ class AbstractTest:
             return 4
 
     class ClassicShampooPreconditionerListTest(BaseShampooPreconditionerListTest):
+        @property
+        @abc.abstractmethod
+        def _default_preconditioner_config(self) -> ShampooPreconditionerConfig: ...
+
         def test_update_preconditioners_and_precondition(self) -> None:
             """
             We provide examples where we update the preconditioners twice using specially
