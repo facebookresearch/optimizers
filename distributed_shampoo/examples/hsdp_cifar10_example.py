@@ -32,7 +32,7 @@ from distributed_shampoo.examples.trainer_utils import (
 from torch import nn
 from torch.distributed.device_mesh import DeviceMesh, init_device_mesh
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP, ShardingStrategy
-from torchvision.datasets import VisionDataset  # type: ignore[import-untyped]
+from torchvision.datasets import VisionDataset
 
 logging.basicConfig(
     format="[%(filename)s:%(lineno)d] %(levelname)s: %(message)s",

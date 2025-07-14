@@ -30,7 +30,7 @@ from distributed_shampoo.examples.trainer_utils import (
 from torch import nn
 from torch.distributed._composable.fsdp import fully_shard
 from torch.distributed.fsdp import FSDPModule
-from torchvision.datasets import VisionDataset  # type: ignore[import-untyped]
+from torchvision.datasets import VisionDataset
 
 logging.basicConfig(
     format="[%(filename)s:%(lineno)d] %(levelname)s: %(message)s",
