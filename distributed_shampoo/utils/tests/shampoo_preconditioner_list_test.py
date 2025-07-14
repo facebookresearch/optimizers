@@ -264,9 +264,9 @@ class AdagradPreconditionerListTest(AbstractPreconditionerListTest.Interface):
             torch.tensor(1.0),  # a 0D tensor
         )
         self._state: dict[Tensor, dict[Hashable, object]] = {
-            self._params[0]: {},
-            self._params[1]: {},
-            self._params[2]: {},
+            self._params[0]: {"block_0": {}},
+            self._params[1]: {"block_0": {}, "block_1": {}},
+            self._params[2]: {"block_0": {}},
         }
         # Because maximum_preconditioner_dim = 2, self._params[0] forms a block by itself,
         # and self._params[1] are split into two blocks.
@@ -525,9 +525,9 @@ class AbstractTest:
                 torch.tensor(1.0),  # a 0D tensor
             )
             self._state: dict[Tensor, dict[Hashable, object]] = {
-                self._params[0]: {},
-                self._params[1]: {},
-                self._params[2]: {},
+                self._params[0]: {"block_0": {}},
+                self._params[1]: {"block_0": {}, "block_1": {}},
+                self._params[2]: {"block_0": {}},
             }
             # Because maximum_preconditioner_dim = 2, self._params[0] forms a block by itself,
             # and self._params[1] are split into two blocks.

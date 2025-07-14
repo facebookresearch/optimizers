@@ -455,7 +455,9 @@ class DistributedShampoo(torch.optim.Optimizer):
         ]
 
         # Block parameters and instantiate optimizer states.
+        # NOTE: _instantiate_distributor() has to be called first and _initialize_blocked_parameters_state() second.
         self._instantiate_distributor(distributed_config)
+        self._initialize_blocked_parameters_state()
         self._instantiate_shampoo_preconditioner_list()
         self._instantiate_grafting()
         self._instantiate_steps()
@@ -513,6 +515,18 @@ class DistributedShampoo(torch.optim.Optimizer):
             ].local_blocked_params
             # First PREVIOUS_GRAD_SELECTOR is set to None.
             state_lists[PREVIOUS_GRAD_SELECTOR] = None
+
+    @torch.no_grad()
+    def _initialize_blocked_parameters_state(self) -> None:
+        for state_lists in self._per_group_state_lists:
+            # NOTE: We need to initialize the optimizer states within the optimizer's state dictionary.
+            for block_info in state_lists[DISTRIBUTOR].local_block_info_list:
+                param_state = self.state[block_info.param]
+                assert (
+                    (block_index := block_info.composable_block_ids[1])
+                    not in param_state
+                ), "There should not exist any optimizer state yet. Maybe verify that _instantiate_distributor was called before all other instantiation functions."
+                param_state[block_index] = {}
 
     @torch.no_grad()
     def _instantiate_shampoo_preconditioner_list(self) -> None:
@@ -620,12 +634,12 @@ class DistributedShampoo(torch.optim.Optimizer):
             ):
                 assert (
                     block_index := block_info.composable_block_ids[1]
-                ) in self.state[
-                    block_info.param
-                ], f"{block_index=} not found in {self.state[block_info.param]=}. "
-                "Please check the initialization of self.state[block_info.param][block_index] within "
-                "PreconditionerList, and check the initialization of BlockInfo within Distributor "
-                "for the correctness of block_index."
+                ) in self.state[block_info.param], (
+                    f"{block_index=} not found in {self.state[block_info.param]=}. "
+                    "Please check the initialization of self.state[block_info.param][block_index] "
+                    "within _initialize_blocked_parameters_state, and check the initialization of BlockInfo "
+                    "within Distributor for the correctness of block_index."
+                )
                 block_state = self.state[block_info.param][block_index]
 
                 block_state[MOMENTUM] = block_info.allocate_zeros_tensor(
@@ -657,12 +671,12 @@ class DistributedShampoo(torch.optim.Optimizer):
             ):
                 assert (
                     block_index := block_info.composable_block_ids[1]
-                ) in self.state[
-                    block_info.param
-                ], f"{block_index=} not found in {self.state[block_info.param]=}. "
-                "Please check the initialization of self.state[block_info.param][block_index] "
-                "within PreconditionerList, and check the initialization of BlockInfo within "
-                "Distributor for the correctness of block_index."
+                ) in self.state[block_info.param], (
+                    f"{block_index=} not found in {self.state[block_info.param]=}. "
+                    "Please check the initialization of self.state[block_info.param][block_index] "
+                    "within _initialize_blocked_parameters_state, and check the initialization of BlockInfo "
+                    "within Distributor for the correctness of block_index."
+                )
                 block_state = self.state[block_info.param][block_index]
 
                 block_state[FILTERED_GRAD] = block_info.allocate_zeros_tensor(
