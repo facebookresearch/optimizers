@@ -18,8 +18,10 @@ from commons import AbstractDataclass
 from matrix_functions_types import (
     DefaultEigenConfig,
     DefaultEigendecompositionConfig,
+    DefaultNewtonSchulzOrthogonalizationConfig,
     EigendecompositionConfig,
     MatrixFunctionConfig,
+    OrthogonalizationConfig,
     PerturbationConfig,
     QREigendecompositionConfig,
     RootInvConfig,
@@ -406,6 +408,27 @@ DefaultEigenvalueCorrectedShampooConfig = (
 DefaultSOAPConfig = EigenvalueCorrectedShampooPreconditionerConfig(
     amortized_computation_config=QREigendecompositionConfig(),
 )
+
+
+@dataclass(kw_only=True)
+class SpectralDescentPreconditionerConfig(PreconditionerConfig):
+    """Configuration for spectral descent computation in DistributedShampoo.
+
+    NOTE: This config can only be used for 2D parameters, or parameters that have been reshaped to 2D.
+    Which parameters are reshaped to 2D is determined by the max_preconditioner_dim argument in DistributedShampoo (assuming use_merge_dims=True).
+
+    Attributes:
+        orthogonalization_config (OrthogonalizationConfig): Configuration for orthogonalization of the search direction.
+            (Default: DefaultNewtonSchulzOrthogonalizationConfig)
+
+    """
+
+    orthogonalization_config: OrthogonalizationConfig = field(
+        default_factory=lambda: DefaultNewtonSchulzOrthogonalizationConfig
+    )
+
+
+DefaultSpectralDescentPreconditionerConfig = SpectralDescentPreconditionerConfig()
 
 
 @dataclass

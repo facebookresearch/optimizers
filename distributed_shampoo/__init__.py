@@ -16,6 +16,7 @@ from distributed_shampoo.shampoo_types import (
     DefaultEigenvalueCorrectedShampooConfig,
     DefaultShampooConfig,
     DefaultSOAPConfig,
+    DefaultSpectralDescentPreconditionerConfig,
     DistributedConfig,
     EigendecomposedShampooPreconditionerConfig,
     EigenvalueCorrectedShampooPreconditionerConfig,
@@ -30,6 +31,7 @@ from distributed_shampoo.shampoo_types import (
     SGDGraftingConfig,
     ShampooPreconditionerConfig,
     ShampooPT2CompileConfig,
+    SpectralDescentPreconditionerConfig,
 )
 from distributed_shampoo.utils.shampoo_fsdp_utils import compile_fsdp_parameter_metadata
 from matrix_functions_types import (
@@ -82,6 +84,8 @@ __all__ = [
     "EigenvalueCorrectedShampooPreconditionerConfig",  # Based on `AmortizedPreconditionerConfig`.
     "DefaultEigenvalueCorrectedShampooConfig",  # Default `EigenvalueCorrectedShampooPreconditionerConfig` using `EighEigendecompositionConfig`.
     "DefaultSOAPConfig",  # Default `EigenvalueCorrectedShampooPreconditionerConfig` using `QREigendecompositionConfig`.
+    "SpectralDescentPreconditionerConfig",  # Based on `PreconditionerConfig`.
+    "DefaultSpectralDescentPreconditionerConfig",  # Default `SpectralDescentPreconditionerConfig` using `NewtonSchulzOrthogonalizationConfig`.
     # matrix functions configs.
     "RankDeficientStabilityConfig",  # Abstract base class.
     "PerturbationConfig",  # Based on `RankDeficientStabilityConfig`.

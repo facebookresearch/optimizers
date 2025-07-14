@@ -19,6 +19,7 @@ import torch
 from distributed_shampoo.shampoo_types import (
     AdaGradGraftingConfig,
     AdamGraftingConfig,
+    AmortizedPreconditionerConfig,
     BETA3,
     BETAS,
     DAMPENING,
@@ -57,6 +58,7 @@ from distributed_shampoo.shampoo_types import (
     SGDGraftingConfig,
     SHAMPOO_PRECONDITIONER_LIST,
     ShampooPT2CompileConfig,
+    SpectralDescentPreconditionerConfig,
     START_PRECONDITIONING_STEP,
     STEP,
     USE_BIAS_CORRECTION,
@@ -88,12 +90,12 @@ from distributed_shampoo.utils.shampoo_hybrid_shard_distributor import (
 
 from distributed_shampoo.utils.shampoo_preconditioner_list import (
     AdagradPreconditionerList,
-    AmortizedPreconditionerConfig,
     EigendecomposedShampooPreconditionerList,
     EigenvalueCorrectedShampooPreconditionerList,
     PreconditionerList,
     RootInvShampooPreconditionerList,
     SGDPreconditionerList,
+    SpectralDescentPreconditionerList,
 )
 from distributed_shampoo.utils.shampoo_utils import compress_list
 from matrix_functions_types import EigendecompositionConfig, PseudoInverseConfig
@@ -388,6 +390,19 @@ class DistributedShampoo(torch.optim.Optimizer):
                 f"Invalid start preconditioning step: {start_preconditioning_step}. Must be >= -1."
             )
 
+        if isinstance(preconditioner_config, SpectralDescentPreconditionerConfig):
+            # Warn about hyperparameters that won't have any effect.
+            logger.warning(
+                f"{betas[1]=} does not have any effect when SpectralDescentPreconditionerConfig is used."
+            )
+            logger.warning(
+                f"{epsilon=} does not have any effect when SpectralDescentPreconditionerConfig is used."
+            )
+            logger.warning(
+                f"{precondition_frequency=} does not have any effect when SpectralDescentPreconditionerConfig is used. Setting precondition_frequency to 1..."
+            )
+            precondition_frequency = 1
+
         # Provide warning/error for start_preconditioning_step.
         if start_preconditioning_step == -1:
             start_preconditioning_step = precondition_frequency
@@ -534,16 +549,30 @@ class DistributedShampoo(torch.optim.Optimizer):
             self._per_group_state_lists, self.param_groups, strict=True
         ):
             match group[PRECONDITIONER_CONFIG]:
-                case RootInvShampooPreconditionerConfig():
+                case (
+                    RootInvShampooPreconditionerConfig()
+                    | EigendecomposedShampooPreconditionerConfig()
+                    | EigenvalueCorrectedShampooPreconditionerConfig()
+                ):
                     preconditioner_list_cls: Callable[..., PreconditionerList] = (
-                        RootInvShampooPreconditionerList
+                        partial(  # type: ignore[assignment]
+                            {
+                                RootInvShampooPreconditionerConfig: RootInvShampooPreconditionerList,
+                                EigendecomposedShampooPreconditionerConfig: EigendecomposedShampooPreconditionerList,
+                                EigenvalueCorrectedShampooPreconditionerConfig: EigenvalueCorrectedShampooPreconditionerList,
+                            }[type(group[PRECONDITIONER_CONFIG])],  # type: ignore[index]
+                            state=self.state,
+                            block_info_list=state_lists[
+                                DISTRIBUTOR
+                            ].local_block_info_list,
+                            beta2=group[BETAS][1],
+                            epsilon=group[EPSILON],
+                            use_bias_correction=group[USE_BIAS_CORRECTION],
+                            factor_matrix_dtype=group[PRECONDITIONER_DTYPE],
+                        )
                     )
-                case EigendecomposedShampooPreconditionerConfig():
-                    preconditioner_list_cls = EigendecomposedShampooPreconditionerList
-                case EigenvalueCorrectedShampooPreconditionerConfig():
-                    preconditioner_list_cls = (
-                        EigenvalueCorrectedShampooPreconditionerList
-                    )
+                case SpectralDescentPreconditionerConfig():
+                    preconditioner_list_cls = SpectralDescentPreconditionerList
                 case _:
                     raise NotImplementedError(
                         f"{group[PRECONDITIONER_CONFIG]=} not supported!"
@@ -551,13 +580,7 @@ class DistributedShampoo(torch.optim.Optimizer):
 
             state_lists[SHAMPOO_PRECONDITIONER_LIST] = preconditioner_list_cls(
                 block_list=state_lists[DISTRIBUTOR].local_blocked_params,
-                state=self.state,
-                block_info_list=state_lists[DISTRIBUTOR].local_block_info_list,
                 preconditioner_config=group[PRECONDITIONER_CONFIG],
-                beta2=group[BETAS][1],
-                epsilon=group[EPSILON],
-                use_bias_correction=group[USE_BIAS_CORRECTION],
-                factor_matrix_dtype=group[PRECONDITIONER_DTYPE],
             )
 
     @torch.no_grad()
