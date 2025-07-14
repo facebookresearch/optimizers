@@ -476,13 +476,10 @@ def instantiate_grafting_config(
 ) -> GraftingConfig | None:
     if grafting_type == GraftingType.NONE:
         return None
+    elif grafting_type == GraftingType.SGD:
+        return SGDGraftingConfig()  # type: ignore[abstract]
     elif grafting_type == GraftingType.ADAGRAD:
         return AdaGradGraftingConfig(
-            epsilon=grafting_epsilon,
-        )
-    elif grafting_type == GraftingType.ADAM:
-        return AdamGraftingConfig(
-            beta2=grafting_beta2,
             epsilon=grafting_epsilon,
         )
     elif grafting_type == GraftingType.RMSPROP:
@@ -490,8 +487,8 @@ def instantiate_grafting_config(
             beta2=grafting_beta2,
             epsilon=grafting_epsilon,
         )
-    elif grafting_type == GraftingType.SGD:
-        return SGDGraftingConfig(  # type: ignore[abstract]
+    elif grafting_type == GraftingType.ADAM:
+        return AdamGraftingConfig(
             beta2=grafting_beta2,
             epsilon=grafting_epsilon,
         )
