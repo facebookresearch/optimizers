@@ -17,6 +17,7 @@ import random
 import shutil
 from abc import ABC, abstractmethod
 from collections.abc import Callable
+from functools import partial
 from operator import attrgetter
 from pathlib import Path
 from typing import overload, Type
@@ -422,35 +423,23 @@ def instantiate_optimizer(
     preconditioner_computation_type: PreconditionerComputationType,
 ) -> torch.optim.Optimizer:
     if optimizer_type == OptimizerType.SGD:
-        optimizer = torch.optim.SGD(
-            parameters,
-            lr=lr,
+        optimizer_cls: Callable[..., torch.optim.Optimizer] = partial(
+            torch.optim.SGD,
             momentum=momentum,
             dampening=dampening,
             weight_decay=weight_decay,
             nesterov=use_nesterov,
         )
     elif optimizer_type == OptimizerType.ADAM:
-        if use_decoupled_weight_decay:
-            optimizer = torch.optim.AdamW(
-                parameters,
-                lr=lr,
-                betas=betas,
-                eps=epsilon,
-                weight_decay=weight_decay,
-            )  # type: ignore[assignment]
-        else:
-            optimizer = torch.optim.Adam(
-                parameters,
-                lr=lr,
-                betas=betas,
-                eps=epsilon,
-                weight_decay=weight_decay,
-            )  # type: ignore[assignment]
+        optimizer_cls = partial(
+            torch.optim.AdamW if use_decoupled_weight_decay else torch.optim.Adam,
+            betas=betas,
+            eps=epsilon,
+            weight_decay=weight_decay,
+        )
     elif optimizer_type == OptimizerType.DISTRIBUTED_SHAMPOO:
-        optimizer = DistributedShampoo(
-            parameters,
-            lr=lr,
+        optimizer_cls = partial(
+            DistributedShampoo,
             betas=betas,
             beta3=beta3,
             epsilon=epsilon,
@@ -473,11 +462,11 @@ def instantiate_optimizer(
                 preconditioner_computation_type=preconditioner_computation_type,
                 exponent_multiplier=exponent_multiplier,
             ),
-        )  # type: ignore[assignment]
+        )
     else:
         raise ValueError(f"Invalid OptimizerType {optimizer_type}!")
 
-    return optimizer
+    return optimizer_cls(parameters, lr=lr)
 
 
 def instantiate_grafting_config(
