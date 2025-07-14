@@ -14,8 +14,8 @@ from commons import get_all_non_abstract_subclasses
 
 from distributed_shampoo.shampoo_types import (
     AdaGradGraftingConfig,
+    AmortizedPreconditionerConfig,
     EigenvalueCorrectedShampooPreconditionerConfig,
-    PreconditionerConfig,
     RMSpropGraftingConfig,
     ShampooPreconditionerConfig,
 )
@@ -67,17 +67,14 @@ class RMSpropGraftingConfigSubclassesTest(unittest.TestCase):
 
 
 @instantiate_parametrized_tests
-class PreconditionerConfigSubclassesTest(unittest.TestCase):
-    subclasses_types: list[type[PreconditionerConfig]] = list(
-        get_all_non_abstract_subclasses(
-            PreconditionerConfig,  # type: ignore[type-abstract]
-        )
+class AmortizedPreconditionerConfigSubclassesTest(unittest.TestCase):
+    subclasses_types: list[type[AmortizedPreconditionerConfig]] = list(
+        get_all_non_abstract_subclasses(AmortizedPreconditionerConfig)  # type: ignore[type-abstract]
     )
 
-    # Not testing for the base class PreconditionerConfig because it is an abstract class.
     @parametrize("cls", subclasses_types)
     def test_illegal_num_tolerated_failed_amortized_computations(
-        self, cls: type[PreconditionerConfig]
+        self, cls: type[AmortizedPreconditionerConfig]
     ) -> None:
         num_tolerated_failed_amortized_computations = -1
         self.assertRaisesRegex(
