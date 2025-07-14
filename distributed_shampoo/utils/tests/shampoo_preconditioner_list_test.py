@@ -993,9 +993,411 @@ class AbstractTest:
         def _expected_compress_list_call_count(self) -> int:
             return 4
 
+    class ClassicShampooPreconditionerListTest(BaseShampooPreconditionerListTest):
+        def test_update_preconditioners_and_precondition(self) -> None:
+            """
+            We provide examples where we update the preconditioners twice using specially
+            chosen gradients such that we get a scalar * identity matrix for both Kronecker
+            factor matrices for all parameters of interest.
+
+            Specifically, for the beta2 = 1 case, we have 3 parameters and define their gradients
+            as the following in order to get the expected preconditioned gradient list:
+
+            (1) Tensor of Size 2
+                G1 = [1, 0]^T
+                G2 = [0, 1]^T
+
+                L = G1 * G1^T + G2 * G2^T = [[1, 0], [0, 1]]
+                P = L^{-1/2} G2 = [0, 1]^T = G2
+
+            (2) Tensor of Size 2 x 2
+                G1 = [[1, 0], [0, 1]] / sqrt(2)
+                G2 = [[1, 0], [0, 1]] / sqrt(2)
+
+                L = G1 * G1^T + G2 * G2^T = [[1, 0], [0, 1]]
+                R = G1^T * G1 + G2^T * G2 = [[1, 0], [0, 1]]
+                P = L^{-1/4} G2 R^{-1/4} = [[1, 0], [0, 1]] / sqrt(2) = G2
+
+            (3) Tensor of Size 1 x 2
+                G1 = [[1, 0]]
+                G2 = [[0, 1]]
+
+                L = G1 * G1^T + G2 * G2^T = 2
+                R = G1^T * G1 + G2^T * G2 = [[1, 0], [0, 1]]
+                P = L^{-1/4} G2 R^{-1/4} = 2^{-1/4} * [[0, 1]] = 2^{-1/4} G2
+
+            (4) Tensor of Size 0
+                G1 = 3
+                G2 = 2
+
+                P = G2 = 2 because there is no preconditioner due to 0D tensor.
+
+            """
+            masked_grad_list1 = (
+                torch.tensor([1.0, 0.0]),
+                torch.eye(2) / math.sqrt(2.0),
+                torch.tensor([[1.0, 0.0]]),
+                torch.tensor(3.0),
+            )
+            masked_grad_list2 = (
+                torch.tensor([0.0, 1.0]),
+                torch.eye(2) / math.sqrt(2.0),
+                torch.tensor([[0.0, 1.0]]),
+                torch.tensor(2.0),
+            )
+
+            masked_expected_preconditioned_grad_list = [
+                preconditioned_grad.clone() for preconditioned_grad in masked_grad_list2
+            ]
+            masked_expected_preconditioned_grad_list[2] /= 2.0 ** (1 / 4)
+
+            self._verify_preconditioner_updates(
+                preconditioner_list=self._instantiate_preconditioner_list(
+                    beta2=1.0,
+                    use_bias_correction=True,
+                ),
+                masked_grad_lists=[masked_grad_list1, masked_grad_list2],
+                masked_expected_preconditioned_grad_list=tuple(
+                    masked_expected_preconditioned_grad_list
+                ),
+            )
+
+            """
+            For the other two cases (beta2 < 1), note:
+
+                L = beta2 * (1 - beta2) * G1 * G1^T + (1 - beta2) * G2 * G2^T
+                R = beta2 * (1 - beta2) * G1^T * G1 + (1 - beta2) * G2^T * G2
+
+            Therefore, in order to retain the identity matrix, we simply need to scale each gradient by:
+
+                G1 -> G1 / sqrt(beta2 * (1 - beta2))
+                G2 -> G2 / sqrt(1 - beta2).
+
+            """
+            beta2 = 0.9
+
+            beta2_compensated_grad_list1 = torch._foreach_div(
+                masked_grad_list1, math.sqrt(beta2 * (1 - beta2))
+            )
+            beta2_compensated_grad_list2 = torch._foreach_div(
+                masked_grad_list2, math.sqrt(1 - beta2)
+            )
+
+            masked_expected_preconditioned_grad_list = [
+                preconditioned_grad.clone()
+                for preconditioned_grad in beta2_compensated_grad_list2
+            ]
+            masked_expected_preconditioned_grad_list[2] /= 2.0 ** (1 / 4)
+
+            self._verify_preconditioner_updates(
+                preconditioner_list=self._instantiate_preconditioner_list(
+                    beta2=beta2,
+                    use_bias_correction=False,
+                ),
+                masked_grad_lists=[
+                    beta2_compensated_grad_list1,
+                    beta2_compensated_grad_list2,
+                ],
+                masked_expected_preconditioned_grad_list=tuple(
+                    masked_expected_preconditioned_grad_list
+                ),
+            )
+
+            """
+            For the last case of including bias correction, we re-scale the entire matrix by the
+            bias correction at iteration 2.
+
+                L -> L / (1 - beta2^2)
+                R -> R / (1 - beta2^2).
+
+            Therefore, it is sufficient to additionally scale by this value:
+
+                G1 -> sqrt(1 - beta2^2) * G1
+                G2 -> sqrt(1 - beta2^2) * G2.
+
+            """
+            bias_compensated_grad_list1 = torch._foreach_mul(
+                beta2_compensated_grad_list1, math.sqrt(1 - beta2**2)
+            )
+            bias_compensated_grad_list2 = torch._foreach_mul(
+                beta2_compensated_grad_list2, math.sqrt(1 - beta2**2)
+            )
+
+            masked_expected_preconditioned_grad_list = [
+                preconditioned_grad.clone()
+                for preconditioned_grad in bias_compensated_grad_list2
+            ]
+            masked_expected_preconditioned_grad_list[2] /= 2.0 ** (1 / 4)
+
+            self._verify_preconditioner_updates(
+                preconditioner_list=self._instantiate_preconditioner_list(
+                    beta2=beta2,
+                    use_bias_correction=True,
+                ),
+                masked_grad_lists=[
+                    bias_compensated_grad_list1,
+                    bias_compensated_grad_list2,
+                ],
+                masked_expected_preconditioned_grad_list=tuple(
+                    masked_expected_preconditioned_grad_list
+                ),
+            )
+
+        def test_update_preconditioners_and_precondition_with_epsilon(self) -> None:
+            """
+            We provide examples where we deliberately choose a large epsilon. This is to ensure that
+            the matrix inverse computation behaves as expected. Below we update the preconditioners twice
+            for 4 different blocks and check if the preconditioned gradients are as expected. When
+            performing the inverse computation, epsilon is chosen to be 80 in (L + epsilon * I) and
+            (R + epsilon * I).
+
+            G_{ij}: at the i-th step, the gradient for the j-th block. For example,
+            G12 is the gradient for the second block, at the first step.
+
+            epsilon = 80.0
+
+            Gradients for block 1: (no right preconditioner)
+            (1) 1D Tensor of Size 2
+                G11 = [1, 0]^T
+                G21 = [0, 1]^T
+
+                L = G11 * G11^T + G21 * G21^T = [[1, 0], [0, 1]]
+                P = (L + epsilon * I)^{-1/2} G21 = [[81, 0], [0, 81]]^{-1/2} [0, 1]^T
+                = [0, 1/9]^T.
+
+            Gradients for block 2: (both left and right preconditioner)
+            (2) Tensor of Size 2 x 2
+                G12 = [[1, 0], [0, 1]] / sqrt(2)
+                G22 = [[1, 0], [0, 1]] / sqrt(2)
+
+                L = G12 * G12^T + G22 * G22^T = [[1, 0], [0, 1]]
+                R = G12^T * G12 + G22^T * G22 = [[1, 0], [0, 1]]
+                P = (L + epsilon * I)^{-1/4} G22 (R + epsilon * I)^{-1/4}
+                = [[1/3, 0], [0, 1/3]] * G22 * [[1/3, 0], [0, 1/3]] = I / (9 * sqrt(2))
+
+            Gradients for block 3: (both left and right preconditioner)
+            (3) Tensor of Size 1 x 2
+                G13 = [[1, 0]]
+                G23 = [[0, 1]]
+
+                L = G13 * G13^T + G23 * G23^T = I
+                R = G13^T * G13 + G23^T * G23 = 2
+                P = (L + epsilon * I)^{-1/4} G22 (R + epsilon * I)^{-1/4}
+                = [[1/3, 0], [0, 1/3]] * G22 * (80 + 2)^{-1/4} =
+                = [[0.0, 1.0/3.0 * 82.0 ** (-1/4)]]
+
+            Gradients for block 4: (no preconditioner)
+            (4) Tensor of Size 0
+                G14 = 1
+                G24 = 1
+
+                No preconditioner is applied. Expected gradient is 1.
+
+            """
+
+            epsilon = 80.0
+
+            # Blocked gradients at the first step: masked_grad_list1 = (G11, G12, G13, G14)
+            masked_grad_list1 = (
+                torch.tensor([1.0, 0.0]),
+                torch.eye(2) / math.sqrt(2),
+                torch.tensor([[1.0, 0.0]]),
+                torch.tensor(1.0),
+            )
+
+            # Blocked gradients at the second step: masked_grad_list2 = (G21, G22, G23, G24)
+            masked_grad_list2 = (
+                torch.tensor([0.0, 1.0]),
+                torch.eye(2) / math.sqrt(2),
+                torch.tensor([[0.0, 1.0]]),
+                torch.tensor(1.0),
+            )
+
+            # Manually apply the preconditioners to the gradients at the second step (masked_grad_list2) with epsilon.
+            # The result is stored in masked_expected_preconditioned_grad_list.
+
+            masked_expected_preconditioned_grad_list = (
+                torch.tensor([0.0, 1.0 / 9.0]),
+                torch.eye(2) / (9 * math.sqrt(2)),
+                torch.tensor([[0.0, 1.0 / 3.0 * 82.0 ** (-1 / 4)]]),
+                torch.tensor(1.0),
+            )
+
+            # Apply preconditioner to the last step (masked_grad_list2) with epsilon. The result should be the same as the expected preconditioned grad list.
+            self._verify_preconditioner_updates(
+                preconditioner_list=self._instantiate_preconditioner_list(
+                    beta2=1.0,
+                    use_bias_correction=True,
+                    epsilon=epsilon,
+                ),
+                masked_grad_lists=[masked_grad_list1, masked_grad_list2],
+                masked_expected_preconditioned_grad_list=tuple(
+                    masked_expected_preconditioned_grad_list
+                ),
+            )
+
+        def test_update_preconditioners_and_precondition_with_dims_ignored(
+            self,
+        ) -> None:
+            """
+
+            (1) Tensor of Size 2
+                G1 = [4, 0]^T
+                G2 = [0, 4]^T
+
+                L = G1 * G1^T + G2 * G2^T = [[4*4, 0], [0, 4*4]]
+                P = L^{-1/2} G2 = [[1/4, 0], [0, 1/4]] G2 = [0, 1]^T
+
+            (2) Tensor of Size 2 x 2
+                G1 = [[3, 0], [0, 3]]
+                G2 = [[4, 0], [0, 4]]
+
+                L = G1 * G1^T + G2 * G2^T = [[3*3+4*4, 0], [0, 3*3+4*4]]
+                R = G1^T * G1 + G2^T * G2 = [[3*3+4*4, 0], [0, 3*3+4*4]]
+                P = L^{-1/4} G2 R^{-1/4} = [[1/sqrt(5), 0], [0, 1/sqrt(5)]] G2 [[1/sqrt(5), 0], [0, 1/sqrt(5)]] = G2 / 5
+
+            (3) Tensor of Size 1 x 2
+                G1 = [[2, 0]]
+                G2 = [[0, 2]]
+
+                L = G1 * G1^T + G2 * G2^T = 2*2+2*2 = 8
+                R = G1^T * G1 + G2^T * G2 = [[4, 0], [0, 4]]
+                P = L^{-1/4} G2 R^{-1/4} = 8^{-1/4} G2 [[1/sqrt(2), 0], [0, 1/sqrt(2)]] = G2 / (sqrt(2 * sqrt(8)))
+
+            (4) Tensor of Size 0
+                G1 = 3
+                G2 = 2
+
+                P = G2 = 2 because there is no preconditioner due to 0D tensor.
+
+            """
+            masked_grad_list1 = (
+                torch.tensor([4.0, 0.0]),
+                torch.eye(2) * 3,
+                torch.tensor([[2.0, 0.0]]),
+                torch.tensor(3.0),
+            )
+            masked_grad_list2 = (
+                torch.tensor([0.0, 4.0]),
+                torch.eye(2) * 4,
+                torch.tensor([[0.0, 2.0]]),
+                torch.tensor(2.0),
+            )
+
+            masked_expected_preconditioned_grad_list = [
+                torch.tensor([0.0, 1.0]),
+                masked_grad_list2[1] / 5,
+                masked_grad_list2[2] / math.sqrt(2 * math.sqrt(8)),
+                torch.tensor(2.0),
+            ]
+
+            # The default case where we do not ignore any dimensions.
+            self._verify_preconditioner_updates(
+                preconditioner_list=self._instantiate_preconditioner_list(
+                    beta2=1.0,
+                ),
+                masked_grad_lists=[masked_grad_list1, masked_grad_list2],
+                masked_expected_preconditioned_grad_list=tuple(
+                    masked_expected_preconditioned_grad_list
+                ),
+            )
+
+            # When ignoring all the dimensions by setting all inverse exponent override values to 0.0, the preconditioner should be the identity matrix, and the expected preconditioned gradient should be the same as the input gradient.
+            self._verify_preconditioner_updates(
+                preconditioner_list=self._instantiate_preconditioner_list(
+                    beta2=1.0,
+                    preconditioner_config=replace(
+                        self._default_preconditioner_config,
+                        inverse_exponent_override={
+                            0: {0: 0.0},
+                            1: {0: 0.0},
+                            2: 0.0,
+                        },
+                    ),
+                ),
+                masked_grad_lists=[masked_grad_list1, masked_grad_list2],
+                masked_expected_preconditioned_grad_list=masked_grad_list2,
+            )
+
+        def test_inverse_exponent_override(self) -> None:
+            """
+            For this example, we modify the one given above such that the inverse_exponent_override = {0: 1.0, 1: 1.0, 2: 1.0}.
+            This effectively means all tensors in this test setting will use the inverse root of 1 rather than the default.
+            This should result in the following behavior:
+
+            (1) Tensor of Size 2
+                G1 = [1, 0]^T
+                G2 = [0, 2]^T
+
+                L = G1 * G1^T + G2 * G2^T = [[1, 0], [0, 4]]
+                P = L^{-1} G2 = [0, 0.5]^T
+
+            (2) Tensor of Size 2 x 2
+                G1 = [[1, 0], [0, 1]] / sqrt(2)
+                G2 = [[1, 0], [0, 1]] / sqrt(2)
+
+                L = G1 * G1^T + G2 * G2^T = [[1, 0], [0, 1]]
+                R = G1^T * G1 + G2^T * G2 = [[1, 0], [0, 1]]
+                P = L^{-1} G2 R^{-1} = [[1, 0], [0, 1]] / sqrt(2) = G2
+
+            (3) Tensor of Size 1 x 2
+                G1 = [[1, 0]]
+                G2 = [[0, 2]]
+
+                L = G1 * G1^T + G2 * G2^T = 5
+                R = G1^T * G1 + G2^T * G2 = [[1, 0], [0, 4]]
+                P = L^{-1} G2 R^{-1} =  [[0, 0.1]]
+
+            (4) Tensor of Size 0
+                G1 = 3
+                G2 = 2
+
+                P = G2 = 2 because there is no preconditioner due to 0D tensor.
+
+            """
+
+            preconditioner_config = replace(
+                self._default_preconditioner_config,
+                inverse_exponent_override={
+                    0: {0: 1.0},
+                    1: {0: 1.0},
+                    2: 1.0,
+                },
+            )
+
+            masked_grad_list1 = (
+                torch.tensor([1.0, 0.0]),
+                torch.eye(2) / math.sqrt(2.0),
+                torch.tensor([[1.0, 0.0]]),
+                torch.tensor(3.0),
+            )
+            masked_grad_list2 = (
+                torch.tensor([0.0, 2.0]),
+                torch.eye(2) / math.sqrt(2.0),
+                torch.tensor([[0.0, 2.0]]),
+                torch.tensor(2.0),
+            )
+
+            masked_expected_preconditioned_grad_list = (
+                torch.tensor([0, 0.5]),
+                torch.eye(2) / math.sqrt(2.0),
+                torch.tensor([[0, 0.1]]),
+                torch.tensor(2.0),
+            )
+
+            self._verify_preconditioner_updates(
+                preconditioner_list=self._instantiate_preconditioner_list(
+                    beta2=1.0,
+                    use_bias_correction=True,
+                    preconditioner_config=preconditioner_config,
+                ),
+                masked_grad_lists=[masked_grad_list1, masked_grad_list2],
+                masked_expected_preconditioned_grad_list=masked_expected_preconditioned_grad_list,
+            )
+
 
 class RootInvShampooPreconditionerListTest(
-    AbstractTest.BaseShampooPreconditionerListTest
+    AbstractTest.ClassicShampooPreconditionerListTest
 ):
     @property
     def _amortized_computation_properties(self) -> AmortizedComputationProperties:
@@ -1014,408 +1416,9 @@ class RootInvShampooPreconditionerListTest(
     )
     def test_adaptive_amortized_computation_frequency(self) -> None: ...
 
-    def test_update_preconditioners_and_precondition(self) -> None:
-        """
-        We provide examples where we update the preconditioners twice using specially
-        chosen gradients such that we get a scalar * identity matrix for both Kronecker
-        factor matrices for all parameters of interest.
-
-        Specifically, for the beta2 = 1 case, we have 3 parameters and define their gradients
-        as the following in order to get the expected preconditioned gradient list:
-
-        (1) Tensor of Size 2
-            G1 = [1, 0]^T
-            G2 = [0, 1]^T
-
-            L = G1 * G1^T + G2 * G2^T = [[1, 0], [0, 1]]
-            P = L^{-1/2} G2 = [0, 1]^T = G2
-
-        (2) Tensor of Size 2 x 2
-            G1 = [[1, 0], [0, 1]] / sqrt(2)
-            G2 = [[1, 0], [0, 1]] / sqrt(2)
-
-            L = G1 * G1^T + G2 * G2^T = [[1, 0], [0, 1]]
-            R = G1^T * G1 + G2^T * G2 = [[1, 0], [0, 1]]
-            P = L^{-1/4} G2 R^{-1/4} = [[1, 0], [0, 1]] / sqrt(2) = G2
-
-        (3) Tensor of Size 1 x 2
-            G1 = [[1, 0]]
-            G2 = [[0, 1]]
-
-            L = G1 * G1^T + G2 * G2^T = 2
-            R = G1^T * G1 + G2^T * G2 = [[1, 0], [0, 1]]
-            P = L^{-1/4} G2 R^{-1/4} = 2^{-1/4} * [[0, 1]] = 2^{-1/4} G2
-
-        (4) Tensor of Size 0
-            G1 = 3
-            G2 = 2
-
-            P = G2 = 2 because there is no preconditioner due to 0D tensor.
-
-        """
-        masked_grad_list1 = (
-            torch.tensor([1.0, 0.0]),
-            torch.eye(2) / math.sqrt(2.0),
-            torch.tensor([[1.0, 0.0]]),
-            torch.tensor(3.0),
-        )
-        masked_grad_list2 = (
-            torch.tensor([0.0, 1.0]),
-            torch.eye(2) / math.sqrt(2.0),
-            torch.tensor([[0.0, 1.0]]),
-            torch.tensor(2.0),
-        )
-
-        masked_expected_preconditioned_grad_list = [
-            preconditioned_grad.clone() for preconditioned_grad in masked_grad_list2
-        ]
-        masked_expected_preconditioned_grad_list[2] /= 2.0 ** (1 / 4)
-
-        self._verify_preconditioner_updates(
-            preconditioner_list=self._instantiate_preconditioner_list(
-                beta2=1.0,
-                use_bias_correction=True,
-            ),
-            masked_grad_lists=[masked_grad_list1, masked_grad_list2],
-            masked_expected_preconditioned_grad_list=tuple(
-                masked_expected_preconditioned_grad_list
-            ),
-        )
-
-        """
-        For the other two cases (beta2 < 1), note:
-
-            L = beta2 * (1 - beta2) * G1 * G1^T + (1 - beta2) * G2 * G2^T
-            R = beta2 * (1 - beta2) * G1^T * G1 + (1 - beta2) * G2^T * G2
-
-        Therefore, in order to retain the identity matrix, we simply need to scale each gradient by:
-
-            G1 -> G1 / sqrt(beta2 * (1 - beta2))
-            G2 -> G2 / sqrt(1 - beta2).
-
-        """
-        beta2 = 0.9
-
-        beta2_compensated_grad_list1 = torch._foreach_div(
-            masked_grad_list1, math.sqrt(beta2 * (1 - beta2))
-        )
-        beta2_compensated_grad_list2 = torch._foreach_div(
-            masked_grad_list2, math.sqrt(1 - beta2)
-        )
-
-        masked_expected_preconditioned_grad_list = [
-            preconditioned_grad.clone()
-            for preconditioned_grad in beta2_compensated_grad_list2
-        ]
-        masked_expected_preconditioned_grad_list[2] /= 2.0 ** (1 / 4)
-
-        self._verify_preconditioner_updates(
-            preconditioner_list=self._instantiate_preconditioner_list(
-                beta2=beta2,
-                use_bias_correction=False,
-            ),
-            masked_grad_lists=[
-                beta2_compensated_grad_list1,
-                beta2_compensated_grad_list2,
-            ],
-            masked_expected_preconditioned_grad_list=tuple(
-                masked_expected_preconditioned_grad_list
-            ),
-        )
-
-        """
-        For the last case of including bias correction, we re-scale the entire matrix by the
-        bias correction at iteration 2.
-
-            L -> L / (1 - beta2^2)
-            R -> R / (1 - beta2^2).
-
-        Therefore, it is sufficient to additionally scale by this value:
-
-            G1 -> sqrt(1 - beta2^2) * G1
-            G2 -> sqrt(1 - beta2^2) * G2.
-
-        """
-        bias_compensated_grad_list1 = torch._foreach_mul(
-            beta2_compensated_grad_list1, math.sqrt(1 - beta2**2)
-        )
-        bias_compensated_grad_list2 = torch._foreach_mul(
-            beta2_compensated_grad_list2, math.sqrt(1 - beta2**2)
-        )
-
-        masked_expected_preconditioned_grad_list = [
-            preconditioned_grad.clone()
-            for preconditioned_grad in bias_compensated_grad_list2
-        ]
-        masked_expected_preconditioned_grad_list[2] /= 2.0 ** (1 / 4)
-
-        self._verify_preconditioner_updates(
-            preconditioner_list=self._instantiate_preconditioner_list(
-                beta2=beta2,
-                use_bias_correction=True,
-            ),
-            masked_grad_lists=[
-                bias_compensated_grad_list1,
-                bias_compensated_grad_list2,
-            ],
-            masked_expected_preconditioned_grad_list=tuple(
-                masked_expected_preconditioned_grad_list
-            ),
-        )
-
-    def test_update_preconditioners_and_precondition_with_epsilon(self) -> None:
-        """
-        We provide examples where we deliberately choose a large epsilon. This is to ensure that
-        the matrix inverse computation behaves as expected. Below we update the preconditioners twice
-        for 4 different blocks and check if the preconditioned gradients are as expected. When
-        performing the inverse computation, epsilon is chosen to be 80 in (L + epsilon * I) and
-        (R + epsilon * I).
-
-        G_{ij}: at the i-th step, the gradient for the j-th block. For example,
-        G12 is the gradient for the second block, at the first step.
-
-        epsilon = 80.0
-
-        Gradients for block 1: (no right preconditioner)
-        (1) 1D Tensor of Size 2
-            G11 = [1, 0]^T
-            G21 = [0, 1]^T
-
-            L = G11 * G11^T + G21 * G21^T = [[1, 0], [0, 1]]
-            P = (L + epsilon * I)^{-1/2} G21 = [[81, 0], [0, 81]]^{-1/2} [0, 1]^T
-              = [0, 1/9]^T.
-
-        Gradients for block 2: (both left and right preconditioner)
-        (2) Tensor of Size 2 x 2
-            G12 = [[1, 0], [0, 1]] / sqrt(2)
-            G22 = [[1, 0], [0, 1]] / sqrt(2)
-
-            L = G12 * G12^T + G22 * G22^T = [[1, 0], [0, 1]]
-            R = G12^T * G12 + G22^T * G22 = [[1, 0], [0, 1]]
-            P = (L + epsilon * I)^{-1/4} G22 (R + epsilon * I)^{-1/4}
-              = [[1/3, 0], [0, 1/3]] * G22 * [[1/3, 0], [0, 1/3]] = I / (9 * sqrt(2))
-
-        Gradients for block 3: (both left and right preconditioner)
-        (3) Tensor of Size 1 x 2
-            G13 = [[1, 0]]
-            G23 = [[0, 1]]
-
-            L = G13 * G13^T + G23 * G23^T = I
-            R = G13^T * G13 + G23^T * G23 = 2
-            P = (L + epsilon * I)^{-1/4} G22 (R + epsilon * I)^{-1/4}
-              = [[1/3, 0], [0, 1/3]] * G22 * (80 + 2)^{-1/4} =
-              = [[0.0, 1.0/3.0 * 82.0 ** (-1/4)]]
-
-        Gradients for block 4: (no preconditioner)
-        (4) Tensor of Size 0
-            G14 = 1
-            G24 = 1
-
-            No preconditioner is applied. Expected gradient is 1.
-
-        """
-
-        epsilon = 80.0
-
-        # Blocked gradients at the first step: masked_grad_list1 = (G11, G12, G13, G14)
-        masked_grad_list1 = (
-            torch.tensor([1.0, 0.0]),
-            torch.eye(2) / math.sqrt(2),
-            torch.tensor([[1.0, 0.0]]),
-            torch.tensor(1.0),
-        )
-
-        # Blocked gradients at the second step: masked_grad_list2 = (G21, G22, G23, G24)
-        masked_grad_list2 = (
-            torch.tensor([0.0, 1.0]),
-            torch.eye(2) / math.sqrt(2),
-            torch.tensor([[0.0, 1.0]]),
-            torch.tensor(1.0),
-        )
-
-        # Manually apply the preconditioners to the gradients at the second step (masked_grad_list2) with epsilon.
-        # The result is stored in masked_expected_preconditioned_grad_list.
-
-        masked_expected_preconditioned_grad_list = (
-            torch.tensor([0.0, 1.0 / 9.0]),
-            torch.eye(2) / (9 * math.sqrt(2)),
-            torch.tensor([[0.0, 1.0 / 3.0 * 82.0 ** (-1 / 4)]]),
-            torch.tensor(1.0),
-        )
-
-        # Apply preconditioner to the last step (masked_grad_list2) with epsilon. The result should be the same as the expected preconditioned grad list.
-        self._verify_preconditioner_updates(
-            preconditioner_list=self._instantiate_preconditioner_list(
-                beta2=1.0,
-                use_bias_correction=True,
-                epsilon=epsilon,
-            ),
-            masked_grad_lists=[masked_grad_list1, masked_grad_list2],
-            masked_expected_preconditioned_grad_list=tuple(
-                masked_expected_preconditioned_grad_list
-            ),
-        )
-
-    def test_update_preconditioners_and_precondition_with_dims_ignored(self) -> None:
-        """
-
-        (1) Tensor of Size 2
-            G1 = [4, 0]^T
-            G2 = [0, 4]^T
-
-            L = G1 * G1^T + G2 * G2^T = [[4*4, 0], [0, 4*4]]
-            P = L^{-1/2} G2 = [[1/4, 0], [0, 1/4]] G2 = [0, 1]^T
-
-        (2) Tensor of Size 2 x 2
-            G1 = [[3, 0], [0, 3]]
-            G2 = [[4, 0], [0, 4]]
-
-            L = G1 * G1^T + G2 * G2^T = [[3*3+4*4, 0], [0, 3*3+4*4]]
-            R = G1^T * G1 + G2^T * G2 = [[3*3+4*4, 0], [0, 3*3+4*4]]
-            P = L^{-1/4} G2 R^{-1/4} = [[1/sqrt(5), 0], [0, 1/sqrt(5)]] G2 [[1/sqrt(5), 0], [0, 1/sqrt(5)]] = G2 / 5
-
-        (3) Tensor of Size 1 x 2
-            G1 = [[2, 0]]
-            G2 = [[0, 2]]
-
-            L = G1 * G1^T + G2 * G2^T = 2*2+2*2 = 8
-            R = G1^T * G1 + G2^T * G2 = [[4, 0], [0, 4]]
-            P = L^{-1/4} G2 R^{-1/4} = 8^{-1/4} G2 [[1/sqrt(2), 0], [0, 1/sqrt(2)]] = G2 / (sqrt(2 * sqrt(8)))
-
-        (4) Tensor of Size 0
-            G1 = 3
-            G2 = 2
-
-            P = G2 = 2 because there is no preconditioner due to 0D tensor.
-
-        """
-        masked_grad_list1 = (
-            torch.tensor([4.0, 0.0]),
-            torch.eye(2) * 3,
-            torch.tensor([[2.0, 0.0]]),
-            torch.tensor(3.0),
-        )
-        masked_grad_list2 = (
-            torch.tensor([0.0, 4.0]),
-            torch.eye(2) * 4,
-            torch.tensor([[0.0, 2.0]]),
-            torch.tensor(2.0),
-        )
-
-        masked_expected_preconditioned_grad_list = [
-            torch.tensor([0.0, 1.0]),
-            masked_grad_list2[1] / 5,
-            masked_grad_list2[2] / math.sqrt(2 * math.sqrt(8)),
-            torch.tensor(2.0),
-        ]
-
-        # The default case where we do not ignore any dimensions.
-        self._verify_preconditioner_updates(
-            preconditioner_list=self._instantiate_preconditioner_list(
-                beta2=1.0,
-            ),
-            masked_grad_lists=[masked_grad_list1, masked_grad_list2],
-            masked_expected_preconditioned_grad_list=tuple(
-                masked_expected_preconditioned_grad_list
-            ),
-        )
-
-        # When ignoring all the dimensions by setting all inverse exponent override values to 0.0, the preconditioner should be the identity matrix, and the expected preconditioned gradient should be the same as the input gradient.
-        self._verify_preconditioner_updates(
-            preconditioner_list=self._instantiate_preconditioner_list(
-                beta2=1.0,
-                preconditioner_config=replace(
-                    self._default_preconditioner_config,
-                    inverse_exponent_override={
-                        0: {0: 0.0},
-                        1: {0: 0.0},
-                        2: 0.0,
-                    },
-                ),
-            ),
-            masked_grad_lists=[masked_grad_list1, masked_grad_list2],
-            masked_expected_preconditioned_grad_list=masked_grad_list2,
-        )
-
-    def test_inverse_exponent_override(self) -> None:
-        """
-        For this example, we modify the one given above such that the inverse_exponent_override = {0: 1.0, 1: 1.0, 2: 1.0}.
-        This effectively means all tensors in this test setting will use the inverse root of 1 rather than the default.
-        This should result in the following behavior:
-
-        (1) Tensor of Size 2
-            G1 = [1, 0]^T
-            G2 = [0, 2]^T
-
-            L = G1 * G1^T + G2 * G2^T = [[1, 0], [0, 4]]
-            P = L^{-1} G2 = [0, 0.5]^T
-
-        (2) Tensor of Size 2 x 2
-            G1 = [[1, 0], [0, 1]] / sqrt(2)
-            G2 = [[1, 0], [0, 1]] / sqrt(2)
-
-            L = G1 * G1^T + G2 * G2^T = [[1, 0], [0, 1]]
-            R = G1^T * G1 + G2^T * G2 = [[1, 0], [0, 1]]
-            P = L^{-1} G2 R^{-1} = [[1, 0], [0, 1]] / sqrt(2) = G2
-
-        (3) Tensor of Size 1 x 2
-            G1 = [[1, 0]]
-            G2 = [[0, 2]]
-
-            L = G1 * G1^T + G2 * G2^T = 5
-            R = G1^T * G1 + G2^T * G2 = [[1, 0], [0, 4]]
-            P = L^{-1} G2 R^{-1} =  [[0, 0.1]]
-
-        (4) Tensor of Size 0
-            G1 = 3
-            G2 = 2
-
-            P = G2 = 2 because there is no preconditioner due to 0D tensor.
-
-        """
-
-        preconditioner_config = replace(
-            self._default_preconditioner_config,
-            inverse_exponent_override={
-                0: {0: 1.0},
-                1: {0: 1.0},
-                2: 1.0,
-            },
-        )
-
-        masked_grad_list1 = (
-            torch.tensor([1.0, 0.0]),
-            torch.eye(2) / math.sqrt(2.0),
-            torch.tensor([[1.0, 0.0]]),
-            torch.tensor(3.0),
-        )
-        masked_grad_list2 = (
-            torch.tensor([0.0, 2.0]),
-            torch.eye(2) / math.sqrt(2.0),
-            torch.tensor([[0.0, 2.0]]),
-            torch.tensor(2.0),
-        )
-
-        masked_expected_preconditioned_grad_list = (
-            torch.tensor([0, 0.5]),
-            torch.eye(2) / math.sqrt(2.0),
-            torch.tensor([[0, 0.1]]),
-            torch.tensor(2.0),
-        )
-
-        self._verify_preconditioner_updates(
-            preconditioner_list=self._instantiate_preconditioner_list(
-                beta2=1.0,
-                use_bias_correction=True,
-                preconditioner_config=preconditioner_config,
-            ),
-            masked_grad_lists=[masked_grad_list1, masked_grad_list2],
-            masked_expected_preconditioned_grad_list=masked_expected_preconditioned_grad_list,
-        )
-
 
 class EigendecomposedShampooPreconditionerListTest(
-    RootInvShampooPreconditionerListTest
+    AbstractTest.ClassicShampooPreconditionerListTest
 ):
     @property
     def _amortized_computation_properties(self) -> AmortizedComputationProperties:
