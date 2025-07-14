@@ -44,6 +44,7 @@ Key distinctives of this implementation include:
 - Merging of small dimensions.
 - Option to (approximately) correct the eigenvalues/run Adam in the eigenbasis of Shampoo's preconditioner (SOAP) [2,6,7].
 - Option to use an adaptive preconditioner update frequency when symmetric eigendecompositions or the QR algorithm is used [8].
+- Spectral descent via reduced SVD or Newton-Schulz iteration for 2D gradients, or gradients that have been reshaped to 2D [9,10]. This can be used to implement Muon [11], see [Example 6](#example-6-muon).
 
 ## Requirements
 
@@ -267,6 +268,53 @@ optimizer = DistributedShampoo(
     preconditioner_config=DefaultEigenvalueCorrectedShampooConfig,
 )
 ```
+
+### Example 6: Muon
+
+```python
+import math
+
+from distributed_shampoo import (
+    DistributedShampoo,
+    NewtonSchulzOrthogonalizationConfig,
+    SpectralDescentPreconditionerConfig,
+)
+
+
+model = instantiate_model()
+# Separate parameters into hidden layers (only 2D) and other parameters (first layer, biases and other 1D parameters, and last layer).
+hidden_layer_params = ...
+other_params = ...
+
+optimizer = DistributedShampoo(
+    [
+        # Use spectral descent with Newton-Schulz semi-orthogonalization for hidden layer parameters.
+        {
+            "params": hidden_layer_params,
+            "lr": 0.02,
+            "preconditioner_config": SpectralDescentPreconditionerConfig(
+                orthogonalization_config=NewtonSchulzOrthogonalizationConfig(
+                    scale_by_dims_fn=lambda d_in, d_out: max(1, d_out / d_in)**0.5,
+                ),
+            ),
+        },
+        # Use AdamW for other parameters.
+        {
+            "params": other_params,
+            "lr": 3e-4,
+            "start_preconditioning_step", math.inf,
+            "grafting_config": AdamGraftingConfig(
+                beta2=0.95,
+                epsilon=1e-10,
+            ),
+        },
+    ],
+    weight_decay=1e-05,
+    use_decoupled_weight_decay=True,
+)
+```
+
+`SpectralDescentPreconditionerConfig` can also be used to implement other variations of spectral descent.
 
 ## Distributed Training Support
 
@@ -715,10 +763,13 @@ If you use PyTorch Distributed Shampoo in your work, please use the following Bi
 ## References
 
 1. [Shampoo: Preconditioned Stochastic Tensor Optimization](https://proceedings.mlr.press/v80/gupta18a/gupta18a.pdf). Vineet Gupta, Tomer Koren, and Yoram Singer. International Conference on Machine Learning, 2018.
-2. [Scalable Second-Order Optimization for Deep Learning](https://arxiv.org/pdf/2002.09018.pdf). Rohan Anil, Vineet Gupta, Tomer Koren, Kevin Regan, and Yoram Singer. Tech Report, 2021.
-3. [Learning Rate Grafting: Transferability of Optimizer Tuning](https://openreview.net/pdf?id=FpKgG31Z_i9). Naman Agarwal, Rohan Anil, Elad Hazan, Tomer Koren, and Cyril Zhang. Tech Report, 2021.
+2. [Scalable Second-Order Optimization for Deep Learning](https://arxiv.org/pdf/2002.09018.pdf). Rohan Anil, Vineet Gupta, Tomer Koren, Kevin Regan, and Yoram Singer. Tech report, 2021.
+3. [Learning Rate Grafting: Transferability of Optimizer Tuning](https://openreview.net/pdf?id=FpKgG31Z_i9). Naman Agarwal, Rohan Anil, Elad Hazan, Tomer Koren, and Cyril Zhang. Tech report, 2021.
 4. [Functions of Matrices: Theory and Computation](https://epubs.siam.org/doi/book/10.1137/1.9780898717778). Nicholas J. Higham. SIAM, 2008.
-5. [A Distributed Data-Parallel PyTorch Implementation of the Distributed Shampoo Optimizer for Training Neural Networks At-Scale](https://arxiv.org/pdf/2309.06497.pdf). Hao-Jun Michael Shi, Tsung-Hsien Lee, Shintaro Iwasaki, Jose Gallego-Posada, Zhijing Li, Kaushik Rangadurai, Dheevatsa Mudigere, and Michael Rabbat. Tech Report, 2023.
+5. [A Distributed Data-Parallel PyTorch Implementation of the Distributed Shampoo Optimizer for Training Neural Networks At-Scale](https://arxiv.org/pdf/2309.06497.pdf). Hao-Jun Michael Shi, Tsung-Hsien Lee, Shintaro Iwasaki, Jose Gallego-Posada, Zhijing Li, Kaushik Rangadurai, Dheevatsa Mudigere, and Michael Rabbat. Tech report, 2023.
 6. [Fast Approximate Natural Gradient Descent in a Kronecker-factored Eigenbasis](https://arxiv.org/abs/1806.03884). Thomas George, César Laurent, Xavier Bouthillier, Nicolas Ballas, Pascal Vincent. NeurIPS, 2018.
 7. [SOAP: Improving and Stabilizing Shampoo using Adam](https://arxiv.org/abs/2409.11321). Nikhil Vyas, Depen Morwani, Rosie Zhao, Itai Shapira, David Brandfonbrener, Lucas Janson, Sham Kakade. ICLR, 2025.
-8. [Purifying Shampoo: Investigating Shampoo's Heuristics by Decomposing its Preconditioner](https://www.arxiv.org/abs/2506.03595). Runa Eschenhagen, Aaron Defazio, Tsung-Hsien Lee, Richard E. Turner, Hao-Jun Michael Shi. Tech Report, 2025.
+8. [Purifying Shampoo: Investigating Shampoo's Heuristics by Decomposing its Preconditioner](https://www.arxiv.org/abs/2506.03595). Runa Eschenhagen, Aaron Defazio, Tsung-Hsien Lee, Richard E. Turner, Hao-Jun Michael Shi. Tech report, 2025.
+9. [Preconditioned Spectral Descent for Deep Learning](https://papers.nips.cc/paper_files/paper/2015/hash/f50a6c02a3fc5a3a5d4d9391f05f3efc-Abstract.html). David E. Carlson, Edo Collins, Ya-Ping Hsieh, Lawrence Carin, Volkan Cevher. NIPS, 2015.
+10. [Old Optimizer, New Norm: An Anthology](https://arxiv.org/abs/2409.20325). Jeremy Bernstein, Laker Newhouse. Tech report, 2024.
+11. [Muon: An optimizer for hidden layers in neural networks](https://kellerjordan.github.io/posts/muon/). Keller Jordan, Yuchen Jin, Vlado Boza, Jiacheng You, Franz Cesista, Laker Newhouse, Jeremy Bernstein. Blog post, 2024.
