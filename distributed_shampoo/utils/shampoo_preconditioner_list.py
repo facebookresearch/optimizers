@@ -214,8 +214,12 @@ class AdagradPreconditionerList(PreconditionerList):
         preconditioner_list: list[Tensor] = []
         for block, block_info in zip(block_list, block_info_list, strict=True):
             param_index, block_index = block_info.composable_block_ids
-            if block_index not in state[block_info.param]:
-                state[block_info.param][block_index] = {}
+            assert block_index in state[block_info.param], (
+                f"{block_index=} not found in {state[block_info.param]=}. "
+                "Please check the initialization of self.state[block_info.param][block_index] "
+                "within DistributedShampoo._initialize_blocked_parameters_state, and check the initialization of BlockInfo "
+                "within Distributor for the correctness of block_index."
+            )
             block_state = state[block_info.param][block_index]
 
             # Instantiate AdaGrad optimizer state for this block.
@@ -892,8 +896,12 @@ class BaseShampooPreconditionerList(
             strict=True,
         ):
             param_index, block_index = block_info.composable_block_ids
-            if block_index not in state[block_info.param]:
-                state[block_info.param][block_index] = {}
+            assert block_index in state[block_info.param], (
+                f"{block_index=} not found in {state[block_info.param]=}. "
+                "Please check the initialization of self.state[block_info.param][block_index] "
+                "within DistributedShampoo._initialize_blocked_parameters_state, and check the initialization of BlockInfo "
+                "within Distributor for the correctness of block_index."
+            )
             block_state = state[block_info.param][block_index]
             # NOTE: Use types.get_original_bases() instead of self.__orig_bases__ when downstream applications are Python 3.12+ available
             kronecker_factors_state_type, kronecker_factors_state_unwrapped_type = (
