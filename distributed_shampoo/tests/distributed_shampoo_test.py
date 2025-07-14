@@ -22,9 +22,9 @@ import torch
 from distributed_shampoo.distributed_shampoo import DistributedShampoo
 from distributed_shampoo.shampoo_types import (
     AdaGradGraftingConfig,
-    AmortizedPreconditionerConfig,
     DefaultEigenvalueCorrectedShampooConfig,
     DefaultShampooConfig,
+    DefaultSpectralDescentPreconditionerConfig,
     DistributedConfig,
     EigendecomposedShampooPreconditionerConfig,
     EigenvalueCorrectedShampooPreconditionerConfig,
@@ -32,6 +32,7 @@ from distributed_shampoo.shampoo_types import (
     PreconditionerConfig,
     RootInvShampooPreconditionerConfig,
     ShampooPT2CompileConfig,
+    SpectralDescentPreconditionerConfig,
 )
 from matrix_functions_types import EigenConfig, PseudoInverseConfig
 from torch import nn
@@ -163,19 +164,53 @@ class DistributedShampooInitTest(unittest.TestCase):
             **incorrect_hyperparameter_setting,
         )
 
-    def test_nesterov_and_zero_momentum(self) -> None:
-        with self.assertLogs(
-            level="WARNING",
-        ) as cm:
+    @parametrize(
+        "noop_hyperparameter_setting, expected_warning_msg",
+        [
+            (
+                {"momentum": 0.0, "use_nesterov": True},
+                "Nesterov flag is enabled but momentum parameter is zero! Continuing without using momentum or Nesterov acceleration...",
+            ),
+            (
+                {
+                    "betas": (0.9, 0.999),
+                    "preconditioner_config": DefaultSpectralDescentPreconditionerConfig,
+                    # Has to be set to False because otherwise parameter will be reshaped to 1D and initialization of preconditioner list will fail.
+                    "use_merge_dims": False,
+                },
+                "betas[1]=0.999 does not have any effect when SpectralDescentPreconditionerConfig is used.",
+            ),
+            (
+                {
+                    "epsilon": 1e-8,
+                    "preconditioner_config": DefaultSpectralDescentPreconditionerConfig,
+                    # Has to be set to False because otherwise parameter will be reshaped to 1D and initialization of preconditioner list will fail.
+                    "use_merge_dims": False,
+                },
+                "epsilon=1e-08 does not have any effect when SpectralDescentPreconditionerConfig is used.",
+            ),
+            (
+                {
+                    "precondition_frequency": 100,
+                    "preconditioner_config": DefaultSpectralDescentPreconditionerConfig,
+                    # Has to be set to False because otherwise parameter will be reshaped to 1D and initialization of preconditioner list will fail.
+                    "use_merge_dims": False,
+                },
+                "precondition_frequency=100 does not have any effect when SpectralDescentPreconditionerConfig is used. Setting precondition_frequency to 1...",
+            ),
+        ],
+    )
+    def test_noop_hyperparameter_setting_warnings(
+        self, noop_hyperparameter_setting: dict[str, Any], expected_warning_msg: str
+    ) -> None:
+        with self.assertLogs(level="WARNING") as cm:
             DistributedShampoo(
                 self._model.parameters(),
-                momentum=0.0,
-                use_nesterov=True,
+                **noop_hyperparameter_setting,
             )
 
             self.assertIn(
-                "Nesterov flag is enabled but momentum parameter is zero! "
-                "Continuing without using momentum or Nesterov acceleration...",
+                expected_warning_msg,
                 [r.msg for r in cm.records],
             )
 
@@ -262,10 +297,10 @@ class DistributedShampooTest(unittest.TestCase):
 
 
 class AbstractTest:
-    class ShampooDistributedStateDictTestBase(abc.ABC, unittest.TestCase):
+    class DistributedStateDictTestBase(abc.ABC, unittest.TestCase):
         @property
         @abc.abstractmethod
-        def _preconditioner_config(self) -> AmortizedPreconditionerConfig: ...
+        def _preconditioner_config(self) -> PreconditionerConfig: ...
 
         @property
         @abc.abstractmethod
@@ -461,7 +496,7 @@ class AbstractTest:
                 )
 
 
-class ShampooDistributedStateDictTest(AbstractTest.ShampooDistributedStateDictTestBase):
+class ShampooDistributedStateDictTest(AbstractTest.DistributedStateDictTestBase):
     @property
     def _preconditioner_config(self) -> RootInvShampooPreconditionerConfig:
         return DefaultShampooConfig
@@ -627,7 +662,7 @@ class ShampooDistributedStateDictTest(AbstractTest.ShampooDistributedStateDictTe
 
 
 class EigendecomposedShampooDistributedStateDictTest(
-    AbstractTest.ShampooDistributedStateDictTestBase
+    AbstractTest.DistributedStateDictTestBase
 ):
     @property
     def _preconditioner_config(self) -> EigendecomposedShampooPreconditionerConfig:
@@ -806,7 +841,7 @@ class EigendecomposedShampooDistributedStateDictTest(
 
 
 class EigenvalueCorrectedShampooDistributedStateDictTest(
-    AbstractTest.ShampooDistributedStateDictTestBase
+    AbstractTest.DistributedStateDictTestBase
 ):
     @property
     def _preconditioner_config(self) -> EigenvalueCorrectedShampooPreconditionerConfig:
@@ -908,6 +943,101 @@ class EigenvalueCorrectedShampooDistributedStateDictTest(
                             [0.0, 0.0, 0.0, 0.0, 0.0],
                         ]
                     ),
+                    '["block_0", "adagrad"]': torch.tensor(
+                        [
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                        ]
+                    ),
+                    '["block_1", "adagrad"]': torch.tensor(
+                        [
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                        ]
+                    ),
+                    '["block_0", "momentum"]': torch.tensor(
+                        [
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                        ]
+                    ),
+                    '["block_1", "momentum"]': torch.tensor(
+                        [
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                        ]
+                    ),
+                    '["block_0", "filtered_grad"]': torch.tensor(
+                        [
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                        ]
+                    ),
+                    '["block_1", "filtered_grad"]': torch.tensor(
+                        [
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                        ]
+                    ),
+                },
+            },
+            "param_groups": {
+                "0.weight": {
+                    "lr": 0.01,
+                    "betas": (0.9, 1.0),
+                    "beta3": 0.9,
+                    "epsilon": 1e-12,
+                    "momentum": 0.9,
+                    "dampening": 0.0,
+                    "weight_decay": 0.0,
+                    "max_preconditioner_dim": 5,
+                    "precondition_frequency": 1,
+                    "start_preconditioning_step": 1,
+                    "use_nesterov": False,
+                    "use_bias_correction": True,
+                    "use_decoupled_weight_decay": True,
+                    "grafting_config": AdaGradGraftingConfig(
+                        epsilon=0.001,
+                    ),
+                    "use_merge_dims": True,
+                    "preconditioner_dtype": torch.float32,
+                    "preconditioner_config": self._preconditioner_config,
+                }
+            },
+        }
+
+
+class SpectralDescentDistributedStateDictTest(
+    AbstractTest.DistributedStateDictTestBase
+):
+    @property
+    def _preconditioner_config(self) -> SpectralDescentPreconditionerConfig:
+        return DefaultSpectralDescentPreconditionerConfig
+
+    @property
+    def _distributed_state_dict(self) -> dict[str, Any]:
+        return {
+            "state": {
+                "0.weight": {
+                    '["step"]': torch.tensor(0),
                     '["block_0", "adagrad"]': torch.tensor(
                         [
                             [0.0, 0.0, 0.0, 0.0, 0.0],

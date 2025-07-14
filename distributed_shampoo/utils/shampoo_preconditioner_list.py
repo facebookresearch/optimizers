@@ -22,12 +22,14 @@ import torch
 from distributed_shampoo.shampoo_types import (
     AmortizedPreconditionerConfig,
     PreconditionerValueError,
+    SpectralDescentPreconditionerConfig,
 )
 from distributed_shampoo.utils.shampoo_block_info import BlockInfo
 from distributed_shampoo.utils.shampoo_utils import compress_list, get_dtype_size
 from matrix_functions import (
     matrix_eigendecomposition,
     matrix_inverse_root,
+    matrix_orthogonalization,
     stabilize_and_pow_eigenvalues,
 )
 
@@ -153,6 +155,56 @@ class SGDPreconditionerList(PreconditionerList):
 
     def precondition(self, masked_grad_list: tuple[Tensor, ...]) -> tuple[Tensor, ...]:
         return masked_grad_list
+
+    def compress_preconditioner_list(
+        self, local_grad_selector: tuple[bool, ...]
+    ) -> None:
+        return
+
+
+class SpectralDescentPreconditionerList(PreconditionerList):
+    """Preconditioner list for spectral descent.
+
+    NOTE: This algorithm can only be used for 2D parameters, or parameters that have been reshaped to 2D.
+    Which parameters are reshaped to 2D is determined by the max_preconditioner_dim argument in DistributedShampoo (assuming use_merge_dims=True).
+
+    Args:
+        block_list (tuple[Tensor, ...]): List of (blocks of) parameters.
+        preconditioner_config (SpectralDescentPreconditionerConfig): Configuration for spectral descent.
+
+    """
+
+    def __init__(
+        self,
+        block_list: tuple[Tensor, ...],
+        preconditioner_config: SpectralDescentPreconditionerConfig,
+    ) -> None:
+        if any(block.dim() != 2 for block in block_list):
+            raise ValueError(
+                "Spectral descent can only be used for 2D parameters, or parameters that have been reshaped to 2D."
+            )
+        super().__init__(block_list)
+        self._preconditioner_config = preconditioner_config
+
+    @_profile_decorator
+    def update_preconditioners(
+        self,
+        masked_grad_list: tuple[Tensor, ...],
+        step: Tensor,
+        perform_amortized_computation: bool = False,
+    ) -> None:
+        return
+
+    @_profile_decorator
+    def precondition(self, masked_grad_list: tuple[Tensor, ...]) -> tuple[Tensor, ...]:
+        return tuple(
+            # An error will be raised when grad is not 2D.
+            matrix_orthogonalization(
+                grad,
+                orthogonalization_config=self._preconditioner_config.orthogonalization_config,
+            )
+            for grad in masked_grad_list
+        )
 
     def compress_preconditioner_list(
         self, local_grad_selector: tuple[bool, ...]
