@@ -22,11 +22,11 @@ import matrix_functions
 import torch
 from commons import AbstractDataclass
 from distributed_shampoo.shampoo_types import (
+    AmortizedPreconditionerConfig,
     DefaultShampooConfig,
     DefaultSOAPConfig,
     EigendecomposedShampooPreconditionerConfig,
     EigenvalueCorrectedShampooPreconditionerConfig,
-    PreconditionerConfig,
     PreconditionerValueError,
     RootInvShampooPreconditionerConfig,
 )
@@ -409,7 +409,7 @@ class AbstractTest:
 
         @property
         @abc.abstractmethod
-        def _default_preconditioner_config(self) -> PreconditionerConfig: ...
+        def _default_preconditioner_config(self) -> AmortizedPreconditionerConfig: ...
 
         @property
         @abc.abstractmethod
