@@ -46,6 +46,9 @@ class _ModelWithScalarAndLinearAndDeadLayers(nn.Module):
                     for a, b in pairwise(model_dead_layers_dims)
                 )
             )
+            # Initialize dead layers with zeros for the ease of testing if needed
+            for m in self.dead_layers:
+                m.weight.data.fill_(0.0)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.linear_layers(x) + self.scalar
