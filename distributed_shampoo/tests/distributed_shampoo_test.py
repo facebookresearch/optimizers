@@ -174,28 +174,14 @@ class DistributedShampooInitTest(unittest.TestCase):
             (
                 {
                     "betas": (0.9, 0.999),
-                    "preconditioner_config": DefaultSpectralDescentPreconditionerConfig,
-                    # Has to be set to False because otherwise parameter will be reshaped to 1D and initialization of preconditioner list will fail.
-                    "use_merge_dims": False,
-                },
-                "betas[1]=0.999 does not have any effect when SpectralDescentPreconditionerConfig is used.",
-            ),
-            (
-                {
                     "epsilon": 1e-8,
-                    "preconditioner_config": DefaultSpectralDescentPreconditionerConfig,
-                    # Has to be set to False because otherwise parameter will be reshaped to 1D and initialization of preconditioner list will fail.
-                    "use_merge_dims": False,
-                },
-                "epsilon=1e-08 does not have any effect when SpectralDescentPreconditionerConfig is used.",
-            ),
-            (
-                {
                     "precondition_frequency": 100,
                     "preconditioner_config": DefaultSpectralDescentPreconditionerConfig,
                     # Has to be set to False because otherwise parameter will be reshaped to 1D and initialization of preconditioner list will fail.
                     "use_merge_dims": False,
                 },
+                "betas[1]=0.999 does not have any effect when SpectralDescentPreconditionerConfig is used.\n"
+                "epsilon=1e-08 does not have any effect when SpectralDescentPreconditionerConfig is used.\n"
                 "precondition_frequency=100 does not have any effect when SpectralDescentPreconditionerConfig is used. Setting precondition_frequency to 1...",
             ),
         ],

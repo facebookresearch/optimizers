@@ -393,12 +393,8 @@ class DistributedShampoo(torch.optim.Optimizer):
         if isinstance(preconditioner_config, SpectralDescentPreconditionerConfig):
             # Warn about hyperparameters that won't have any effect.
             logger.warning(
-                f"{betas[1]=} does not have any effect when SpectralDescentPreconditionerConfig is used."
-            )
-            logger.warning(
-                f"{epsilon=} does not have any effect when SpectralDescentPreconditionerConfig is used."
-            )
-            logger.warning(
+                f"{betas[1]=} does not have any effect when SpectralDescentPreconditionerConfig is used.\n"
+                f"{epsilon=} does not have any effect when SpectralDescentPreconditionerConfig is used.\n"
                 f"{precondition_frequency=} does not have any effect when SpectralDescentPreconditionerConfig is used. Setting precondition_frequency to 1..."
             )
             precondition_frequency = 1
@@ -554,13 +550,18 @@ class DistributedShampoo(torch.optim.Optimizer):
                     | EigendecomposedShampooPreconditionerConfig()
                     | EigenvalueCorrectedShampooPreconditionerConfig()
                 ):
+                    preconditioner_config_to_list_cls: dict[
+                        type[PreconditionerConfig], Callable[..., PreconditionerList]
+                    ] = {
+                        RootInvShampooPreconditionerConfig: RootInvShampooPreconditionerList,
+                        EigendecomposedShampooPreconditionerConfig: EigendecomposedShampooPreconditionerList,
+                        EigenvalueCorrectedShampooPreconditionerConfig: EigenvalueCorrectedShampooPreconditionerList,
+                    }
                     preconditioner_list_cls: Callable[..., PreconditionerList] = (
-                        partial(  # type: ignore[assignment]
-                            {
-                                RootInvShampooPreconditionerConfig: RootInvShampooPreconditionerList,
-                                EigendecomposedShampooPreconditionerConfig: EigendecomposedShampooPreconditionerList,
-                                EigenvalueCorrectedShampooPreconditionerConfig: EigenvalueCorrectedShampooPreconditionerList,
-                            }[type(group[PRECONDITIONER_CONFIG])],  # type: ignore[index]
+                        partial(
+                            preconditioner_config_to_list_cls[
+                                type(group[PRECONDITIONER_CONFIG])
+                            ],
                             state=self.state,
                             block_info_list=state_lists[
                                 DISTRIBUTOR
