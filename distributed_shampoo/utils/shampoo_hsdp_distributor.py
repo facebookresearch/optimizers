@@ -342,9 +342,7 @@ class HSDPDistributor(DistributorInterface):
             if group_source_rank == group_rank
         )
 
-    def _merge_and_block_parameters(
-        self,
-    ) -> None:
+    def _merge_and_block_parameters(self) -> None:
         """Split, merge, and block parameters."""
         global_blocked_params: list[Tensor] = []
         # self._global_num_splits_per_param refers to the total number of splits within each
@@ -356,11 +354,6 @@ class HSDPDistributor(DistributorInterface):
         # split parameter.
         # This has the same length as the number of split parameters.
         global_num_blocks_per_split_param = []
-        merge_dims = partial(
-            merge_small_dims,
-            threshold=self._param_group[MAX_PRECONDITIONER_DIM]
-            * self._param_group[USE_MERGE_DIMS],
-        )
 
         for flattened_param in self._param_group[PARAMS]:
             # Split flattened parameters into valid tensor blocks of the parameter.
@@ -372,25 +365,11 @@ class HSDPDistributor(DistributorInterface):
             )
             global_num_splits_per_param.append(len(split_params))
 
-            for split_param in split_params:
-                # Obtain blocks for each parameter after merging.
-                blocks_within_split_param = multi_dim_split(
-                    split_param.view(merge_dims(tensor_shape=split_param.size())),
-                    self._param_group[MAX_PRECONDITIONER_DIM],
-                )
-
-                # Generate and extend block info list and extend blocked parameters list.
-                # Note that the block info list should have the same length as the blocked parameters list.
-                global_blocked_params.extend(
-                    # Note: We are using tensor.detach() here to explicitly set block_param (a view of the original
-                    # parameter) to requires_grad = False in order to prevent errors with print and PT2 compile.
-                    # Remove this tensor.detach() once https://github.com/pytorch/pytorch/issues/113793 is fixed.
-                    block_param.detach()
-                    for block_param in blocks_within_split_param
-                )
-
-                # Stores the number of blocks for each param so we could use this later for constructing the mask on filtering blocks when grad is None.
-                global_num_blocks_per_split_param.append(len(blocks_within_split_param))
+            (blocked_params, num_blocks_per_split_param) = (
+                self._merge_and_block_with_params(params=split_params)
+            )
+            global_blocked_params.extend(blocked_params)
+            global_num_blocks_per_split_param.extend(num_blocks_per_split_param)
 
         # Check that the number of blocks for each parameter equals to the summation of the number of blocks
         # from each split parameter.

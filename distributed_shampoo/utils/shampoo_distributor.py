@@ -161,25 +161,33 @@ class DistributorInterface(ABC):
         )
 
     @torch.no_grad()
-    def _merge_and_block_parameters(
-        self,
-    ) -> None:
-        """Merges small dims and blocks parameters.
+    def _merge_and_block_with_params(
+        self, params: Iterable[Tensor]
+    ) -> tuple[list[Tensor], list[int]]:
+        """Merges small dimensions and blocks parameters into manageable chunks.
 
-        NOTE: FSDP may modify this function.
+        This function processes each parameter tensor by:
+        1. Merging small dimensions based on a threshold
+        2. Splitting large tensors into blocks that don't exceed the maximum preconditioner dimension
+        3. Detaching the resulting blocks to prevent gradient tracking
 
+        Args:
+            params (Iterable[Tensor]): Parameter tensors to be processed
+
+        Returns:
+            blocked_params (list[Tensor]) : List of blocked parameter tensors.
+            num_blocks_per_param (list[int]) : List of block counts for each original parameter.
         """
-
         # Generate blocked parameters list and number of blocks per parameter.
-        global_blocked_params: list[Tensor] = []
-        global_num_blocks_per_param: list[int] = []
+        blocked_params: list[Tensor] = []
+        num_blocks_per_param: list[int] = []
         merge_dims = partial(
             merge_small_dims,
             threshold=self._param_group[MAX_PRECONDITIONER_DIM]
             * self._param_group[USE_MERGE_DIMS],
         )
 
-        for param in self._get_params_or_grads():
+        for param in params:
             # Obtain blocks for each parameter after merging.
             blocks_within_param = multi_dim_split(
                 param.view(merge_dims(tensor_shape=param.size())),
@@ -187,18 +195,27 @@ class DistributorInterface(ABC):
             )
 
             # Generate and extend blocked parameters list.
-            global_blocked_params.extend(
+            blocked_params.extend(
                 # Note: We are using tensor.detach() here to explicitly set block_param (a view of the original
                 # parameter) to requires_grad = False in order to prevent errors with print and PT2 compile.
                 # Remove this tensor.detach() once https://github.com/pytorch/pytorch/issues/113793 is fixed.
                 block_param.detach()
                 for block_param in blocks_within_param
             )
-            global_num_blocks_per_param.append(len(blocks_within_param))
+            num_blocks_per_param.append(len(blocks_within_param))
 
-        self._global_blocked_params: tuple[Tensor, ...] = tuple(global_blocked_params)
-        self._global_num_blocks_per_param: tuple[int, ...] = tuple(
-            global_num_blocks_per_param
+        return blocked_params, num_blocks_per_param
+
+    def _merge_and_block_parameters(self) -> None:
+        """Merges small dimensions and blocks parameters, storing results as instance attributes.
+
+        NOTE: FSDP may modify this function.
+        """
+        self._global_blocked_params: tuple[Tensor, ...]
+        self._global_num_blocks_per_param: tuple[int, ...]
+        self._global_blocked_params, self._global_num_blocks_per_param = map(
+            partial(tuple),
+            self._merge_and_block_with_params(params=self._get_params_or_grads()),
         )
 
     @abstractmethod
