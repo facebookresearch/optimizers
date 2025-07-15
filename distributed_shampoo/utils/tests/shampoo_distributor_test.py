@@ -190,19 +190,23 @@ class DistributorOnEmptyParamTest(unittest.TestCase):
             ).param_groups[0]
         )
 
-    def test_update_params(self) -> None:
         # Set up the scalar tensor with a gradient
-        scalar_tensor: torch.Tensor = cast(torch.Tensor, self._model.scalar)
-        scalar_tensor.grad = torch.ones_like(scalar_tensor)
+        self._scalar_tensor: torch.Tensor = cast(torch.Tensor, self._model.scalar)
+        self._scalar_tensor.grad = torch.ones_like(self._scalar_tensor)
 
         # Get the linear layers module list - note that this contains an empty parameter
         linear_layers: nn.ModuleList = cast(nn.ModuleList, self._model.linear_layers)
 
         # Get the weight of the first layer (which is empty) and set its gradient
-        layer_weight: torch.Tensor = cast(torch.Tensor, linear_layers[0].weight)
-        self.assertEqual(layer_weight.numel(), 0)
-        layer_weight.grad = torch.ones_like(layer_weight)
+        self._first_linear_layer_weight: torch.Tensor = cast(
+            torch.Tensor, linear_layers[0].weight
+        )
+        assert self._first_linear_layer_weight.numel() == 0
+        self._first_linear_layer_weight.grad = torch.ones_like(
+            self._first_linear_layer_weight
+        )
 
+    def test_update_params(self) -> None:
         # Process gradients and update the local gradient selector
         # Since layer_weight is empty, it won't produce block params
         self._distributor.merge_and_block_gradients()
@@ -213,7 +217,7 @@ class DistributorOnEmptyParamTest(unittest.TestCase):
         # Create search directions only for the scalar tensor
         # No search directions for the empty layer_weight
         masked_blocked_search_directions = (
-            torch.ones_like(scalar_tensor, dtype=torch.float),
+            torch.ones_like(self._scalar_tensor, dtype=torch.float),
         )
 
         # Update parameters using the search directions
@@ -224,7 +228,7 @@ class DistributorOnEmptyParamTest(unittest.TestCase):
         # Define expected masked blocked parameters
         # Only contains the scalar tensor (unsqueezed to match dimensions)
         expected_masked_blocked_params = (
-            torch.ones_like(scalar_tensor, dtype=torch.float).unsqueeze(0),
+            torch.ones_like(self._scalar_tensor, dtype=torch.float).unsqueeze(0),
         )
 
         # Verify that the actual parameters match the expected ones
@@ -233,18 +237,6 @@ class DistributorOnEmptyParamTest(unittest.TestCase):
         )
 
     def test_local_grad_selector(self) -> None:
-        # Set up the scalar tensor with a gradient
-        scalar_tensor: torch.Tensor = cast(torch.Tensor, self._model.scalar)
-        scalar_tensor.grad = torch.ones_like(scalar_tensor)
-
-        # Get the linear layers module list - this contains an empty parameter
-        linear_layers: nn.ModuleList = cast(nn.ModuleList, self._model.linear_layers)
-
-        # Get the weight of the first layer (which is empty) and set its gradient
-        layer_weight: torch.Tensor = cast(torch.Tensor, linear_layers[0].weight)
-        self.assertEqual(layer_weight.numel(), 0)
-        layer_weight.grad = torch.ones_like(layer_weight)
-
         # Process gradients and update the local gradient selector
         self._distributor.merge_and_block_gradients()
 
@@ -284,20 +276,18 @@ class DistributorOnEmptyParamTest(unittest.TestCase):
         # Register the custom equality function for BlockInfo type
         self.addTypeEqualityFunc(BlockInfo, block_info_equality)
 
-        # Get the linear layers and the empty layer weight
-        linear_layers: nn.ModuleList = cast(nn.ModuleList, self._model.linear_layers)
-        layer_weight: torch.Tensor = cast(torch.Tensor, linear_layers[0].weight)
-        self.assertEqual(layer_weight.numel(), 0)
-
         # Expected block info list:
         # - First element: the scalar tensor with block ID (0, "block_0")
         # - Second element: the empty layer weight with block ID (1, "block_0")
         expected_local_block_info_list = (
             BlockInfo(
-                param=cast(torch.Tensor, self._model.scalar),
+                param=self._scalar_tensor,
                 composable_block_ids=(0, "block_0"),
             ),
-            BlockInfo(param=layer_weight, composable_block_ids=(1, "block_0")),
+            BlockInfo(
+                param=self._first_linear_layer_weight,
+                composable_block_ids=(1, "block_0"),
+            ),
         )
 
         # Compare each element in the block info lists
@@ -315,16 +305,6 @@ class DistributorOnEmptyParamTest(unittest.TestCase):
             )
 
     def test_merge_and_block_gradients(self) -> None:
-        # Set up the scalar tensor with a gradient
-        scalar_tensor: torch.Tensor = cast(torch.Tensor, self._model.scalar)
-        scalar_tensor.grad = torch.ones_like(scalar_tensor)
-
-        # Get the linear layers and the empty layer weight
-        linear_layers: nn.ModuleList = cast(nn.ModuleList, self._model.linear_layers)
-        layer_weight: torch.Tensor = cast(torch.Tensor, linear_layers[0].weight)
-        self.assertEqual(layer_weight.numel(), 0)
-        layer_weight.grad = torch.ones_like(layer_weight)
-
         # Process gradients - since layer_weight is empty, it won't produce block gradients
         actual_local_masked_block_grads = self._distributor.merge_and_block_gradients()
 
