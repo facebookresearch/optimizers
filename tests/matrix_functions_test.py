@@ -1050,6 +1050,24 @@ class MatrixOrthogonalizationTest(unittest.TestCase):
             rtol=rtol,
         )
 
+    @parametrize(
+        "matrix",
+        (torch.randn(3, 2), torch.randn(2, 3)),
+    )
+    @parametrize(
+        "orthogonalization_config",
+        (
+            SVDOrthogonalizationConfig(),
+            NewtonSchulzOrthogonalizationConfig(),
+        ),
+    )
+    def test_orthogonalization_non_square_matrix(
+        self, matrix: Tensor, orthogonalization_config: OrthogonalizationConfig
+    ) -> None:
+        matrix_orthogonalization(
+            matrix, orthogonalization_config=orthogonalization_config
+        )
+
     def test_invalid_orthogonalization_config(self) -> None:
         @dataclass
         class NotSupportedOrthogonalizationConfig(OrthogonalizationConfig):

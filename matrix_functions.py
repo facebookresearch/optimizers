@@ -1101,8 +1101,8 @@ def _svd_orthogonalization(
 
     """
     # Orthogonalize A via reduced SVD.
-    U, s, V = torch.linalg.svd(A, full_matrices=False)
-    A_orthogonal = U @ V.T
+    U, s, V_T = torch.linalg.svd(A, full_matrices=False)
+    A_orthogonal = U @ V_T
 
     # Scale by nuclear norm if specified.
     if scale_by_nuclear_norm:

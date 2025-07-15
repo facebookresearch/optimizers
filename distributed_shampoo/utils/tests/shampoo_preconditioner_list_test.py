@@ -47,7 +47,9 @@ from distributed_shampoo.utils.shampoo_preconditioner_list import (
 )
 from distributed_shampoo.utils.shampoo_utils import compress_list
 from matrix_functions_types import (
+    DefaultNewtonSchulzOrthogonalizationConfig,
     EighEigendecompositionConfig,
+    OrthogonalizationConfig,
     PerturbationConfig,
     QREigendecompositionConfig,
     SVDOrthogonalizationConfig,
@@ -269,6 +271,26 @@ class SpectralDescentPreconditionerListTest(AbstractPreconditionerListTest.Inter
             masked_grad_lists=[masked_grad_list],
             masked_expected_preconditioned_grad_list=masked_grad_list,
         )
+
+    @parametrize(
+        "orthogonalization_config",
+        (
+            SVDOrthogonalizationConfig(),
+            DefaultNewtonSchulzOrthogonalizationConfig,
+        ),
+    )
+    def test_precondition_non_square_matrix(
+        self, orthogonalization_config: OrthogonalizationConfig
+    ) -> None:
+        block_list = (torch.randn(3, 2), torch.randn(2, 3))
+        masked_grad_list = (torch.randn(3, 2), torch.randn(2, 3))
+        preconditioner_list = SpectralDescentPreconditionerList(
+            block_list=block_list,
+            preconditioner_config=SpectralDescentPreconditionerConfig(
+                orthogonalization_config=orthogonalization_config,
+            ),
+        )
+        preconditioner_list.precondition(masked_grad_list=masked_grad_list)
 
     @parametrize(
         "block_list",
