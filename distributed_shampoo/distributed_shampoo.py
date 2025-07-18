@@ -292,6 +292,7 @@ class DistributedShampoo(torch.optim.Optimizer):
         grafting_config (GraftingConfig | None): Configuration for grafting method. If None, ignores grafting.
             (Default: None)
         use_merge_dims (bool): Merge dimensions if possible while respecting max_preconditioner_dim. (Default: True)
+        use_pin_memory (bool): Whether to use pin memory to remove sync point in memory copy. (Default: False)
         shampoo_pt2_compile_config (ShampooPT2CompileConfig | None): Configuration for Shampoo PT2 compilation. If None,
             ignores compilation, and Shampoo will run in eager mode. (Default: None)
         distributed_config (DistributedConfig | None): Configuration for applying Shampoo
@@ -323,6 +324,7 @@ class DistributedShampoo(torch.optim.Optimizer):
         use_decoupled_weight_decay: bool = True,
         grafting_config: GraftingConfig | None = None,
         use_merge_dims: bool = True,
+        use_pin_memory: bool = False,
         shampoo_pt2_compile_config: ShampooPT2CompileConfig | None = None,
         distributed_config: DistributedConfig | None = None,
         preconditioner_dtype: torch.dtype = torch.float,
@@ -454,6 +456,9 @@ class DistributedShampoo(torch.optim.Optimizer):
                 PRECONDITIONER_CONFIG: preconditioner_config,
             },
         )
+
+        # Initialize pin memory option to remove sync point in memory copy.
+        self._use_pin_memory: bool = use_pin_memory
 
         # Initialize non-group-related fields.
         self._shampoo_pt2_compile_config: ShampooPT2CompileConfig | None = (
@@ -1159,9 +1164,9 @@ class DistributedShampoo(torch.optim.Optimizer):
             # NOTE: Wrap scalar of group[LR] into a 0D tensor to avoid PT2 recompilation;
             # Send 0D tensor to GPU in `non_blocking` to avoid QPS regression. Remove the gpu
             # tensor impl once PT2 supports cpu 0D tensor properly.
-            lr = torch.tensor(group[LR], dtype=torch.float).to(
-                self._device, non_blocking=True
-            )
+            lr = torch.tensor(
+                group[LR], dtype=torch.float, pin_memory=self._use_pin_memory
+            ).to(self._device, non_blocking=True)
             beta1 = group[BETAS][0]
             beta3 = group[BETA3]
             weight_decay = group[WEIGHT_DECAY]
