@@ -15,7 +15,6 @@ import importlib
 import logging
 import random
 import shutil
-from abc import ABC, abstractmethod
 from collections.abc import Callable
 from functools import partial
 from operator import attrgetter
@@ -303,18 +302,7 @@ class Parser:
 
 
 ###### METRICS CLASSES ######
-class Metrics(ABC):
-    @abstractmethod
-    def log(self) -> None: ...
-
-    @abstractmethod
-    def reset(self) -> None: ...
-
-    @abstractmethod
-    def update(self, loss: torch.Tensor) -> None: ...
-
-
-class LossMetrics(Metrics):
+class LossMetrics:
     def __init__(
         self,
         window_size: int = 100,
