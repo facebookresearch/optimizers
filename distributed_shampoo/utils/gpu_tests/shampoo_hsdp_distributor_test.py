@@ -14,6 +14,7 @@ import unittest
 from collections.abc import Callable
 from functools import partial
 from itertools import filterfalse, pairwise
+from typing import cast
 from unittest import mock
 
 import torch
@@ -24,10 +25,15 @@ from distributed_shampoo.tests.shampoo_test_utils import (
     construct_training_problem,
     train_model,
 )
+from distributed_shampoo.utils.gpu_tests.distributor_test_utils import (
+    DistributorOnEmptyParamTest,
+)
+from distributed_shampoo.utils.shampoo_block_info import DTensorBlockInfo
 from distributed_shampoo.utils.shampoo_fsdp_utils import compile_fsdp_parameter_metadata
+from distributed_shampoo.utils.shampoo_hsdp_distributor import HSDPDistributor
 from distributed_shampoo.utils.shampoo_preconditioner_list import SHAMPOO
 
-from torch import nn
+from torch import distributed as dist, nn
 from torch.distributed.checkpoint._nested_dict import flatten_state_dict
 from torch.distributed.device_mesh import init_device_mesh
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP1, ShardingStrategy
@@ -332,3 +338,164 @@ class ShampooHSDPDistributorTest(FSDPTest):
                 ),
                 model.parameters(),
             )
+
+
+@unittest.skipIf(not torch.cuda.is_available(), "Skip when CUDA is not available")
+class HSDPDistributorOnEmptyParamTest(FSDPTest, DistributorOnEmptyParamTest.Interface):
+    @property
+    def world_size(self) -> int:
+        return 4
+
+    def _construct_model_and_distributor(self) -> tuple[nn.Module, HSDPDistributor]:
+        device_mesh = init_device_mesh("cuda", (2, 2))
+
+        # Create a model with specific configuration:
+        # - linear_layers are empty params (second dimension is 0)
+        # - dead_layers will be partitioned into two split params for each replicate group
+        # For replicate group composed of rank 0 and 2: One split param with torch.Size((PRECONDITIONER_DIM,)) and another with torch.Size((PRECONDITIONER_DIM // 2,))
+        # For replicate group composed of rank 1 and 3: One split param with torch.Size((PRECONDITIONER_DIM // 2,)) and another with torch.Size((PRECONDITIONER_DIM,))
+        model = construct_training_problem(
+            model_linear_layers_dims=(PRECONDITIONER_DIM, 0),
+            model_dead_layers_dims=(PRECONDITIONER_DIM, 3),
+            enable_learnable_scalar=False,  # Disable 0D learable parameter because FSDP doesn't support it.
+            device=torch.device("cuda"),
+            fill=0.01,
+            post_model_decoration=partial(
+                FSDP1,
+                device_mesh=device_mesh,
+                sharding_strategy=ShardingStrategy.HYBRID_SHARD,
+                use_orig_params=True,
+            ),
+        )[0]
+        distributed_config = HSDPShampooConfig(
+            device_mesh=device_mesh,
+            param_to_metadata=compile_fsdp_parameter_metadata(model),
+            num_trainers_per_group=1,
+        )
+        distributor = HSDPDistributor(
+            param_group=DistributedShampoo(
+                model.parameters(),
+                lr=0.001,
+                betas=(0.9, 1.0),
+                epsilon=1e-8,
+                momentum=0.0,
+                weight_decay=0.0,
+                precondition_frequency=1,
+                start_preconditioning_step=-1,
+                max_preconditioner_dim=PRECONDITIONER_DIM,
+                distributed_config=distributed_config,
+            ).param_groups[0],
+            distributed_config=distributed_config,
+        )
+
+        # Get the weight of the linear layers (which is empty) and set its gradient
+        linear_layers: nn.ModuleList = cast(nn.ModuleList, model.linear_layers)
+        first_linear_layer_weight: torch.Tensor = cast(
+            torch.Tensor, linear_layers[0].weight
+        )
+        assert first_linear_layer_weight.numel() == 0
+        first_linear_layer_weight.grad = torch.ones_like(first_linear_layer_weight)
+
+        # Get the weight of the dead layers and set its gradient to None to make sure this is a dead layer
+        dead_layers: nn.ModuleList = cast(nn.ModuleList, model.dead_layers)
+        first_dead_layer_weight: torch.Tensor = cast(
+            torch.Tensor, dead_layers[0].weight
+        )
+        first_dead_layer_weight.grad = None
+
+        return model, distributor
+
+    @property
+    def _expected_masked_blocked_params(self) -> tuple[torch.Tensor, ...]:
+        return ()
+
+    @property
+    def _expected_local_grad_selector(self) -> tuple[bool, ...]:
+        return (False, False)
+
+    @property
+    def _expected_local_blocked_params(self) -> tuple[torch.Tensor, ...]:
+        # Define expected parameters for each rank
+        return {
+            0: (  # For rank 0
+                torch.zeros((PRECONDITIONER_DIM,), dtype=torch.float, device="cuda:0"),
+                torch.zeros(
+                    (PRECONDITIONER_DIM // 2,), dtype=torch.float, device="cuda:0"
+                ),
+            ),
+            1: (  # For rank 1
+                torch.zeros(
+                    (PRECONDITIONER_DIM // 2,), dtype=torch.float, device="cuda:1"
+                ),
+                torch.zeros((PRECONDITIONER_DIM,), dtype=torch.float, device="cuda:1"),
+            ),
+            2: (  # For rank 2
+                torch.zeros((PRECONDITIONER_DIM,), dtype=torch.float, device="cuda:2"),
+                torch.zeros(
+                    (PRECONDITIONER_DIM // 2,), dtype=torch.float, device="cuda:2"
+                ),
+            ),
+            3: (  # For rank 3
+                torch.zeros(
+                    (PRECONDITIONER_DIM // 2,), dtype=torch.float, device="cuda:3"
+                ),
+                torch.zeros((PRECONDITIONER_DIM,), dtype=torch.float, device="cuda:3"),
+            ),
+        }[dist.get_rank()]
+
+    def _expected_local_block_info_list(
+        self, model: nn.Module
+    ) -> tuple[DTensorBlockInfo, ...]:
+        # Get the weight parameter from the first dead layer
+        dead_layers: nn.ModuleList = cast(nn.ModuleList, model.dead_layers)
+        first_dead_layer_weight: torch.Tensor = cast(
+            torch.Tensor, dead_layers[0].weight
+        )
+
+        # Define expected DTensorBlockInfo objects for each rank
+        return {
+            0: (  # For rank 0
+                DTensorBlockInfo(
+                    param=first_dead_layer_weight,
+                    composable_block_ids=(1, "rank_0-block_0"),
+                ),
+                DTensorBlockInfo(
+                    param=first_dead_layer_weight,
+                    composable_block_ids=(1, "rank_0-block_1"),
+                ),
+            ),
+            1: (  # For rank 1
+                DTensorBlockInfo(
+                    param=first_dead_layer_weight,
+                    composable_block_ids=(1, "rank_1-block_0"),
+                ),
+                DTensorBlockInfo(
+                    param=first_dead_layer_weight,
+                    composable_block_ids=(1, "rank_1-block_1"),
+                ),
+            ),
+            2: (  # For rank 2
+                DTensorBlockInfo(
+                    param=first_dead_layer_weight,
+                    composable_block_ids=(1, "rank_0-block_0"),
+                ),
+                DTensorBlockInfo(
+                    param=first_dead_layer_weight,
+                    composable_block_ids=(1, "rank_0-block_1"),
+                ),
+            ),
+            3: (  # For rank 3
+                DTensorBlockInfo(
+                    param=first_dead_layer_weight,
+                    composable_block_ids=(1, "rank_1-block_0"),
+                ),
+                DTensorBlockInfo(
+                    param=first_dead_layer_weight,
+                    composable_block_ids=(1, "rank_1-block_1"),
+                ),
+            ),
+        }[dist.get_rank()]
+
+    @property
+    def _expected_local_masked_block_grads(self) -> tuple[torch.Tensor, ...]:
+        return ()
