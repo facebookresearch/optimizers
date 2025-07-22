@@ -298,7 +298,7 @@ class DistributedShampoo(torch.optim.Optimizer):
         distributed_config (DistributedConfig | None): Configuration for applying Shampoo
             to different distributed training frameworks, such as distributed-data parallel (DDP) training.
             Based on the configuration, determines which version of Shampoo to use. (Default: None)
-        preconditioner_dtype (torch.dtype): Data type for preconditioner. (Default: None)
+        preconditioner_dtype (torch.dtype): Data type for preconditioner. (Default: torch.float)
         preconditioner_config (PreconditionerConfig): Configuration for preconditioner computation.
             If this field is an instance ShampooPreconditionerConfig, Shampoo uses the root inverse of the preconditioner.
             If this field is an instance EigenvalueCorrectedShampooPreconditionerConfig Shampoo uses corrected the eigenvalues/running Adam in the eigenbasis of preconditioner.
