@@ -34,14 +34,7 @@ class DistributorTest(unittest.TestCase):
         self._distributor = Distributor(
             param_group=DistributedShampoo(
                 self._model.parameters(),
-                lr=0.01,
-                betas=(0.9, 1.0),
-                epsilon=1e-12,
-                momentum=0.0,
-                weight_decay=0.0,
                 max_preconditioner_dim=PRECONDITIONER_DIM,
-                precondition_frequency=1,
-                start_preconditioning_step=-1,
             ).param_groups[0]
         )
 
@@ -179,14 +172,7 @@ class DistributorOnEmptyParamTest(unittest.TestCase):
         self._distributor = Distributor(
             param_group=DistributedShampoo(
                 self._model.parameters(),
-                lr=0.01,
-                betas=(0.9, 1.0),
-                epsilon=1e-12,
-                momentum=0.0,
-                weight_decay=0.0,
                 max_preconditioner_dim=PRECONDITIONER_DIM,
-                precondition_frequency=1,
-                start_preconditioning_step=-1,
             ).param_groups[0]
         )
 
