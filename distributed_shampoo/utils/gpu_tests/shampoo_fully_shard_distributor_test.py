@@ -231,6 +231,7 @@ class FullyShardDistributorOnEmptyParamTest(
             post_model_decoration=partial(fully_shard),
         )[0]
         distributed_config = FullyShardShampooConfig()  # type: ignore[abstract]
+        assert isinstance(model, nn.Module)
         distributor = FullyShardDistributor(
             param_group=DistributedShampoo(
                 model.parameters(),
@@ -268,7 +269,7 @@ class FullyShardDistributorOnEmptyParamTest(
         return ()
 
     @with_comms
-    def test_update_params(self) -> None:
+    def test_update_params(self) -> None:  # type: ignore[override]
         DistributorOnEmptyParamTest.Interface.test_update_params(self)
 
     @property
@@ -276,7 +277,7 @@ class FullyShardDistributorOnEmptyParamTest(
         return (False, False)
 
     @with_comms
-    def test_local_grad_selector(self) -> None:
+    def test_local_grad_selector(self) -> None:  # type: ignore[override]
         DistributorOnEmptyParamTest.Interface.test_local_grad_selector(self)
 
     @property
@@ -296,7 +297,7 @@ class FullyShardDistributorOnEmptyParamTest(
         )
 
     @with_comms
-    def test_local_blocked_params(self) -> None:
+    def test_local_blocked_params(self) -> None:  # type: ignore[override]
         DistributorOnEmptyParamTest.Interface.test_local_blocked_params(self)
 
     def _expected_local_block_info_list(
@@ -321,7 +322,7 @@ class FullyShardDistributorOnEmptyParamTest(
         )
 
     @with_comms
-    def test_local_block_info_list(self) -> None:
+    def test_local_block_info_list(self) -> None:  # type: ignore[override]
         DistributorOnEmptyParamTest.Interface.test_local_block_info_list(self)
 
     @property
@@ -329,5 +330,5 @@ class FullyShardDistributorOnEmptyParamTest(
         return ()
 
     @with_comms
-    def test_merge_and_block_gradients(self) -> None:
+    def test_merge_and_block_gradients(self) -> None:  # type: ignore[override]
         DistributorOnEmptyParamTest.Interface.test_merge_and_block_gradients(self)

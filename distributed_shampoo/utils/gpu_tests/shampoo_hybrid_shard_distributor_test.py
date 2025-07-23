@@ -544,6 +544,7 @@ class HybridShardDistributorOnEmptyParamTest(
         distributed_config = HybridShardShampooConfig(
             device_mesh=device_mesh, num_trainers_per_group=1
         )
+        assert isinstance(model, nn.Module)
         distributor = HybridShardDistributor(
             param_group=DistributedShampoo(
                 model.parameters(),
@@ -582,7 +583,7 @@ class HybridShardDistributorOnEmptyParamTest(
         return ()
 
     @with_comms
-    def test_update_params(self) -> None:
+    def test_update_params(self) -> None:  # type: ignore[override]
         DistributorOnEmptyParamTest.Interface.test_update_params(self)
 
     @property
@@ -590,7 +591,7 @@ class HybridShardDistributorOnEmptyParamTest(
         return (False, False)
 
     @with_comms
-    def test_local_grad_selector(self) -> None:
+    def test_local_grad_selector(self) -> None:  # type: ignore[override]
         DistributorOnEmptyParamTest.Interface.test_local_grad_selector(self)
 
     @property
@@ -610,7 +611,7 @@ class HybridShardDistributorOnEmptyParamTest(
         )
 
     @with_comms
-    def test_local_blocked_params(self) -> None:
+    def test_local_blocked_params(self) -> None:  # type: ignore[override]
         DistributorOnEmptyParamTest.Interface.test_local_blocked_params(self)
 
     def _expected_local_block_info_list(
@@ -667,7 +668,7 @@ class HybridShardDistributorOnEmptyParamTest(
         }[dist.get_rank()]
 
     @with_comms
-    def test_local_block_info_list(self) -> None:
+    def test_local_block_info_list(self) -> None:  # type: ignore[override]
         DistributorOnEmptyParamTest.Interface.test_local_block_info_list(self)
 
     @property
@@ -675,5 +676,5 @@ class HybridShardDistributorOnEmptyParamTest(
         return ()
 
     @with_comms
-    def test_merge_and_block_gradients(self) -> None:
+    def test_merge_and_block_gradients(self) -> None:  # type: ignore[override]
         DistributorOnEmptyParamTest.Interface.test_merge_and_block_gradients(self)
