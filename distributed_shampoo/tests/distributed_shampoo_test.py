@@ -209,7 +209,7 @@ class DistributedShampooInitTest(unittest.TestCase):
 
         self.assertRaisesRegex(
             NotImplementedError,
-            r"distributed_config=.*\.NotSupportedDistributedConfig\(.*\) not supported!",
+            r"group\[DISTRIBUTED_CONFIG\]=.*\.NotSupportedDistributedConfig\(.*\) not supported!",
             DistributedShampoo,
             params=self._model.parameters(),
             distributed_config=NotSupportedDistributedConfig(),
@@ -640,6 +640,7 @@ class ShampooDistributedStateDictTest(AbstractTest.DistributedStateDictTestBase)
                         epsilon=0.001,
                     ),
                     "use_merge_dims": True,
+                    "distributed_config": None,
                     "preconditioner_dtype": torch.float32,
                     "preconditioner_config": self._preconditioner_config,
                 }
@@ -819,6 +820,7 @@ class EigendecomposedShampooDistributedStateDictTest(
                         epsilon=0.001,
                     ),
                     "use_merge_dims": True,
+                    "distributed_config": None,
                     "preconditioner_dtype": torch.float32,
                     "preconditioner_config": self._preconditioner_config,
                 }
@@ -1004,6 +1006,7 @@ class EigenvalueCorrectedShampooDistributedStateDictTest(
                         epsilon=0.001,
                     ),
                     "use_merge_dims": True,
+                    "distributed_config": None,
                     "preconditioner_dtype": torch.float32,
                     "preconditioner_config": self._preconditioner_config,
                 }
@@ -1099,6 +1102,7 @@ class SpectralDescentDistributedStateDictTest(
                         epsilon=0.001,
                     ),
                     "use_merge_dims": True,
+                    "distributed_config": None,
                     "preconditioner_dtype": torch.float32,
                     "preconditioner_config": self._preconditioner_config,
                 }

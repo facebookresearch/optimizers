@@ -25,6 +25,7 @@ from distributed_shampoo.shampoo_types import (
     DAMPENING,
     DDPShampooConfig,
     DefaultShampooConfig,
+    DISTRIBUTED_CONFIG,
     DistributedConfig,
     DISTRIBUTOR,
     EigendecomposedShampooPreconditionerConfig,
@@ -452,6 +453,7 @@ class DistributedShampoo(torch.optim.Optimizer):
                 USE_DECOUPLED_WEIGHT_DECAY: use_decoupled_weight_decay,
                 GRAFTING_CONFIG: grafting_config,
                 USE_MERGE_DIMS: use_merge_dims,
+                DISTRIBUTED_CONFIG: distributed_config,
                 PRECONDITIONER_DTYPE: preconditioner_dtype,
                 PRECONDITIONER_CONFIG: preconditioner_config,
             },
@@ -472,7 +474,7 @@ class DistributedShampoo(torch.optim.Optimizer):
 
         # Block parameters and instantiate optimizer states.
         # NOTE: _instantiate_distributor() has to be called first and _initialize_blocked_parameters_state() second.
-        self._instantiate_distributor(distributed_config)
+        self._instantiate_distributor()
         self._initialize_blocked_parameters_state()
         self._instantiate_shampoo_preconditioner_list()
         self._instantiate_grafting()
@@ -485,36 +487,37 @@ class DistributedShampoo(torch.optim.Optimizer):
         )
 
     @torch.no_grad()
-    def _instantiate_distributor(
-        self, distributed_config: DistributedConfig | None
-    ) -> None:
-        match distributed_config:
-            case None:
-                distributor_cls: Callable[..., DistributorInterface] = Distributor
-            case HSDPShampooConfig():
-                distributor_cls = partial(
-                    HSDPDistributor, distributed_config=distributed_config
-                )
-            case HybridShardShampooConfig():
-                distributor_cls = partial(
-                    HybridShardDistributor, distributed_config=distributed_config
-                )
-            case DDPShampooConfig():
-                distributor_cls = partial(
-                    DDPDistributor, distributed_config=distributed_config
-                )
-            case FSDPShampooConfig():
-                distributor_cls = partial(
-                    FSDPDistributor, distributed_config=distributed_config
-                )
-            case FullyShardShampooConfig():
-                distributor_cls = FullyShardDistributor
-            case _:
-                raise NotImplementedError(f"{distributed_config=} not supported!")
-
+    def _instantiate_distributor(self) -> None:
         for state_lists, group in zip(
             self._per_group_state_lists, self.param_groups, strict=True
         ):
+            match group[DISTRIBUTED_CONFIG]:
+                case None:
+                    distributor_cls: Callable[..., DistributorInterface] = Distributor
+                case HSDPShampooConfig():
+                    distributor_cls = partial(
+                        HSDPDistributor, distributed_config=group[DISTRIBUTED_CONFIG]
+                    )
+                case HybridShardShampooConfig():
+                    distributor_cls = partial(
+                        HybridShardDistributor,
+                        distributed_config=group[DISTRIBUTED_CONFIG],
+                    )
+                case DDPShampooConfig():
+                    distributor_cls = partial(
+                        DDPDistributor, distributed_config=group[DISTRIBUTED_CONFIG]
+                    )
+                case FSDPShampooConfig():
+                    distributor_cls = partial(
+                        FSDPDistributor, distributed_config=group[DISTRIBUTED_CONFIG]
+                    )
+                case FullyShardShampooConfig():
+                    distributor_cls = FullyShardDistributor
+                case _:
+                    raise NotImplementedError(
+                        f"{group[DISTRIBUTED_CONFIG]=} not supported!"
+                    )
+
             # Instantiate distributors for each group.
             state_lists[DISTRIBUTOR] = distributor_cls(group)
 
@@ -523,7 +526,7 @@ class DistributedShampoo(torch.optim.Optimizer):
             # those trainers are working on nothing.
             assert state_lists[
                 DISTRIBUTOR
-            ].local_blocked_params, f"Some workers have no parameters to work on. This mostly happens when the value of num_trainers_per_group field in {distributed_config=} is more than the number of local blocked params on a single device. Please check the num_trainers_per_group setting and consider reducing it."
+            ].local_blocked_params, f"Some workers have no parameters to work on. This mostly happens when the value of num_trainers_per_group field in {group[DISTRIBUTED_CONFIG]=} is more than the number of local blocked params on a single device. Please check the num_trainers_per_group setting and consider reducing it."
 
             # Compile blocked parameters and block-to-parameter metadata into group lists.
             state_lists[MASKED_BLOCKED_PARAMS] = state_lists[
