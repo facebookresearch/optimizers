@@ -27,6 +27,9 @@ from distributed_shampoo.tests.shampoo_test_utils import (
     construct_training_problem,
     train_model,
 )
+from distributed_shampoo.utils.gpu_tests.distributor_test_utils import (
+    DistributorOnEmptyParamTest,
+)
 from distributed_shampoo.utils.shampoo_block_info import BlockInfo
 from distributed_shampoo.utils.shampoo_fsdp_distributor import FSDPDistributor
 from distributed_shampoo.utils.shampoo_fsdp_utils import compile_fsdp_parameter_metadata
@@ -235,14 +238,12 @@ class ShampooFSDPDistributorTest(FSDPTest):
 
 
 @unittest.skipIf(not torch.cuda.is_available(), "Skip when CUDA is not available")
-@instantiate_parametrized_tests
-class FSDPDistributorOnEmptyParamTest(FSDPTest):
+class FSDPDistributorOnEmptyParamTest(FSDPTest, DistributorOnEmptyParamTest.Interface):
     @property
     def world_size(self) -> int:
         return 2
 
-    @staticmethod
-    def _construct_model_and_distributor() -> tuple[nn.Module, FSDPDistributor]:
+    def _construct_model_and_distributor(self) -> tuple[nn.Module, FSDPDistributor]:
         # Create a model with specific configuration:
         # - linear_layers are empty params (second dimension is 0)
         # - dead_layers will be partitioned into two split params for each rank
@@ -292,60 +293,18 @@ class FSDPDistributorOnEmptyParamTest(FSDPTest):
 
         return model, distributor
 
-    @skip_if_lt_x_gpu(2)
-    def test_update_params(self) -> None:
-        _, distributor = (
-            FSDPDistributorOnEmptyParamTest._construct_model_and_distributor()
-        )
+    @property
+    def _expected_masked_blocked_params(self) -> tuple[torch.Tensor, ...]:
+        return ()
 
-        # Merge and block gradients to prepare for parameter updates
-        distributor.merge_and_block_gradients()
+    @property
+    def _expected_local_grad_selector(self) -> tuple[bool, ...]:
+        return (False, False)
 
-        # Get the current masked blocked parameters
-        actual_masked_blocked_params = distributor.local_masked_blocked_params
-
-        # Create empty search directions (no updates)
-        masked_blocked_search_directions = ()
-
-        # Apply the empty updates to parameters
-        distributor.update_params(
-            masked_blocked_search_directions=masked_blocked_search_directions
-        )
-
-        # Expect that masked blocked parameters are empty
-        expected_masked_blocked_params = ()
-
-        # Verify that actual and expected parameters match
-        torch.testing.assert_close(
-            actual_masked_blocked_params, expected_masked_blocked_params
-        )
-
-    @skip_if_lt_x_gpu(2)
-    def test_local_grad_selector(self) -> None:
-        _, distributor = (
-            FSDPDistributorOnEmptyParamTest._construct_model_and_distributor()
-        )
-
-        # Merge and block gradients to prepare for testing
-        distributor.merge_and_block_gradients()
-
-        # With empty parameters, we expect no gradients (all False)
-        expected_local_grad_selector = (False, False)
-
-        # Verify that the gradient selector matches expectations
-        self.assertEqual(distributor.local_grad_selector, expected_local_grad_selector)
-
-    @skip_if_lt_x_gpu(2)
-    def test_local_blocked_params(self) -> None:
-        _, distributor = (
-            FSDPDistributorOnEmptyParamTest._construct_model_and_distributor()
-        )
-
-        # Merge and block gradients to prepare for testing
-        distributor.merge_and_block_gradients()
-
+    @property
+    def _expected_local_blocked_params(self) -> tuple[torch.Tensor, ...]:
         # Define expected parameters for each rank
-        expected_local_params = {
+        return {
             0: (  # For rank 0
                 torch.zeros((PRECONDITIONER_DIM,), dtype=torch.float, device="cuda:0"),
                 torch.zeros(
@@ -358,19 +317,11 @@ class FSDPDistributorOnEmptyParamTest(FSDPTest):
                 ),
                 torch.zeros((PRECONDITIONER_DIM,), dtype=torch.float, device="cuda:1"),
             ),
-        }
+        }[dist.get_rank()]
 
-        # Verify that the local blocked parameters match expectations for the current rank
-        torch.testing.assert_close(
-            distributor.local_blocked_params, expected_local_params[dist.get_rank()]
-        )
-
-    @skip_if_lt_x_gpu(2)
-    def test_local_bloc_info_list(self) -> None:
-        model, distributor = (
-            FSDPDistributorOnEmptyParamTest._construct_model_and_distributor()
-        )
-
+    def _expected_local_block_info_list(
+        self, model: nn.Module
+    ) -> tuple[BlockInfo, ...]:
         # Get the weight parameter from the first dead layer
         dead_layers: nn.ModuleList = cast(nn.ModuleList, model.dead_layers)
         first_dead_layer_weight: torch.Tensor = cast(
@@ -378,7 +329,7 @@ class FSDPDistributorOnEmptyParamTest(FSDPTest):
         )
 
         # Define expected BlockInfo objects for each rank
-        expected_local_block_info_list = (
+        return (
             BlockInfo(
                 param=first_dead_layer_weight,
                 composable_block_ids=(1, f"rank_{dist.get_rank()}-block_0"),
@@ -389,25 +340,6 @@ class FSDPDistributorOnEmptyParamTest(FSDPTest):
             ),
         )
 
-        # Note: We could use unittest.addTypeEqualityFunc() for BlockInfo comparison,
-        # but since this test class inherits from FSDPTest and not directly from unittest.TestCase,
-        # we need to implement the comparison manually here.
-        for index, (a, b) in enumerate(
-            zip(
-                distributor.local_block_info_list,
-                expected_local_block_info_list,
-                strict=True,
-            )
-        ):
-            # Only comparing param and composable_block_ids fields but not others like get_tensor()
-            # because function objects are not comparable in BlockInfo.
-            torch.testing.assert_close(
-                a.param,
-                b.param,
-                msg=f"Difference found at {index=}: {a.param=} != {b.param=}",
-            )
-            self.assertEqual(
-                a.composable_block_ids,
-                b.composable_block_ids,
-                msg=f"Difference found at {index=}: {a.composable_block_ids=} != {b.composable_block_ids=}",
-            )
+    @property
+    def _expected_local_masked_block_grads(self) -> tuple[torch.Tensor, ...]:
+        return ()
