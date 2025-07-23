@@ -131,6 +131,7 @@ class DistributorOnEmptyParamTest:
                     msg=f"Difference found at {index=}: {a.composable_block_ids=} != {b.composable_block_ids=}",
                 )
 
+        @property
         @abc.abstractmethod
         def _expected_local_masked_block_grads(self) -> tuple[torch.Tensor, ...]:
             """Returns expected local masked block gradients used in test_merge_and_block_gradients"""
