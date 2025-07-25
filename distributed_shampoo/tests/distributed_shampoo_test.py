@@ -91,8 +91,8 @@ class DistributedShampooInitTest(unittest.TestCase):
                 "Invalid beta parameter at index 0: -0.1. Must be in [0.0, 1.0).",
             ),
             (
-                {"betas": (0.9, 0.0)},
-                "Invalid beta parameter at index 1: 0.0. Must be in (0.0, 1.0].",
+                {"betas": (0.9, -0.1)},
+                "Invalid beta parameter at index 1: -0.1. Must be in [0.0, 1.0].",
             ),
             (
                 {"beta3": -0.1},

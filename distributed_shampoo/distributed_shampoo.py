@@ -338,9 +338,9 @@ class DistributedShampoo(torch.optim.Optimizer):
             raise ValueError(
                 f"Invalid beta parameter at index 0: {betas[0]}. Must be in [0.0, 1.0)."
             )
-        if not 0.0 < betas[1] <= 1.0:
+        if not 0.0 <= betas[1] <= 1.0:
             raise ValueError(
-                f"Invalid beta parameter at index 1: {betas[1]}. Must be in (0.0, 1.0]."
+                f"Invalid beta parameter at index 1: {betas[1]}. Must be in [0.0, 1.0]."
             )
         if beta3 == -1.0:
             beta3 = betas[0]
