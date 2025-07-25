@@ -14,7 +14,11 @@ from typing import Any
 
 import torch
 import torch.distributed as dist
-from distributed_shampoo.shampoo_types import DDPShampooConfig, PARAMS
+from distributed_shampoo.shampoo_types import (
+    DDPShampooConfig,
+    DISTRIBUTED_CONFIG,
+    PARAMS,
+)
 from distributed_shampoo.utils.shampoo_block_info import DTensorBlockInfo
 from distributed_shampoo.utils.shampoo_dist_utils import get_device_mesh
 from distributed_shampoo.utils.shampoo_distributor import DistributorInterface
@@ -33,12 +37,12 @@ logger: logging.Logger = logging.getLogger(__name__)
 
 
 """
-The following is a visualization of how DDP Distributor computing parallelism functions. 
+The following is a visualization of how DDP Distributor computing parallelism functions.
 Users specify num_trainers_per_group, which is the number of workers within a model replication group to manage computing parallelism.
 Note that num_trainers_per_group must be a divisor of the total number of workers.
 
-Assuming we have 4 GPUs within a model replication group, each GPU holds identical model parameters, 
-and there are 8 computationally expensive tasks for computing search directions or weight updates associated with the model. 
+Assuming we have 4 GPUs within a model replication group, each GPU holds identical model parameters,
+and there are 8 computationally expensive tasks for computing search directions or weight updates associated with the model.
 In practice, tasks may not be evenly distributed among workers.
 
 One approach is to let each worker perform these tasks independently without any subsequent communication.
@@ -47,16 +51,16 @@ This occurs when num_trainers_per_group = 1.
 ## num_trainers_per_group = 1
 
       GPU 0           GPU 1           GPU 2           GPU 3
-     -------         -------         -------         ------- 
+     -------         -------         -------         -------
     | W0 W1 |       | W0 W1 |       | W0 W1 |       | W0 W1 |
     | W2 W3 |       | W2 W3 |       | W2 W3 |       | W2 W3 |
     | W4 W5 |       | W4 W5 |       | W4 W5 |       | W4 W5 |
     | W6 W7 |       | W6 W7 |       | W6 W7 |       | W6 W7 |
-     -------         -------         -------         ------- 
+     -------         -------         -------         -------
 
 
 
-Alternatively, we could partition these 8 tasks evenly among the 4 GPUs, 
+Alternatively, we could partition these 8 tasks evenly among the 4 GPUs,
 allowing each GPU to compute its own partition.
 
 ## num_trainers_per_group = -1 or 4
@@ -84,9 +88,9 @@ allowing each GPU to compute its own partition.
 
 
 
-We could also find a middle ground by splitting the 4 GPUs into two independent groups, 
-each completing their own 8 search directions or weight updates independently. 
-Here, GPU 0 and 1 form one group, and GPU 2 and 3 form another group. 
+We could also find a middle ground by splitting the 4 GPUs into two independent groups,
+each completing their own 8 search directions or weight updates independently.
+Here, GPU 0 and 1 form one group, and GPU 2 and 3 form another group.
 For GPU 0 and 1, each needs to compute 4 search directions or weight updates, and similarly for GPU 2 and 3.
 
 ## num_trainers_per_group = 2
@@ -102,7 +106,7 @@ For GPU 0 and 1, each needs to compute 4 search directions or weight updates, an
   +++++++++++++++++++++++++++++   +++++++++++++++++++++++++++++
 
 
-  Within each group, once the computations are complete, each group performs its own synchronizations independently. 
+  Within each group, once the computations are complete, each group performs its own synchronizations independently.
   This approach balances computational and communication costs.
 
   After all-gather, the result is:
@@ -127,16 +131,12 @@ class DDPDistributor(DistributorInterface):
 
     Args:
         param_group (dict[str, Any]): Parameter group containing parameters.
-        distributed_config (DDPShampooConfig): Configuration for DDP Shampoo.
 
     """
 
-    def __init__(
-        self,
-        param_group: dict[str, Any],
-        distributed_config: DDPShampooConfig,
-    ) -> None:
+    def __init__(self, param_group: dict[str, Any]) -> None:
         super().__init__(param_group)
+        distributed_config: DDPShampooConfig = param_group[DISTRIBUTED_CONFIG]
 
         # Construct global masked blocked parameters (which is DDP-specific).
         self._global_masked_blocked_params: tuple[Tensor, ...] = (

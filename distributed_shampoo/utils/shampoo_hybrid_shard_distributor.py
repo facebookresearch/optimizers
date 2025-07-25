@@ -15,7 +15,11 @@ from typing import Any, Literal, overload
 
 import torch
 from commons import batched
-from distributed_shampoo.shampoo_types import HybridShardShampooConfig, PARAMS
+from distributed_shampoo.shampoo_types import (
+    DISTRIBUTED_CONFIG,
+    HybridShardShampooConfig,
+    PARAMS,
+)
 from distributed_shampoo.utils.shampoo_block_info import DTensorBlockInfo
 from distributed_shampoo.utils.shampoo_dist_utils import get_device_mesh
 from distributed_shampoo.utils.shampoo_distributor import DistributorInterface
@@ -74,15 +78,11 @@ class HybridShardDistributor(DistributorInterface):
 
     Args:
         param_group (dict[str, Any]): Parameter group containing parameters.
-        distributed_config (HybridShardShampooConfig): Configuration for HybridShard Shampoo.
 
     """
 
-    def __init__(
-        self,
-        param_group: dict[str, Any],
-        distributed_config: HybridShardShampooConfig,
-    ) -> None:
+    def __init__(self, param_group: dict[str, Any]) -> None:
+        distributed_config: HybridShardShampooConfig = param_group[DISTRIBUTED_CONFIG]
         self._hybrid_shard_device_mesh: torch.distributed.device_mesh.DeviceMesh = (
             distributed_config.device_mesh
         )

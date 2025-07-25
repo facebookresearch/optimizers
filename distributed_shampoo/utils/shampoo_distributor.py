@@ -289,12 +289,10 @@ class Distributor(DistributorInterface):
 
     Args:
         param_group (dict[str, Any]): Parameter group containing parameters.
+
     """
 
-    def __init__(
-        self,
-        param_group: dict[str, Any],
-    ) -> None:
+    def __init__(self, param_group: dict[str, Any]) -> None:
         super().__init__(param_group)
 
         # Initialize selectors and local blocked (masked) parameters.
