@@ -396,8 +396,12 @@ class DistributedShampoo(torch.optim.Optimizer):
         if isinstance(preconditioner_config, SpectralDescentPreconditionerConfig):
             # Warn about hyperparameters that won't have any effect.
             logger.warning(
-                f"{betas[1]=} does not have any effect when SpectralDescentPreconditionerConfig is used.\n"
-                f"{epsilon=} does not have any effect when SpectralDescentPreconditionerConfig is used.\n"
+                f"{betas[1]=} does not have any effect when SpectralDescentPreconditionerConfig is used."
+            )
+            logger.warning(
+                f"{epsilon=} does not have any effect when SpectralDescentPreconditionerConfig is used."
+            )
+            logger.warning(
                 f"{precondition_frequency=} does not have any effect when SpectralDescentPreconditionerConfig is used. Setting precondition_frequency to 1..."
             )
             precondition_frequency = 1
