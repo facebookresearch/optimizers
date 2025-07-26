@@ -156,20 +156,26 @@ class DistributedShampooInitTest(unittest.TestCase):
     def test_invalid_with_incorrect_hyperparameter_setting(
         self, incorrect_hyperparameter_setting: dict[str, Any], expected_error_msg: str
     ) -> None:
-        self.assertRaisesRegex(
-            ValueError,
-            re.escape(expected_error_msg),
-            DistributedShampoo,
-            self._model.parameters(),
-            **incorrect_hyperparameter_setting,
-        )
+        with self.subTest(
+            incorrect_hyperparameter_setting=incorrect_hyperparameter_setting,
+            expected_error_msg=expected_error_msg,
+        ):
+            self.assertRaisesRegex(
+                ValueError,
+                re.escape(expected_error_msg),
+                DistributedShampoo,
+                self._model.parameters(),
+                **incorrect_hyperparameter_setting,
+            )
 
     @parametrize(
-        "noop_hyperparameter_setting, expected_warning_msg",
+        "noop_hyperparameter_setting, expected_warning_msgs",
         [
             (
                 {"momentum": 0.0, "use_nesterov": True},
-                "Nesterov flag is enabled but momentum parameter is zero! Continuing without using momentum or Nesterov acceleration...",
+                [
+                    "Nesterov flag is enabled but momentum parameter is zero! Continuing without using momentum or Nesterov acceleration..."
+                ],
             ),
             (
                 {
@@ -180,25 +186,35 @@ class DistributedShampooInitTest(unittest.TestCase):
                     # Has to be set to False because otherwise parameter will be reshaped to 1D and initialization of preconditioner list will fail.
                     "use_merge_dims": False,
                 },
-                "betas[1]=0.999 does not have any effect when SpectralDescentPreconditionerConfig is used.\n"
-                "epsilon=1e-08 does not have any effect when SpectralDescentPreconditionerConfig is used.\n"
-                "precondition_frequency=100 does not have any effect when SpectralDescentPreconditionerConfig is used. Setting precondition_frequency to 1...",
+                [
+                    "betas[1]=0.999 does not have any effect when SpectralDescentPreconditionerConfig is used.",
+                    "epsilon=1e-08 does not have any effect when SpectralDescentPreconditionerConfig is used.",
+                    "precondition_frequency=100 does not have any effect when SpectralDescentPreconditionerConfig is used. Setting precondition_frequency to 1...",
+                ],
             ),
         ],
     )
     def test_noop_hyperparameter_setting_warnings(
-        self, noop_hyperparameter_setting: dict[str, Any], expected_warning_msg: str
+        self,
+        noop_hyperparameter_setting: dict[str, Any],
+        expected_warning_msgs: list[str],
     ) -> None:
         with self.assertLogs(level="WARNING") as cm:
             DistributedShampoo(
                 self._model.parameters(),
                 **noop_hyperparameter_setting,
             )
-
-            self.assertIn(
-                expected_warning_msg,
-                [r.msg for r in cm.records],
-            )
+            recorded_warning_msgs = [r.msg for r in cm.records]
+            for expected_warning_msg in expected_warning_msgs:
+                with self.subTest(
+                    noop_hyperparameter_setting=noop_hyperparameter_setting,
+                    expected_warning_msg=expected_warning_msg,
+                    recorded_warning_msgs=recorded_warning_msgs,
+                ):
+                    self.assertIn(
+                        expected_warning_msg,
+                        recorded_warning_msgs,
+                    )
 
     def test_invalid_distributed_config(self) -> None:
         @dataclass
