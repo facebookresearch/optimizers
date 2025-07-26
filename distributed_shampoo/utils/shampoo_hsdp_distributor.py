@@ -16,6 +16,7 @@ from typing import Any
 import torch
 from commons import batched
 from distributed_shampoo.shampoo_types import (
+    DISTRIBUTED_CONFIG,
     FSDPParameterMetadata,
     HSDPShampooConfig,
     MAX_PRECONDITIONER_DIM,
@@ -86,15 +87,11 @@ class HSDPDistributor(DistributorInterface):
 
     Args:
         param_group (dict[str, Any]): Parameter group containing parameters.
-        distributed_config (HSDPShampooConfig): Configuration for HSDP Shampoo.
 
     """
 
-    def __init__(
-        self,
-        param_group: dict[str, Any],
-        distributed_config: HSDPShampooConfig,
-    ) -> None:
+    def __init__(self, param_group: dict[str, Any]) -> None:
+        distributed_config: HSDPShampooConfig = param_group[DISTRIBUTED_CONFIG]
         self._param_to_metadata: dict[Parameter, FSDPParameterMetadata] = (
             distributed_config.param_to_metadata
         )

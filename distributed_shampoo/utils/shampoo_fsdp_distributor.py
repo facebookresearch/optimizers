@@ -13,6 +13,7 @@ from typing import Any
 
 import torch
 from distributed_shampoo.shampoo_types import (
+    DISTRIBUTED_CONFIG,
     FSDPParameterMetadata,
     FSDPShampooConfig,
     MAX_PRECONDITIONER_DIM,
@@ -39,15 +40,11 @@ class FSDPDistributor(Distributor):
 
     Args:
         param_group (dict[str, Any]): Parameter group containing parameters.
-        distributed_config (FSDPShampooConfig): Configuration for FSDP Shampoo.
 
     """
 
-    def __init__(
-        self,
-        param_group: dict[str, Any],
-        distributed_config: FSDPShampooConfig,
-    ) -> None:
+    def __init__(self, param_group: dict[str, Any]) -> None:
+        distributed_config: FSDPShampooConfig = param_group[DISTRIBUTED_CONFIG]
         self._param_to_metadata: dict[Parameter, FSDPParameterMetadata] = (
             distributed_config.param_to_metadata
         )

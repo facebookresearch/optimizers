@@ -385,7 +385,6 @@ class HSDPDistributorOnEmptyParamTest(FSDPTest, DistributorOnEmptyParamTest.Inte
                 max_preconditioner_dim=PRECONDITIONER_DIM,
                 distributed_config=distributed_config,
             ).param_groups[0],
-            distributed_config=distributed_config,
         )
 
         # Get the weight of the linear layers (which is empty) and set its gradient

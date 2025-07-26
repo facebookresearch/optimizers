@@ -497,24 +497,15 @@ class DistributedShampoo(torch.optim.Optimizer):
         ):
             match group[DISTRIBUTED_CONFIG]:
                 case None:
-                    distributor_cls: Callable[..., DistributorInterface] = Distributor
+                    distributor_cls: type[DistributorInterface] = Distributor
                 case HSDPShampooConfig():
-                    distributor_cls = partial(
-                        HSDPDistributor, distributed_config=group[DISTRIBUTED_CONFIG]
-                    )
+                    distributor_cls = HSDPDistributor
                 case HybridShardShampooConfig():
-                    distributor_cls = partial(
-                        HybridShardDistributor,
-                        distributed_config=group[DISTRIBUTED_CONFIG],
-                    )
+                    distributor_cls = HybridShardDistributor
                 case DDPShampooConfig():
-                    distributor_cls = partial(
-                        DDPDistributor, distributed_config=group[DISTRIBUTED_CONFIG]
-                    )
+                    distributor_cls = DDPDistributor
                 case FSDPShampooConfig():
-                    distributor_cls = partial(
-                        FSDPDistributor, distributed_config=group[DISTRIBUTED_CONFIG]
-                    )
+                    distributor_cls = FSDPDistributor
                 case FullyShardShampooConfig():
                     distributor_cls = FullyShardDistributor
                 case _:
