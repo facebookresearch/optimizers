@@ -665,7 +665,8 @@ def train_model(
     # main training loop
     for epoch in range(epochs):
         metrics._epoch = epoch
-        sampler.set_epoch(epoch)  # type: ignore[attr-defined]
+        if isinstance(sampler, torch.utils.data.distributed.DistributedSampler):
+            sampler.set_epoch(epoch)
 
         for inputs, labels in data_loader:
             inputs, labels = inputs.to(device), labels.to(device)
