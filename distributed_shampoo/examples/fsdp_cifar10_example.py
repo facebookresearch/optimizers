@@ -121,7 +121,6 @@ if __name__ == "__main__":
         distributed_config=FSDPShampooConfig(
             param_to_metadata=compile_fsdp_parameter_metadata(model),
         ),
-        preconditioner_dtype=args.preconditioner_dtype,
         preconditioner_computation_type=args.preconditioner_computation_type,
     )
 

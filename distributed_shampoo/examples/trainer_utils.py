@@ -230,14 +230,6 @@ class Parser:
             help="Grafting beta2 parameter for Shampoo.",
         )
 
-        # Arguments for mixed-precision.
-        parser.add_argument(
-            "--preconditioner-dtype",
-            type=lambda t: attrgetter(t)(torch),
-            default=torch.float32,
-            help="Preconditioner dtype for Shampoo.",
-        )
-
         # Arguments for DDP Shampoo.
         parser.add_argument(
             "--communication-dtype",
@@ -407,7 +399,6 @@ def instantiate_optimizer(
     grafting_epsilon: float,
     use_merge_dims: bool,
     distributed_config: DistributedConfig | None,
-    preconditioner_dtype: torch.dtype,
     preconditioner_computation_type: PreconditionerComputationType,
 ) -> torch.optim.Optimizer:
     if optimizer_type == OptimizerType.SGD:
@@ -445,7 +436,6 @@ def instantiate_optimizer(
             ),
             use_merge_dims=use_merge_dims,
             distributed_config=distributed_config,
-            preconditioner_dtype=preconditioner_dtype,
             preconditioner_config=instantiate_preconditioner_config(
                 preconditioner_computation_type=preconditioner_computation_type,
                 exponent_multiplier=exponent_multiplier,

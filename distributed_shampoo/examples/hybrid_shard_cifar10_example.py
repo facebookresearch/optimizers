@@ -78,7 +78,6 @@ def create_model_and_optimizer_and_loss_fn(
             device_mesh=device_mesh,
             num_trainers_per_group=args.num_trainers_per_group,
         ),
-        preconditioner_dtype=args.preconditioner_dtype,
         preconditioner_computation_type=args.preconditioner_computation_type,
     )
     return model, optimizer, loss_function
