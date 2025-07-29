@@ -136,7 +136,6 @@ if __name__ == "__main__":
         grafting_beta2=args.grafting_beta2,
         use_merge_dims=args.use_merge_dims,
         distributed_config=None,
-        preconditioner_dtype=args.preconditioner_dtype,
         preconditioner_computation_type=args.preconditioner_computation_type,
     )
 

@@ -131,7 +131,6 @@ if __name__ == "__main__":
             num_trainers_per_group=args.num_trainers_per_group,
             communicate_params=args.communicate_params,
         ),
-        preconditioner_dtype=args.preconditioner_dtype,
         preconditioner_computation_type=args.preconditioner_computation_type,
     )
 
