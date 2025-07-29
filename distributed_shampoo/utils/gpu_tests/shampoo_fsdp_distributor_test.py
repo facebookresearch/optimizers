@@ -129,7 +129,7 @@ class ShampooFSDPDistributorTest(FSDPTest):
         fsdp_config = FSDPShampooConfig(param_to_metadata={})
 
         steps_without_gradients = 2
-        with unittest.mock.patch("torch.Tensor.backward") as mock_backward:
+        with unittest.mock.patch.object(torch.Tensor, "backward") as mock_backward:
             # By mocking the backward() method, we're intercepting gradient calculation.
             # This effectively simulates running forward passes without computing gradients.
             train_model(
