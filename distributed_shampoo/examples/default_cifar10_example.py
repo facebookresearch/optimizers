@@ -10,7 +10,6 @@ LICENSE file in the root directory of this source tree.
 #!/usr/bin/env python3
 
 import argparse
-import logging
 import os
 
 import torch
@@ -25,12 +24,6 @@ from distributed_shampoo.examples.trainer_utils import (
 )
 from torch import nn
 from torchvision.datasets import VisionDataset
-
-logging.basicConfig(
-    format="[%(filename)s:%(lineno)d] %(levelname)s: %(message)s",
-    level=logging.DEBUG,
-)
-logger: logging.Logger = logging.getLogger(__name__)
 
 # for reproducibility, set environmental variable for CUBLAS
 os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
