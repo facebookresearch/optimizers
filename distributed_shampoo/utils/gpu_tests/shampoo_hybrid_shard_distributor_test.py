@@ -120,7 +120,7 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
         )(
             model_linear_layers_dims=model_linear_layers_dims,
             model_dead_layers_dims=model_dead_layers_dims,
-            enable_learnable_scalar=False,  # Disable 0D learable parameter because FSDP doesn't support it.
+            enable_learnable_scalar=False,  # Disable 0D learnable parameter because FSDP doesn't support it.
             device=torch.device("cuda"),
             fill=0.1,
         )
@@ -536,7 +536,7 @@ class HybridShardDistributorOnEmptyParamTest(
         model = construct_training_problem(
             model_linear_layers_dims=(PRECONDITIONER_DIM, 0),
             model_dead_layers_dims=(PRECONDITIONER_DIM, 3 * PRECONDITIONER_DIM),
-            enable_learnable_scalar=False,  # Disable 0D learable parameter because FSDP doesn't support it.
+            enable_learnable_scalar=False,  # Disable 0D learnable parameter because FSDP doesn't support it.
             device=torch.device("cuda"),
             fill=0.01,
             post_model_decoration=partial(fully_shard, mesh=device_mesh),

@@ -39,7 +39,7 @@ def _create_model_and_params(
     model, _, _, _ = construct_training_problem(
         model_linear_layers_dims=model_linear_layers_dims,
         model_dead_layers_dims=None,
-        enable_learnable_scalar=False,  # Disable 0D learable parameter because FSDP doesn't support it.
+        enable_learnable_scalar=False,  # Disable 0D learnable parameter because FSDP doesn't support it.
         fill=(1.0, 2.0),
     )
     return model, list(model.parameters())

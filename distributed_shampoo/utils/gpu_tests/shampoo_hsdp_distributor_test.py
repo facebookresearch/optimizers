@@ -87,7 +87,7 @@ class ShampooHSDPDistributorTest(FSDPTest):
         model, loss, data, target = construct_training_problem(
             model_linear_layers_dims=model_linear_layers_dims,
             model_dead_layers_dims=None,
-            enable_learnable_scalar=False,  # Disable 0D learable parameter because FSDP doesn't support it.
+            enable_learnable_scalar=False,  # Disable 0D learnable parameter because FSDP doesn't support it.
             device=torch.device("cuda"),
             fill=0.01,
             post_model_decoration=post_model_decoration,
@@ -357,7 +357,7 @@ class HSDPDistributorOnEmptyParamTest(FSDPTest, DistributorOnEmptyParamTest.Inte
         model = construct_training_problem(
             model_linear_layers_dims=(PRECONDITIONER_DIM, 0),
             model_dead_layers_dims=(PRECONDITIONER_DIM, 3),
-            enable_learnable_scalar=False,  # Disable 0D learable parameter because FSDP doesn't support it.
+            enable_learnable_scalar=False,  # Disable 0D learnable parameter because FSDP doesn't support it.
             device=torch.device("cuda"),
             fill=0.01,
             post_model_decoration=partial(
