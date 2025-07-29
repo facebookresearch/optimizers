@@ -10,13 +10,13 @@ LICENSE file in the root directory of this source tree.
 import logging
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Hashable, Mapping
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field, fields
 from fractions import Fraction
-from functools import reduce, wraps
+from functools import partial, reduce, wraps
 from itertools import chain
 from operator import attrgetter
 from pathlib import Path
-from typing import Any, cast, Generic, get_args, NoReturn, overload, TypeVar
+from typing import Any, Generic, get_args, NoReturn, overload, TypeVar
 
 import torch
 from distributed_shampoo.shampoo_types import (
@@ -24,6 +24,7 @@ from distributed_shampoo.shampoo_types import (
     PreconditionerValueError,
     SpectralDescentPreconditionerConfig,
 )
+from distributed_shampoo.utils.dict_zip_iterator import DictZipIterator
 from distributed_shampoo.utils.shampoo_block_info import BlockInfo
 from distributed_shampoo.utils.shampoo_utils import compress_list, get_dtype_size
 from matrix_functions import (
@@ -33,7 +34,11 @@ from matrix_functions import (
     stabilize_and_pow_eigenvalues,
 )
 
-from matrix_functions_types import EigendecompositionConfig, RootInvConfig
+from matrix_functions_types import (
+    EigendecompositionConfig,
+    MatrixFunctionConfig,
+    RootInvConfig,
+)
 from optimizer_modules import OptimizerModule
 from torch import Tensor
 from torch.autograd import profiler
@@ -424,16 +429,186 @@ class BaseShampooKroneckerFactorsUnwrapped:
             the factor matrices, used for identification and debugging.
         roots (tuple[float, ...]): A tuple of float values representing the inverse exponent roots
             to be applied to each factor matrix during preconditioner computation.
+        amortized_computation_config (MatrixFunctionConfig): Configuration for the amortized
+            computation of matrix operations, specifying algorithms and parameters for
+            eigendecomposition or matrix inverse computation.
+        epsilon (float): Small constant added to matrices to ensure numerical stability
+            during matrix operations like inversion or eigendecomposition.
+        num_tolerated_failed_amortized_computations (int): Maximum number of consecutive
+            failed amortized computations that can be tolerated before raising an error.
+        _failed_amortized_computation_counter (int): Internal counter tracking the number
+            of consecutive failed amortized computations.
     """
 
     factor_matrices: tuple[Tensor, ...]
     factor_matrix_indices: tuple[str, ...]
     roots: tuple[float, ...]
+    amortized_computation_config: MatrixFunctionConfig
+    epsilon: float
+    num_tolerated_failed_amortized_computations: int
+    _failed_amortized_computation_counter: int = field(init=False, default=0)
 
     def __post_init__(self) -> None:
         # NOTE: Due to EigenvalueCorrectedShampooKroneckerFactorsState's roots usage, which is one root only applied on corrected eigenvalues,
         # there is no check of roots with other fields.
         assert len(self.factor_matrices) == len(self.factor_matrix_indices)
+
+    def _get_field_dict(self) -> dict[str, Any]:
+        """
+        Creates a dictionary containing shallow copies of this dataclass's fields.
+
+        This method creates a dictionary where keys are field names and values are
+        the corresponding field values from the dataclass. Since this is a shallow copy,
+        any modifications to the returned dictionary's values will affect the original
+        dataclass fields.
+
+        Returns:
+            dict[str, Any]: A dictionary mapping field names to their values
+        """
+        return {
+            field.name: getattr(self, field.name)
+            for field in fields(self)
+            if field.name
+            not in (
+                "amortized_computation_config",
+                "epsilon",
+                "num_tolerated_failed_amortized_computations",
+                "_failed_amortized_computation_counter",
+            )
+        }
+
+    @abstractmethod
+    def _amortized_computation(
+        self,
+        bias_corrected_factor_matrix: Tensor,
+        kronecker_factors_iter_dict: dict[str, Any],
+    ) -> tuple[dict[str, Tensor], Exception | None]:
+        """Performs computationally expensive matrix operations for Shampoo preconditioners.
+
+        This method handles the heavy computational work that is too expensive to perform
+        at every optimization step. Instead, these operations are "amortized" - performed
+        periodically (e.g., every N steps) to update the preconditioner matrices.
+
+        Different Shampoo variants implement this method differently:
+        - RootInvShampooPreconditionerList: Computes matrix inverse roots
+        - EigendecomposedShampooPreconditionerList: Performs eigendecomposition
+        - EigenvalueCorrectedShampooPreconditionerList: Computes eigenvectors
+
+        The method includes error handling to gracefully recover from numerical issues
+        that may occur during matrix operations.
+
+        Args:
+            bias_corrected_factor_matrix (Tensor): The factor matrix after bias correction
+                has been applied. This is the matrix on which the computationally expensive
+                operations (like eigendecomposition or matrix inverse) will be performed.
+            kronecker_factors_iter_dict (dict[str, Any]): Dictionary containing factor matrices
+                and related data needed for the computation. The exact contents depend on the
+                specific Shampoo implementation, but typically include factor matrices,
+                their indices, and other relevant tensors.
+
+        Returns:
+            computed_quantities (dict[str, Tensor]): A dictionary mapping from tensor names to computed tensors. The keys and values depend on the specific implementation.
+            exception (Exception | None): Any exception that occurred during computation, or None if successful.
+        """
+
+    @_profile_decorator
+    def amortized_computation(self, bias_correction2: float) -> None:
+        """Performs amortized computation for Shampoo preconditioners.
+
+        This method orchestrates the execution of the computationally expensive matrix operations
+        that are amortized over multiple optimization steps. It applies bias correction to the
+        factor matrices and calls the specialized _amortized_computation method for each factor.
+
+        The method handles exceptions that may occur during computation, keeping track of failures
+        and raising an exception if the number of failures exceeds the configured tolerance.
+
+        Args:
+            bias_correction2 (float): The bias correction factor to apply to the factor matrices
+                before performing the amortized computation.
+
+        Raises:
+            PreconditionerValueError: If NaN or infinity values are encountered in the factor matrices.
+            ValueError: If the number of failed amortized computations exceeds the configured tolerance.
+        """
+        last_seen_exception: Exception | None = None
+        for kronecker_factors_iter_dict in DictZipIterator(data=self._get_field_dict()):
+            bias_corrected_factor_matrix, factor_matrix_index = (
+                # Incorporate bias correction.
+                kronecker_factors_iter_dict["factor_matrices"] / bias_correction2,
+                kronecker_factors_iter_dict["factor_matrix_indices"],
+            )
+
+            # Check for nan or inf values.
+            if not torch.isfinite(bias_corrected_factor_matrix).all():
+                raise PreconditionerValueError(
+                    f"Encountered nan/inf values in factor matrix {factor_matrix_index}! "
+                    "To mitigate, check if nan inputs are being passed into the network or nan gradients are being passed to the optimizer. "
+                    "Otherwise, in some cases, this may be due to divergence of the algorithm. To mitigate, try decreasing the learning rate or increasing grafting epsilon. "
+                    f"For debugging purposes, factor_matrix {factor_matrix_index}: "
+                    f"{torch.min(bias_corrected_factor_matrix)=}, {torch.max(bias_corrected_factor_matrix)=}, "
+                    f"{bias_corrected_factor_matrix.isinf().any()=}, {bias_corrected_factor_matrix.isnan().any()=}."
+                )
+
+            computed_quantity_to_result, exception = self._amortized_computation(
+                bias_corrected_factor_matrix=bias_corrected_factor_matrix,
+                kronecker_factors_iter_dict=kronecker_factors_iter_dict,
+            )
+            if exception:
+                last_seen_exception = exception
+
+                BaseShampooPreconditionerList._save_and_handle_matrix_error(
+                    factor_matrix_index=factor_matrix_index,
+                    source_matrix=bias_corrected_factor_matrix,
+                    error_handler=partial(
+                        logger.warning,
+                        f"Matrix computation failed for factor matrix {factor_matrix_index} with {exception=}. To investigate, check factor matrix before the matrix computation: {bias_corrected_factor_matrix=} Using previous preconditioner and continuing...",
+                    ),
+                )
+
+            # Check if we encounter NaN or inf values in computed quantities.
+            for (
+                computed_quantity_name,
+                computed_result,
+            ) in computed_quantity_to_result.items():
+                if not torch.isfinite(computed_result).all():
+                    # Define a closure to handle the error with proper variable capture
+                    def raise_preconditioner_value_error(
+                        factor_matrix_index: str = factor_matrix_index,
+                        bias_corrected_factor_matrix: Tensor = bias_corrected_factor_matrix,
+                        computed_quantity_name: str = computed_quantity_name,
+                    ) -> NoReturn:
+                        quantity_name = f"{computed_quantity_name=}".split("=")[
+                            0
+                        ].split("_")[-1]
+                        raise PreconditionerValueError(
+                            f"Encountered nan or inf values in {quantity_name} of factor matrix {factor_matrix_index}! "
+                            f"To mitigate, check factor matrix before the matrix computation: {bias_corrected_factor_matrix=}"
+                        )
+
+                    BaseShampooPreconditionerList._save_and_handle_matrix_error(
+                        factor_matrix_index=factor_matrix_index,
+                        source_matrix=bias_corrected_factor_matrix,
+                        error_handler=raise_preconditioner_value_error,
+                    )
+
+                kronecker_factors_iter_dict[computed_quantity_name].copy_(
+                    computed_result
+                )
+
+        if last_seen_exception is None:
+            # Reset counter for failed amortized computations.
+            self._failed_amortized_computation_counter = 0
+        else:
+            # Increment counter for failed amortized computations.
+            self._failed_amortized_computation_counter += 1
+            # Raise the exception if the tolerance is exceeded.
+            if (
+                self._failed_amortized_computation_counter
+                > self.num_tolerated_failed_amortized_computations
+            ):
+                raise ValueError(
+                    f"The number of failed amortized computations for factors {self.factor_matrix_indices} exceeded the allowed tolerance. The last seen exception was {last_seen_exception}."
+                ) from last_seen_exception
 
 
 @dataclass(kw_only=True)
@@ -495,12 +670,27 @@ class RootInvShampooKroneckerFactorsState(BaseShampooKroneckerFactorsState):
 class RootInvShampooKroneckerFactorsUnwrapped(BaseShampooKroneckerFactorsUnwrapped):
     """Shampoo Kronecker factors (unwrapped) for operations during optimizer computation.
 
+    This class implements the Root Inverse variant of Shampoo, which directly computes
+    the inverse root of factor matrices for preconditioning.
+
     Attributes:
-        inv_factor_matrices (tuple[Tensor, ...]): A tuple of tensors representing the inverse of the factor matrices.
+        inv_factor_matrices (tuple[Tensor, ...]): A tuple of tensors representing the inverse
+            of the factor matrices. These are the preconditioners that are applied to gradients.
         factor_matrices (tuple[Tensor, ...]): A tuple of tensors representing the factor matrices.
-        factor_matrix_indices (tuple[str, ...]): A tuple of strings representing the indices of the factor matrices.
+            These are the Kronecker factors accumulated during optimization.
+        factor_matrix_indices (tuple[str, ...]): A tuple of strings representing the indices of
+            the factor matrices, used for identification and debugging.
         roots (tuple[float, ...]): A tuple of float values representing the inverse exponent roots
             to be applied to each factor matrix during preconditioner computation.
+        amortized_computation_config (MatrixFunctionConfig): Configuration for the amortized
+            computation of matrix operations, specifying algorithms and parameters for
+            matrix inverse computation.
+        epsilon (float): Small constant added to matrices to ensure numerical stability
+            during matrix operations like inversion.
+        num_tolerated_failed_amortized_computations (int): Maximum number of consecutive
+            failed amortized computations that can be tolerated before raising an error.
+        _failed_amortized_computation_counter (int): Internal counter tracking the number
+            of consecutive failed amortized computations.
     """
 
     inv_factor_matrices: tuple[Tensor, ...]
@@ -511,17 +701,35 @@ class RootInvShampooKroneckerFactorsUnwrapped(BaseShampooKroneckerFactorsUnwrapp
         unwrapped_tensor_getter: Callable[[Tensor], Tensor],
         kronecker_factors_state: BaseShampooKroneckerFactorsState,
         roots: tuple[float, ...],
+        amortized_computation_config: RootInvConfig,
+        epsilon: float,
+        num_tolerated_failed_amortized_computations: int,
     ) -> "RootInvShampooKroneckerFactorsUnwrapped":
         """
         Constructs a RootInvShampooKroneckerFactorsUnwrapped object from the given Kronecker factors state.
 
+        This method converts the wrapped Kronecker factors state (which is stored in the optimizer state)
+        into an unwrapped version that can be used for computation. It unwraps all tensors using the
+        provided unwrapped_tensor_getter function and sets up the configuration for matrix operations.
+
         Args:
-            unwrapped_tensor_getter (Callable[[Tensor], Tensor]): A function to unwrap tensors.
-            kronecker_factors_state (BaseShampooKroneckerFactorsState): The state containing factor matrices and their indices.
-            roots (tuple[float, ...]): A tuple of float values representing the inverse exponent roots.
+            unwrapped_tensor_getter (Callable[[Tensor], Tensor]): A function to unwrap tensors,
+                typically retrieving them from the optimizer state.
+            kronecker_factors_state (BaseShampooKroneckerFactorsState): The state containing factor
+                matrices and their indices. Must be an instance of RootInvShampooKroneckerFactorsState.
+            roots (tuple[float, ...]): A tuple of float values representing the inverse exponent roots
+                to be applied to each factor matrix during preconditioner computation.
+            amortized_computation_config (MatrixFunctionConfig): Configuration for the amortized
+                computation of matrix operations, specifying algorithms and parameters for
+                matrix inverse computation.
+            epsilon (float): Small constant added to matrices to ensure numerical stability
+                during matrix operations like inversion.
+            num_tolerated_failed_amortized_computations (int): Maximum number of consecutive
+                failed amortized computations that can be tolerated before raising an error.
 
         Returns:
-            kronecker_factors_unwrapped (RootInvShampooKroneckerFactorsUnwrapped): An instance of RootInvShampooKroneckerFactorsUnwrapped.
+            kronecker_factors_unwrapped (RootInvShampooKroneckerFactorsUnwrapped): An instance of
+                RootInvShampooKroneckerFactorsUnwrapped with unwrapped tensors and configuration.
         """
         assert isinstance(kronecker_factors_state, RootInvShampooKroneckerFactorsState)
         return cls(
@@ -536,7 +744,59 @@ class RootInvShampooKroneckerFactorsUnwrapped(BaseShampooKroneckerFactorsUnwrapp
             ),
             factor_matrix_indices=kronecker_factors_state.factor_matrix_indices,
             roots=roots,
+            amortized_computation_config=amortized_computation_config,
+            epsilon=epsilon,
+            num_tolerated_failed_amortized_computations=num_tolerated_failed_amortized_computations,
         )
+
+    @torch.compiler.disable
+    def _amortized_computation(
+        self,
+        bias_corrected_factor_matrix: Tensor,
+        kronecker_factors_iter_dict: dict[str, Any],
+    ) -> tuple[dict[str, Tensor], Exception | None]:
+        """Computes matrix inverse roots for Shampoo preconditioners.
+
+        This implementation of the abstract _amortized_computation method specifically handles
+        the computation of matrix inverse roots for the RootInvShampoo variant. It applies
+        the matrix_inverse_root function to each factor matrix with the appropriate root value.
+
+        The computation is performed on the bias-corrected factor matrices and uses the
+        configuration specified in amortized_computation_config. Error handling is included
+        to gracefully recover from numerical issues.
+
+        Args:
+            bias_corrected_factor_matrix (Tensor): The factor matrix after bias correction
+                has been applied.
+            kronecker_factors_iter_dict (dict[str, Any]): Dictionary containing the current
+                inv_factor_matrices and roots values for the computation.
+
+        Returns:
+            computed_quantities (dict[str, Tensor]): A dictionary with the computed inverse factor matrices.
+            exception (Exception | None): Any exception that occurred during computation, or None if successful.
+
+        Note:
+            This function assumes there are no changes in the selector or masking between
+            iterations within a single precondition_frequency interval.
+        """
+        inv_factor_matrix, root = (
+            kronecker_factors_iter_dict["inv_factor_matrices"],
+            kronecker_factors_iter_dict["roots"],
+        )
+
+        try:
+            # Compute inverse preconditioners
+            return {
+                "inv_factor_matrices": matrix_inverse_root(
+                    A=bias_corrected_factor_matrix,
+                    root=Fraction(root),
+                    root_inv_config=self.amortized_computation_config,
+                    epsilon=self.epsilon,
+                    is_diagonal=False,
+                ).to(dtype=inv_factor_matrix.dtype)
+            }, None
+        except Exception as exception:
+            return {"inv_factor_matrices": inv_factor_matrix}, exception
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -623,13 +883,30 @@ class EigendecomposedShampooKroneckerFactorsUnwrapped(
 ):
     """Eigendecomposed Shampoo Kronecker factors (unwrapped) for operations during optimizer computation.
 
+    This class implements the Eigendecomposed variant of Shampoo, which computes and stores
+    the eigendecomposition of factor matrices for more efficient and numerically stable
+    preconditioning operations.
+
     Attributes:
-        factor_matrices_eigenvectors (tuple[Tensor, ...]): A tuple of tensors representing the eigenvectors of the factor matrices.
-        factor_matrices_eigenvalues (tuple[Tensor, ...]): A tuple of tensors representing the eigenvalues of the factor matrices.
+        factor_matrices_eigenvectors (tuple[Tensor, ...]): A tuple of tensors representing the
+            eigenvectors of the factor matrices. These are used to transform gradients into
+            the eigenspace and back.
+        factor_matrices_eigenvalues (tuple[Tensor, ...]): A tuple of tensors representing the
+            eigenvalues of the factor matrices. These are used to scale gradients in the eigenspace.
         factor_matrices (tuple[Tensor, ...]): A tuple of tensors representing the factor matrices.
-        factor_matrix_indices (tuple[str, ...]): A tuple of strings representing the indices of the factor matrices.
+            These are the Kronecker factors accumulated during optimization.
+        factor_matrix_indices (tuple[str, ...]): A tuple of strings representing the indices of
+            the factor matrices, used for identification and debugging.
         roots (tuple[float, ...]): A tuple of float values representing the inverse exponent roots
             to be applied to each factor matrix during preconditioner computation.
+        amortized_computation_config (EigendecompositionConfig): Configuration for the amortized
+            computation of eigendecomposition, specifying algorithms and parameters.
+        epsilon (float): Small constant added to eigenvalues to ensure numerical stability
+            during matrix operations.
+        num_tolerated_failed_amortized_computations (int): Maximum number of consecutive
+            failed amortized computations that can be tolerated before raising an error.
+        _failed_amortized_computation_counter (int): Internal counter tracking the number
+            of consecutive failed amortized computations.
     """
 
     factor_matrices_eigenvectors: tuple[Tensor, ...]
@@ -641,17 +918,34 @@ class EigendecomposedShampooKroneckerFactorsUnwrapped(
         unwrapped_tensor_getter: Callable[[Tensor], Tensor],
         kronecker_factors_state: BaseShampooKroneckerFactorsState,
         roots: tuple[float, ...],
+        amortized_computation_config: EigendecompositionConfig,
+        epsilon: float,
+        num_tolerated_failed_amortized_computations: int,
     ) -> "EigendecomposedShampooKroneckerFactorsUnwrapped":
         """
         Constructs an EigendecomposedShampooKroneckerFactorsUnwrapped object from the given Kronecker factors state.
 
+        This method converts the wrapped Kronecker factors state (which is stored in the optimizer state)
+        into an unwrapped version that can be used for computation. It unwraps all tensors using the
+        provided unwrapped_tensor_getter function and sets up the configuration for eigendecomposition.
+
         Args:
-            unwrapped_tensor_getter (Callable[[Tensor], Tensor]): A function to unwrap tensors.
-            kronecker_factors_state (BaseShampooKroneckerFactorsState): The state containing factor matrices and their indices.
-            roots (tuple[float, ...]): A tuple of float values representing the inverse exponent roots.
+            unwrapped_tensor_getter (Callable[[Tensor], Tensor]): A function to unwrap tensors,
+                typically retrieving them from the optimizer state.
+            kronecker_factors_state (BaseShampooKroneckerFactorsState): The state containing factor
+                matrices and their indices. Must be an instance of EigendecomposedShampooKroneckerFactorsState.
+            roots (tuple[float, ...]): A tuple of float values representing the inverse exponent roots
+                to be applied to each factor matrix during preconditioner computation.
+            amortized_computation_config (MatrixFunctionConfig): Configuration for the amortized
+                computation of eigendecomposition, specifying algorithms and parameters.
+            epsilon (float): Small constant added to eigenvalues to ensure numerical stability
+                during matrix operations.
+            num_tolerated_failed_amortized_computations (int): Maximum number of consecutive
+                failed amortized computations that can be tolerated before raising an error.
 
         Returns:
-            kronecker_factors_unwrapped (EigendecomposedShampooKroneckerFactorsUnwrapped): An instance of EigendecomposedShampooKroneckerFactorsUnwrapped.
+            kronecker_factors_unwrapped (EigendecomposedShampooKroneckerFactorsUnwrapped): An instance of
+                EigendecomposedShampooKroneckerFactorsUnwrapped with unwrapped tensors and configuration.
         """
         assert isinstance(
             kronecker_factors_state, EigendecomposedShampooKroneckerFactorsState
@@ -674,7 +968,76 @@ class EigendecomposedShampooKroneckerFactorsUnwrapped(
             ),
             factor_matrix_indices=kronecker_factors_state.factor_matrix_indices,
             roots=roots,
+            amortized_computation_config=amortized_computation_config,
+            epsilon=epsilon,
+            num_tolerated_failed_amortized_computations=num_tolerated_failed_amortized_computations,
         )
+
+    @torch.compiler.disable
+    def _amortized_computation(
+        self,
+        bias_corrected_factor_matrix: Tensor,
+        kronecker_factors_iter_dict: dict[str, Any],
+    ) -> tuple[dict[str, Tensor], Exception | None]:
+        """Performs eigendecomposition for Shampoo preconditioners.
+
+        This implementation of the abstract _amortized_computation method specifically handles
+        the eigendecomposition for the EigendecomposedShampoo variant. It computes both
+        eigenvalues and eigenvectors for each factor matrix.
+
+        The computation uses the configuration specified in amortized_computation_config,
+        with special handling for QR-based eigendecomposition which requires the previous
+        eigenvectors as an initial estimate. Error handling is included to gracefully
+        recover from numerical issues.
+
+        Args:
+            bias_corrected_factor_matrix (Tensor): The factor matrix after bias correction
+                has been applied.
+            kronecker_factors_iter_dict (dict[str, Any]): Dictionary containing the current
+                factor_matrices_eigenvalues and factor_matrices_eigenvectors for the computation.
+
+        Returns:
+            computed_quantities (dict[str, Tensor]): A dictionary with the computed eigenvalues and eigenvectors.
+            exception (Exception | None): Any exception that occurred during computation, or None if successful.
+
+        Note:
+            This function assumes there are no changes in the selector or masking between
+            iterations within a single precondition_frequency interval.
+        """
+        (
+            factor_matrix_eigenvectors,
+            factor_matrix_eigenvalues,
+        ) = (
+            kronecker_factors_iter_dict["factor_matrices_eigenvectors"],
+            kronecker_factors_iter_dict["factor_matrices_eigenvalues"],
+        )
+
+        try:
+            # Compute inverse preconditioner.
+            computed_eigenvalues, computed_eigenvectors = matrix_eigendecomposition(
+                A=bias_corrected_factor_matrix,
+                eigendecomposition_config=self.amortized_computation_config,
+                # To estimate the eigenvalues based on the previous eigenvectors, we need to pass in the previous eigenvectors with the same dtype as the input matrix, i.e., factor_matrix.
+                eigenvectors_estimate=factor_matrix_eigenvectors.to(
+                    dtype=bias_corrected_factor_matrix.dtype
+                ),
+                is_diagonal=False,
+                epsilon=self.epsilon,
+            )
+
+            return {
+                "factor_matrices_eigenvalues": computed_eigenvalues.to(
+                    dtype=factor_matrix_eigenvalues.dtype
+                ),
+                "factor_matrices_eigenvectors": computed_eigenvectors.to(
+                    dtype=factor_matrix_eigenvectors.dtype
+                ),
+            }, None
+        except Exception as exception:
+            return {
+                "factor_matrices_eigenvalues": factor_matrix_eigenvalues,
+                "factor_matrices_eigenvectors": factor_matrix_eigenvectors,
+            }, exception
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -759,14 +1122,34 @@ class EigenvalueCorrectedShampooKroneckerFactorsUnwrapped(
 ):
     """Eigenvalue-corrected Shampoo Kronecker factors (unwrapped) for operations during optimizer computation.
 
+    This class implements the Eigenvalue-Corrected variant of Shampoo, which computes eigenvectors
+    of factor matrices but maintains a separate tensor of corrected eigenvalues that are updated
+    directly from gradients. This approach can provide better conditioning and convergence properties
+    in certain optimization scenarios.
+
     Attributes:
-        factor_matrices_eigenvectors (tuple[Tensor, ...]): A tuple of tensors representing the eigenvectors of the factor matrices.
-        corrected_eigenvalues (Tensor): A tensor representing the corrected eigenvalues.
+        factor_matrices_eigenvectors (tuple[Tensor, ...]): A tuple of tensors representing the
+            eigenvectors of the factor matrices. These are used to transform gradients into
+            the eigenspace and back.
+        corrected_eigenvalues (Tensor): A tensor representing the corrected eigenvalues that are
+            updated directly from squared gradients in the eigenspace. This is a single tensor
+            rather than a tuple of tensors per factor matrix.
         factor_matrices (tuple[Tensor, ...]): A tuple of tensors representing the factor matrices.
-        factor_matrix_indices (tuple[str, ...]): A tuple of strings representing the indices of the factor matrices.
+            These are the Kronecker factors accumulated during optimization.
+        factor_matrix_indices (tuple[str, ...]): A tuple of strings representing the indices of
+            the factor matrices, used for identification and debugging.
         roots (tuple[float, ...]): A tuple of float values representing the inverse exponent roots
             to be applied to the corrected eigenvalues during preconditioner computation.
-            Note that for eigenvalue-corrected Shampoo, this always contains only a single value.
+            Note that for eigenvalue-corrected Shampoo, this always contains only a single value
+            since all eigenvalues are corrected using the same exponent.
+        amortized_computation_config (EigendecompositionConfig): Configuration for the amortized
+            computation of eigendecomposition, specifying algorithms and parameters.
+        epsilon (float): Small constant added to corrected eigenvalues to ensure numerical stability
+            during preconditioning operations.
+        num_tolerated_failed_amortized_computations (int): Maximum number of consecutive
+            failed amortized computations that can be tolerated before raising an error.
+        _failed_amortized_computation_counter (int): Internal counter tracking the number
+            of consecutive failed amortized computations.
     """
 
     factor_matrices_eigenvectors: tuple[Tensor, ...]
@@ -778,18 +1161,37 @@ class EigenvalueCorrectedShampooKroneckerFactorsUnwrapped(
         unwrapped_tensor_getter: Callable[[Tensor], Tensor],
         kronecker_factors_state: BaseShampooKroneckerFactorsState,
         roots: tuple[float, ...],
+        amortized_computation_config: EigendecompositionConfig,
+        epsilon: float,
+        num_tolerated_failed_amortized_computations: int,
     ) -> "EigenvalueCorrectedShampooKroneckerFactorsUnwrapped":
         """
         Constructs an EigenvalueCorrectedShampooKroneckerFactorsUnwrapped object from the given Kronecker factors state.
 
+        This method converts the wrapped Kronecker factors state (which is stored in the optimizer state)
+        into an unwrapped version that can be used for computation. It unwraps all tensors using the
+        provided unwrapped_tensor_getter function and sets up the configuration for eigendecomposition
+        and eigenvalue correction.
+
         Args:
-            unwrapped_tensor_getter (Callable[[Tensor], Tensor]): A function to unwrap tensors.
-            kronecker_factors_state (BaseShampooKroneckerFactorsState): The state containing factor matrices and their indices.
-            roots (tuple[float, ...]): A tuple of float values representing the inverse exponent roots.
-                For eigenvalue-corrected Shampoo, this always contains only a single value.
+            unwrapped_tensor_getter (Callable[[Tensor], Tensor]): A function to unwrap tensors,
+                typically retrieving them from the optimizer state.
+            kronecker_factors_state (BaseShampooKroneckerFactorsState): The state containing factor
+                matrices and their indices. Must be an instance of EigenvalueCorrectedShampooKroneckerFactorsState.
+            roots (tuple[float, ...]): A tuple of float values representing the inverse exponent roots
+                to be applied to the corrected eigenvalues during preconditioner computation.
+                For eigenvalue-corrected Shampoo, this always contains only a single value
+                since all eigenvalues are corrected using the same exponent.
+            amortized_computation_config (MatrixFunctionConfig): Configuration for the amortized
+                computation of eigendecomposition, specifying algorithms and parameters.
+            epsilon (float): Small constant added to corrected eigenvalues to ensure numerical stability
+                during preconditioning operations.
+            num_tolerated_failed_amortized_computations (int): Maximum number of consecutive
+                failed amortized computations that can be tolerated before raising an error.
 
         Returns:
-            kronecker_factors_unwrapped (EigenvalueCorrectedShampooKroneckerFactorsUnwrapped): An instance of EigenvalueCorrectedShampooKroneckerFactorsUnwrapped.
+            kronecker_factors_unwrapped (EigenvalueCorrectedShampooKroneckerFactorsUnwrapped): An instance of
+                EigenvalueCorrectedShampooKroneckerFactorsUnwrapped with unwrapped tensors and configuration.
         """
         assert isinstance(
             kronecker_factors_state, EigenvalueCorrectedShampooKroneckerFactorsState
@@ -809,12 +1211,92 @@ class EigenvalueCorrectedShampooKroneckerFactorsUnwrapped(
             ),
             factor_matrix_indices=kronecker_factors_state.factor_matrix_indices,
             roots=roots,
+            amortized_computation_config=amortized_computation_config,
+            epsilon=epsilon,
+            num_tolerated_failed_amortized_computations=num_tolerated_failed_amortized_computations,
         )
+
+    @torch.compiler.disable
+    def _amortized_computation(
+        self,
+        bias_corrected_factor_matrix: Tensor,
+        kronecker_factors_iter_dict: dict[str, Any],
+    ) -> tuple[dict[str, Tensor], Exception | None]:
+        """Computes eigenvectors for eigenvalue-corrected Shampoo preconditioners.
+
+        This implementation of the abstract _amortized_computation method specifically handles
+        the computation of eigenvectors for the EigenvalueCorrectedShampoo variant. Unlike
+        the EigendecomposedShampoo variant, this only computes eigenvectors and not eigenvalues,
+        as the eigenvalues are corrected separately during the optimization process.
+
+        The computation uses the configuration specified in amortized_computation_config,
+        with special handling for QR-based eigendecomposition which requires the previous
+        eigenvectors as an initial estimate. Error handling is included to gracefully
+        recover from numerical issues.
+
+        Args:
+            bias_corrected_factor_matrix (Tensor): The factor matrix after bias correction
+                has been applied.
+            kronecker_factors_iter_dict (dict[str, Any]): Dictionary containing the current
+                factor_matrices_eigenvectors for the computation.
+
+        Returns:
+            computed_quantities (dict[str, Tensor]): A dictionary with the computed eigenvectors.
+            exception (Exception | None): Any exception that occurred during computation, or None if successful.
+
+        Note:
+            This function assumes there are no changes in the selector or masking between
+            iterations within a single precondition_frequency interval.
+        """
+        factor_matrix_eigenvectors = kronecker_factors_iter_dict[
+            "factor_matrices_eigenvectors"
+        ]
+
+        try:
+            # Compute eigenvectors of factor matrix.
+            return {
+                "factor_matrices_eigenvectors": matrix_eigendecomposition(
+                    A=bias_corrected_factor_matrix,
+                    eigendecomposition_config=self.amortized_computation_config,
+                    # To estimate the eigenvalues based on the previous eigenvectors, we need to pass in the previous eigenvectors with the same dtype as the input matrix, i.e., factor_matrix.
+                    eigenvectors_estimate=factor_matrix_eigenvectors.to(
+                        dtype=bias_corrected_factor_matrix.dtype
+                    ),
+                    is_diagonal=False,
+                    epsilon=self.epsilon,
+                )[1].to(dtype=factor_matrix_eigenvectors.dtype)
+            }, None
+        except Exception as exception:
+            return {
+                "factor_matrices_eigenvectors": factor_matrix_eigenvectors
+            }, exception
 
     def __post_init__(self) -> None:
         super().__post_init__()
         assert len(self.factor_matrices) == len(self.factor_matrices_eigenvectors)
         assert len(self.roots) == 1
+
+    def _get_field_dict(self) -> dict[str, Any]:
+        """
+        Creates a dictionary containing shallow copies of this dataclass's fields, excluding specific fields.
+
+        This method overrides the parent class's _get_field_dict method to exclude fields that don't
+        align with the per-factor iteration pattern used in amortized computation:
+
+        1. 'corrected_eigenvalues' is a single tensor that doesn't align with the per-factor iteration pattern
+           since it represents eigenvalues across all dimensions rather than per-factor.
+        2. 'roots' contains a single value for eigenvalue correction, unlike other fields which have
+           one entry per factor matrix.
+
+        Returns:
+            dict[str, Any]: A dictionary mapping field names to their values, excluding
+                'corrected_eigenvalues' and 'roots'.
+        """
+        return {
+            key: value
+            for key, value in super()._get_field_dict().items()
+            if key not in ("corrected_eigenvalues", "roots")
+        }
 
 
 _ShampooKroneckerFactorsStateType = TypeVar(
@@ -973,6 +1455,9 @@ class BaseShampooPreconditionerList(
                     roots=self._get_inverse_roots_from_override(
                         preconditioned_dims_selector
                     ),
+                    amortized_computation_config=self._preconditioner_config.amortized_computation_config,
+                    epsilon=self._epsilon,
+                    num_tolerated_failed_amortized_computations=self._preconditioner_config.num_tolerated_failed_amortized_computations,
                 )
             )
 
@@ -999,70 +1484,6 @@ class BaseShampooPreconditionerList(
         Returns:
             inverse_roots (tuple[float, ...]): Inverse roots for each preconditioner of a block.
         """
-
-    @abstractmethod
-    def _amortized_computation(self) -> None:
-        """
-        Computes the amortized computation needed for each Shampoo preconditioner implementation.
-        This amortized computation is computation heavy work that cannot be done for each step.
-        """
-
-    @staticmethod
-    def _check_factor_matrix_for_nan_and_inf(
-        factor_matrix: Tensor,
-        factor_matrix_index: str,
-    ) -> None:
-        # Check for nan or inf values.
-        if not torch.isfinite(factor_matrix).all():
-            raise PreconditionerValueError(
-                f"Encountered nan/inf values in factor matrix {factor_matrix_index}! "
-                f"To mitigate, check if nan inputs are being passed into the network or nan gradients are being passed to the optimizer. "
-                f"Otherwise, in some cases, this may be due to divergence of the algorithm. To mitigate, try decreasing the learning rate or increasing grafting epsilon. "
-                f"For debugging purposes, factor_matrix {factor_matrix_index}: "
-                f"{torch.min(factor_matrix)=}, {torch.max(factor_matrix)=}, "
-                f"{factor_matrix.isinf().any()=}, {factor_matrix.isnan().any()=}."
-            )
-
-    def _raise_exception_if_failure_tolerance_exceeded(
-        self,
-        last_seen_exception: Exception | None,
-        preconditioner_index: int,
-        exception_message: str,
-    ) -> None:
-        """Raises an exception if the number of failed amortized computations exceeds the tolerance.
-
-        Resets the counter at the given index when all amortized computations are successful.
-
-        Args:
-            last_seen_exception (Exception | None): The last exception encountered, or None if no exception occurred.
-                When None, the counter is reset.
-                When an Exception, the counter is incremented and checked against tolerance.
-            preconditioner_index (int): The index of the preconditioner in the counter list.
-            exception_message (str): The message to include in the raised exception.
-
-        Raises:
-            ValueError: If the number of failed computations exceeds the allowed tolerance.
-                The original exception is attached as the cause.
-        """
-        if last_seen_exception is None:
-            # Reset counter for failed amortized computations.
-            self._masked_failed_amortized_computation_counter_list[
-                preconditioner_index
-            ] = 0
-        else:
-            # Increment counter for failed amortized computations.
-            self._masked_failed_amortized_computation_counter_list[
-                preconditioner_index
-            ] += 1
-            # Raise the exception if the tolerance at the given index is exceeded.
-            failure_counter = self._masked_failed_amortized_computation_counter_list[
-                preconditioner_index
-            ]
-            tolerance = (
-                self._preconditioner_config.num_tolerated_failed_amortized_computations
-            )
-            if failure_counter > tolerance:
-                raise ValueError(exception_message) from last_seen_exception
 
     @_profile_decorator
     def update_preconditioners(
@@ -1092,7 +1513,10 @@ class BaseShampooPreconditionerList(
         # In Shampoo, this is equivalent to computing the inverse factor matrix.
         # In eigenvalue-corrected Shampoo, this is equivalent to computing the eigenvectors of the factor matrix.
         if perform_amortized_computation:
-            self._amortized_computation()
+            for kronecker_factors_unwrapped in self._masked_kronecker_factors_unwrapped:
+                kronecker_factors_unwrapped.amortized_computation(
+                    bias_correction2=self._bias_correction2
+                )
 
     def _initialize_state_lists(
         self,
@@ -1109,18 +1533,12 @@ class BaseShampooPreconditionerList(
         self._local_order_list: tuple[int, ...] = tuple(
             block.dim() for block in block_list
         )
-        self._local_failed_amortized_computation_counter_list: list[int] = [0] * len(
-            self._local_kronecker_factors_unwrapped
-        )
         self._local_preconditioned_dims_selector_list: tuple[tuple[bool, ...], ...] = (
             preconditioned_dims_selector_list
         )
 
         # Masked lists are the list of active preconditioners or values after filtering out gradients with None.
         self._masked_order_list: tuple[int, ...] = self._local_order_list
-        self._masked_failed_amortized_computation_counter_list: list[int] = (
-            self._local_failed_amortized_computation_counter_list
-        )
         self._masked_kronecker_factors_unwrapped: tuple[
             _ShampooKroneckerFactorsUnwrappedType,
             ...,
@@ -1148,12 +1566,6 @@ class BaseShampooPreconditionerList(
     ) -> None:
         self._masked_order_list = compress_list(
             self._local_order_list, local_grad_selector
-        )
-        self._masked_failed_amortized_computation_counter_list = list(
-            compress_list(
-                self._local_failed_amortized_computation_counter_list,
-                local_grad_selector,
-            )
         )
         self._masked_kronecker_factors_unwrapped = compress_list(
             self._local_kronecker_factors_unwrapped, local_grad_selector
@@ -1294,76 +1706,6 @@ class BaseShampooPreconditionerList(
             profile="full",  # Use the 'full' profile to display all elements of tensors.
         )
         error_handler()
-
-    @staticmethod
-    def _handle_preconditioner_error(
-        factor_matrix_index: str,
-        source_matrix: Tensor,
-        quantity_name: str,
-    ) -> NoReturn:
-        """
-        Handles errors related to preconditioner computation by saving the problematic matrix
-        and raising a detailed error message.
-
-        This method is called when NaN or inf values are detected in computed matrices during
-        preconditioner operations. It saves the source matrix to a file for debugging purposes
-        and raises a PreconditionerValueError with detailed information.
-
-        Args:
-            factor_matrix_index (str): The index identifier for the factor matrix.
-            source_matrix (Tensor): The source matrix that caused the computation error.
-            quantity_name (str): Description of the quantity being computed.
-
-        Raises:
-            PreconditionerValueError: Error with details about the problematic matrix.
-        """
-
-        def raise_preconditioner_value_error() -> NoReturn:
-            raise PreconditionerValueError(
-                f"Encountered nan or inf values in {quantity_name} of factor matrix {factor_matrix_index}! "
-                f"To mitigate, check factor matrix before the matrix computation: {source_matrix=}"
-            )
-
-        BaseShampooPreconditionerList._save_and_handle_matrix_error(
-            factor_matrix_index=factor_matrix_index,
-            source_matrix=source_matrix,
-            error_handler=raise_preconditioner_value_error,
-        )
-
-    @staticmethod
-    def _handle_amortized_computation_internal_error(
-        factor_matrix_index: str,
-        source_matrix: Tensor,
-        exception: Exception,
-        preconditioner_name: str,
-    ) -> None:
-        """
-        Handles internal errors during amortized computation by saving the problematic matrix
-        and logging a warning message.
-
-        This method is called when an exception occurs during matrix computations in the amortized
-        computation phase. It saves the source matrix to a file for debugging purposes and logs
-        a warning with detailed information about the error, allowing the optimization to continue
-        using the previous preconditioner.
-
-        Args:
-            factor_matrix_index (str): The index identifier for the factor matrix.
-            source_matrix (Tensor): The source matrix that caused the computation error.
-            exception (Exception): The exception that was raised during computation.
-            preconditioner_name (str): Name of the preconditioner being computed.
-
-        Returns:
-            None
-        """
-        BaseShampooPreconditionerList._save_and_handle_matrix_error(
-            factor_matrix_index=factor_matrix_index,
-            source_matrix=source_matrix,
-            error_handler=lambda: logger.warning(
-                f"Matrix computation failed for factor matrix {factor_matrix_index} with {exception=}. "
-                f"To investigate, check factor matrix before the matrix computation: {source_matrix=}. "
-                f"Using previous {preconditioner_name} and continuing..."
-            ),
-        )
 
     @abstractmethod
     def _compute_preconditioned_gradient(
@@ -1511,80 +1853,6 @@ class RootInvShampooPreconditionerList(
             preconditioner_list=kronecker_factors.inv_factor_matrices,
         )
 
-    @torch.compiler.disable
-    @_profile_decorator
-    def _amortized_computation(self) -> None:
-        # NOTE: This function currently only computes the matrix root inverse based on
-        # the masked lists which combines both selection based on the distributor and where
-        # grad is not None. Implicitly, this assumes that there are no changes between the
-        # selector or masking from iteration-to-iteration within a single precondition_frequency
-        # interval.
-        for idx, kronecker_factors in enumerate(
-            self._masked_kronecker_factors_unwrapped
-        ):
-            last_seen_exception: Exception | None = None
-            for (
-                factor_matrix,
-                inv_factor_matrix,
-                factor_matrix_index,
-                root,
-            ) in zip(
-                kronecker_factors.factor_matrices,
-                kronecker_factors.inv_factor_matrices,
-                kronecker_factors.factor_matrix_indices,
-                kronecker_factors.roots,
-                strict=True,
-            ):
-                # Incorporate bias correction.
-                bias_corrected_factor_matrix = factor_matrix / self._bias_correction2
-
-                BaseShampooPreconditionerList._check_factor_matrix_for_nan_and_inf(
-                    factor_matrix=bias_corrected_factor_matrix,
-                    factor_matrix_index=factor_matrix_index,
-                )
-
-                # Compute inverse preconditioner.
-                root_inv_config = cast(
-                    RootInvConfig,
-                    self._preconditioner_config.amortized_computation_config,
-                )
-                try:
-                    computed_inv_factor_matrix = matrix_inverse_root(
-                        A=bias_corrected_factor_matrix,
-                        root=Fraction(root),
-                        root_inv_config=root_inv_config,
-                        epsilon=self._epsilon,
-                        is_diagonal=False,
-                    ).to(dtype=inv_factor_matrix.dtype)
-                except Exception as exception:
-                    # Track the last seen exception.
-                    last_seen_exception = exception
-                    BaseShampooPreconditionerList._handle_amortized_computation_internal_error(
-                        factor_matrix_index=factor_matrix_index,
-                        source_matrix=bias_corrected_factor_matrix,
-                        exception=exception,
-                        preconditioner_name="inverted factor matrix",
-                    )
-                    # Define computed_inv_factor_matrix to prevent undefined local variable error.
-                    computed_inv_factor_matrix = inv_factor_matrix
-
-                # Check if we encounter NaN or inf values in computed inverse matrix.
-                if not torch.isfinite(computed_inv_factor_matrix).all():
-                    BaseShampooPreconditionerList._handle_preconditioner_error(
-                        factor_matrix_index=factor_matrix_index,
-                        source_matrix=bias_corrected_factor_matrix,
-                        quantity_name="inverse",
-                    )
-                inv_factor_matrix.copy_(computed_inv_factor_matrix)
-
-            # Only reuse previous inverse roots if tolerance is not exceeded.
-            self._raise_exception_if_failure_tolerance_exceeded(
-                last_seen_exception=last_seen_exception,
-                preconditioner_index=idx,
-                exception_message=f"The number of failed inverse root computations for factors {kronecker_factors.factor_matrix_indices} exceeded the allowed tolerance."
-                f"The last seen exception was {last_seen_exception}.",
-            )
-
 
 class EigendecomposedShampooPreconditionerList(
     ClassicShampooPreconditionerList[
@@ -1627,95 +1895,6 @@ class EigendecomposedShampooPreconditionerList(
                 )
             ),
         )
-
-    @torch.compiler.disable
-    @_profile_decorator
-    def _amortized_computation(self) -> None:
-        # NOTE: This function currently only computes the eigendecomposition based on
-        # the masked lists which combines both selection based on the distributor and where
-        # grad is not None. Implicitly, this assumes that there are no changes between the
-        # selector or masking from iteration-to-iteration within a single precondition_frequency
-        # interval.
-        for idx, kronecker_factors in enumerate(
-            self._masked_kronecker_factors_unwrapped
-        ):
-            last_seen_exception: Exception | None = None
-            for (
-                factor_matrix,
-                factor_matrix_eigenvectors,
-                factor_matrix_eigenvalues,
-                factor_matrix_index,
-            ) in zip(
-                kronecker_factors.factor_matrices,
-                kronecker_factors.factor_matrices_eigenvectors,
-                kronecker_factors.factor_matrices_eigenvalues,
-                kronecker_factors.factor_matrix_indices,
-                strict=True,
-            ):
-                # Incorporate bias correction.
-                bias_corrected_factor_matrix = factor_matrix / self._bias_correction2
-
-                BaseShampooPreconditionerList._check_factor_matrix_for_nan_and_inf(
-                    factor_matrix=bias_corrected_factor_matrix,
-                    factor_matrix_index=factor_matrix_index,
-                )
-
-                # Compute inverse preconditioner.
-                eigendecomposition_config = cast(
-                    EigendecompositionConfig,
-                    self._preconditioner_config.amortized_computation_config,
-                )
-                # To estimate the eigenvalues based on the previous eigenvectors, we need to pass in the previous eigenvectors with the same dtype as the input matrix, i.e., bias_corrected_factor_matrix.
-                eigenvectors_estimate = factor_matrix_eigenvectors.to(
-                    dtype=bias_corrected_factor_matrix.dtype
-                )
-                try:
-                    computed_eigenvalues, computed_eigenvectors = (
-                        matrix_eigendecomposition(
-                            A=bias_corrected_factor_matrix,
-                            eigendecomposition_config=eigendecomposition_config,
-                            eigenvectors_estimate=eigenvectors_estimate,
-                            is_diagonal=False,
-                            epsilon=self._epsilon,
-                        )
-                    )
-                    computed_eigenvalues.to(dtype=factor_matrix_eigenvalues.dtype)
-                    computed_eigenvectors.to(dtype=factor_matrix_eigenvectors.dtype)
-                except Exception as exception:
-                    # Track the last seen exception.
-                    last_seen_exception = exception
-                    BaseShampooPreconditionerList._handle_amortized_computation_internal_error(
-                        factor_matrix_index=factor_matrix_index,
-                        source_matrix=bias_corrected_factor_matrix,
-                        exception=exception,
-                        preconditioner_name="inverted factor matrix",
-                    )
-                    # Define computed_eigenvalues and computed_eigenvectors to prevent undefined local variable error.
-                    computed_eigenvalues = factor_matrix_eigenvalues
-                    computed_eigenvectors = factor_matrix_eigenvectors
-
-                # Check if we encounter NaN or inf values in computed quantities.
-                for computed_quantity, target in (
-                    (computed_eigenvalues, factor_matrix_eigenvalues),
-                    (computed_eigenvectors, factor_matrix_eigenvectors),
-                ):
-                    if not torch.isfinite(computed_quantity).all():
-                        BaseShampooPreconditionerList._handle_preconditioner_error(
-                            factor_matrix_index=factor_matrix_index,
-                            source_matrix=bias_corrected_factor_matrix,
-                            quantity_name=f"{computed_quantity=}".split("=")[0].split(
-                                "_"
-                            )[-1],
-                        )
-                    target.copy_(computed_quantity)
-
-            # Only reuse previous inverse roots if tolerance is not exceeded.
-            self._raise_exception_if_failure_tolerance_exceeded(
-                last_seen_exception=last_seen_exception,
-                preconditioner_index=idx,
-                exception_message=f"The number of failed eigendecompositions for factors {kronecker_factors.factor_matrix_indices} exceeded the allowed tolerance."
-                f"The last seen exception was {last_seen_exception}.",
-            )
 
 
 class EigenvalueCorrectedShampooPreconditionerList(
@@ -1833,76 +2012,3 @@ class EigenvalueCorrectedShampooPreconditionerList(
             preconditioner_list=kronecker_factors.factor_matrices_eigenvectors,
             dims=([0], [1]),
         )
-
-    @torch.compiler.disable
-    @_profile_decorator
-    def _amortized_computation(self) -> None:
-        # NOTE: This function currently only computes the preconditioner eigenvectors based on
-        # the masked lists which combines both selection based on the distributor and where
-        # grad is not None. Implicitly, this assumes that there are no changes between the
-        # selector or masking from iteration-to-iteration within a single precondition_frequency
-        # interval.
-        for idx, kronecker_factors in enumerate(
-            self._masked_kronecker_factors_unwrapped
-        ):
-            last_seen_exception: Exception | None = None
-            for (
-                factor_matrix,
-                factor_matrix_eigenvectors,
-                factor_matrix_index,
-            ) in zip(
-                kronecker_factors.factor_matrices,
-                kronecker_factors.factor_matrices_eigenvectors,
-                kronecker_factors.factor_matrix_indices,
-                strict=True,
-            ):
-                BaseShampooPreconditionerList._check_factor_matrix_for_nan_and_inf(
-                    factor_matrix=factor_matrix,
-                    factor_matrix_index=factor_matrix_index,
-                )
-
-                # Compute eigenvectors of factor matrix.
-                eigendecomposition_config = cast(
-                    EigendecompositionConfig,
-                    self._preconditioner_config.amortized_computation_config,
-                )
-                # To estimate the eigenvalues based on the previous eigenvectors, we need to pass in the previous eigenvectors with the same dtype as the input matrix, i.e., factor_matrix.
-                eigenvectors_estimate = factor_matrix_eigenvectors.to(
-                    dtype=factor_matrix.dtype
-                )
-                try:
-                    computed_eigenvectors = matrix_eigendecomposition(
-                        A=factor_matrix,
-                        eigendecomposition_config=eigendecomposition_config,
-                        eigenvectors_estimate=eigenvectors_estimate,
-                        is_diagonal=False,
-                        epsilon=self._epsilon,
-                    )[1].to(dtype=factor_matrix_eigenvectors.dtype)
-                except Exception as exception:
-                    # Track the last seen exception.
-                    last_seen_exception = exception
-                    BaseShampooPreconditionerList._handle_amortized_computation_internal_error(
-                        factor_matrix_index=factor_matrix_index,
-                        source_matrix=factor_matrix,
-                        exception=exception,
-                        preconditioner_name="factor matrix eigenvectors",
-                    )
-                    # Define computed_eigenvectors to prevent undefined local variable error.
-                    computed_eigenvectors = factor_matrix_eigenvectors
-
-                # Check if we encounter NaN or inf values in computed eigenvectors.
-                if not torch.isfinite(computed_eigenvectors).all():
-                    BaseShampooPreconditionerList._handle_preconditioner_error(
-                        factor_matrix_index=factor_matrix_index,
-                        source_matrix=factor_matrix,
-                        quantity_name="eigenvectors",
-                    )
-                factor_matrix_eigenvectors.copy_(computed_eigenvectors)
-
-            # Only reuse previous eigenvectors if tolerance is not exceeded.
-            self._raise_exception_if_failure_tolerance_exceeded(
-                last_seen_exception=last_seen_exception,
-                preconditioner_index=idx,
-                exception_message=f"The number of failed eigenvector computations for factors {kronecker_factors.factor_matrix_indices} exceeded the allowed tolerance."
-                f"The last seen exception was {last_seen_exception}.",
-            )

@@ -914,10 +914,9 @@ class AbstractTest:
                     step += 1
                 # Exactly at failure tolerance now.
                 with self.assertLogs(level="WARNING") as cm:
-                    expected_error_message = r"The number of failed .* for factors \('0.block_0.0',\) exceeded the allowed tolerance\."
                     self.assertRaisesRegex(
                         ValueError,
-                        expected_error_message,
+                        r"The number of failed amortized computations for factors \('0\.block_0\.0',\) exceeded the allowed tolerance\. The last seen exception was .*",
                         self._preconditioner_list.update_preconditioners,
                         masked_grad_list=masked_grad_list,
                         step=torch.tensor(step),
@@ -1014,7 +1013,7 @@ class AbstractTest:
 
         @property
         def _expected_compress_list_call_count(self) -> int:
-            return 4
+            return 3
 
     class ClassicShampooPreconditionerListTest(BaseShampooPreconditionerListTest):
         @property
