@@ -657,7 +657,6 @@ class ShampooDistributedStateDictTest(AbstractTest.DistributedStateDictTestBase)
                     ),
                     "use_merge_dims": True,
                     "distributed_config": None,
-                    "preconditioner_dtype": torch.float32,
                     "preconditioner_config": self._preconditioner_config,
                 }
             },
@@ -837,7 +836,6 @@ class EigendecomposedShampooDistributedStateDictTest(
                     ),
                     "use_merge_dims": True,
                     "distributed_config": None,
-                    "preconditioner_dtype": torch.float32,
                     "preconditioner_config": self._preconditioner_config,
                 }
             },
@@ -1023,7 +1021,6 @@ class EigenvalueCorrectedShampooDistributedStateDictTest(
                     ),
                     "use_merge_dims": True,
                     "distributed_config": None,
-                    "preconditioner_dtype": torch.float32,
                     "preconditioner_config": self._preconditioner_config,
                 }
             },
@@ -1119,7 +1116,6 @@ class SpectralDescentDistributedStateDictTest(
                     ),
                     "use_merge_dims": True,
                     "distributed_config": None,
-                    "preconditioner_dtype": torch.float32,
                     "preconditioner_config": self._preconditioner_config,
                 }
             },

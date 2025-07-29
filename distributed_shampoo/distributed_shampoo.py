@@ -51,7 +51,6 @@ from distributed_shampoo.shampoo_types import (
     PARAMS,
     PRECONDITION_FREQUENCY,
     PRECONDITIONER_CONFIG,
-    PRECONDITIONER_DTYPE,
     PreconditionerConfig,
     PREVIOUS_GRAD_SELECTOR,
     RMSpropGraftingConfig,
@@ -299,7 +298,6 @@ class DistributedShampoo(torch.optim.Optimizer):
         distributed_config (DistributedConfig | None): Configuration for applying Shampoo
             to different distributed training frameworks, such as distributed-data parallel (DDP) training.
             Based on the configuration, determines which version of Shampoo to use. (Default: None)
-        preconditioner_dtype (torch.dtype): Data type for preconditioner. (Default: torch.float)
         preconditioner_config (PreconditionerConfig): Configuration for preconditioner computation.
             If this field is an instance ShampooPreconditionerConfig, Shampoo uses the root inverse of the preconditioner.
             If this field is an instance EigenvalueCorrectedShampooPreconditionerConfig Shampoo uses corrected the eigenvalues/running Adam in the eigenbasis of preconditioner.
@@ -328,7 +326,6 @@ class DistributedShampoo(torch.optim.Optimizer):
         use_pin_memory: bool = False,
         shampoo_pt2_compile_config: ShampooPT2CompileConfig | None = None,
         distributed_config: DistributedConfig | None = None,
-        preconditioner_dtype: torch.dtype = torch.float,
         preconditioner_config: PreconditionerConfig = DefaultShampooConfig,
     ) -> None:
         # Hyperparameter checks.
@@ -458,7 +455,6 @@ class DistributedShampoo(torch.optim.Optimizer):
                 GRAFTING_CONFIG: grafting_config,
                 USE_MERGE_DIMS: use_merge_dims,
                 DISTRIBUTED_CONFIG: distributed_config,
-                PRECONDITIONER_DTYPE: preconditioner_dtype,
                 PRECONDITIONER_CONFIG: preconditioner_config,
             },
         )
@@ -572,7 +568,6 @@ class DistributedShampoo(torch.optim.Optimizer):
                             beta2=group[BETAS][1],
                             epsilon=group[EPSILON],
                             use_bias_correction=group[USE_BIAS_CORRECTION],
-                            factor_matrix_dtype=group[PRECONDITIONER_DTYPE],
                         )
                     )
                 case SpectralDescentPreconditionerConfig():

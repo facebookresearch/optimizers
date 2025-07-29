@@ -46,7 +46,6 @@ LR = "lr"
 MAX_PRECONDITIONER_DIM = "max_preconditioner_dim"
 PARAMS = "params"  # While this is stored in groups by default, we do not checkpoint this quantity.
 PRECONDITION_FREQUENCY = "precondition_frequency"
-PRECONDITIONER_DTYPE = "preconditioner_dtype"
 PRECONDITIONER_CONFIG = "preconditioner_config"
 START_PRECONDITIONING_STEP = "start_preconditioning_step"
 USE_EIGENVALUE_CORRECTION = "use_eigenvalue_correction"
@@ -87,12 +86,14 @@ class AmortizedPreconditionerConfig(PreconditionerConfig):
     Attributes:
         amortized_computation_config (MatrixFunctionConfig): Configuration for the amortized computation, e.g., inverse-root computation or eigendecomposition.
         num_tolerated_failed_amortized_computations (int): Number of failed amortized computations to tolerate before raising an error. (Default: 3)
+        factor_matrix_dtype (torch.dtype): Data type for factor matrix. (Default: torch.float32)
 
     """
 
     # repr=False prevents __repr__() from accessing this field to avoid linter complaints
     amortized_computation_config: MatrixFunctionConfig = field(repr=False)
     num_tolerated_failed_amortized_computations: int = 3
+    factor_matrix_dtype: torch.dtype = torch.float32
 
     def __post_init__(self) -> None:
         if self.num_tolerated_failed_amortized_computations < 0:
@@ -108,6 +109,7 @@ class ShampooPreconditionerConfig(AmortizedPreconditionerConfig):
     Attributes:
         amortized_computation_config (MatrixFunctionConfig): Configuration for the amortized computation, e.g., inverse-root computation or eigendecomposition.
         num_tolerated_failed_amortized_computations (int): Number of failed amortized computations to tolerate before raising an error. (Default: 3)
+        factor_matrix_dtype (torch.dtype): Data type for factor matrix. (Default: torch.float32)
         inverse_exponent_override (dict[int, dict[int, float] | float]): The inverse_exponent_override attribute is a dictionary that allows for customizing the inverse exponent used in the Shampoo preconditioner computation.
             The keys of the dictionary represent the order of the tensor, and the values are either dictionaries with dimension indices as keys and override values as values, or a single float value for all dimensions. All unspecified dimensions use a default exponent of 1/(2*max(o,1)), where o is the order of the tensor. (Default: {})
 
@@ -197,6 +199,7 @@ class RootInvShampooPreconditionerConfig(ShampooPreconditionerConfig):
     Attributes:
         amortized_computation_config (RootInvConfig): Configuration for the inverse-root computation. (Default: DefaultEigenConfig)
         num_tolerated_failed_amortized_computations (int): Number of failed amortized computations to tolerate before raising an error. (Default: 3)
+        factor_matrix_dtype (torch.dtype): Data type for factor matrix. (Default: torch.float32)
         inverse_exponent_override (dict[int, dict[int, float] | float]): The inverse_exponent_override attribute is a dictionary that allows for customizing the inverse exponent used in the Shampoo preconditioner computation.
             The keys of the dictionary represent the order of the tensor, and the values are either dictionaries with dimension indices as keys and override values as values, or a single float value for all dimensions. All unspecified dimensions use a default exponent of 1/(2*max(o,1)), where o is the order of the tensor. (Default: {})
 
@@ -251,6 +254,7 @@ class EigendecomposedShampooPreconditionerConfig(ShampooPreconditionerConfig):
     Attributes:
         amortized_computation_config (EigendecompositionConfig): Configuration for the eigendecomposition computation. (Default: DefaultEigendecompositionConfig)
         num_tolerated_failed_amortized_computations (int): Number of failed amortized computations to tolerate before raising an error. (Default: 3)
+        factor_matrix_dtype (torch.dtype): Data type for factor matrix. (Default: torch.float32)
         inverse_exponent_override (dict[int, dict[int, float] | float]): The inverse_exponent_override attribute is a dictionary that allows for customizing the inverse exponent used in the Shampoo preconditioner computation.
             The keys of the dictionary represent the order of the tensor, and the values are either dictionaries with dimension indices as keys and override values as values, or a single float value for all dimensions. All unspecified dimensions use a default exponent of 1/(2*max(o,1)), where o is the order of the tensor. (Default: {})
 
@@ -306,6 +310,7 @@ class EigenvalueCorrectedShampooPreconditionerConfig(AmortizedPreconditionerConf
         amortized_computation_config (EigendecompositionConfig): Configuration for the eigenvector computation.
             (Default: DefaultEigendecompositionConfig)
         num_tolerated_failed_amortized_computations (int): Number of failed amortized computations to tolerate before raising an error. (Default: 3)
+        factor_matrix_dtype (torch.dtype): Data type for factor matrix. (Default: torch.float32)
         ignored_basis_change_dims (dict[int, list[int]]): The ignored_basis_change_dims attribute is a dictionary that specifies the dimensions of the gradient to ignore when transforming the basis of the gradient using the corresponding factor matrix's eigenvectors.
             (This is analogous to turning off preconditioning for the specified dimensions in default Shampoo.)
             The keys of the dictionary represent the order of the tensor, and the values are lists of dimension indices to ignore. (Default: {})

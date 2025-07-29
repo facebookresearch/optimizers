@@ -1331,7 +1331,6 @@ class BaseShampooPreconditionerList(
             (Default: 1.0)
         epsilon (float): Epsilon term for regularizing preconditioner to ensure positive definiteness. (Default: 1e-12)
         use_bias_correction (bool): Flag for using bias correction. (Default: True)
-        factor_matrix_dtype (torch.dtype): Data type for accumulating and computing root inverse of preconditioners. (Default: torch.float)
 
     """
 
@@ -1344,7 +1343,6 @@ class BaseShampooPreconditionerList(
         beta2: float = 1.0,
         epsilon: float = 1e-12,
         use_bias_correction: bool = True,
-        factor_matrix_dtype: torch.dtype = torch.float,
     ) -> None:
         super().__init__(block_list)
 
@@ -1352,7 +1350,6 @@ class BaseShampooPreconditionerList(
         self._preconditioner_config = preconditioner_config
         self._beta2 = beta2
         self._epsilon = epsilon
-        self._factor_matrix_dtype = factor_matrix_dtype
         self._use_bias_correction = use_bias_correction
         self._bias_correction2: Tensor = torch.tensor(1.0)
 
@@ -1443,7 +1440,7 @@ class BaseShampooPreconditionerList(
             )
             block_state[SHAMPOO] = kronecker_factors_state_type.from_block(
                 block_info=block_info,
-                factor_matrix_dtype=self._factor_matrix_dtype,
+                factor_matrix_dtype=self._preconditioner_config.factor_matrix_dtype,
                 preconditioned_dims=preconditioned_dims,
                 block_dtype=block.dtype,
                 dims=dims,
@@ -1555,7 +1552,10 @@ class BaseShampooPreconditionerList(
         )
         self._num_bytes_list: tuple[int, ...] = tuple(
             numel
-            * (get_dtype_size(self._factor_matrix_dtype) + get_dtype_size(block.dtype))
+            * (
+                get_dtype_size(self._preconditioner_config.factor_matrix_dtype)
+                + get_dtype_size(block.dtype)
+            )
             // 2
             for numel, block in zip(self._numel_list, block_list, strict=True)
         )
