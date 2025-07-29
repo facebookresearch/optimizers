@@ -481,7 +481,6 @@ class DistributedShampoo(torch.optim.Optimizer):
         self._instantiate_steps()
         self._instantiate_momentum()
         self._instantiate_filtered_grads()
-        self._instantiate_device()
         self._instantiate_per_group_step(
             shampoo_pt2_compile_config=shampoo_pt2_compile_config
         )
@@ -714,11 +713,6 @@ class DistributedShampoo(torch.optim.Optimizer):
             # Here, we set masked filtered grad list to filtered grad list because we assume
             # all parameters are active.
             state_lists[MASKED_FILTERED_GRAD_LIST] = state_lists[FILTERED_GRAD_LIST]
-
-    @torch.no_grad()
-    def _instantiate_device(self) -> None:
-        # NOTE: Assume all parameter groups consistently exist on the same rank.
-        self._device = self._per_group_state_lists[0][MASKED_BLOCKED_PARAMS][0].device
 
     @torch.no_grad()
     def _instantiate_per_group_step(
@@ -1159,7 +1153,11 @@ class DistributedShampoo(torch.optim.Optimizer):
             # tensor impl once PT2 supports cpu 0D tensor properly.
             lr = torch.tensor(
                 group[LR], dtype=torch.float, pin_memory=self._use_pin_memory
-            ).to(self._device, non_blocking=True)
+            ).to(
+                # NOTE: Assume all parameter groups consistently exist on the same rank.
+                state_lists[DISTRIBUTOR].local_blocked_params[0].device,
+                non_blocking=True,
+            )
             beta1 = group[BETAS][0]
             beta3 = group[BETA3]
             weight_decay = group[WEIGHT_DECAY]
