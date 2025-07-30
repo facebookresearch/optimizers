@@ -21,6 +21,18 @@ import matrix_functions
 
 import torch
 from commons import AbstractDataclass
+from distributed_shampoo.distributor.shampoo_block_info import BlockInfo
+from distributed_shampoo.preconditioner import shampoo_preconditioner_list
+from distributed_shampoo.preconditioner.shampoo_preconditioner_list import (
+    AdagradPreconditionerList,
+    BaseShampooPreconditionerList,
+    EigendecomposedShampooPreconditionerList,
+    EigenvalueCorrectedShampooPreconditionerList,
+    PreconditionerList,
+    RootInvShampooPreconditionerList,
+    SGDPreconditionerList,
+    SpectralDescentPreconditionerList,
+)
 from distributed_shampoo.shampoo_types import (
     AmortizedPreconditionerConfig,
     DefaultShampooConfig,
@@ -32,18 +44,6 @@ from distributed_shampoo.shampoo_types import (
     RootInvShampooPreconditionerConfig,
     ShampooPreconditionerConfig,
     SpectralDescentPreconditionerConfig,
-)
-from distributed_shampoo.utils import shampoo_preconditioner_list
-from distributed_shampoo.utils.shampoo_block_info import BlockInfo
-from distributed_shampoo.utils.shampoo_preconditioner_list import (
-    AdagradPreconditionerList,
-    BaseShampooPreconditionerList,
-    EigendecomposedShampooPreconditionerList,
-    EigenvalueCorrectedShampooPreconditionerList,
-    PreconditionerList,
-    RootInvShampooPreconditionerList,
-    SGDPreconditionerList,
-    SpectralDescentPreconditionerList,
 )
 from distributed_shampoo.utils.shampoo_utils import compress_list
 from matrix_functions_types import (

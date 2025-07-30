@@ -15,6 +15,29 @@ from functools import partial
 from typing import Any, overload
 
 import torch
+from distributed_shampoo.distributor.shampoo_ddp_distributor import DDPDistributor
+from distributed_shampoo.distributor.shampoo_distributor import (
+    Distributor,
+    DistributorInterface,
+)
+from distributed_shampoo.distributor.shampoo_fsdp_distributor import FSDPDistributor
+from distributed_shampoo.distributor.shampoo_fully_shard_distributor import (
+    FullyShardDistributor,
+)
+from distributed_shampoo.distributor.shampoo_hsdp_distributor import HSDPDistributor
+from distributed_shampoo.distributor.shampoo_hybrid_shard_distributor import (
+    HybridShardDistributor,
+)
+
+from distributed_shampoo.preconditioner.shampoo_preconditioner_list import (
+    AdagradPreconditionerList,
+    EigendecomposedShampooPreconditionerList,
+    EigenvalueCorrectedShampooPreconditionerList,
+    PreconditionerList,
+    RootInvShampooPreconditionerList,
+    SGDPreconditionerList,
+    SpectralDescentPreconditionerList,
+)
 
 from distributed_shampoo.shampoo_types import (
     AdaGradGraftingConfig,
@@ -73,29 +96,6 @@ from distributed_shampoo.utils.shampoo_checkpoint_utils import (
     flatten,
     unflatten,
     update_param_state_dict_object,
-)
-from distributed_shampoo.utils.shampoo_ddp_distributor import DDPDistributor
-from distributed_shampoo.utils.shampoo_distributor import (
-    Distributor,
-    DistributorInterface,
-)
-from distributed_shampoo.utils.shampoo_fsdp_distributor import FSDPDistributor
-from distributed_shampoo.utils.shampoo_fully_shard_distributor import (
-    FullyShardDistributor,
-)
-from distributed_shampoo.utils.shampoo_hsdp_distributor import HSDPDistributor
-from distributed_shampoo.utils.shampoo_hybrid_shard_distributor import (
-    HybridShardDistributor,
-)
-
-from distributed_shampoo.utils.shampoo_preconditioner_list import (
-    AdagradPreconditionerList,
-    EigendecomposedShampooPreconditionerList,
-    EigenvalueCorrectedShampooPreconditionerList,
-    PreconditionerList,
-    RootInvShampooPreconditionerList,
-    SGDPreconditionerList,
-    SpectralDescentPreconditionerList,
 )
 from distributed_shampoo.utils.shampoo_utils import compress_list
 from matrix_functions_types import EigendecompositionConfig, PseudoInverseConfig

@@ -12,6 +12,7 @@ from math import prod
 from typing import Any
 
 import torch
+from distributed_shampoo.distributor.shampoo_distributor import Distributor
 from distributed_shampoo.shampoo_types import (
     DISTRIBUTED_CONFIG,
     FSDPParameterMetadata,
@@ -20,7 +21,6 @@ from distributed_shampoo.shampoo_types import (
     PARAMS,
     USE_MERGE_DIMS,
 )
-from distributed_shampoo.utils.shampoo_distributor import Distributor
 from distributed_shampoo.utils.shampoo_utils import (
     compress_list,
     generate_pairwise_indices,

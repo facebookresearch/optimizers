@@ -15,7 +15,7 @@ from operator import or_
 from typing import Any
 
 import torch
-from optimizer_modules import OptimizerModule
+from distributed_shampoo.utils.optimizer_modules import OptimizerModule
 
 
 logger: logging.Logger = logging.getLogger(__name__)

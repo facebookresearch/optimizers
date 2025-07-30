@@ -16,6 +16,13 @@ from typing import cast, overload
 
 import torch
 from distributed_shampoo.distributed_shampoo import DistributedShampoo
+from distributed_shampoo.distributor.gpu_tests.distributor_test_utils import (
+    DistributorOnEmptyParamTest,
+)
+from distributed_shampoo.distributor.shampoo_block_info import BlockInfo
+from distributed_shampoo.distributor.shampoo_fully_shard_distributor import (
+    FullyShardDistributor,
+)
 from distributed_shampoo.shampoo_types import (
     AdaGradGraftingConfig,
     FullyShardShampooConfig,
@@ -25,13 +32,6 @@ from distributed_shampoo.tests.shampoo_test_utils import (
     compare_two_optimizers_models_devices_on_weight_and_loss,
     construct_training_problem,
     train_model,
-)
-from distributed_shampoo.utils.gpu_tests.distributor_test_utils import (
-    DistributorOnEmptyParamTest,
-)
-from distributed_shampoo.utils.shampoo_block_info import BlockInfo
-from distributed_shampoo.utils.shampoo_fully_shard_distributor import (
-    FullyShardDistributor,
 )
 
 from torch import distributed as dist, nn

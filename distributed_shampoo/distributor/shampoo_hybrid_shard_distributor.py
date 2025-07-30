@@ -8,126 +8,73 @@ LICENSE file in the root directory of this source tree.
 """
 
 import logging
+from collections.abc import Iterable
 from functools import partial
 from itertools import islice
-from typing import Any
+from typing import Any, Literal, overload
 
 import torch
-import torch.distributed as dist
+from commons import batched
+from distributed_shampoo.distributor.shampoo_block_info import DTensorBlockInfo
+from distributed_shampoo.distributor.shampoo_dist_utils import get_device_mesh
+from distributed_shampoo.distributor.shampoo_distributor import DistributorInterface
 from distributed_shampoo.shampoo_types import (
-    DDPShampooConfig,
     DISTRIBUTED_CONFIG,
+    HybridShardShampooConfig,
     PARAMS,
 )
-from distributed_shampoo.utils.shampoo_block_info import DTensorBlockInfo
-from distributed_shampoo.utils.shampoo_dist_utils import get_device_mesh
-from distributed_shampoo.utils.shampoo_distributor import DistributorInterface
 from distributed_shampoo.utils.shampoo_utils import (
     compress_list,
     distribute_buffer_sizes,
     generate_pairwise_indices,
     get_dtype_size,
 )
-from torch import Tensor
+from torch import distributed as dist, Tensor
 from torch.distributed import tensor as dtensor
-
-from torch.distributed.tensor import zeros as dtensor_zeros
+from torch.distributed.device_mesh import _mesh_resources
+from torch.distributed.tensor import DTensor, zeros as dtensor_zeros
 
 logger: logging.Logger = logging.getLogger(__name__)
 
 
-"""
-The following is a visualization of how DDP Distributor computing parallelism functions.
-Users specify num_trainers_per_group, which is the number of workers within a model replication group to manage computing parallelism.
-Note that num_trainers_per_group must be a divisor of the total number of workers.
+class HybridShardDistributor(DistributorInterface):
+    """HybridShard Distributor class.
 
-Assuming we have 4 GPUs within a model replication group, each GPU holds identical model parameters,
-and there are 8 computationally expensive tasks for computing search directions or weight updates associated with the model.
-In practice, tasks may not be evenly distributed among workers.
+    The constructor internally sets up `DeviceMesh` objects as necessary for distributing memory
+    and computation, so torch.distributed must be initialized in advance.
 
-One approach is to let each worker perform these tasks independently without any subsequent communication.
-This occurs when num_trainers_per_group = 1.
+    Unlike FullyShardDistributor, HybridShardDistributor requires the user to pass in a device mesh specifiying the model level parallelism used for Hybrid Shard.
+    For example, suppose we have 48 GPUs and the Hybrid Shard group size is 8. Then:
 
-## num_trainers_per_group = 1
+    Hybrid Shard Device Mesh with (Replicate, Shard) = (6, 8); note that the Replicate and Shard here is referring to the model level parallelism:
 
-      GPU 0           GPU 1           GPU 2           GPU 3
-     -------         -------         -------         -------
-    | W0 W1 |       | W0 W1 |       | W0 W1 |       | W0 W1 |
-    | W2 W3 |       | W2 W3 |       | W2 W3 |       | W2 W3 |
-    | W4 W5 |       | W4 W5 |       | W4 W5 |       | W4 W5 |
-    | W6 W7 |       | W6 W7 |       | W6 W7 |       | W6 W7 |
-     -------         -------         -------         -------
+        device_mesh = [[ 0,  1,  2,  3,  4,  5,  6,  7]
+                       [ 8,  9, 10, 11, 12, 13, 14, 15]
+                       [16, 17, 18, 19, 20, 21, 22, 23]
+                       [24, 25, 26, 27, 28, 29, 30, 31]
+                       [32, 33, 34, 35, 36, 37, 38, 39]
+                       [40, 41, 42, 43, 44, 45, 46, 47]]
 
+    For example, if my device is rank 11, then:
+        device_mesh["replicate"] = [3, 11, 19, 27, 35, 43]
+        device_mesh["shard"] = [8, 9, 10, 11, 12, 13, 14, 15]
 
+    Since the parameters are sharded along the "shard" dimension, we would normally replicate the
+    computation along the "replicate" dimension. With Hybrid Shard Shampoo, we instead want to
+    distribute the computation and memory requirements across the "replicate" dimension of the original
+    Hybrid Shard device mesh.
 
-Alternatively, we could partition these 8 tasks evenly among the 4 GPUs,
-allowing each GPU to compute its own partition.
+    For example, suppose that the num_trainers_per_group = 3. We want to form a (2, 3)-submesh on
+    the ranks [3, 11, 19, 27, 35, 43] (and similar).
 
-## num_trainers_per_group = -1 or 4
+    HybridShardDistributor 2D Sub-Mesh Example with (Replicate, Shard) = (2, 3); note that the Replicate and Shard here is referring to the optimizer level computating parallelism:
 
-  +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-  +   GPU 0           GPU 1           GPU 2           GPU 3   +
-  +  -------         -------         -------         -------  +
-  + | W0 W1 |       |       |       |       |       |       | +
-  + |       |       | W2 W3 |       |       |       |       | +
-  + |       |       |       |       | W4 W5 |       |       | +
-  + |       |       |       |       |       |       | W6 W7 | +
-  +  -------         -------         -------         -------  +
-  +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+        submesh = [[ 3, 11, 19]
+                   [27, 35, 43]]
 
-  After all-gather, each GPU will have all 8 computed search directions or weight updates:
-  +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-  +   GPU 0           GPU 1           GPU 2           GPU 3   +
-  +  -------         -------         -------         -------  +
-  + | W0 W1 |       | W0 W1 |       | W0 W1 |       | W0 W1 | +
-  + | W2 W3 |       | W2 W3 |       | W2 W3 |       | W2 W3 | +
-  + | W4 W5 |       | W4 W5 |       | W4 W5 |       | W4 W5 | +
-  + | W6 W7 |       | W6 W7 |       | W6 W7 |       | W6 W7 | +
-  +  -------         -------         -------         -------  +
-  +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-
-
-
-We could also find a middle ground by splitting the 4 GPUs into two independent groups,
-each completing their own 8 search directions or weight updates independently.
-Here, GPU 0 and 1 form one group, and GPU 2 and 3 form another group.
-For GPU 0 and 1, each needs to compute 4 search directions or weight updates, and similarly for GPU 2 and 3.
-
-## num_trainers_per_group = 2
-
-  +++++++++++++++++++++++++++++   +++++++++++++++++++++++++++++
-  +   GPU 0           GPU 1   +   +   GPU 2           GPU 3   +
-  +  -------         -------  +   +  -------         -------  +
-  + | W0 W1 |       |       | +   + | W0 W1 |       |       | +
-  + | W2 W3 |       |       | +   + | W2 W3 |       |       | +
-  + |       |       | W4 W5 | +   + |       |       | W4 W5 | +
-  + |       |       | W6 W7 | +   + |       |       | W6 W7 | +
-  +  -------         -------  +   +  -------         -------  +
-  +++++++++++++++++++++++++++++   +++++++++++++++++++++++++++++
-
-
-  Within each group, once the computations are complete, each group performs its own synchronizations independently.
-  This approach balances computational and communication costs.
-
-  After all-gather, the result is:
-  +++++++++++++++++++++++++++++   +++++++++++++++++++++++++++++
-  +   GPU 0           GPU 1   +   +   GPU 2           GPU 3   +
-  +  -------         -------  +   +  -------         -------  +
-  + | W0 W1 |       | W0 W1 | +   + | W0 W1 |       | W0 W1 | +
-  + | W2 W3 |       | W2 W3 | +   + | W2 W3 |       | W2 W3 | +
-  + | W4 W5 |       | W4 W5 | +   + | W4 W5 |       | W4 W5 | +
-  + | W6 W7 |       | W6 W7 | +   + | W6 W7 |       | W6 W7 | +
-  +  -------         -------  +   +  -------         -------  +
-  +++++++++++++++++++++++++++++   +++++++++++++++++++++++++++++
-
-"""
-
-
-class DDPDistributor(DistributorInterface):
-    """DDP Distributor class.
-
-    Handles merging, blocking, and distributing of the parameters at instantiation.
-    The constructor internally sets up process groups, so torch.distributed must be initialized in advance.
+    In this case, optimizer states will live on different "replicate" meshes: {[3, 27], [11, 35],
+    [19, 43]}. In order to synchronize the optimizer step, we will communicate along the "shard"
+    mesh {[3, 11, 19], [27, 35, 43]}.
 
     Args:
         param_group (dict[str, Any]): Parameter group containing parameters.
@@ -135,36 +82,87 @@ class DDPDistributor(DistributorInterface):
     """
 
     def __init__(self, param_group: dict[str, Any]) -> None:
+        distributed_config: HybridShardShampooConfig = param_group[DISTRIBUTED_CONFIG]
+        self._hybrid_shard_device_mesh: torch.distributed.device_mesh.DeviceMesh = (
+            distributed_config.device_mesh
+        )
+
         super().__init__(param_group)
-        distributed_config: DDPShampooConfig = param_group[DISTRIBUTED_CONFIG]
+        if not dist.is_initialized():
+            raise RuntimeError(
+                "HybridShardDistributor needs torch.distributed to be initialized!"
+            )
 
         # Construct global masked blocked parameters (which is DDP-specific).
         self._global_masked_blocked_params: tuple[Tensor, ...] = (
             self._global_blocked_params
         )
 
-        # Check num_trainers_per_group and get global and group sizes.
-        # NOTE: If num_trainers_per_group = -1, then we use the global world size.
-        self._global_size: int = dist.get_world_size()
+        # Check num_trainers_per_group and replicated group size.
+        # NOTE: If num_trainers_per_group = -1, then we use the replicated group size.
+        self._replicated_group_size: int = self._hybrid_shard_device_mesh.size(0)
 
+        if not (
+            1
+            <= distributed_config.num_trainers_per_group
+            <= self._replicated_group_size
+            or distributed_config.num_trainers_per_group == -1
+        ):
+            raise ValueError(
+                f"Invalid number of trainers per group: {distributed_config.num_trainers_per_group}. "
+                f"Must be between [1, {self._replicated_group_size}] or set to -1."
+            )
         if distributed_config.num_trainers_per_group == -1:
             logger.info(
-                f"Note that {distributed_config.num_trainers_per_group=}! Defaulting to world size {self._global_size}."
+                f"Note that {distributed_config.num_trainers_per_group=}! Defaulting to replicated group size {self._replicated_group_size}."
             )
-        self._group_size: int = (
+        elif (
+            not self._replicated_group_size % distributed_config.num_trainers_per_group
+            == 0
+        ):
+            raise ValueError(
+                f"{distributed_config.num_trainers_per_group=} must divide {self._replicated_group_size=}!"
+            )
+
+        # Group size for distributing computation / memory requirements.
+        self._dist_group_size: int = (
             distributed_config.num_trainers_per_group
             if distributed_config.num_trainers_per_group != -1
-            else self._global_size
+            else self._replicated_group_size
         )
 
         # Create flag for distributing parameters instead of search directions.
         self._communicate_params: bool = distributed_config.communicate_params
 
         # Initialize _dist_group and _group_rank.
-        self._dist_group: dist.ProcessGroup | None = dist.new_subgroups(
-            group_size=self._group_size
-        )[0]
-        group_rank: int = dist.get_rank(group=self._dist_group)
+        # Note that this requires initializing all process groups.
+        # Splits replicated ranks group into smaller groups of size self._dist_group_size.
+        # Instantiates this by using DeviceMesh.
+        ranks_in_all_replicated_groups = self._hybrid_shard_device_mesh.mesh.T
+        for ranks_in_replicated_group in ranks_in_all_replicated_groups:
+            device_mesh = get_device_mesh(
+                device_type=self._hybrid_shard_device_mesh.device_type,
+                mesh=tuple(
+                    map(
+                        partial(tuple),
+                        ranks_in_replicated_group.view(
+                            -1, self._dist_group_size
+                        ).tolist(),
+                    )
+                ),
+                mesh_dim_names=("replicate", "shard"),
+            )
+            if dist.get_rank() in ranks_in_replicated_group:
+                # NOTE: We want the process group in the device mesh that the current rank
+                # belongs to but solely along the "shard" dimension for communications.
+                #
+                # For example, if the current rank is 11, then I want the process group
+                # that contains the ranks [3, 11, 19].
+                self._comms_dist_group: dist.ProcessGroup = device_mesh.get_group(
+                    "shard"
+                )
+
+        comms_group_rank: int = dist.get_rank(self._comms_dist_group)
 
         # Assign ranks to blocks with their respective buffer size.
         buffer_size_ranks = distribute_buffer_sizes(
@@ -173,7 +171,7 @@ class DDPDistributor(DistributorInterface):
                 * get_dtype_size(distributed_config.communication_dtype)
                 for blocked_param in self._global_blocked_params
             ),
-            group_size=self._group_size,
+            group_size=self._dist_group_size,
         )
 
         self._local_block_info_list: tuple[DTensorBlockInfo, ...] = (
@@ -181,12 +179,13 @@ class DDPDistributor(DistributorInterface):
                 group_source_ranks=tuple(
                     group_source_rank for _, group_source_rank in buffer_size_ranks
                 ),
-                group_rank=group_rank,
+                group_rank=comms_group_rank,
             )
         )
+
         # Initialize selectors and local blocked (masked) parameters.
         self._distributor_selector: tuple[bool, ...] = tuple(
-            group_source_rank == group_rank
+            group_source_rank == comms_group_rank
             for _, group_source_rank in buffer_size_ranks
         )
         self._local_blocked_params: tuple[Tensor, ...] = compress_list(
@@ -202,7 +201,36 @@ class DDPDistributor(DistributorInterface):
         self._construct_distributed_buffers(
             buffer_size_ranks=buffer_size_ranks,
             communication_dtype=distributed_config.communication_dtype,
-            group_rank=group_rank,
+            comms_group_rank=comms_group_rank,
+        )
+
+    @overload
+    @torch.no_grad()
+    def _get_params_or_grads(
+        self, get_grad: Literal[True]
+    ) -> Iterable[Tensor | None]: ...
+
+    @overload
+    @torch.no_grad()
+    def _get_params_or_grads(
+        self, get_grad: Literal[False] = False
+    ) -> Iterable[Tensor]: ...
+
+    @torch.no_grad()
+    def _get_params_or_grads(self, get_grad: bool = False) -> Iterable[Tensor | None]:
+        """Helper function to get the local params (or grad) from the param_group, where params are represented as DTensors.
+
+        Args:
+            get_grad (bool): Whether to return the param or the grad of the param.
+        Returns:
+            local (Iterable[Tensor | None]): Local params (or grad) from the param_group.
+        """
+        # If a parameter is in a "dead layer", it won't have any gradient. In this case, we
+        # should return `None` for the gradient.
+        return (
+            (None if p.grad is None else p.grad.to_local()) if get_grad else local_p
+            for p in self._param_group[PARAMS]
+            if (local_p := p.to_local()).numel() > 0
         )
 
     @torch.no_grad()
@@ -214,7 +242,6 @@ class DDPDistributor(DistributorInterface):
 
         Args:
             masked_blocked_search_directions (tuple[Tensor, ...]): Search directions for each local blocked parameter.
-            This tuple might be empty if the parameters are not receiving gradients.
 
         """
 
@@ -224,7 +251,7 @@ class DDPDistributor(DistributorInterface):
             dist.all_gather_into_tensor(
                 output_tensor=self._global_dist_buffer,
                 input_tensor=self._local_dist_buffer,
-                group=self._dist_group,
+                group=self._comms_dist_group,
             )
 
         if self._communicate_params:
@@ -296,13 +323,24 @@ class DDPDistributor(DistributorInterface):
         Returns:
             block_info_list (tuple[DTensorBlockInfo, ...]): A tuple of DTensorBlockInfo objects for each parameter block.
         """
+        # Call `super()` instead of `self` as a performance optimization.
+        # This leads to O(1) instead of O(N) complexity to retrieve the parameters.
+        non_empty_params: Iterable[Tensor] = filter(
+            lambda p: isinstance(p, DTensor) and p.to_local().numel() > 0,
+            super()._get_params_or_grads(),
+        )
+
+        # Note that for HybridShard, we want to get the rank within each sharded group for the block id.
+        # When using a device mesh, 0 corresponds to the replicated group and 1 corresponds to the sharded group.
+        sharded_group_rank = self._hybrid_shard_device_mesh.get_local_rank(1)
         return tuple(
             DTensorBlockInfo(
                 param=param,
                 composable_block_ids=self._construct_composable_block_ids(
-                    param_index=param_index, block_index=block_index
+                    param_index=param_index,
+                    block_index=block_index,
+                    rank=sharded_group_rank,
                 ),
-                # Curry a function to capture a local variable "group_source_rank".
                 allocate_zeros_tensor=partial(
                     self._allocate_zeros_distributed_tensor,
                     group_source_rank=group_source_rank,
@@ -312,7 +350,7 @@ class DDPDistributor(DistributorInterface):
                 (param_index, param),
                 (buffer_size_ranks_start, buffer_size_ranks_end),
             ) in zip(
-                enumerate(self._param_group[PARAMS]),
+                enumerate(non_empty_params),
                 generate_pairwise_indices(self._global_num_blocks_per_param),
                 strict=True,
             )
@@ -379,7 +417,7 @@ class DDPDistributor(DistributorInterface):
         self,
         buffer_size_ranks: tuple[tuple[int, int], ...],
         communication_dtype: torch.dtype,
-        group_rank: int,
+        comms_group_rank: int,
     ) -> None:
         """Construct the distributed buffers for AllGather communications.
 
@@ -390,32 +428,32 @@ class DDPDistributor(DistributorInterface):
         Args:
             buffer_size_ranks (tuple[tuple[int, int], ...]): A list of tuples containing the
                 buffer size and an assigned rank for each block.
-            communication_dtype (torch.dtype): Data type used for communication.
-            group_rank (int): Rank of the current process group.
+            communication_dtype (torch.dtype): The data type used for communication.
+            comms_group_rank (int): The rank of the current group within the comms group.
 
         """
 
         # Calculate buffer size each rank needs.
         local_buffer_sizes = tuple(
             sum(buffer_size for buffer_size, rank in buffer_size_ranks if rank == i)
-            for i in range(self._group_size)
+            for i in range(self._dist_group_size)
         )
 
         # Calculate the whole buffer size and obtain buffers for every rank.
         max_buffer_size_sum = max(local_buffer_sizes)
-        total_buffer_size = max_buffer_size_sum * self._group_size
+        total_buffer_size = max_buffer_size_sum * self._dist_group_size
         self._global_dist_buffer = torch.zeros(
             total_buffer_size,
             dtype=torch.int8,
             device=self._global_blocked_params[0].device,
         )
         local_dist_buffers = torch.split(self._global_dist_buffer, max_buffer_size_sum)
-        splitted_local_dist_buffers = DDPDistributor._split_local_dist_buffers(
+        splitted_local_dist_buffers = HybridShardDistributor._split_local_dist_buffers(
             buffer_size_ranks, local_dist_buffers
         )
 
         # Get local buffer for specific group rank.
-        self._local_dist_buffer = local_dist_buffers[group_rank]
+        self._local_dist_buffer = local_dist_buffers[comms_group_rank]
 
         # Obtain the list of buffers corresponding to each block (ignoring padding).
         # Note that each buffer is reshaped into the block's shape and viewed in terms
@@ -486,25 +524,34 @@ class DDPDistributor(DistributorInterface):
             size (tuple[int, ...]): Shape of desired tensor.
             dtype (torch.dtype): DType of desired tensor.
             device (torch.device): Device of desired tensor.
-            group_source_rank (int): Desired source rank of allocated zeros tensor within the process group.
+            group_source_rank (int): Group rank (with respect to the sharded group of
+                the 2D submesh) that determines which ranks the DTensor is allocated on.
 
         Returns:
-            out (Tensor): Desired DTensor.
+            out (Tensor): Desired Tensor.
 
         """
-        device_mesh_ranks = tuple(
-            range(
-                group_source_rank % self._group_size,
-                self._global_size,
-                self._group_size,
-            )
+        ranks_in_replicated_group = dist.get_process_group_ranks(
+            self._hybrid_shard_device_mesh.get_group(0)
         )
+        device_mesh_2d = get_device_mesh(
+            device_type=device.type,
+            mesh=tuple(batched(ranks_in_replicated_group, self._dist_group_size)),
+            mesh_dim_names=("replicate", "shard"),
+        )
+        # NOTE: We get all submeshes along the "replicate" dimension, then pick out
+        # the sub-mesh that the optimizer state is assigned to.
+        #
+        # For the example above, this would give me submeshes [[3, 27], [11, 35], [19, 43]].
+        # Note that the group source rank must belong to {0, 1, 2} in this case.
+        # Suppose the group_source_rank = 1, then this would get the submesh [11, 35].
+        replicate_submesh = _mesh_resources._get_all_submeshes(
+            device_mesh_2d, "replicate"
+        )[group_source_rank]
 
         return dtensor_zeros(
             size,
             dtype=dtype,
-            device_mesh=get_device_mesh(
-                device_type=device.type, mesh=device_mesh_ranks
-            ),
+            device_mesh=replicate_submesh,
             placements=[dtensor.Replicate()],
         )

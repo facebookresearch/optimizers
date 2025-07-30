@@ -13,7 +13,7 @@ import unittest
 from dataclasses import dataclass
 
 import torch
-from optimizer_modules import OptimizerModule
+from distributed_shampoo.utils.optimizer_modules import OptimizerModule
 
 
 @dataclass

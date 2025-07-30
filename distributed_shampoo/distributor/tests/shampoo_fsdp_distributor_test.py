@@ -13,7 +13,7 @@ import unittest
 
 import torch
 
-from distributed_shampoo.utils.shampoo_hsdp_distributor import HSDPDistributor
+from distributed_shampoo.distributor.shampoo_fsdp_distributor import FSDPDistributor
 from torch import Tensor
 from torch.testing._internal.common_utils import (
     instantiate_parametrized_tests,
@@ -32,7 +32,7 @@ class SplitTensorBlockRecoveryTest(unittest.TestCase):
         start_idx: int,
         end_idx: int,
     ) -> None:
-        actual_split_tensors = HSDPDistributor._split_tensor_block_recovery(
+        actual_split_tensors = FSDPDistributor._split_tensor_block_recovery(
             original_tensor.flatten()[start_idx:end_idx],
             original_tensor.size(),
             start_idx,
@@ -46,7 +46,7 @@ class SplitTensorBlockRecoveryTest(unittest.TestCase):
         self.assertRaisesRegex(
             ValueError,
             re.escape("Input tensor is not flat"),
-            HSDPDistributor._split_tensor_block_recovery,
+            FSDPDistributor._split_tensor_block_recovery,
             tensor_shard=torch.randn((3, 4)),
             original_shape=torch.Size((3, 4)),
             start_idx=0,

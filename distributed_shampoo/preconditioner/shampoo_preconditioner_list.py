@@ -19,13 +19,14 @@ from pathlib import Path
 from typing import Any, Generic, get_args, NoReturn, overload, TypeVar
 
 import torch
+from distributed_shampoo.distributor.shampoo_block_info import BlockInfo
 from distributed_shampoo.shampoo_types import (
     AmortizedPreconditionerConfig,
     PreconditionerValueError,
     SpectralDescentPreconditionerConfig,
 )
 from distributed_shampoo.utils.dict_zip_iterator import DictZipIterator
-from distributed_shampoo.utils.shampoo_block_info import BlockInfo
+from distributed_shampoo.utils.optimizer_modules import OptimizerModule
 from distributed_shampoo.utils.shampoo_utils import compress_list, get_dtype_size
 from matrix_functions import (
     matrix_eigendecomposition,
@@ -39,7 +40,6 @@ from matrix_functions_types import (
     MatrixFunctionConfig,
     RootInvConfig,
 )
-from optimizer_modules import OptimizerModule
 from torch import Tensor
 from torch.autograd import profiler
 

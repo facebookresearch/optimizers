@@ -14,12 +14,12 @@ from operator import attrgetter
 from typing import Any, Literal, overload
 
 import torch
+from distributed_shampoo.distributor.shampoo_block_info import BlockInfo
 from distributed_shampoo.shampoo_types import (
     MAX_PRECONDITIONER_DIM,
     PARAMS,
     USE_MERGE_DIMS,
 )
-from distributed_shampoo.utils.shampoo_block_info import BlockInfo
 from distributed_shampoo.utils.shampoo_utils import (
     compress_list,
     generate_pairwise_indices,
