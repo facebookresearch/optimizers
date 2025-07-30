@@ -11,8 +11,11 @@ import abc
 import unittest
 
 import torch
-from distributed_shampoo.utils.shampoo_block_info import BlockInfo, DTensorBlockInfo
-from distributed_shampoo.utils.shampoo_distributor import DistributorInterface
+from distributed_shampoo.distributor.shampoo_block_info import (
+    BlockInfo,
+    DTensorBlockInfo,
+)
+from distributed_shampoo.distributor.shampoo_distributor import DistributorInterface
 from torch import nn
 
 

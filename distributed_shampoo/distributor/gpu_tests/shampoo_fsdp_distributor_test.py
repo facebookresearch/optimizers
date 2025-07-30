@@ -17,6 +17,15 @@ from typing import cast
 
 import torch
 from distributed_shampoo.distributed_shampoo import DistributedShampoo
+from distributed_shampoo.distributor.gpu_tests.distributor_test_utils import (
+    DistributorOnEmptyParamTest,
+)
+from distributed_shampoo.distributor.shampoo_block_info import BlockInfo
+from distributed_shampoo.distributor.shampoo_fsdp_distributor import FSDPDistributor
+from distributed_shampoo.distributor.shampoo_fsdp_utils import (
+    compile_fsdp_parameter_metadata,
+)
+from distributed_shampoo.preconditioner.shampoo_preconditioner_list import SHAMPOO
 from distributed_shampoo.shampoo_types import (
     AdaGradGraftingConfig,
     FSDPShampooConfig,
@@ -27,13 +36,6 @@ from distributed_shampoo.tests.shampoo_test_utils import (
     construct_training_problem,
     train_model,
 )
-from distributed_shampoo.utils.gpu_tests.distributor_test_utils import (
-    DistributorOnEmptyParamTest,
-)
-from distributed_shampoo.utils.shampoo_block_info import BlockInfo
-from distributed_shampoo.utils.shampoo_fsdp_distributor import FSDPDistributor
-from distributed_shampoo.utils.shampoo_fsdp_utils import compile_fsdp_parameter_metadata
-from distributed_shampoo.utils.shampoo_preconditioner_list import SHAMPOO
 
 from torch import distributed as dist, nn
 from torch.distributed.checkpoint._nested_dict import flatten_state_dict

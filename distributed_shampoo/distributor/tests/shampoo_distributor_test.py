@@ -15,9 +15,9 @@ from typing import cast
 import torch
 
 from distributed_shampoo.distributed_shampoo import DistributedShampoo
+from distributed_shampoo.distributor.shampoo_block_info import BlockInfo
+from distributed_shampoo.distributor.shampoo_distributor import Distributor
 from distributed_shampoo.tests.shampoo_test_utils import construct_training_problem
-from distributed_shampoo.utils.shampoo_block_info import BlockInfo
-from distributed_shampoo.utils.shampoo_distributor import Distributor
 from torch import nn
 
 PRECONDITIONER_DIM = 5

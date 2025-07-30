@@ -10,13 +10,13 @@ LICENSE file in the root directory of this source tree.
 import unittest
 
 import torch
-from distributed_shampoo.shampoo_types import FSDPParameterMetadata
-from distributed_shampoo.tests.shampoo_test_utils import construct_training_problem
-from distributed_shampoo.utils.shampoo_fsdp_utils import (
+from distributed_shampoo.distributor.shampoo_fsdp_utils import (
     compile_fsdp_parameter_metadata,
     parse_fsdp_params,
     parse_fully_shard_params,
 )
+from distributed_shampoo.shampoo_types import FSDPParameterMetadata
+from distributed_shampoo.tests.shampoo_test_utils import construct_training_problem
 from torch import distributed as dist, nn
 from torch.distributed._composable.fsdp import fully_shard
 from torch.distributed.device_mesh import init_device_mesh

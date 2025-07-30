@@ -21,6 +21,11 @@ from unittest import mock
 
 import torch
 from distributed_shampoo.distributed_shampoo import DistributedShampoo
+from distributed_shampoo.distributor.gpu_tests.distributor_test_utils import (
+    DistributorOnEmptyParamTest,
+)
+from distributed_shampoo.distributor.shampoo_block_info import DTensorBlockInfo
+from distributed_shampoo.distributor.shampoo_ddp_distributor import DDPDistributor
 from distributed_shampoo.shampoo_types import (
     AdaGradGraftingConfig,
     DDPShampooConfig,
@@ -35,11 +40,6 @@ from distributed_shampoo.tests.shampoo_test_utils import (
     construct_training_problem,
     train_model,
 )
-from distributed_shampoo.utils.gpu_tests.distributor_test_utils import (
-    DistributorOnEmptyParamTest,
-)
-from distributed_shampoo.utils.shampoo_block_info import DTensorBlockInfo
-from distributed_shampoo.utils.shampoo_ddp_distributor import DDPDistributor
 
 from torch import distributed as dist, nn, tensor
 from torch.distributed.device_mesh import DeviceMesh

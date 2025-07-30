@@ -15,8 +15,8 @@ from unittest import mock
 
 import torch
 
-from distributed_shampoo.utils import shampoo_dist_utils
-from distributed_shampoo.utils.shampoo_dist_utils import get_device_mesh
+from distributed_shampoo.distributor import shampoo_dist_utils
+from distributed_shampoo.distributor.shampoo_dist_utils import get_device_mesh
 from torch.distributed.device_mesh import DeviceMesh
 from torch.testing._internal.distributed._tensor.common_dtensor import (
     DTensorTestBase,
