@@ -17,7 +17,10 @@ import torch
 
 import torch.distributed as dist
 
-from distributed_shampoo import compile_fsdp_parameter_metadata, HSDPShampooConfig
+from distributed_shampoo import HSDPShampooConfig
+from distributed_shampoo.distributor.shampoo_fsdp_utils import (
+    compile_fsdp_parameter_metadata,
+)
 
 from distributed_shampoo.examples.trainer_utils import (
     get_data_loader_and_sampler,
