@@ -32,7 +32,7 @@ class PerturbationConfig(RankDeficientStabilityConfig):
             that both options are mathematically equivalent, but not necessarily numerically equivalent.
             For eigenvalue-corrected Shampoo this will only affect the stability of the eigenbasis computation and epsilon will always also be added to the corrected eigenvalues.
             Recommended to be set to True for numerical stability.
-            TODO: When generalizing to all MatrixFunctionConfigs, this is only applicable to EigendcompositionConfig.
+            TODO: When generalizing to all MatrixFunctionConfigs, this is only applicable to EigendecompositionConfig.
             (Default: True)
     """
 
@@ -50,11 +50,11 @@ class PseudoInverseConfig(RankDeficientStabilityConfig):
 
     Attributes:
         rank_atol: Absolute tolerance for filtering singular values.
-            TODO: When generalizing to all MatrixFunctionConfigs, this is only applicable to EigendcompositionConfig.
+            TODO: When generalizing to all MatrixFunctionConfigs, this is only applicable to EigendecompositionConfig.
             (Default: 0.0)
         rank_rtol: Relative tolerance for filtering singular values. When None, takes value of max dim of the matrix times the
             epsilon of the dtype of the matrix.
-            TODO: When generalizing to all MatrixFunctionConfigs, this is only applicable to EigendcompositionConfig.
+            TODO: When generalizing to all MatrixFunctionConfigs, this is only applicable to EigendecompositionConfig.
             (Default: 0.0)
     """
 
@@ -122,7 +122,7 @@ class EighEigendecompositionConfig(EigendecompositionConfig):
 
     Attributes:
         rank_deficient_stability_config (RankDeficientStabilityConfig): Configuration for handling/stabilizing rank-deficient matrices. (Default: DefaultPerturbationConfig)
-        retry_double_precision (bool): Whether to re-trying eigendecomposition with higher (double) precision if lower precision fails due
+        retry_double_precision (bool): Whether to retry eigendecomposition with higher (double) precision if lower precision fails due
             to CuSOLVER failure. (Default: True)
         eigendecomposition_offload_device (str): Device to offload eigendecomposition to. If value is empty string, we don't perform offloading. (Default: "")
         tolerance (float): The tolerance which can lead to skipping of the eigendecomposition based on the norm of the off-diagonal elements of the eigenvalue estimate.
@@ -174,7 +174,7 @@ class EigenConfig(RootInvConfig, EighEigendecompositionConfig):
 
     Attributes:
         rank_deficient_stability_config (RankDeficientStabilityConfig): Configuration for handling/stabilizing rank-deficient matrices. (Default: DefaultPerturbationConfig)
-        retry_double_precision (bool): Whether to re-trying eigendecomposition with higher (double) precision if lower precision fails due
+        retry_double_precision (bool): Whether to retry eigendecomposition with higher (double) precision if lower precision fails due
             to CuSOLVER failure. (Default: True)
         eigendecomposition_offload_device (str): Device to offload eigendecomposition to. If value is empty string, we don't perform offloading. (Default: "")
         exponent_multiplier (float): Number to be multiplied to the numerator of the inverse root, i.e., eta where the

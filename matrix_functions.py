@@ -644,7 +644,7 @@ def _matrix_inverse_root_eigen(
         root (Fraction): Root of interest. Any rational number.
         epsilon (float): Adds epsilon * I to matrix before taking matrix root. (Default: 0.0)
         rank_deficient_stability_config (RankDeficientStabilityConfig): Configuration for handling/stabilizing rank-deficient matrices. (Default: DefaultPerturbationConfig)
-        retry_double_precision (bool): Flag for re-trying eigendecomposition with higher precision if lower precision fails due
+        retry_double_precision (bool): Flag for retrying eigendecomposition with higher precision if lower precision fails due
             to CuSOLVER failure. (Default: True)
         eigendecomposition_offload_device (str): Device to offload eigendecomposition computation. If value is empty string, do not perform offloading. (Default: "")
 
