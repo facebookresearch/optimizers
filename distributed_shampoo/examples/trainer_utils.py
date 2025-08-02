@@ -29,13 +29,10 @@ import torch.distributed as dist
 from distributed_shampoo import (
     AdaGradGraftingConfig,
     AdamGraftingConfig,
-    CoupledHigherOrderConfig,
-    CoupledNewtonConfig,
     DefaultEigenvalueCorrectedShampooConfig,
     DefaultSOAPConfig,
     DistributedConfig,
     DistributedShampoo,
-    EigenConfig,
     GraftingConfig,
     PreconditionerConfig,
     RMSpropGraftingConfig,
@@ -43,6 +40,12 @@ from distributed_shampoo import (
     SGDGraftingConfig,
 )
 from distributed_shampoo.examples.convnet import ConvNet
+
+from distributed_shampoo.preconditioner.matrix_functions_types import (
+    CoupledHigherOrderConfig,
+    CoupledNewtonConfig,
+    EigenConfig,
+)
 
 from torch import nn
 from torch.distributed import checkpoint as dist_checkpoint
@@ -176,12 +179,6 @@ class Parser:
             type=int,
             default=0,
             help="Inverse root override for Shampoo root inverse.",
-        )
-        parser.add_argument(
-            "--exponent-multiplier",
-            type=float,
-            default=1.0,
-            help="Exponent multiplier for Shampoo root inverse.",
         )
         parser.add_argument(
             "--use-nesterov",
@@ -390,7 +387,6 @@ def instantiate_optimizer(
     max_preconditioner_dim: int,
     precondition_frequency: int,
     start_preconditioning_step: int,
-    exponent_multiplier: float,
     use_nesterov: bool,
     use_bias_correction: bool,
     use_decoupled_weight_decay: bool,
@@ -438,7 +434,6 @@ def instantiate_optimizer(
             distributed_config=distributed_config,
             preconditioner_config=instantiate_preconditioner_config(
                 preconditioner_computation_type=preconditioner_computation_type,
-                exponent_multiplier=exponent_multiplier,
             ),
         )
     else:
@@ -476,18 +471,10 @@ def instantiate_grafting_config(
 
 def instantiate_preconditioner_config(
     preconditioner_computation_type: PreconditionerComputationType,
-    exponent_multiplier: float,
 ) -> PreconditionerConfig:
-    assert (
-        exponent_multiplier == 1.0
-        or preconditioner_computation_type
-        == PreconditionerComputationType.EIGEN_ROOT_INV
-    ), "Exponent multiplier is only supported for EIGH root inverse computation."
     if preconditioner_computation_type == PreconditionerComputationType.EIGEN_ROOT_INV:
         return RootInvShampooPreconditionerConfig(
-            amortized_computation_config=EigenConfig(
-                exponent_multiplier=exponent_multiplier
-            )
+            amortized_computation_config=EigenConfig()
         )
     elif (
         preconditioner_computation_type

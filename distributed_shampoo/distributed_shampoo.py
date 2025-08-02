@@ -28,6 +28,10 @@ from distributed_shampoo.distributor.shampoo_hsdp_distributor import HSDPDistrib
 from distributed_shampoo.distributor.shampoo_hybrid_shard_distributor import (
     HybridShardDistributor,
 )
+from distributed_shampoo.preconditioner.matrix_functions_types import (
+    EigendecompositionConfig,
+    PseudoInverseConfig,
+)
 
 from distributed_shampoo.preconditioner.shampoo_preconditioner_list import (
     AdagradPreconditionerList,
@@ -98,7 +102,6 @@ from distributed_shampoo.utils.shampoo_checkpoint_utils import (
     update_param_state_dict_object,
 )
 from distributed_shampoo.utils.shampoo_utils import compress_list
-from matrix_functions_types import EigendecompositionConfig, PseudoInverseConfig
 
 from torch.optim.optimizer import ParamsT, StateDict
 
@@ -420,20 +423,6 @@ class DistributedShampoo(torch.optim.Optimizer):
             logger.warning(
                 "Nesterov flag is enabled but momentum parameter is zero! "
                 "Continuing without using momentum or Nesterov acceleration..."
-            )
-
-        # No use of preconditioner_config.amortized_computation_config.exponent_multiplier.
-        if (
-            isinstance(preconditioner_config, AmortizedPreconditionerConfig)
-            and getattr(
-                preconditioner_config.amortized_computation_config,
-                "exponent_multiplier",
-                1.0,
-            )
-            != 1.0
-        ):
-            raise ValueError(
-                "preconditioner_config.amortized_computation_config.exponent_multiplier is not supported. Please use AmortizedPreconditionerConfig.inverse_exponent_override instead."
             )
 
         super().__init__(

@@ -8,6 +8,29 @@ LICENSE file in the root directory of this source tree.
 """
 
 from distributed_shampoo.distributed_shampoo import DistributedShampoo
+from distributed_shampoo.distributor.shampoo_fsdp_utils import (
+    compile_fsdp_parameter_metadata,
+)
+from distributed_shampoo.preconditioner.matrix_functions_types import (
+    CoupledHigherOrderConfig,
+    CoupledNewtonConfig,
+    DefaultEigenConfig,
+    DefaultEigendecompositionConfig,
+    DefaultNewtonSchulzOrthogonalizationConfig,
+    DefaultPerturbationConfig,
+    EigenConfig,
+    EigendecompositionConfig,
+    EighEigendecompositionConfig,
+    MatrixFunctionConfig,
+    NewtonSchulzOrthogonalizationConfig,
+    OrthogonalizationConfig,
+    PerturbationConfig,
+    PseudoInverseConfig,
+    QREigendecompositionConfig,
+    RankDeficientStabilityConfig,
+    RootInvConfig,
+    SVDOrthogonalizationConfig,
+)
 from distributed_shampoo.shampoo_types import (
     AdaGradGraftingConfig,
     AdamGraftingConfig,
@@ -32,27 +55,6 @@ from distributed_shampoo.shampoo_types import (
     ShampooPreconditionerConfig,
     ShampooPT2CompileConfig,
     SpectralDescentPreconditionerConfig,
-)
-from distributed_shampoo.utils.shampoo_fsdp_utils import compile_fsdp_parameter_metadata
-from matrix_functions_types import (
-    CoupledHigherOrderConfig,
-    CoupledNewtonConfig,
-    DefaultEigenConfig,
-    DefaultEigendecompositionConfig,
-    DefaultNewtonSchulzOrthogonalizationConfig,
-    DefaultPerturbationConfig,
-    EigenConfig,
-    EigendecompositionConfig,
-    EighEigendecompositionConfig,
-    MatrixFunctionConfig,
-    NewtonSchulzOrthogonalizationConfig,
-    OrthogonalizationConfig,
-    PerturbationConfig,
-    PseudoInverseConfig,
-    QREigendecompositionConfig,
-    RankDeficientStabilityConfig,
-    RootInvConfig,
-    SVDOrthogonalizationConfig,
 )
 
 

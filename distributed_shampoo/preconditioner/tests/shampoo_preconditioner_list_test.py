@@ -17,12 +17,20 @@ from functools import partial
 from typing import Any
 from unittest import mock
 
-import matrix_functions
-
 import torch
-from commons import AbstractDataclass
 from distributed_shampoo.distributor.shampoo_block_info import BlockInfo
-from distributed_shampoo.preconditioner import shampoo_preconditioner_list
+from distributed_shampoo.preconditioner import (
+    matrix_functions,
+    shampoo_preconditioner_list,
+)
+from distributed_shampoo.preconditioner.matrix_functions_types import (
+    DefaultNewtonSchulzOrthogonalizationConfig,
+    EighEigendecompositionConfig,
+    OrthogonalizationConfig,
+    PerturbationConfig,
+    QREigendecompositionConfig,
+    SVDOrthogonalizationConfig,
+)
 from distributed_shampoo.preconditioner.shampoo_preconditioner_list import (
     AdagradPreconditionerList,
     BaseShampooPreconditionerList,
@@ -45,15 +53,9 @@ from distributed_shampoo.shampoo_types import (
     ShampooPreconditionerConfig,
     SpectralDescentPreconditionerConfig,
 )
+
+from distributed_shampoo.utils.commons import AbstractDataclass
 from distributed_shampoo.utils.shampoo_utils import compress_list
-from matrix_functions_types import (
-    DefaultNewtonSchulzOrthogonalizationConfig,
-    EighEigendecompositionConfig,
-    OrthogonalizationConfig,
-    PerturbationConfig,
-    QREigendecompositionConfig,
-    SVDOrthogonalizationConfig,
-)
 from torch import Tensor
 from torch.testing._internal.common_utils import (
     instantiate_parametrized_tests,

@@ -18,18 +18,17 @@ from types import ModuleType
 from typing import Any
 from unittest import mock
 
-import matrix_functions
-
 import numpy as np
 
 import torch
-from matrix_functions import (
+
+from distributed_shampoo.preconditioner import matrix_functions
+from distributed_shampoo.preconditioner.matrix_functions import (
     _check_2d_tensor,
     _check_square_matrix,
     _matrix_inverse_root_eigen,
     _matrix_inverse_root_newton,
     _matrix_perturbation,
-    check_diagonal,
     compute_matrix_root_inverse_residuals,
     matrix_eigendecomposition,
     matrix_inverse_root,
@@ -37,7 +36,7 @@ from matrix_functions import (
     NewtonConvergenceFlag,
     stabilize_and_pow_eigenvalues,
 )
-from matrix_functions_types import (
+from distributed_shampoo.preconditioner.matrix_functions_types import (
     CoupledHigherOrderConfig,
     CoupledNewtonConfig,
     EigenConfig,
@@ -101,11 +100,6 @@ class CheckSquareMatrixTest(Check2DTensorTest):
             re.escape("Matrix is not square!"),
             super().test_check_tensor_for_rectangle_matrix,
         )
-
-
-class CheckDiagonalTest(unittest.TestCase):
-    def test_check_diagonal_for_diagonal_matrix(self) -> None:
-        self.assertTrue(check_diagonal(A=torch.eye(2)))
 
 
 @instantiate_parametrized_tests
@@ -272,7 +266,6 @@ class MatrixInverseRootTest(unittest.TestCase):
             matrix_inverse_root(
                 A=A,
                 root=Fraction(2, exp),
-                is_diagonal=False,
                 root_inv_config=root_inv_config,
             ),
             atol=atol,
@@ -394,43 +387,6 @@ class MatrixInverseRootTest(unittest.TestCase):
             A=A,
             root=root,
             root_inv_config=NotSupportedRootInvConfig(),
-            is_diagonal=False,
-        )
-
-
-@instantiate_parametrized_tests
-class MatrixRootDiagonalTest(unittest.TestCase):
-    @parametrize("root", (-1, 0))
-    def test_matrix_root_diagonal_nonpositive_root(self, root: int) -> None:
-        A = torch.tensor([[-1.0, 0.0], [0.0, 2.0]])
-        self.assertRaisesRegex(
-            ValueError,
-            re.escape(f"Root {root} should be positive!"),
-            matrix_inverse_root,
-            A=A,
-            root=root,
-            is_diagonal=True,
-        )
-
-    @parametrize("perturb_before_computation", (True, False))
-    def test_matrix_root(self, perturb_before_computation: bool) -> None:
-        A = torch.tensor([[0.1, 0.0], [0.0, 3.1]])
-        root = Fraction(2)
-        expected_root_list = torch.tensor([[1.0, 0.0], [0.0, 0.5]])
-
-        torch.testing.assert_close(
-            expected_root_list,
-            matrix_inverse_root(
-                A=A,
-                root=root,
-                is_diagonal=True,
-                epsilon=1.0 - torch.diag(A).min() * (not perturb_before_computation),
-                root_inv_config=EigenConfig(
-                    rank_deficient_stability_config=PerturbationConfig(
-                        perturb_before_computation=perturb_before_computation
-                    )
-                ),
-            ),
         )
 
 
@@ -854,7 +810,6 @@ class MatrixEigendecompositionTest(unittest.TestCase):
                     ),
                     eigendecomposition_offload_device=eigendecomposition_offload_device,
                 ),
-                is_diagonal=False,
             ),
             atol=atol,
             rtol=rtol,
@@ -876,7 +831,6 @@ class MatrixEigendecompositionTest(unittest.TestCase):
                 A=A,
                 eigendecomposition_config=eigendecomposition_config,
                 eigenvectors_estimate=torch.eye(2),
-                is_diagonal=False,
             ),
         )
 
@@ -930,7 +884,6 @@ class MatrixEigendecompositionTest(unittest.TestCase):
         eigenvalues_estimate, eigenvectors_estimate = matrix_eigendecomposition(
             A=A,
             eigenvectors_estimate=initialization_fn(A),
-            is_diagonal=False,
             eigendecomposition_config=qr_config,
         )
 
@@ -973,23 +926,6 @@ class MatrixEigendecompositionTest(unittest.TestCase):
             matrix_eigendecomposition,
             A=torch.tensor([[1.0, 0.0], [0.0, 4.0]]),
             eigendecomposition_config=eigendecomposition_config,
-        )
-
-
-class MatrixEigendecompositionDiagonalTest(unittest.TestCase):
-    def test_matrix_eigendecomposition(self) -> None:
-        A = torch.tensor([[1.0, 0.0], [0.0, 4.0]])
-        expected_eigenvalues, expected_eigenvectors = (
-            torch.tensor([1.0, 4.0]),
-            torch.tensor([[1.0, 0.0], [0.0, 1.0]]),
-        )
-
-        torch.testing.assert_close(
-            (expected_eigenvalues, expected_eigenvectors),
-            matrix_eigendecomposition(
-                A=A,
-                is_diagonal=True,
-            ),
         )
 
 

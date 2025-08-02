@@ -10,8 +10,12 @@ LICENSE file in the root directory of this source tree.
 import re
 import unittest
 
-from commons import get_all_non_abstract_subclasses
-from matrix_functions_types import EigenConfig, EigendecompositionConfig
+from distributed_shampoo.preconditioner.matrix_functions_types import (
+    EigenConfig,
+    EigendecompositionConfig,
+)
+
+from distributed_shampoo.utils.commons import get_all_non_abstract_subclasses
 from torch.testing._internal.common_utils import (
     instantiate_parametrized_tests,
     parametrize,

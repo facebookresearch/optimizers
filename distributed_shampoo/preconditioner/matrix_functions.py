@@ -20,7 +20,7 @@ from math import isfinite
 from typing import Any, TypeVar
 
 import torch
-from matrix_functions_types import (
+from distributed_shampoo.preconditioner.matrix_functions_types import (
     CoupledHigherOrderConfig,
     CoupledNewtonConfig,
     DefaultEigenConfig,
@@ -127,24 +127,6 @@ def _check_square_matrix(
         return func(A, *args, **kwargs)
 
     return wrapper
-
-
-@_check_square_matrix
-def check_diagonal(A: Tensor) -> bool:
-    """Checks if symmetric matrix is diagonal. Throw if the input is not a square matrix.
-
-    Args:
-        A (Tensor): The input matrix.
-
-    Returns:
-        is_diagonal (bool): True if the matrix is diagonal, False otherwise.
-
-    Raises:
-        ValueError: If the matrix is not 2-dimensional or not square.
-
-    """
-    # Check both upper triangular part and lower triangular part are all zeros.
-    return not A.triu(diagonal=1).any() and not A.tril(diagonal=-1).any()
 
 
 def _matrix_perturbation(
@@ -277,7 +259,6 @@ def matrix_inverse_root(
     root: Fraction,
     root_inv_config: RootInvConfig = DefaultEigenConfig,
     epsilon: float = 0.0,
-    is_diagonal: bool = False,
 ) -> Tensor:
     """Computes matrix root inverse of square symmetric positive definite matrix.
 
@@ -286,8 +267,6 @@ def matrix_inverse_root(
         root (Fraction): Root of interest. Any rational number.
         root_inv_config (RootInvConfig): Configuration for root inverse computation. (Default: DefaultEigenConfig)
         epsilon (float): Adds epsilon * I to matrix before taking matrix root. (Default: 0.0)
-        is_diagonal (bool): Flag for whether or not matrix is diagonal. If so, will compute root inverse by computing
-            root inverse of diagonal entries. (Default: False)
 
     Returns:
         X (Tensor): Inverse root of matrix A.
@@ -297,21 +276,6 @@ def matrix_inverse_root(
         NotImplementedError: If the root inverse config is not implemented.
 
     """
-    if is_diagonal:
-        return _matrix_inverse_root_diagonal(
-            A=A,
-            root=root,
-            epsilon=epsilon,
-            # If the config does not contain rank_deficient_stability_config attribute,
-            # we use DefaultPerturbationConfig as the fallback option for handling
-            # rank-deficient matrices during diagonal matrix inverse root computation.
-            rank_deficient_stability_config=getattr(
-                root_inv_config,
-                "rank_deficient_stability_config",
-                DefaultPerturbationConfig,
-            ),
-        )
-
     match root_inv_config:
         case EigenConfig():
             X, _, _ = _matrix_inverse_root_eigen(
@@ -361,48 +325,12 @@ def matrix_inverse_root(
     return X
 
 
-def _matrix_inverse_root_diagonal(
-    A: Tensor,
-    root: Fraction,
-    epsilon: float = 0.0,
-    rank_deficient_stability_config: RankDeficientStabilityConfig = DefaultPerturbationConfig,
-) -> Tensor:
-    """Computes matrix inverse root for a diagonal matrix by taking inverse square root of diagonal entries.
-
-    Args:
-        A (Tensor): A diagonal matrix.
-        root (Fraction): Root of interest. Any rational number.
-        epsilon (float): Adds epsilon * I to matrix before taking matrix root. (Default: 0.0)
-        rank_deficient_stability_config (RankDeficientStabilityConfig): Configuration for handling/stabilizing rank-deficient matrices. (Default: DefaultPerturbationConfig)
-
-    Returns:
-        X (Tensor): Inverse root of diagonal entries.
-
-    Raises:
-        ValueError: If the root is not a positive integer.
-
-    """
-    # check if root is positive integer
-    if root <= 0:
-        raise ValueError(f"Root {root} should be positive!")
-
-    return torch.diag(
-        stabilize_and_pow_eigenvalues(
-            torch.diagonal(A),
-            root=root,
-            epsilon=epsilon,
-            rank_deficient_stability_config=rank_deficient_stability_config,
-        )
-    )
-
-
 @_check_square_matrix
 def matrix_eigendecomposition(
     A: Tensor,
     epsilon: float = 0.0,
     eigendecomposition_config: EigendecompositionConfig = DefaultEigendecompositionConfig,
     eigenvectors_estimate: Tensor | None = None,
-    is_diagonal: bool = False,
 ) -> tuple[Tensor, Tensor]:
     """Compute the eigendecomposition of a symmetric matrix.
 
@@ -411,7 +339,6 @@ def matrix_eigendecomposition(
         epsilon (float): Adds epsilon * I to matrix before taking matrix root for numerical stability. (Default: 0.0)
         eigendecomposition_config (EigendecompositionConfig): Determines how eigendecomposition is computed. (Default: DefaultEigendecompositionConfig)
         eigenvectors_estimate (Tensor | None): Current estimate of eigenvectors. (Default: None)
-        is_diagonal (bool): Whether A is diagonal. (Default: False)
 
     Returns:
         eigenvalues (Tensor): The eigenvalues of the input matrix.
@@ -424,14 +351,6 @@ def matrix_eigendecomposition(
         NotImplementedError: If the eigendecomposition config is not implemented.
 
     """
-    # Return the (sorted) diagonal of A and identity matrix if A is diagonal.
-    if is_diagonal:
-        return A.diag(), torch.eye(
-            A.shape[0],
-            dtype=A.dtype,
-            device=A.device,
-        )
-
     # TODO: reduce redundant code when rank_deficient_stability_config is generalized to all methods
     # check epsilon is 0 when using pseudo-inverse
     if (
@@ -673,7 +592,6 @@ def _matrix_inverse_root_eigen(
             eigendecomposition_offload_device=eigendecomposition_offload_device,
             tolerance=0.0,
         ),
-        is_diagonal=False,
     )
 
     inv_power_L = stabilize_and_pow_eigenvalues(

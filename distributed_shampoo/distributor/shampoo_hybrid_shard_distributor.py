@@ -14,7 +14,6 @@ from itertools import islice
 from typing import Any, Literal, overload
 
 import torch
-from commons import batched
 from distributed_shampoo.distributor.shampoo_block_info import DTensorBlockInfo
 from distributed_shampoo.distributor.shampoo_dist_utils import get_device_mesh
 from distributed_shampoo.distributor.shampoo_distributor import DistributorInterface
@@ -23,6 +22,7 @@ from distributed_shampoo.shampoo_types import (
     HybridShardShampooConfig,
     PARAMS,
 )
+from distributed_shampoo.utils.commons import batched
 from distributed_shampoo.utils.shampoo_utils import (
     compress_list,
     distribute_buffer_sizes,

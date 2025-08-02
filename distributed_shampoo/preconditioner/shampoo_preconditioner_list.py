@@ -20,6 +20,18 @@ from typing import Any, Generic, get_args, NoReturn, overload, TypeVar
 
 import torch
 from distributed_shampoo.distributor.shampoo_block_info import BlockInfo
+from distributed_shampoo.preconditioner.matrix_functions import (
+    matrix_eigendecomposition,
+    matrix_inverse_root,
+    matrix_orthogonalization,
+    stabilize_and_pow_eigenvalues,
+)
+
+from distributed_shampoo.preconditioner.matrix_functions_types import (
+    EigendecompositionConfig,
+    MatrixFunctionConfig,
+    RootInvConfig,
+)
 from distributed_shampoo.shampoo_types import (
     AmortizedPreconditionerConfig,
     PreconditionerValueError,
@@ -28,18 +40,6 @@ from distributed_shampoo.shampoo_types import (
 from distributed_shampoo.utils.dict_zip_iterator import DictZipIterator
 from distributed_shampoo.utils.optimizer_modules import OptimizerModule
 from distributed_shampoo.utils.shampoo_utils import compress_list, get_dtype_size
-from matrix_functions import (
-    matrix_eigendecomposition,
-    matrix_inverse_root,
-    matrix_orthogonalization,
-    stabilize_and_pow_eigenvalues,
-)
-
-from matrix_functions_types import (
-    EigendecompositionConfig,
-    MatrixFunctionConfig,
-    RootInvConfig,
-)
 from torch import Tensor
 from torch.autograd import profiler
 
@@ -792,7 +792,6 @@ class RootInvShampooKroneckerFactorsUnwrapped(BaseShampooKroneckerFactorsUnwrapp
                     root=Fraction(root),
                     root_inv_config=self.amortized_computation_config,
                     epsilon=self.epsilon,
-                    is_diagonal=False,
                 ).to(dtype=inv_factor_matrix.dtype)
             }, None
         except Exception as exception:
@@ -1021,7 +1020,6 @@ class EigendecomposedShampooKroneckerFactorsUnwrapped(
                 eigenvectors_estimate=factor_matrix_eigenvectors.to(
                     dtype=bias_corrected_factor_matrix.dtype
                 ),
-                is_diagonal=False,
                 epsilon=self.epsilon,
             )
 
@@ -1262,7 +1260,6 @@ class EigenvalueCorrectedShampooKroneckerFactorsUnwrapped(
                     eigenvectors_estimate=factor_matrix_eigenvectors.to(
                         dtype=bias_corrected_factor_matrix.dtype
                     ),
-                    is_diagonal=False,
                     epsilon=self.epsilon,
                 )[1].to(dtype=factor_matrix_eigenvectors.dtype)
             }, None
