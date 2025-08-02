@@ -13,7 +13,11 @@ from abc import ABC, abstractmethod
 
 from dataclasses import dataclass
 
-from commons import AbstractDataclass, batched, get_all_non_abstract_subclasses
+from distributed_shampoo.utils.commons import (
+    AbstractDataclass,
+    batched,
+    get_all_non_abstract_subclasses,
+)
 from torch.testing._internal.common_utils import (
     instantiate_parametrized_tests,
     parametrize,
