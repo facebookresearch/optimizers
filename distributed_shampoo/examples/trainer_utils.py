@@ -621,16 +621,16 @@ def train_model(
     model: nn.Module,
     world_size: int,
     loss_function: nn.Module,
-    sampler: torch.utils.data.Sampler,
+    sampler: torch.utils.data.Sampler | None,
     data_loader: torch.utils.data.DataLoader,
     optimizer: torch.optim.Optimizer,
     device: torch.device,
-    checkpoint_dir: str,
+    checkpoint_dir: str | None,
     epochs: int = 1,
     window_size: int = 100,
-    local_rank: int = 0,
+    local_rank: int | None = 0,
     metrics_dir: str | None = None,
-) -> tuple[torch.Tensor, torch.Tensor, int]:
+) -> tuple[float, float, int]:
     # initialize metrics
     metrics = LossMetrics(
         window_size=window_size,
@@ -673,4 +673,8 @@ def train_model(
         )
 
     metrics.flush()
-    return metrics._lifetime_loss, metrics._window_loss, metrics._iteration
+    return (
+        metrics._lifetime_loss.item(),
+        metrics._window_loss.item(),
+        metrics._iteration,
+    )

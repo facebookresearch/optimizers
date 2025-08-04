@@ -18,54 +18,15 @@ from distributed_shampoo.examples.trainer_utils import (
     get_data_loader_and_sampler,
     get_model_and_loss_fn,
     instantiate_optimizer,
-    LossMetrics,
     Parser,
     set_seed,
+    train_model,
 )
 from torch import nn
 from torchvision.datasets import VisionDataset
 
 # for reproducibility, set environmental variable for CUBLAS
 os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
-
-
-###### TRAINING LOOP ######
-def train_default_model(
-    model: nn.Module,
-    loss_function: nn.Module,
-    data_loader: torch.utils.data.DataLoader,
-    optimizer: torch.optim.Optimizer,
-    device: torch.device,
-    epochs: int = 1,
-    window_size: int = 100,
-    metrics_dir: str | None = None,
-) -> tuple[float, float, int]:
-    """Constructs the main training loop."""
-
-    # initialize metrics
-    metrics = LossMetrics(
-        window_size=window_size, device=device, metrics_dir=metrics_dir
-    )
-
-    # main training loop
-    for epoch in range(epochs):
-        metrics._epoch = epoch
-        for inputs, labels in data_loader:
-            inputs, labels = inputs.to(device), labels.to(device)
-            optimizer.zero_grad()
-            output = model(inputs)
-            loss = loss_function(output, labels)
-            loss.backward()
-            optimizer.step()
-            metrics.update(loss)
-            metrics.log()
-
-    metrics.flush()
-    return (
-        metrics._lifetime_loss.item(),
-        metrics._window_loss.item(),
-        metrics._iteration,
-    )
 
 
 if __name__ == "__main__":
@@ -138,13 +99,15 @@ if __name__ == "__main__":
         preconditioner_computation_type=args.preconditioner_computation_type,
     )
 
-    # train model
-    train_default_model(
+    train_model(
         model,
+        0,
         loss_function,
+        None,
         data_loader,
         optimizer,
         device,
+        checkpoint_dir=None,
         epochs=args.epochs,
         window_size=args.window_size,
         metrics_dir=args.metrics_dir,
