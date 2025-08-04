@@ -29,7 +29,6 @@ from distributed_shampoo.preconditioner.matrix_functions import (
     _matrix_inverse_root_eigen,
     _matrix_inverse_root_newton,
     _matrix_perturbation,
-    compute_matrix_root_inverse_residuals,
     matrix_eigendecomposition,
     matrix_inverse_root,
     matrix_orthogonalization,
@@ -697,48 +696,6 @@ class CoupledHigherOrderRootInverseTest(unittest.TestCase):
         self.assertIn(
             "abs(root.numerator)=13 and abs(root.denominator)=15 are probably too big for best performance.",
             [r.msg for r in cm.records],
-        )
-
-
-@instantiate_parametrized_tests
-class ComputeMatrixRootInverseResidualsTest(unittest.TestCase):
-    def test_matrix_root_inverse_residuals_with_inconsistent_dims(self) -> None:
-        A = torch.zeros((2, 2))
-        X_hat = torch.zeros((3, 3))
-        root = Fraction(4)
-        self.assertRaisesRegex(
-            ValueError,
-            re.escape("Matrix shapes do not match!"),
-            compute_matrix_root_inverse_residuals,
-            A=A,
-            X_hat=X_hat,
-            root=root,
-            epsilon=0.0,
-        )
-
-    @parametrize("root", (Fraction(2, 1), Fraction(4, 2)))
-    def test_matrix_root_inverse_residuals(self, root: Fraction) -> None:
-        A = torch.eye(2)
-        X_hat = torch.eye(2)
-        expected_relative_error = torch.tensor(0.0, dtype=torch.float64)
-        expected_relative_residual = torch.tensor(0.0, dtype=torch.float64)
-
-        (
-            actual_relative_error,
-            actual_relative_residual,
-        ) = compute_matrix_root_inverse_residuals(
-            A=A,
-            X_hat=X_hat,
-            root=root,
-            epsilon=0.0,
-        )
-        torch.testing.assert_close(
-            actual_relative_error,
-            expected_relative_error,
-        )
-        torch.testing.assert_close(
-            actual_relative_residual,
-            expected_relative_residual,
         )
 
 
