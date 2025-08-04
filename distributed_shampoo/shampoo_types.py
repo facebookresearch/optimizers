@@ -25,7 +25,7 @@ from distributed_shampoo.preconditioner.matrix_functions_types import (
     RootInvConfig,
 )
 
-from distributed_shampoo.utils.commons import AbstractDataclass
+from distributed_shampoo.utils.abstract_dataclass import AbstractDataclass
 from torch.distributed.device_mesh import DeviceMesh
 from torch.distributed.fsdp import ShardingStrategy
 from torch.nn.parameter import Parameter

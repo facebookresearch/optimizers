@@ -11,32 +11,11 @@ import re
 import unittest
 from abc import ABC, abstractmethod
 
-from dataclasses import dataclass
-
-from distributed_shampoo.utils.commons import (
-    AbstractDataclass,
-    batched,
-    get_all_non_abstract_subclasses,
-)
+from distributed_shampoo.utils.commons import batched, get_all_non_abstract_subclasses
 from torch.testing._internal.common_utils import (
     instantiate_parametrized_tests,
     parametrize,
 )
-
-
-@instantiate_parametrized_tests
-class InvalidAbstractDataclassInitTest(unittest.TestCase):
-    @dataclass(init=False)
-    class DummyOptimizerConfig(AbstractDataclass):
-        """Dummy abstract dataclass for testing. Instantiation should fail."""
-
-    @parametrize("abstract_cls", (AbstractDataclass, DummyOptimizerConfig))
-    def test_invalid_init(self, abstract_cls: type[AbstractDataclass]) -> None:
-        self.assertRaisesRegex(
-            TypeError,
-            re.escape(f"Can't instantiate abstract class {abstract_cls.__name__} "),
-            abstract_cls,
-        )
 
 
 @instantiate_parametrized_tests

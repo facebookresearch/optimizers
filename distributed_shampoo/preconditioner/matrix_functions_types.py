@@ -10,7 +10,7 @@ LICENSE file in the root directory of this source tree.
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from distributed_shampoo.utils.commons import AbstractDataclass
+from distributed_shampoo.utils.abstract_dataclass import AbstractDataclass
 
 
 @dataclass(init=False)

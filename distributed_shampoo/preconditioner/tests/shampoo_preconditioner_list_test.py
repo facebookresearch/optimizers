@@ -54,7 +54,7 @@ from distributed_shampoo.shampoo_types import (
     SpectralDescentPreconditionerConfig,
 )
 
-from distributed_shampoo.utils.commons import AbstractDataclass
+from distributed_shampoo.utils.abstract_dataclass import AbstractDataclass
 from distributed_shampoo.utils.shampoo_utils import compress_list
 from torch import Tensor
 from torch.testing._internal.common_utils import (
