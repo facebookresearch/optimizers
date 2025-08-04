@@ -909,102 +909,101 @@ def matrix_orthogonalization(
         NotImplementedError: If the orthogonalization config is not implemented.
 
     """
+
+    def svd_orthogonalization(
+        A: Tensor,
+        scale_by_nuclear_norm: bool = False,
+    ) -> Tensor:
+        """Compute the orthogonalization of a matrix using SVD.
+
+        Args:
+            A (Tensor): The input matrix.
+            scale_by_nuclear_norm (bool): Whether to scale the orthogonalized matrix by the nuclear norm of A.
+                (Default: False)
+
+        Returns:
+            A_orthogonal (Tensor): The orthogonalized matrix.
+
+        """
+        # Orthogonalize A via reduced SVD.
+        U, s, V_T = torch.linalg.svd(A, full_matrices=False)
+        A_orthogonal = U @ V_T
+
+        # Scale by nuclear norm if specified.
+        if scale_by_nuclear_norm:
+            A_orthogonal.mul_(s.sum())
+
+        return A_orthogonal
+
+    def newton_schulz(
+        A: Tensor,
+        num_iterations: int = 5,
+        coefficients: tuple[float, float, float] = (3.4445, -4.7750, 2.0315),
+    ) -> Tensor:
+        """
+        Perform quintic Newton-Schulz iteration to compute the semi-orthogonalization of a matrix A.
+
+        This iteratively performs the iteration:
+            X <- p(X) = a * X + b * X * X^T * X + c * (X * X^T)^2 * X.
+
+        NOTE: In order to guarantee convergence, the coefficients must satisfy p(1) = 1.
+            This is not true for the Muon coefficients, which only guarantee convergence to [0.7, 1.3].
+            Another alternative is to use the coefficients (3., -16./5., 6./5.) as used in Modula.
+
+        References:
+            - https://arxiv.org/abs/2409.20325
+            - https://kellerjordan.github.io/posts/muon/
+            - https://docs.modula.systems/algorithms/newton-schulz/
+
+        Args:
+            A (Tensor): The input matrix to be semi-orthogonalized.
+            num_iterations (int): Number of iterations for the Newton-Schulz iteration.
+            coefficients (tuple[float, float, float]): Coefficients for the quintic Newton-Schulz iteration.
+                (Default: (3.4445, -4.7750, 2.0315) based on suggestion in Muon.)
+
+        Returns:
+            X (Tensor): The semi-orthogonalized matrix.
+
+        """
+        # Normalize the matrix A in order to ensure spectral norm <= 1.
+        X = A / max(torch.linalg.matrix_norm(A), 1e-8)
+
+        transpose = A.shape[0] < A.shape[1]
+        if transpose:
+            X = X.T
+
+        # Compute X <- p(X) = a * X + b * X * X^T * X + c * (X * X^T)^2 * X.
+        a, b, c = coefficients
+        for _ in range(num_iterations):
+            A = X.T @ X
+            B = b * A + c * A @ A
+            X = a * X + X @ B
+
+        if transpose:
+            X = X.T
+
+        return X
+
     # Compute scaling based on dimensions of A.
     d_in, d_out = A.shape[1], A.shape[0]
     scaling = orthogonalization_config.scale_by_dims_fn(d_in, d_out)
 
     match orthogonalization_config:
         case SVDOrthogonalizationConfig():
-            return _svd_orthogonalization(
-                A,
+            return svd_orthogonalization(
+                A=A,
                 **_get_function_args_from_config(
-                    _svd_orthogonalization, orthogonalization_config
+                    svd_orthogonalization, orthogonalization_config
                 ),
             ).mul_(scaling)
         case NewtonSchulzOrthogonalizationConfig():
-            return _newton_schulz(
-                A,
+            return newton_schulz(
+                A=A,
                 **_get_function_args_from_config(
-                    _newton_schulz, orthogonalization_config
+                    newton_schulz, orthogonalization_config
                 ),
             ).mul_(scaling)
         case _:
             raise NotImplementedError(
                 f"Orthogonalization config is not implemented! Specified orthogonalization config is {type(orthogonalization_config).__name__}."
             )
-
-
-def _svd_orthogonalization(
-    A: Tensor,
-    scale_by_nuclear_norm: bool = False,
-) -> Tensor:
-    """Compute the orthogonalization of a matrix using SVD.
-
-    Args:
-        A (Tensor): The input matrix.
-        scale_by_nuclear_norm (bool): Whether to scale the orthogonalized matrix by the nuclear norm of A.
-            (Default: False)
-
-    Returns:
-        Tensor: The orthogonalized matrix.
-
-    """
-    # Orthogonalize A via reduced SVD.
-    U, s, V_T = torch.linalg.svd(A, full_matrices=False)
-    A_orthogonal = U @ V_T
-
-    # Scale by nuclear norm if specified.
-    if scale_by_nuclear_norm:
-        A_orthogonal.mul_(s.sum())
-
-    return A_orthogonal
-
-
-def _newton_schulz(
-    A: Tensor,
-    num_iterations: int = 5,
-    coefficients: tuple[float, float, float] = (3.4445, -4.7750, 2.0315),
-) -> Tensor:
-    """
-    Perform quintic Newton-Schulz iteration to compute the semi-orthogonalization of a matrix A.
-
-    This iteratively performs the iteration:
-        X <- p(X) = a * X + b * X * X^T * X + c * (X * X^T)^2 * X.
-
-    NOTE: In order to guarantee convergence, the coefficients must satisfy p(1) = 1.
-        This is not true for the Muon coefficients, which only guarantee convergence to [0.7, 1.3].
-        Another alternative is to use the coefficients (3., -16./5., 6./5.) as used in Modula.
-
-    References:
-        - https://arxiv.org/abs/2409.20325
-        - https://kellerjordan.github.io/posts/muon/
-        - https://docs.modula.systems/algorithms/newton-schulz/
-
-    Args:
-        A (Tensor): The input matrix to be semi-orthogonalized.
-        num_iterations (int): Number of iterations for the Newton-Schulz iteration.
-        coefficients (tuple[float, float, float]): Coefficients for the quintic Newton-Schulz iteration.
-            (Default: (3.4445, -4.7750, 2.0315) based on suggestion in Muon.)
-
-    Returns:
-        Tensor: The semi-orthogonalized matrix.
-
-    """
-    # Normalize the matrix A in order to ensure spectral norm <= 1.
-    X = A / max(torch.linalg.matrix_norm(A), 1e-8)
-
-    transpose = A.shape[0] < A.shape[1]
-    if transpose:
-        X = X.T
-
-    # Compute X <- p(X) = a * X + b * X * X^T * X + c * (X * X^T)^2 * X.
-    a, b, c = coefficients
-    for _ in range(num_iterations):
-        A = X.T @ X
-        B = b * A + c * A @ A
-        X = a * X + X @ B
-
-    if transpose:
-        X = X.T
-
-    return X
