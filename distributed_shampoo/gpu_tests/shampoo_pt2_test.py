@@ -66,7 +66,7 @@ class DistributedShampooPytorchCompileTest(unittest.TestCase):
     @parametrize("grafting_config", (None, AdaGradGraftingConfig(epsilon=1e-10)))
     @parametrize("betas", ((0.0, 1.0), (0.9, 0.999)))
     @parametrize("weight_decay", (0.0, 0.1))
-    def test_pt2_shampoo_before_preconditioning_on_quadratic(
+    def test_pt2_shampoo_before_preconditioning(
         self,
         weight_decay: float,
         betas: tuple[float, float],
@@ -100,7 +100,7 @@ class DistributedShampooPytorchCompileTest(unittest.TestCase):
         ((1, 1000, 5), (10, 10, 5)),
     )
     @parametrize("betas", ((0.0, 1.0), (0.9, 0.999)))
-    def test_pt2_shampoo_after_preconditioning_on_quadratic(
+    def test_pt2_shampoo_after_preconditioning(
         self,
         betas: tuple[float, float],
         precondition_frequency: int,

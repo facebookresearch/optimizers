@@ -64,7 +64,7 @@ class DistributedShampooGraftingTest(unittest.TestCase):
     )
     @parametrize("device", available_devices)
     @parametrize("weight_decay", (0.0, 0.3))
-    def test_adagrad_grafting_on_quadratic(
+    def test_adagrad_grafting(
         self,
         weight_decay: float,
         device: torch.device,
@@ -108,7 +108,7 @@ class DistributedShampooGraftingTest(unittest.TestCase):
     )
     @parametrize("device", available_devices)
     @parametrize("weight_decay", (0.0, 0.3))
-    def test_adam_grafting_on_quadratic(
+    def test_adam_grafting(
         self,
         weight_decay: float,
         device: torch.device,
@@ -152,7 +152,7 @@ class DistributedShampooGraftingTest(unittest.TestCase):
     )
     @parametrize("device", available_devices)
     @parametrize("weight_decay", (0.0, 0.3))
-    def test_adamw_grafting_on_quadratic(
+    def test_adamw_grafting(
         self,
         weight_decay: float,
         device: torch.device,
@@ -196,7 +196,7 @@ class DistributedShampooGraftingTest(unittest.TestCase):
     )
     @parametrize("device", available_devices)
     @parametrize("weight_decay", (0.0, 0.3))
-    def test_rmsprop_grafting_on_quadratic(
+    def test_rmsprop_grafting(
         self,
         weight_decay: float,
         device: torch.device,
@@ -247,7 +247,7 @@ class DistributedShampooGraftingTest(unittest.TestCase):
     @parametrize("device", available_devices)
     @parametrize("use_nesterov", (True, False))
     @parametrize("weight_decay", (0.0, 0.3))
-    def test_sgd_grafting_on_quadratic(
+    def test_sgd_grafting(
         self,
         weight_decay: float,
         use_nesterov: bool,

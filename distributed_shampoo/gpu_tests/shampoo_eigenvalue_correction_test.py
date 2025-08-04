@@ -73,7 +73,7 @@ class DistributedShampooEigenvalueCorrectionTest(unittest.TestCase):
     )
     @parametrize("device", available_devices)
     @parametrize("weight_decay", (0.0, 0.3))
-    def test_adagrad_eigenvalue_correction_on_quadratic(
+    def test_adagrad_eigenvalue_correction(
         self,
         weight_decay: float,
         device: torch.device,
@@ -124,7 +124,7 @@ class DistributedShampooEigenvalueCorrectionTest(unittest.TestCase):
     )
     @parametrize("device", available_devices)
     @parametrize("weight_decay", (0.0, 0.3))
-    def test_adam_eigenvalue_correction_on_quadratic(
+    def test_adam_eigenvalue_correction(
         self,
         weight_decay: float,
         device: torch.device,
@@ -179,7 +179,7 @@ class DistributedShampooEigenvalueCorrectionTest(unittest.TestCase):
     )
     @parametrize("device", available_devices)
     @parametrize("weight_decay", (0.0, 0.3))
-    def test_adamw_eigenvalue_correction_on_quadratic(
+    def test_adamw_eigenvalue_correction(
         self,
         weight_decay: float,
         device: torch.device,
@@ -234,7 +234,7 @@ class DistributedShampooEigenvalueCorrectionTest(unittest.TestCase):
     )
     @parametrize("device", available_devices)
     @parametrize("weight_decay", (0.0, 0.3))
-    def test_rmsprop_eigenvalue_correction_on_quadratic(
+    def test_rmsprop_eigenvalue_correction(
         self,
         weight_decay: float,
         device: torch.device,
