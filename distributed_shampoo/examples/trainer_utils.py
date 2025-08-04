@@ -303,7 +303,6 @@ class LossMetrics:
         self._world_size = world_size
         self._window_size = window_size
         self._device = device
-        self._epoch = 0
         self._iteration = 0
         self._window_losses: list[torch.Tensor] = []
         self._window_loss: torch.Tensor = torch.tensor(0.0, device=device)
@@ -319,7 +318,6 @@ class LossMetrics:
         )
 
     def reset(self) -> None:
-        self._epoch = 0
         self._iteration = 0
         self._window_losses = []
         self._window_loss = torch.tensor(0.0, device=self._device)
@@ -337,7 +335,7 @@ class LossMetrics:
 
     def log(self) -> None:
         logger.info(
-            f"Epoch: {self._epoch} | Iteration: {self._iteration} | Local Lifetime Loss: {self._lifetime_loss} | Local Window Loss: {self._window_loss}"
+            f"Iteration: {self._iteration} | Local Lifetime Loss: {self._lifetime_loss} | Local Window Loss: {self._window_loss}"
         )
         if self._metrics_writer is not None:
             self._metrics_writer.add_scalars(
@@ -356,7 +354,7 @@ class LossMetrics:
     def log_global_metrics(self) -> None:
         if self._world_size > 1:
             logger.info(
-                f"Epoch: {self._epoch} | Iteration: {self._iteration} | Global Lifetime Loss: {self._global_lifetime_loss} | Global Window Loss: {self._global_window_loss}"
+                f"Iteration: {self._iteration} | Global Lifetime Loss: {self._global_lifetime_loss} | Global Window Loss: {self._global_window_loss}"
             )
             if self._metrics_writer is not None:
                 self._metrics_writer.add_scalars(
@@ -641,7 +639,7 @@ def train_model(
 
     # main training loop
     for epoch in range(epochs):
-        metrics._epoch = epoch
+        logger.info(f"Epoch: {epoch}")
         if isinstance(sampler, torch.utils.data.distributed.DistributedSampler):
             sampler.set_epoch(epoch)
 
