@@ -10,7 +10,7 @@ LICENSE file in the root directory of this source tree.
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from commons import AbstractDataclass
+from distributed_shampoo.utils.commons import AbstractDataclass
 
 
 @dataclass(init=False)
@@ -177,12 +177,8 @@ class EigenConfig(RootInvConfig, EighEigendecompositionConfig):
         retry_double_precision (bool): Whether to retry eigendecomposition with higher (double) precision if lower precision fails due
             to CuSOLVER failure. (Default: True)
         eigendecomposition_offload_device (str): Device to offload eigendecomposition to. If value is empty string, we don't perform offloading. (Default: "")
-        exponent_multiplier (float): Number to be multiplied to the numerator of the inverse root, i.e., eta where the
-            exponent is -eta / (2 * p). (Default: 1.0)
 
     """
-
-    exponent_multiplier: float = 1.0
 
     def __post_init__(self) -> None:
         EighEigendecompositionConfig.__post_init__(self)

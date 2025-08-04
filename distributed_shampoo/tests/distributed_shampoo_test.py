@@ -20,6 +20,10 @@ from typing import Any, cast
 
 import torch
 from distributed_shampoo.distributed_shampoo import DistributedShampoo
+from distributed_shampoo.preconditioner.matrix_functions_types import (
+    EigenConfig,
+    PseudoInverseConfig,
+)
 from distributed_shampoo.shampoo_types import (
     AdaGradGraftingConfig,
     DefaultEigenvalueCorrectedShampooConfig,
@@ -34,7 +38,6 @@ from distributed_shampoo.shampoo_types import (
     ShampooPT2CompileConfig,
     SpectralDescentPreconditionerConfig,
 )
-from matrix_functions_types import EigenConfig, PseudoInverseConfig
 from torch import nn
 from torch.testing._internal.common_utils import (
     instantiate_parametrized_tests,
@@ -140,16 +143,6 @@ class DistributedShampooInitTest(unittest.TestCase):
             (
                 {"start_preconditioning_step": 10, "precondition_frequency": 100},
                 "Invalid start_preconditioning_step value: 10. Must be >= precondition_frequency=100.",
-            ),
-            (
-                {
-                    "preconditioner_config": RootInvShampooPreconditionerConfig(
-                        amortized_computation_config=EigenConfig(
-                            exponent_multiplier=0.5
-                        )
-                    )
-                },
-                "preconditioner_config.amortized_computation_config.exponent_multiplier is not supported. Please use AmortizedPreconditionerConfig.inverse_exponent_override instead.",
             ),
         ],
     )
