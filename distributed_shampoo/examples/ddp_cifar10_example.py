@@ -86,13 +86,14 @@ if __name__ == "__main__":
     loss_function: nn.Module
     model, loss_function = get_model_and_loss_fn(
         device=device,
-        post_model_decoration=partial(
-            nn.parallel.DistributedDataParallel,
-            device_ids=[LOCAL_RANK],
-            output_device=LOCAL_RANK,
-        )
-        if args.backend == "nccl"
-        else nn.parallel.DistributedDataParallel,
+        post_model_decoration={
+            "nccl": partial(
+                nn.parallel.DistributedDataParallel,
+                device_ids=[LOCAL_RANK],
+                output_device=LOCAL_RANK,
+            ),
+            "gloo": nn.parallel.DistributedDataParallel,
+        }[args.backend],
     )
 
     # instantiate data loader
