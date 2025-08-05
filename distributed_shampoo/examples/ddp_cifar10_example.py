@@ -92,7 +92,7 @@ if __name__ == "__main__":
                 device_ids=[LOCAL_RANK],
                 output_device=LOCAL_RANK,
             ),
-            "gloo": nn.parallel.DistributedDataParallel,
+            "gloo": partial(nn.parallel.DistributedDataParallel),
         }[args.backend],
     )
 
