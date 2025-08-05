@@ -15,7 +15,7 @@ import time
 from collections.abc import Callable
 from dataclasses import fields
 from fractions import Fraction
-from functools import wraps
+from functools import partial, wraps
 from math import isfinite
 from typing import Any, TypeVar
 
@@ -435,8 +435,10 @@ def _eigh_eigenvalue_decomposition(
         Exception: If the eigendecomposition fails and retry_double_precision is False or fails in double precision.
 
     """
+    # Create a function that will convert tensors back to the original device and dtype of A
+    # This is used at the end to ensure the returned tensors match the input specifications
+    restore_original_format = partial(Tensor.to, device=A.device, dtype=A.dtype)
 
-    current_device = A.device
     if eigendecomposition_offload_device != "":
         A = A.to(device=eigendecomposition_offload_device)
 
@@ -446,6 +448,7 @@ def _eigh_eigenvalue_decomposition(
 
     except Exception as exception:
         # If the computation fails and retry_double_precision is True, retry in double precision
+        # Higher precision can help with numerical stability issues
         if retry_double_precision and A.dtype != torch.float64:
             logger.warning(
                 f"Failed to compute eigendecomposition in {A.dtype} precision with exception {exception}! Retrying in double precision..."
@@ -455,9 +458,9 @@ def _eigh_eigenvalue_decomposition(
             # If retry_double_precision is False or the computation fails in double precision, raise the exception
             raise exception
 
-    return L.to(device=current_device, dtype=A.dtype), Q.to(
-        device=current_device, dtype=A.dtype
-    )
+    # Convert the results back to the original device and dtype before returning
+    # This ensures consistency with the input tensor's specifications
+    return tuple(map(restore_original_format, (L, Q)))
 
 
 def _eigenvalues_estimate_criterion_below_or_equal_tolerance(
