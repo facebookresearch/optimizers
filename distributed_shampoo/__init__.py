@@ -43,6 +43,7 @@ from distributed_shampoo.shampoo_types import (
     DistributedConfig,
     EigendecomposedShampooPreconditionerConfig,
     EigenvalueCorrectedShampooPreconditionerConfig,
+    FSDPParamAssignmentStrategy,
     FSDPShampooConfig,
     FullyShardShampooConfig,
     GraftingConfig,
@@ -71,6 +72,7 @@ __all__ = [
     # `distributed_config` options.
     "DistributedConfig",  # Abstract base class.
     "DDPShampooConfig",
+    "FSDPParamAssignmentStrategy",
     "FSDPShampooConfig",
     "FullyShardShampooConfig",
     "HSDPShampooConfig",

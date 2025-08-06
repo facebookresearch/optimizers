@@ -460,7 +460,7 @@ def _eigh_eigenvalue_decomposition(
 
     # Convert the results back to the original device and dtype before returning
     # This ensures consistency with the input tensor's specifications
-    return tuple(map(restore_original_format, (L, Q)))
+    return restore_original_format(L), restore_original_format(Q)
 
 
 def _eigenvalues_estimate_criterion_below_or_equal_tolerance(
