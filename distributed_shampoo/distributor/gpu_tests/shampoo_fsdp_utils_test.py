@@ -198,7 +198,6 @@ class ParseFSDPParamsTest(FSDPTest):
         )
 
         model = nn.Sequential(fsdp_module, nn.Linear(3, 2, bias=False))
-        model[1].weight.data.fill_(3.0)
 
         fsdp_parameter_metadata = compile_fsdp_parameter_metadata(model)
         named_params = dict(model.named_parameters())
