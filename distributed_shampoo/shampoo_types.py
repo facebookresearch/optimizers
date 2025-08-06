@@ -7,6 +7,7 @@ LICENSE file in the root directory of this source tree.
 
 """
 
+import enum
 from dataclasses import dataclass, field, make_dataclass
 from inspect import signature
 from typing import Any
@@ -459,6 +460,29 @@ class FSDPParameterMetadata:
     sharding_strategy: ShardingStrategy
 
 
+@enum.unique
+class FSDPParamAssignmentStrategy(enum.Enum):
+    """Parameter assignment strategy for FSDP2, determining how the parameters are assigned to ranks in shard dimension.
+
+    DEFAULT: By default, parameters are assigned to ranks according to their FSDP shard.
+        Shampoo further blocks the parameters for preconditioning, which would likely affect the numerical accuracy
+        of the preconditioner. However, this strategy is the most efficient in terms of memory usage.
+
+    REPLICATE: parameters are all-gathered (replicated) across all ranks in shard dimension.
+        This strategy should produce identical results as the default Shampoo implementation, but at the cost of
+        significantly increased memory usage and communication.
+
+    ROUND_ROBIN: whole parameters are assigned to ranks in a round-robin fashion.
+        This strategy balances the memory and compute overhead across all ranks, by assigning the whole model
+        parameters to the ranks in the shard dimension (and it should be used when there are more parameters than shards).
+
+    """
+
+    DEFAULT = enum.auto()
+    REPLICATE = enum.auto()
+    ROUND_ROBIN = enum.auto()
+
+
 @dataclass(init=False)
 class DistributedConfig(AbstractDataclass):
     """Abstract dataclass for distributed configs in Shampoo."""
@@ -525,8 +549,15 @@ class HSDPShampooConfig(FSDPShampooConfig, DDPShampooConfig):
 class FullyShardShampooConfig(DistributedConfig):
     """Configuration for FullyShard (per-parameter FSDP) Shampoo.
 
-    Currently only a placeholder used for Shampoo optimizer to select FullyShardDistributor.
+
+    Attributes:
+        param_assignment_strategy (FSDPParamAssignmentStrategy): Strategy for assigning model parameters among the FSDP shards.
+            (Default: FSDPParamAssignmentStrategy.DEFAULT)
     """
+
+    param_assignment_strategy: FSDPParamAssignmentStrategy = (
+        FSDPParamAssignmentStrategy.DEFAULT
+    )
 
 
 @dataclass

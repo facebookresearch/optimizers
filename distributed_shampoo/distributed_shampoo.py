@@ -24,6 +24,9 @@ from distributed_shampoo.distributor.shampoo_fsdp_distributor import FSDPDistrib
 from distributed_shampoo.distributor.shampoo_fully_shard_distributor import (
     FullyShardDistributor,
 )
+from distributed_shampoo.distributor.shampoo_fully_shard_lossless_distributor import (
+    FullyShardLosslessDistributor,
+)
 from distributed_shampoo.distributor.shampoo_hsdp_distributor import HSDPDistributor
 from distributed_shampoo.distributor.shampoo_hybrid_shard_distributor import (
     HybridShardDistributor,
@@ -60,6 +63,7 @@ from distributed_shampoo.shampoo_types import (
     EPSILON,
     FILTERED_GRAD,
     FILTERED_GRAD_LIST,
+    FSDPParamAssignmentStrategy,
     FSDPShampooConfig,
     FullyShardShampooConfig,
     GRAFTING_CONFIG,
@@ -490,8 +494,14 @@ class DistributedShampoo(torch.optim.Optimizer):
                     distributor_cls = DDPDistributor
                 case FSDPShampooConfig():
                     distributor_cls = FSDPDistributor
-                case FullyShardShampooConfig():
+                case FullyShardShampooConfig(
+                    param_assignment_strategy=FSDPParamAssignmentStrategy.DEFAULT
+                ):
                     distributor_cls = FullyShardDistributor
+                case FullyShardShampooConfig(
+                    param_assignment_strategy=FSDPParamAssignmentStrategy.REPLICATE
+                ):
+                    distributor_cls = FullyShardLosslessDistributor
                 case _:
                     raise NotImplementedError(
                         f"{group[DISTRIBUTED_CONFIG]=} not supported!"

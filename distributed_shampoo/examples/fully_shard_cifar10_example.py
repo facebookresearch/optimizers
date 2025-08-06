@@ -70,7 +70,9 @@ def create_model_and_optimizer_and_loss_fn(
         grafting_epsilon=args.grafting_epsilon,
         grafting_beta2=args.grafting_beta2,
         use_merge_dims=args.use_merge_dims,
-        distributed_config=FullyShardShampooConfig(),  # type: ignore[abstract]
+        distributed_config=FullyShardShampooConfig(
+            param_assignment_strategy=args.param_assignment_strategy
+        ),
         preconditioner_computation_type=args.preconditioner_computation_type,
     )
     return model, optimizer, loss_function

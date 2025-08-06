@@ -33,6 +33,7 @@ from distributed_shampoo import (
     DefaultSOAPConfig,
     DistributedConfig,
     DistributedShampoo,
+    FSDPParamAssignmentStrategy,
     GraftingConfig,
     PreconditionerConfig,
     RMSpropGraftingConfig,
@@ -277,6 +278,12 @@ class Parser:
             type=int,
             default=2,
             help="Default HSDP replicate degree.",
+        )
+        parser.add_argument(
+            "--param-assignment-strategy",
+            type=lambda t: enum_type_parse(t, FSDPParamAssignmentStrategy),
+            default=FSDPParamAssignmentStrategy.DEFAULT,
+            help="Parameter assignment strategy in FSDP / HSDP distributor.",
         )
 
         # Arguments for metrics logging.
