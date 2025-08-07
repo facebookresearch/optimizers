@@ -324,7 +324,7 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
         mesh_2d = init_device_mesh(
             "cuda", (2, 2), mesh_dim_names=("replicate", "shard")
         )
-        fully_shard_config = FullyShardShampooConfig()  # type: ignore[abstract]
+        fully_shard_config = FullyShardShampooConfig()
         hybrid_shard_config = HybridShardShampooConfig(
             device_mesh=mesh_2d,
             communication_dtype=communication_dtype,

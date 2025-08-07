@@ -133,7 +133,7 @@ class ShampooFullyShardDistributorTest(DTensorTestBase):
     @with_comms
     @skip_if_lt_x_gpu(2)
     def test_all_ranks_with_no_grads(self) -> None:
-        fully_shard_config = FullyShardShampooConfig()  # type: ignore[abstract]
+        fully_shard_config = FullyShardShampooConfig()
 
         steps_without_gradients = 2
         with unittest.mock.patch.object(torch.Tensor, "backward") as mock_backward:
@@ -156,7 +156,7 @@ class ShampooFullyShardDistributorTest(DTensorTestBase):
     @with_comms
     @skip_if_lt_x_gpu(2)
     def test_fully_shard_shampoo_against_default_shampoo(self) -> None:
-        fully_shard_config = FullyShardShampooConfig()  # type: ignore[abstract]
+        fully_shard_config = FullyShardShampooConfig()
         compare_two_optimizers_models_devices_on_weight_and_loss(
             control_optim_factory=ShampooFullyShardDistributorTest._shampoo_optim_factory(
                 distributed_config=None,
@@ -180,7 +180,7 @@ class ShampooFullyShardDistributorTest(DTensorTestBase):
         mesh_2d = init_device_mesh(
             "cuda", (1, self.world_size), mesh_dim_names=("replicate", "shard")
         )
-        fully_shard_config = FullyShardShampooConfig()  # type: ignore[abstract]
+        fully_shard_config = FullyShardShampooConfig()
         hybrid_shard_config = HybridShardShampooConfig(
             device_mesh=mesh_2d, communicate_params=communicate_params
         )
@@ -230,7 +230,7 @@ class FullyShardDistributorOnEmptyParamTest(
             fill=0.01,
             post_model_decoration=partial(fully_shard),
         )[0]
-        distributed_config = FullyShardShampooConfig()  # type: ignore[abstract]
+        distributed_config = FullyShardShampooConfig()
         assert isinstance(model, nn.Module)
         distributor = FullyShardDistributor(
             param_group=DistributedShampoo(

@@ -568,6 +568,8 @@ class HybridShardShampooConfig(FullyShardShampooConfig, DDPShampooConfig):
     parameters between different Hybrid Shard process groups.
 
     Attributes:
+        param_assignment_strategy (FSDPParamAssignmentStrategy): Strategy for assigning model parameters among the FSDP shards.
+            (Default: FSDPParamAssignmentStrategy.DEFAULT)
         device_mesh (torch.distributed.device_mesh.DeviceMesh): Device mesh for Hybrid Shard.
         communication_dtype (torch.dtype): Data type for communication between ranks. (Default: torch.float32)
         num_trainers_per_group (int): Number of GPUs per distributed process group for distributed computation/memory.
