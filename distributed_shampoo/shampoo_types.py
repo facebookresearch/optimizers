@@ -617,6 +617,15 @@ class SGDGraftingConfig(GraftingConfig):
     """Configuration for grafting from SGD."""
 
 
+@dataclass
+class MuonGraftingConfig(SGDGraftingConfig):
+    """Configuration for grafting from Momentum-SGD (Muon).
+
+    Note:
+        The momentum parameter is set by momentum in DistributedShampoo's hyperparameters.
+    """
+
+
 @dataclass(kw_only=True)
 class AdaGradGraftingConfig(GraftingConfig):
     """Configuration for grafting from AdaGrad.
