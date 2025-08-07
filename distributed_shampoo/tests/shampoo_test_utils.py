@@ -48,7 +48,8 @@ class _ModelWithScalarAndLinearAndDeadLayers(nn.Module):
             )
             # Initialize dead layers with zeros for the ease of testing if needed
             for m in self.dead_layers:
-                m.weight.data.fill_(0.0)
+                assert isinstance(m, nn.Linear)
+                nn.init.zeros_(m.weight)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.linear_layers(x) + self.scalar
@@ -127,10 +128,11 @@ def construct_training_problem(
         strict=True,
     ):
         # Directly fills the weight tensor with the value 'f' without tracking in autograd.
-        m.weight.data.fill_(f)
+        assert isinstance(m, nn.Linear)
+        nn.init.constant_(m.weight, f)
         if bias:
             # If bias is used, directly fills the bias tensor with the value 'f' without tracking in autograd.
-            m.bias.data.fill_(f)
+            nn.init.constant_(m.bias, f)
 
     loss = nn.MSELoss()
 
