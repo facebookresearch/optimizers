@@ -9,6 +9,8 @@ LICENSE file in the root directory of this source tree.
 
 import re
 import unittest
+from typing import Any
+from unittest.mock import MagicMock
 
 from distributed_shampoo.preconditioner.matrix_functions_types import (
     EighEigendecompositionConfig,
@@ -18,7 +20,11 @@ from distributed_shampoo.preconditioner.matrix_functions_types import (
 from distributed_shampoo.shampoo_types import (
     AdaGradGraftingConfig,
     AmortizedPreconditionerConfig,
+    DistributedConfig,
     EigenvalueCorrectedShampooPreconditionerConfig,
+    FSDPShampooConfig,
+    HSDPShampooConfig,
+    HybridShardShampooConfig,
     RMSpropGraftingConfig,
     ShampooPreconditionerConfig,
 )
@@ -84,7 +90,7 @@ class AmortizedPreconditionerConfigSubclassesTest(unittest.TestCase):
         self.assertRaisesRegex(
             ValueError,
             re.escape(
-                f"Invalid num_tolerated_failed_amortized_computations value: "
+                "Invalid num_tolerated_failed_amortized_computations value: "
                 f"{num_tolerated_failed_amortized_computations}. Must be >= 0."
             ),
             cls,
@@ -258,4 +264,45 @@ class EigenvalueCorrectedShampooPreconditionerConfigSubclassesTest(unittest.Test
             ),
             cls,
             amortized_computation_config=invalid_amortized_computation_config,
+        )
+
+
+@instantiate_parametrized_tests
+class DistributedConfigSubclassesTest(unittest.TestCase):
+    subclasses_types: list[type[DistributedConfig]] = list(
+        get_all_non_abstract_subclasses(DistributedConfig)  # type: ignore[type-abstract]
+    )
+
+    @parametrize("cls", subclasses_types)
+    @parametrize(
+        "target_parameter_dimensionality, error_msg",
+        [
+            (-1, "Must be >= 1."),
+            (0, "Must be >= 1."),
+            (0.1, "Must be an integer or math.inf."),
+        ],
+    )
+    def test_illegal_target_parameter_dimensionality(
+        self,
+        cls: type[DistributedConfig],
+        target_parameter_dimensionality: int,
+        error_msg: str,
+    ) -> None:
+        # Create required arguments for specific config classes.
+        kwargs: dict[str, Any] = {
+            "target_parameter_dimensionality": target_parameter_dimensionality
+        }
+        if cls in (FSDPShampooConfig, HSDPShampooConfig):
+            kwargs["param_to_metadata"] = {}
+        if cls in (HSDPShampooConfig, HybridShardShampooConfig):
+            # Mock DeviceMesh to avoid distributed initialization.
+            kwargs["device_mesh"] = MagicMock()
+
+        self.assertRaisesRegex(
+            ValueError,
+            re.escape(
+                f"Invalid self.{target_parameter_dimensionality=} value. {error_msg}"
+            ),
+            cls,
+            **kwargs,
         )

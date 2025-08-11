@@ -14,7 +14,7 @@ import copy
 import gc
 import re
 import unittest
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from itertools import chain
 from typing import Any, cast
 
@@ -28,6 +28,7 @@ from distributed_shampoo.shampoo_types import (
     AdaGradGraftingConfig,
     DefaultEigenvalueCorrectedShampooConfig,
     DefaultShampooConfig,
+    DefaultSingleDeviceDistributedConfig,
     DefaultSpectralDescentPreconditionerConfig,
     DistributedConfig,
     EigendecomposedShampooPreconditionerConfig,
@@ -38,6 +39,7 @@ from distributed_shampoo.shampoo_types import (
     PreconditionerConfig,
     RootInvShampooPreconditionerConfig,
     ShampooPT2CompileConfig,
+    SingleDeviceDistributedConfig,
     SpectralDescentPreconditionerConfig,
 )
 from torch import nn
@@ -131,6 +133,10 @@ class DistributedShampooInitTest(unittest.TestCase):
                 "Invalid weight_decay value: -0.1. Must be >= 0.0.",
             ),
             (
+                {"max_preconditioner_dim": 3.14},
+                "Invalid max_preconditioner_dim=3.14 value. Must be an integer or math.inf.",
+            ),
+            (
                 {"max_preconditioner_dim": 0},
                 "Invalid max preconditioner dimension: 0. Must be >= 1.",
             ),
@@ -178,8 +184,10 @@ class DistributedShampooInitTest(unittest.TestCase):
                     "epsilon": 1e-8,
                     "precondition_frequency": 100,
                     "preconditioner_config": DefaultSpectralDescentPreconditionerConfig,
-                    # Has to be set to False because otherwise parameter will be reshaped to 1D and initialization of preconditioner list will fail.
-                    "use_merge_dims": False,
+                    # distributed_config.target_parameter_dimensionality=2 is necessary to avoid reshaping parameter to 1D which prevents successful initialization of preconditioner list.
+                    "distributed_config": SingleDeviceDistributedConfig(
+                        target_parameter_dimensionality=2,
+                    ),
                 },
                 [
                     "betas[1]=0.999 does not have any effect when SpectralDescentPreconditionerConfig is used.",
@@ -252,7 +260,7 @@ class DistributedShampooTest(unittest.TestCase):
             max_preconditioner_dim=5,
             precondition_frequency=1,
             start_preconditioning_step=1,
-            distributed_config=None,
+            distributed_config=DefaultSingleDeviceDistributedConfig,
             # Explicity set grafting_config=None to test the case that no grafting is used.
             grafting_config=None,
         )
@@ -327,7 +335,11 @@ class AbstractTest:
                 max_preconditioner_dim=5,
                 precondition_frequency=1,
                 start_preconditioning_step=-1,
-                distributed_config=None,
+                distributed_config=replace(
+                    DefaultSingleDeviceDistributedConfig,
+                    # distributed_config.target_parameter_dimensionality=2 is necessary to prevent SpectralDescentPreconditionerConfig assertion error.
+                    target_parameter_dimensionality=2,
+                ),
                 grafting_config=AdaGradGraftingConfig(
                     epsilon=0.001,
                 ),
@@ -660,8 +672,10 @@ class ShampooDistributedStateDictTest(AbstractTest.DistributedStateDictTestBase)
                     "grafting_config": AdaGradGraftingConfig(
                         epsilon=0.001,
                     ),
-                    "use_merge_dims": True,
-                    "distributed_config": None,
+                    "distributed_config": replace(
+                        DefaultSingleDeviceDistributedConfig,
+                        target_parameter_dimensionality=2,
+                    ),
                     "preconditioner_config": self._preconditioner_config,
                 }
             },
@@ -839,8 +853,10 @@ class EigendecomposedShampooDistributedStateDictTest(
                     "grafting_config": AdaGradGraftingConfig(
                         epsilon=0.001,
                     ),
-                    "use_merge_dims": True,
-                    "distributed_config": None,
+                    "distributed_config": replace(
+                        DefaultSingleDeviceDistributedConfig,
+                        target_parameter_dimensionality=2,
+                    ),
                     "preconditioner_config": self._preconditioner_config,
                 }
             },
@@ -1024,8 +1040,10 @@ class EigenvalueCorrectedShampooDistributedStateDictTest(
                     "grafting_config": AdaGradGraftingConfig(
                         epsilon=0.001,
                     ),
-                    "use_merge_dims": True,
-                    "distributed_config": None,
+                    "distributed_config": replace(
+                        DefaultSingleDeviceDistributedConfig,
+                        target_parameter_dimensionality=2,
+                    ),
                     "preconditioner_config": self._preconditioner_config,
                 }
             },
@@ -1119,8 +1137,10 @@ class SpectralDescentDistributedStateDictTest(
                     "grafting_config": AdaGradGraftingConfig(
                         epsilon=0.001,
                     ),
-                    "use_merge_dims": True,
-                    "distributed_config": None,
+                    "distributed_config": replace(
+                        DefaultSingleDeviceDistributedConfig,
+                        target_parameter_dimensionality=2,
+                    ),
                     "preconditioner_config": self._preconditioner_config,
                 }
             },
@@ -1143,7 +1163,7 @@ class DistributedShampooNoneGradTest(unittest.TestCase):
             precondition_frequency=1,
             start_preconditioning_step=1,
             shampoo_pt2_compile_config=ShampooPT2CompileConfig(backend="eager"),
-            distributed_config=None,
+            distributed_config=DefaultSingleDeviceDistributedConfig,
             # Explicity set grafting_config=None to test the case that no grafting is used.
             grafting_config=None,
         )

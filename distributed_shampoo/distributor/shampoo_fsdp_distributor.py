@@ -19,7 +19,6 @@ from distributed_shampoo.shampoo_types import (
     FSDPShampooConfig,
     MAX_PRECONDITIONER_DIM,
     PARAMS,
-    USE_MERGE_DIMS,
 )
 from distributed_shampoo.utils.shampoo_utils import (
     compress_list,
@@ -111,8 +110,10 @@ class FSDPDistributor(Distributor):
         global_grad_selector = []
         merge_dims = partial(
             merge_small_dims,
-            threshold=self._param_group[MAX_PRECONDITIONER_DIM]
-            * self._param_group[USE_MERGE_DIMS],
+            threshold=self._param_group[MAX_PRECONDITIONER_DIM],
+            target_tensor_dimensionality=self._param_group[
+                DISTRIBUTED_CONFIG
+            ].target_parameter_dimensionality,
         )
 
         for (

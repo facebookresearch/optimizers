@@ -125,7 +125,6 @@ if __name__ == "__main__":
         grafting_type=args.grafting_type,
         grafting_beta2=args.grafting_beta2,
         grafting_epsilon=args.grafting_epsilon,
-        use_merge_dims=args.use_merge_dims,
         distributed_config=DDPShampooConfig(
             communication_dtype=args.communication_dtype,
             num_trainers_per_group=args.num_trainers_per_group,

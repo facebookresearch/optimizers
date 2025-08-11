@@ -16,9 +16,9 @@ from typing import Any, Literal, overload
 import torch
 from distributed_shampoo.distributor.shampoo_block_info import BlockInfo
 from distributed_shampoo.shampoo_types import (
+    DISTRIBUTED_CONFIG,
     MAX_PRECONDITIONER_DIM,
     PARAMS,
-    USE_MERGE_DIMS,
 )
 from distributed_shampoo.utils.shampoo_utils import (
     compress_list,
@@ -183,8 +183,10 @@ class DistributorInterface(ABC):
         num_blocks_per_param: list[int] = []
         merge_dims = partial(
             merge_small_dims,
-            threshold=self._param_group[MAX_PRECONDITIONER_DIM]
-            * self._param_group[USE_MERGE_DIMS],
+            threshold=self._param_group[MAX_PRECONDITIONER_DIM],
+            target_tensor_dimensionality=self._param_group[
+                DISTRIBUTED_CONFIG
+            ].target_parameter_dimensionality,
         )
 
         for param in params:
@@ -239,8 +241,10 @@ class DistributorInterface(ABC):
         global_grad_selector = []
         merge_dims = partial(
             merge_small_dims,
-            threshold=self._param_group[MAX_PRECONDITIONER_DIM]
-            * self._param_group[USE_MERGE_DIMS],
+            threshold=self._param_group[MAX_PRECONDITIONER_DIM],
+            target_tensor_dimensionality=self._param_group[
+                DISTRIBUTED_CONFIG
+            ].target_parameter_dimensionality,
         )
 
         for grad, num_blocks, (block_index, next_block_index) in zip(

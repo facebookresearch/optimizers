@@ -8,6 +8,7 @@ LICENSE file in the root directory of this source tree.
 """
 
 import logging
+import math
 from collections.abc import Callable, Iterator
 from copy import deepcopy
 from dataclasses import asdict
@@ -55,6 +56,7 @@ from distributed_shampoo.shampoo_types import (
     DAMPENING,
     DDPShampooConfig,
     DefaultShampooConfig,
+    DefaultSingleDeviceDistributedConfig,
     DISTRIBUTED_CONFIG,
     DistributedConfig,
     DISTRIBUTOR,
@@ -89,12 +91,12 @@ from distributed_shampoo.shampoo_types import (
     SGDGraftingConfig,
     SHAMPOO_PRECONDITIONER_LIST,
     ShampooPT2CompileConfig,
+    SingleDeviceDistributedConfig,
     SpectralDescentPreconditionerConfig,
     START_PRECONDITIONING_STEP,
     STEP,
     USE_BIAS_CORRECTION,
     USE_DECOUPLED_WEIGHT_DECAY,
-    USE_MERGE_DIMS,
     USE_NESTEROV,
     WEIGHT_DECAY,
 )
@@ -286,7 +288,7 @@ class DistributedShampoo(torch.optim.Optimizer):
         momentum (float): Momentum parameter. (Default: 0.)
         dampening (float): Dampening parameter for momentum. (Default: 0.)
         weight_decay (float): Weight decay (L2 penalty). (Default: 0.)
-        max_preconditioner_dim (int): Maximum preconditioner dimension. (Default: 1024)
+        max_preconditioner_dim (int | float): Maximum preconditioner dimension. (Default: 1024)
         precondition_frequency (int): Frequency of updating all components of the preconditioner.
             If this field is an instance ShampooPreconditionerConfig, this is the update frequency of the root inverse of the preconditioner.
             If this field is an instance EigenvalueCorrectedShampooPreconditionerConfig, this is the update frequency of the eigenbasis of preconditioner.
@@ -298,13 +300,11 @@ class DistributedShampoo(torch.optim.Optimizer):
         use_decoupled_weight_decay (bool): Flag for using AdamW-style decoupled weight decay. (Default: True)
         grafting_config (GraftingConfig | None): Configuration for grafting method. If None, ignores grafting.
             (Default: None)
-        use_merge_dims (bool): Merge dimensions if possible while respecting max_preconditioner_dim. (Default: True)
         use_pin_memory (bool): Whether to use pin memory to remove sync point in memory copy. (Default: False)
         shampoo_pt2_compile_config (ShampooPT2CompileConfig | None): Configuration for Shampoo PT2 compilation. If None,
             ignores compilation, and Shampoo will run in eager mode. (Default: None)
-        distributed_config (DistributedConfig | None): Configuration for applying Shampoo
-            to different distributed training frameworks, such as distributed-data parallel (DDP) training.
-            Based on the configuration, determines which version of Shampoo to use. (Default: None)
+        distributed_config (DistributedConfig): Configuration for applying Shampoo to different distributed training frameworks, such as distributed-data parallel (DDP) training.
+            (Default: DefaultSingleDeviceDistributedConfig)
         preconditioner_config (PreconditionerConfig): Configuration for preconditioner computation.
             If this field is an instance ShampooPreconditionerConfig, Shampoo uses the root inverse of the preconditioner.
             If this field is an instance EigenvalueCorrectedShampooPreconditionerConfig Shampoo uses corrected the eigenvalues/running Adam in the eigenbasis of preconditioner.
@@ -322,17 +322,16 @@ class DistributedShampoo(torch.optim.Optimizer):
         momentum: float = 0.0,
         dampening: float = 0.0,
         weight_decay: float = 0.0,
-        max_preconditioner_dim: int = 1024,
+        max_preconditioner_dim: int | float = 1024,
         precondition_frequency: int = 1,
         start_preconditioning_step: int = -1,
         use_nesterov: bool = False,
         use_bias_correction: bool = True,
         use_decoupled_weight_decay: bool = True,
         grafting_config: GraftingConfig | None = None,
-        use_merge_dims: bool = True,
         use_pin_memory: bool = False,
         shampoo_pt2_compile_config: ShampooPT2CompileConfig | None = None,
-        distributed_config: DistributedConfig | None = None,
+        distributed_config: DistributedConfig = DefaultSingleDeviceDistributedConfig,
         preconditioner_config: PreconditionerConfig = DefaultShampooConfig,
     ) -> None:
         # Hyperparameter checks.
@@ -383,6 +382,13 @@ class DistributedShampoo(torch.optim.Optimizer):
         if not weight_decay >= 0.0:
             raise ValueError(
                 f"Invalid weight_decay value: {weight_decay}. Must be >= 0.0."
+            )
+        if (
+            isinstance(max_preconditioner_dim, float)
+            and max_preconditioner_dim != math.inf
+        ):
+            raise ValueError(
+                f"Invalid {max_preconditioner_dim=} value. Must be an integer or math.inf."
             )
         if not max_preconditioner_dim >= 1:
             raise ValueError(
@@ -446,7 +452,6 @@ class DistributedShampoo(torch.optim.Optimizer):
                 USE_BIAS_CORRECTION: use_bias_correction,
                 USE_DECOUPLED_WEIGHT_DECAY: use_decoupled_weight_decay,
                 GRAFTING_CONFIG: grafting_config,
-                USE_MERGE_DIMS: use_merge_dims,
                 DISTRIBUTED_CONFIG: distributed_config,
                 PRECONDITIONER_CONFIG: preconditioner_config,
             },
@@ -484,7 +489,7 @@ class DistributedShampoo(torch.optim.Optimizer):
             self._per_group_state_lists, self.param_groups, strict=True
         ):
             match group[DISTRIBUTED_CONFIG]:
-                case None:
+                case SingleDeviceDistributedConfig():
                     distributor_cls: type[DistributorInterface] = Distributor
                 case HSDPShampooConfig():
                     distributor_cls = HSDPDistributor
@@ -569,6 +574,9 @@ class DistributedShampoo(torch.optim.Optimizer):
                         )
                     )
                 case SpectralDescentPreconditionerConfig():
+                    assert (
+                        group[DISTRIBUTED_CONFIG].target_parameter_dimensionality == 2
+                    ), f"{group[DISTRIBUTED_CONFIG].target_parameter_dimensionality=} must be 2 when using SpectralDescentPreconditionerConfig."
                     preconditioner_list_cls = SpectralDescentPreconditionerList
                 case _:
                     raise NotImplementedError(

@@ -171,7 +171,8 @@ class SpectralDescentPreconditionerList(PreconditionerList):
     """Preconditioner list for spectral descent.
 
     NOTE: This algorithm can only be used for 2D parameters, or parameters that have been reshaped to 2D.
-    Which parameters are reshaped to 2D is determined by the max_preconditioner_dim argument in DistributedShampoo (assuming use_merge_dims=True).
+    Which parameters are reshaped to 2D is determined by the max_preconditioner_dim argument in DistributedShampoo.
+    If all >2D parameters should be guaranteed to be reshaped to 2D, then max_preconditioner_dim=math.inf and distributed_config.target_parameter_dimensionality=2 has to be used.
 
     Args:
         block_list (tuple[Tensor, ...]): List of (blocks of) parameters.
@@ -186,7 +187,8 @@ class SpectralDescentPreconditionerList(PreconditionerList):
     ) -> None:
         if any(block.dim() != 2 for block in block_list):
             raise ValueError(
-                "Spectral descent can only be used for 2D parameters, or parameters that have been reshaped to 2D."
+                "Spectral descent can only be used for 2D parameters, or parameters that have been reshaped to 2D. "
+                "To guarantee that all >2D parameters are reshaped to 2D, set max_preconditioner_dim=math.inf and distributed_config.target_parameter_dimensionality=2."
             )
         super().__init__(block_list)
         self._preconditioner_config = preconditioner_config

@@ -28,7 +28,12 @@ from distributed_shampoo.distributor.shampoo_fsdp_utils import (
 )
 from distributed_shampoo.distributor.shampoo_hsdp_distributor import HSDPDistributor
 from distributed_shampoo.preconditioner.shampoo_preconditioner_list import SHAMPOO
-from distributed_shampoo.shampoo_types import AdaGradGraftingConfig, HSDPShampooConfig
+from distributed_shampoo.shampoo_types import (
+    AdaGradGraftingConfig,
+    DefaultSingleDeviceDistributedConfig,
+    HSDPShampooConfig,
+    SingleDeviceDistributedConfig,
+)
 from distributed_shampoo.tests.shampoo_test_utils import (
     compare_two_optimizers_models_devices_on_weight_and_loss,
     construct_training_problem,
@@ -106,7 +111,7 @@ class ShampooHSDPDistributorTest(FSDPTest):
 
     @staticmethod
     def _shampoo_optim_factory(
-        distributed_config: HSDPShampooConfig | None,
+        distributed_config: HSDPShampooConfig | SingleDeviceDistributedConfig,
     ) -> Callable[[ParamsT], torch.optim.Optimizer]:
         return partial(
             DistributedShampoo,
@@ -150,7 +155,7 @@ class ShampooHSDPDistributorTest(FSDPTest):
 
         compare_two_optimizers_models_devices_on_weight_and_loss(
             control_optim_factory=ShampooHSDPDistributorTest._shampoo_optim_factory(
-                distributed_config=None,
+                distributed_config=DefaultSingleDeviceDistributedConfig,
             ),
             control_model_factory=ShampooHSDPDistributorTest._construct_model,
             experimental_optim_factory=ShampooHSDPDistributorTest._shampoo_optim_factory(

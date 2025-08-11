@@ -31,9 +31,11 @@ from distributed_shampoo.shampoo_types import (
     DDPShampooConfig,
     DefaultEigenvalueCorrectedShampooConfig,
     DefaultShampooConfig,
+    DefaultSingleDeviceDistributedConfig,
     DefaultSOAPConfig,
     EigendecomposedShampooPreconditionerConfig,
     PreconditionerConfig,
+    SingleDeviceDistributedConfig,
 )
 from distributed_shampoo.tests.shampoo_test_utils import (
     compare_two_optimizers_on_weight_and_loss,
@@ -87,7 +89,7 @@ class AbstractTest:
 
         @staticmethod
         def _shampoo_optim_factory(
-            distributed_config: DDPShampooConfig | None,
+            distributed_config: DDPShampooConfig | SingleDeviceDistributedConfig,
             preconditioner_config: PreconditionerConfig = DefaultShampooConfig,
         ) -> Callable[[ParamsT], torch.optim.Optimizer]:
             return partial(
@@ -150,7 +152,7 @@ class AbstractTest:
 
             compare_two_optimizers_on_weight_and_loss(
                 control_optim_factory=self._shampoo_optim_factory(
-                    distributed_config=None,
+                    distributed_config=DefaultSingleDeviceDistributedConfig,
                     preconditioner_config=preconditioner_config,
                 ),
                 experimental_optim_factory=self._shampoo_optim_factory(

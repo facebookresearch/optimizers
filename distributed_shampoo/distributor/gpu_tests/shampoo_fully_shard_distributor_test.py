@@ -25,8 +25,10 @@ from distributed_shampoo.distributor.shampoo_fully_shard_distributor import (
 )
 from distributed_shampoo.shampoo_types import (
     AdaGradGraftingConfig,
+    DefaultSingleDeviceDistributedConfig,
     FullyShardShampooConfig,
     HybridShardShampooConfig,
+    SingleDeviceDistributedConfig,
 )
 from distributed_shampoo.tests.shampoo_test_utils import (
     compare_two_optimizers_models_devices_on_weight_and_loss,
@@ -113,7 +115,7 @@ class ShampooFullyShardDistributorTest(DTensorTestBase):
 
     @staticmethod
     def _shampoo_optim_factory(
-        distributed_config: FullyShardShampooConfig | None,
+        distributed_config: FullyShardShampooConfig | SingleDeviceDistributedConfig,
     ) -> Callable[[ParamsT], torch.optim.Optimizer]:
         return partial(
             DistributedShampoo,
@@ -159,7 +161,7 @@ class ShampooFullyShardDistributorTest(DTensorTestBase):
         fully_shard_config = FullyShardShampooConfig()
         compare_two_optimizers_models_devices_on_weight_and_loss(
             control_optim_factory=ShampooFullyShardDistributorTest._shampoo_optim_factory(
-                distributed_config=None,
+                distributed_config=DefaultSingleDeviceDistributedConfig,
             ),
             control_model_factory=ShampooFullyShardDistributorTest._construct_model,
             experimental_optim_factory=ShampooFullyShardDistributorTest._shampoo_optim_factory(
