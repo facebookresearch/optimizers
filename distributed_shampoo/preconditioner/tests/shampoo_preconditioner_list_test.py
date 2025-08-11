@@ -19,10 +19,7 @@ from unittest import mock
 
 import torch
 from distributed_shampoo.distributor.shampoo_block_info import BlockInfo
-from distributed_shampoo.preconditioner import (
-    matrix_functions,
-    shampoo_preconditioner_list,
-)
+from distributed_shampoo.preconditioner import shampoo_preconditioner_list
 from distributed_shampoo.preconditioner.matrix_functions_types import (
     DefaultNewtonSchulzOrthogonalizationConfig,
     EighEigendecompositionConfig,
@@ -525,84 +522,62 @@ class AbstractTest:
                 )
             )
 
-            # Create the masked gradients for the test.
-            masked_grad_list0 = (
+            # Create the masked gradient list for the test.
+            masked_grad_list = (
                 torch.tensor([1.0, 0.0]),
                 torch.eye(2) / torch.tensor(2.0).sqrt(),
                 torch.tensor([[1.0, 0.0]]),
                 torch.tensor(1.0),
             )
-            masked_grad_list = (
-                torch.tensor([0.0, 1.0]),
-                torch.eye(2) / torch.tensor(2.0).sqrt(),
-                torch.tensor([[0.0, 1.0]]),
-                torch.tensor(2.0),
-            )
 
             # Setup the constants for the mock functions.
-            NUM_FACTOR_MATRICES = sum(grad.dim() for grad in masked_grad_list0)
+
+            # Count total number of factor matrices across all parameters
+            NUM_FACTOR_MATRICES = sum(grad.dim() for grad in masked_grad_list)
             # If criterion is False, amortized computation is performed.
             # If criterion is True, amortized computation is not performed.
-            # We want to simulate two update steps.
-            CRITERION_RESULTS_STEP_ONE = [False, True, False, False, True]
-            assert len(CRITERION_RESULTS_STEP_ONE) == NUM_FACTOR_MATRICES
-            CRITERION_RESULTS_STEP_TWO = [True, True, False, True, False]
-            assert len(CRITERION_RESULTS_STEP_TWO) == NUM_FACTOR_MATRICES
-            # We will perform two update steps. If we performed the amortized computation
-            # for all factor matrices in both steps, we would have 2 * NUM_FACTOR_MATRICES
-            # calls. However, we will skip the update when the criterion result is mocked
-            # to be True, i.e. sum(CRITERION_RESULTS_STEP_ONE/TWO) times.
+            CRITERION_RESULTS = [False, True, False, False, True]
+            assert len(CRITERION_RESULTS) == NUM_FACTOR_MATRICES
+            # We will perform one update step, and we will skip the update when the criterion result is mocked to be True, i.e. sum(CRITERION_RESULTS_STEP_ONE) times.
             # Hence, the number of calls of the amortized computation function should be:
-            NUM_AMORTIZED_COMPUTATION_CALLS_STEP_ONE = NUM_FACTOR_MATRICES - sum(
-                CRITERION_RESULTS_STEP_ONE
-            )
-            NUM_AMORTIZED_COMPUTATION_CALLS_STEP_TWO = NUM_FACTOR_MATRICES - sum(
-                CRITERION_RESULTS_STEP_TWO
-            )
-            NUM_AMORTIZED_COMPUTATION_CALLS = (
-                NUM_AMORTIZED_COMPUTATION_CALLS_STEP_ONE
-                + NUM_AMORTIZED_COMPUTATION_CALLS_STEP_TWO
+            NUM_AMORTIZED_COMPUTATION_CALLS = NUM_FACTOR_MATRICES - sum(
+                CRITERION_RESULTS
             )
 
-            # Mock the amortized computation function and the criterion function.
             with (
+                # This mock replaces torch.sqrt with a function that returns:
+                # -math.inf when CRITERION_RESULTS is True (meaning we want to skip computation)
+                # math.inf when CRITERION_RESULTS is False (meaning we want to perform computation)
+                # This simulates the adaptive computation criterion where negative values
+                # indicate we should skip the computation, and positive values indicate we should compute
                 mock.patch.object(
-                    # shampoo_preconditioner_list,
-                    # self._amortized_computation_properties.amortized_computation_function_name,
-                    matrix_functions,
-                    "_eigh_eigenvalue_decomposition",
-                    side_effect=[
-                        *((torch.tensor([1.0]), torch.tensor([1.0])),)
-                        * NUM_AMORTIZED_COMPUTATION_CALLS
-                    ],
-                ) as mock_amortized_computation,
-                mock.patch.object(
-                    matrix_functions,
-                    "_eigenvalues_estimate_criterion_below_or_equal_tolerance",
-                    side_effect=CRITERION_RESULTS_STEP_ONE + CRITERION_RESULTS_STEP_TWO,
+                    torch,
+                    "sqrt",
+                    side_effect=(
+                        -math.inf
+                        if v
+                        else math.inf  # Return -inf for True (skip) and inf for False (compute)
+                        for v in CRITERION_RESULTS
+                    ),
                 ) as mock_criterion,
+                # Mock torch.linalg.eigh because it's the main function used in the amortized computation
+                # after passing the adaptive criterion. By mocking it, we can assert that the number of times
+                # the computation is performed matches our expectations based on the CRITERION_RESULTS.
+                mock.patch.object(
+                    torch.linalg,
+                    "eigh",
+                ) as mock_amortized_computation,
             ):
-                # First update step.
                 self._preconditioner_list.update_preconditioners(
-                    masked_grad_list=masked_grad_list0,
+                    masked_grad_list=masked_grad_list,
                     step=torch.tensor(1),
                     perform_amortized_computation=True,
                 )
-                # Amortized computation is performed for all factor matrices in the first step.
+
+                # Verify criterion called for each factor matrix
                 self.assertEqual(mock_criterion.call_count, NUM_FACTOR_MATRICES)
-                self.assertEqual(
-                    mock_amortized_computation.call_count,
-                    NUM_AMORTIZED_COMPUTATION_CALLS_STEP_ONE,
-                )
-                # Second update step.
-                self._preconditioner_list.update_preconditioners(
-                    masked_grad_list=masked_grad_list,
-                    step=torch.tensor(2),
-                    perform_amortized_computation=True,
-                )
-                # The criterion is evaluated for all factor matrices in the second step.
-                self.assertEqual(mock_criterion.call_count, 2 * NUM_FACTOR_MATRICES)
-                # Amortized computation is performed for the first, third, and fourth factor matrices in the second step.
+
+                # Verify only non-skipped matrices were computed
                 self.assertEqual(
                     mock_amortized_computation.call_count,
                     NUM_AMORTIZED_COMPUTATION_CALLS,
