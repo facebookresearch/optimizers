@@ -324,13 +324,6 @@ class LossMetrics:
             SummaryWriter(log_dir=metrics_dir) if metrics_dir else None
         )
 
-    def reset(self) -> None:
-        self._iteration = 0
-        self._window_losses = []
-        self._window_loss = torch.tensor(0.0, device=self._device)
-        self._accumulated_loss = torch.tensor(0.0, device=self._device)
-        self._lifetime_loss = torch.tensor(0.0, device=self._device)
-
     def update(self, loss: torch.Tensor) -> None:
         self._iteration += 1
         self._window_losses.append(loss)
@@ -346,9 +339,12 @@ class LossMetrics:
         )
         if self._metrics_writer is not None:
             self._metrics_writer.add_scalars(
-                "Local Loss",
-                {"Lifetime": self._lifetime_loss, "Window": self._window_loss},
-                self._iteration,
+                main_tag="Local Loss",
+                tag_scalar_dict={
+                    "Lifetime": self._lifetime_loss,
+                    "Window": self._window_loss,
+                },
+                global_step=self._iteration,
             )
 
     def update_global_metrics(self) -> None:
@@ -365,12 +361,12 @@ class LossMetrics:
             )
             if self._metrics_writer is not None:
                 self._metrics_writer.add_scalars(
-                    "Global Loss",
-                    {
+                    main_tag="Global Loss",
+                    tag_scalar_dict={
                         "Lifetime": self._global_lifetime_loss,
                         "Window": self._global_window_loss,
                     },
-                    self._iteration,
+                    global_step=self._iteration,
                 )
 
     def flush(self) -> None:
