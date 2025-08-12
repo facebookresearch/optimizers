@@ -302,7 +302,8 @@ class SpectralDescentPreconditionerListTest(AbstractPreconditionerListTest.Inter
         self.assertRaisesRegex(
             ValueError,
             re.escape(
-                "Spectral descent can only be used for 2D parameters, or parameters that have been reshaped to 2D."
+                "Spectral descent can only be used for 2D parameters, or parameters that have been reshaped to 2D. "
+                "To guarantee that all >2D parameters are reshaped to 2D, set max_preconditioner_dim=math.inf and distributed_config.target_parameter_dimensionality=2."
             ),
             SpectralDescentPreconditionerList,
             block_list=block_list,

@@ -7,6 +7,7 @@ LICENSE file in the root directory of this source tree.
 
 """
 
+import math
 import re
 import unittest
 from operator import methodcaller
@@ -36,14 +37,22 @@ class MergeSmallDimsTest(unittest.TestCase):
         self, threshold: int, expected_new_tensor_shape: tuple[int, ...]
     ) -> None:
         self.assertEqual(
-            merge_small_dims(tensor_shape=(1, 2, 5, 1), threshold=threshold),
+            merge_small_dims(
+                tensor_shape=(1, 2, 5, 1),
+                threshold=threshold,
+                target_tensor_dimensionality=1,
+            ),
             expected_new_tensor_shape,
         )
 
     def test_merge_small_dims_for_single_dim(self) -> None:
         expected_new_tensor_shape = (2,)
         self.assertEqual(
-            merge_small_dims(tensor_shape=torch.Size([2]), threshold=10),
+            merge_small_dims(
+                tensor_shape=torch.Size([2]),
+                threshold=10,
+                target_tensor_dimensionality=1,
+            ),
             expected_new_tensor_shape,
         )
 
@@ -51,7 +60,11 @@ class MergeSmallDimsTest(unittest.TestCase):
     def test_merge_small_dims_all_ones(self, threshold: int) -> None:
         expected_new_tensor_shape = (1,)
         self.assertEqual(
-            merge_small_dims(tensor_shape=(1, 1, 1, 1), threshold=threshold),
+            merge_small_dims(
+                tensor_shape=(1, 1, 1, 1),
+                threshold=threshold,
+                target_tensor_dimensionality=1,
+            ),
             expected_new_tensor_shape,
         )
 
@@ -61,7 +74,9 @@ class MergeSmallDimsTest(unittest.TestCase):
     def test_merge_small_dims_empty(self, tensor_shape: tuple[int, ...]) -> None:
         expected_new_tensor_shape = (0,)
         self.assertEqual(
-            merge_small_dims(tensor_shape=tensor_shape, threshold=10),
+            merge_small_dims(
+                tensor_shape=tensor_shape, threshold=10, target_tensor_dimensionality=1
+            ),
             expected_new_tensor_shape,
         )
 
@@ -69,14 +84,57 @@ class MergeSmallDimsTest(unittest.TestCase):
     def test_empty_dims(self, threshold: int) -> None:
         expected_new_tensor_shape = (1,)
         self.assertEqual(
-            merge_small_dims(tensor_shape=(), threshold=threshold),
+            merge_small_dims(
+                tensor_shape=(), threshold=threshold, target_tensor_dimensionality=1
+            ),
             expected_new_tensor_shape,
         )
 
-    def test_convolution_like_dims(self) -> None:
-        expected_new_tensor_shape = (96, 4096)
+    def test_target_tensor_dimensionality_is_inf(self) -> None:
+        expected_new_tensor_shape = (1, 2, 5, 1)
         self.assertEqual(
-            merge_small_dims(tensor_shape=(32, 3, 64, 64), threshold=8192),
+            merge_small_dims(
+                tensor_shape=(1, 2, 5, 1),
+                threshold=10,
+                target_tensor_dimensionality=math.inf,
+            ),
+            expected_new_tensor_shape,
+        )
+
+    @parametrize(
+        "threshold, target_tensor_dimensionality, expected_new_tensor_shape",
+        [
+            (10, 1, (32, 3, 64, 64)),
+            (200, 1, (32, 192, 64)),
+            (8192, 1, (96, 4096)),
+            (1_000_000, 1, (96 * 4096,)),
+            (10, 2, (32, 3, 64, 64)),
+            (200, 2, (32, 192, 64)),
+            (8192, 2, (96, 4096)),
+            (
+                1_000_000,
+                2,
+                (32, 3 * 4096),
+            ),
+            (8192, 1, (96, 4096)),
+            (8192, 2, (96, 4096)),
+            (8192, 3, (32, 3, 4096)),
+            (8192, 4, (32, 3, 64, 64)),
+            (8192, math.inf, (32, 3, 64, 64)),
+        ],
+    )
+    def test_convolution_like_dims(
+        self,
+        threshold: int,
+        target_tensor_dimensionality: int,
+        expected_new_tensor_shape: tuple[int, ...],
+    ) -> None:
+        self.assertEqual(
+            merge_small_dims(
+                tensor_shape=(32, 3, 64, 64),
+                threshold=threshold,
+                target_tensor_dimensionality=target_tensor_dimensionality,
+            ),
             expected_new_tensor_shape,
         )
 

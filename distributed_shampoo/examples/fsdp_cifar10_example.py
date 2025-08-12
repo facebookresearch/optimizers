@@ -119,7 +119,6 @@ if __name__ == "__main__":
         grafting_type=args.grafting_type,
         grafting_epsilon=args.grafting_epsilon,
         grafting_beta2=args.grafting_beta2,
-        use_merge_dims=args.use_merge_dims,
         distributed_config=FSDPShampooConfig(
             param_to_metadata=compile_fsdp_parameter_metadata(model),
         ),

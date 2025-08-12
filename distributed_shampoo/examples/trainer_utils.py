@@ -398,8 +398,7 @@ def instantiate_optimizer(
     grafting_type: GraftingType,
     grafting_beta2: float,
     grafting_epsilon: float,
-    use_merge_dims: bool,
-    distributed_config: DistributedConfig | None,
+    distributed_config: DistributedConfig,
     preconditioner_computation_type: PreconditionerComputationType,
 ) -> torch.optim.Optimizer:
     if optimizer_type == OptimizerType.SGD:
@@ -435,7 +434,6 @@ def instantiate_optimizer(
             grafting_config=instantiate_grafting_config(
                 grafting_type, grafting_beta2, grafting_epsilon
             ),
-            use_merge_dims=use_merge_dims,
             distributed_config=distributed_config,
             preconditioner_config=instantiate_preconditioner_config(
                 preconditioner_computation_type=preconditioner_computation_type,

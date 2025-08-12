@@ -8,6 +8,7 @@ LICENSE file in the root directory of this source tree.
 """
 
 import heapq
+import math
 import operator
 from collections.abc import Callable, Iterator, Sequence
 from functools import cache, partial, reduce
@@ -20,7 +21,11 @@ from torch import Tensor
 
 
 @cache
-def merge_small_dims(tensor_shape: tuple[int, ...], threshold: int) -> tuple[int, ...]:
+def merge_small_dims(
+    tensor_shape: tuple[int, ...],
+    threshold: int,
+    target_tensor_dimensionality: int | float,
+) -> tuple[int, ...]:
     """Reshapes tensor by merging small dimensions.
 
     This function merges adjacent dimensions of a tensor when their product is below
@@ -37,24 +42,41 @@ def merge_small_dims(tensor_shape: tuple[int, ...], threshold: int) -> tuple[int
     Args:
         tensor_shape (tuple[int, ...]): The shape of the tensor.
         threshold (int): Threshold on the maximum size of each dimension.
+        target_tensor_dimensionality (int | float): Target dimensionality of the tensor. Only merge until the target dimensionality is reached.
+            If target_tensor_dimensionality > len(tensor_shape), then no merging occurs. The only float that can be used is math.inf.
+            Note that the output tensor will NOT necessarily have dimension equal to target_tensor_dimensionality.
+            The merging will stop before reaching target_tensor_dimensionality if the threshold is small.
 
     Returns:
         new_tensor_shape (tuple[int, ...]): New tensor shape after merging dimensions.
 
+    Raises:
+        AssertionError: If target_tensor_dimensionality is a float but not math.inf.
+
     Example:
-        - merge_small_dims((1, 2, 5, 1), threshold=10) -> (10,)
+        - merge_small_dims((1, 2, 5, 1), threshold=10, target_tensor_dimensionality=1) -> (10,)
           All dimensions are merged as their product (10) is equal to the threshold.
 
-        - merge_small_dims((1, 2, 5, 1), threshold=1) -> (2, 5)
+        - merge_small_dims((1, 2, 5, 1), threshold=1, target_tensor_dimensionality=1) -> (2, 5)
           Dimensions of size 1 are removed, and no merging occurs as 2*5 > threshold.
 
-        - merge_small_dims((32, 3, 64, 64), threshold=8192) -> (96, 4096)
+        - merge_small_dims((32, 3, 64, 64), threshold=8192, target_tensor_dimensionality=1) -> (96, 4096)
           For convolution-like dimensions, merges into (32*3, 64*64) as 96 < threshold
           but 96*4096 > threshold.
+
+        - merge_small_dims((32, 3, 64, 64), threshold=1_000_000, target_tensor_dimensionality=2) -> (32, 12_288)
+          For convolution-like dimensions, merges into (32, 3*64*64) despite 32*3*64*64 < threshold because
+          target_tensor_dimensionality is 2. This is useful for spectral descent methods like Muon.
 
     """
     if 0 in tensor_shape:
         return (0,)
+
+    if isinstance(target_tensor_dimensionality, float):
+        assert (
+            target_tensor_dimensionality == math.inf
+        ), f"{target_tensor_dimensionality=} has to be an integer or math.inf."
+        return tensor_shape
 
     # Squeeze tensor shape to remove dimension with 1; if all dimensions are 1,
     # then add a 1 to the tensor shape.
@@ -64,9 +86,20 @@ def merge_small_dims(tensor_shape: tuple[int, ...], threshold: int) -> tuple[int
     squeezed_tensor_shape = list(filter(lambda t: t != 1, reversed(tensor_shape))) or [
         1
     ]
+    squeezed_dimensionality = len(squeezed_tensor_shape)
     new_tensor_shape = [squeezed_tensor_shape[0]]
-    for next_tensor_shape in islice(squeezed_tensor_shape, 1, None):
-        if (new_dimension := new_tensor_shape[-1] * next_tensor_shape) <= threshold:
+    for num_processed_dimensions, next_tensor_shape in enumerate(
+        islice(squeezed_tensor_shape, 1, None), start=1
+    ):
+        current_dimensionality = len(new_tensor_shape)
+        remaining_dimensions = squeezed_dimensionality - num_processed_dimensions
+        potential_dimensionality_before_merge = (
+            current_dimensionality + remaining_dimensions
+        )
+        if (
+            potential_dimensionality_before_merge > target_tensor_dimensionality
+            and (new_dimension := new_tensor_shape[-1] * next_tensor_shape) <= threshold
+        ):
             new_tensor_shape[-1] = new_dimension
         else:
             new_tensor_shape.append(next_tensor_shape)

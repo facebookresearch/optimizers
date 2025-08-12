@@ -13,6 +13,7 @@ import argparse
 import os
 
 import torch
+from distributed_shampoo import DefaultSingleDeviceDistributedConfig
 
 from distributed_shampoo.examples.trainer_utils import (
     get_data_loader_and_sampler,
@@ -94,8 +95,7 @@ if __name__ == "__main__":
         grafting_type=args.grafting_type,
         grafting_epsilon=args.grafting_epsilon,
         grafting_beta2=args.grafting_beta2,
-        use_merge_dims=args.use_merge_dims,
-        distributed_config=None,
+        distributed_config=DefaultSingleDeviceDistributedConfig,
         preconditioner_computation_type=args.preconditioner_computation_type,
     )
 

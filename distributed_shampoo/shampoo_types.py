@@ -8,6 +8,7 @@ LICENSE file in the root directory of this source tree.
 """
 
 import enum
+import math
 from dataclasses import dataclass, field, make_dataclass
 from inspect import signature
 from typing import Any
@@ -52,7 +53,6 @@ START_PRECONDITIONING_STEP = "start_preconditioning_step"
 USE_EIGENVALUE_CORRECTION = "use_eigenvalue_correction"
 USE_BIAS_CORRECTION = "use_bias_correction"
 USE_DECOUPLED_WEIGHT_DECAY = "use_decoupled_weight_decay"
-USE_MERGE_DIMS = "use_merge_dims"
 USE_NESTEROV = "use_nesterov"
 WEIGHT_DECAY = "weight_decay"
 
@@ -422,7 +422,8 @@ class SpectralDescentPreconditionerConfig(PreconditionerConfig):
     """Configuration for spectral descent computation in DistributedShampoo.
 
     NOTE: This config can only be used for 2D parameters, or parameters that have been reshaped to 2D.
-    Which parameters are reshaped to 2D is determined by the max_preconditioner_dim argument in DistributedShampoo (assuming use_merge_dims=True).
+    Which parameters are reshaped to 2D is determined by the max_preconditioner_dim argument in DistributedShampoo.
+    If all >2D parameters should be guaranteed to be reshaped to 2D, then max_preconditioner_dim=math.inf and distributed_config.target_parameter_dimensionality=2 has to be used.
 
     Attributes:
         orthogonalization_config (OrthogonalizationConfig): Configuration for orthogonalization of the search direction.
@@ -485,7 +486,52 @@ class FSDPParamAssignmentStrategy(enum.Enum):
 
 @dataclass(init=False)
 class DistributedConfig(AbstractDataclass):
-    """Abstract dataclass for distributed configs in Shampoo."""
+    """Abstract dataclass for distributed configs in Shampoo.
+
+    Attributes:
+        target_parameter_dimensionality (int | float): The idealized parameter dimensionality for a given algorithm.
+            The dimensions of parameters and gradients will be merged (after squeezing dimensions of size 1) while respecting max_preconditioner_dim until the tensor has target_parameter_dimensionality dimensions left.
+            If it should be guranteed that the parameters/gradients with > target_parameter_dimensionality dimensions are reshaped to target_parameter_dimensionality-D tensors, then max_preconditioner_dim=math.inf has to be used.
+            For example, when target_parameter_dimensionality=1, we ideally want to precondition 1D gradients, e.g. with full-matrix Adagrad.
+            If target_parameter_dimensionality=2, we ideally want to consider 2D gradients, e.g. for spectral descent in Muon.
+            If target_parameter_dimensionality=math.inf, no dimensions are merged (besides dimensions of size 1).
+            (Default: 1)
+
+    """
+
+    target_parameter_dimensionality: int | float = 1
+
+    def __post_init__(self) -> None:
+        if (
+            isinstance(self.target_parameter_dimensionality, float)
+            and self.target_parameter_dimensionality != math.inf
+        ):
+            raise ValueError(
+                f"Invalid {self.target_parameter_dimensionality=} value. Must be an integer or math.inf."
+            )
+        elif self.target_parameter_dimensionality < 1:
+            raise ValueError(
+                f"Invalid {self.target_parameter_dimensionality=} value. Must be >= 1."
+            )
+
+
+@dataclass(kw_only=True)
+class SingleDeviceDistributedConfig(DistributedConfig):
+    """Configuration for Shampoo without any parallelism.
+
+    Attributes:
+        target_parameter_dimensionality (int | float): The idealized parameter dimensionality for a given algorithm.
+            The dimensions of parameters and gradients will be merged (after squeezing dimensions of size 1) while respecting max_preconditioner_dim until the tensor has target_parameter_dimensionality dimensions left.
+            If it should be guranteed that the parameters/gradients with > target_parameter_dimensionality dimensions are reshaped to target_parameter_dimensionality-D tensors, then max_preconditioner_dim=math.inf has to be used.
+            For example, when target_parameter_dimensionality=1, we ideally want to precondition 1D gradients, e.g. with full-matrix Adagrad.
+            If target_parameter_dimensionality=2, we ideally want to consider 2D gradients, e.g. for spectral descent in Muon.
+            If target_parameter_dimensionality=math.inf, no dimensions are merged (besides dimensions of size 1).
+            (Default: 1)
+
+    """
+
+
+DefaultSingleDeviceDistributedConfig = SingleDeviceDistributedConfig()
 
 
 @dataclass(kw_only=True)
@@ -495,6 +541,13 @@ class DDPShampooConfig(DistributedConfig):
     Enables distributed computation and optimizer states (like ZeRO-1) via DTensor for Shampoo.
 
     Attributes:
+        target_parameter_dimensionality (int | float): The idealized parameter dimensionality for a given algorithm.
+            The dimensions of parameters and gradients will be merged (after squeezing dimensions of size 1) while respecting max_preconditioner_dim until the tensor has target_parameter_dimensionality dimensions left.
+            If it should be guranteed that the parameters/gradients with > target_parameter_dimensionality dimensions are reshaped to target_parameter_dimensionality-D tensors, then max_preconditioner_dim=math.inf has to be used.
+            For example, when target_parameter_dimensionality=1, we ideally want to precondition 1D gradients, e.g. with full-matrix Adagrad.
+            If target_parameter_dimensionality=2, we ideally want to consider 2D gradients, e.g. for spectral descent in Muon.
+            If target_parameter_dimensionality=math.inf, no dimensions are merged (besides dimensions of size 1).
+            (Default: 1)
         communication_dtype (torch.dtype): Data type for communication between ranks. (Default: torch.float32)
         num_trainers_per_group (int): Number of GPUs per distributed process group for distributed computation/memory.
             If num_trainers_per_group = -1 is used, then defaults to using the LOCAL_WORLD_SIZE. (Default: -1)
@@ -515,6 +568,13 @@ class FSDPShampooConfig(DistributedConfig):
     Passes in additional metadata necessary to run FSDP Shampoo.
 
     Attributes:
+        target_parameter_dimensionality (int | float): The idealized parameter dimensionality for a given algorithm.
+            The dimensions of parameters and gradients will be merged (after squeezing dimensions of size 1) while respecting max_preconditioner_dim until the tensor has target_parameter_dimensionality dimensions left.
+            If it should be guranteed that the parameters/gradients with > target_parameter_dimensionality dimensions are reshaped to target_parameter_dimensionality-D tensors, then max_preconditioner_dim=math.inf has to be used.
+            For example, when target_parameter_dimensionality=1, we ideally want to precondition 1D gradients, e.g. with full-matrix Adagrad.
+            If target_parameter_dimensionality=2, we ideally want to consider 2D gradients, e.g. for spectral descent in Muon.
+            If target_parameter_dimensionality=math.inf, no dimensions are merged (besides dimensions of size 1).
+            (Default: 1)
         param_to_metadata (dict[Parameter, FSDPParameterMetadata]): Dictionary mapping parameter to its metadata from FSDP.
 
     """
@@ -522,7 +582,7 @@ class FSDPShampooConfig(DistributedConfig):
     param_to_metadata: dict[Parameter, FSDPParameterMetadata]
 
 
-@dataclass
+@dataclass(kw_only=True)
 class HSDPShampooConfig(FSDPShampooConfig, DDPShampooConfig):
     """Configuration for HSDP Shampoo.
 
@@ -530,6 +590,13 @@ class HSDPShampooConfig(FSDPShampooConfig, DDPShampooConfig):
     parameters between different HSDP process groups.
 
     Attributes:
+        target_parameter_dimensionality (int | float): The idealized parameter dimensionality for a given algorithm.
+            The dimensions of parameters and gradients will be merged (after squeezing dimensions of size 1) while respecting max_preconditioner_dim until the tensor has target_parameter_dimensionality dimensions left.
+            If it should be guranteed that the parameters/gradients with > target_parameter_dimensionality dimensions are reshaped to target_parameter_dimensionality-D tensors, then max_preconditioner_dim=math.inf has to be used.
+            For example, when target_parameter_dimensionality=1, we ideally want to precondition 1D gradients, e.g. with full-matrix Adagrad.
+            If target_parameter_dimensionality=2, we ideally want to consider 2D gradients, e.g. for spectral descent in Muon.
+            If target_parameter_dimensionality=math.inf, no dimensions are merged (besides dimensions of size 1).
+            (Default: 1)
         device_mesh (torch.distributed.device_mesh.DeviceMesh): A 2D device mesh that specifies the layout of the numbers of
             replicate and shard dimensions.
         param_to_metadata (dict[Parameter, FSDPParameterMetadata]): Dictionary mapping parameter to its metadata from HSDP.
@@ -551,6 +618,13 @@ class FullyShardShampooConfig(DistributedConfig):
 
 
     Attributes:
+        target_parameter_dimensionality (int | float): The idealized parameter dimensionality for a given algorithm.
+            The dimensions of parameters and gradients will be merged (after squeezing dimensions of size 1) while respecting max_preconditioner_dim until the tensor has target_parameter_dimensionality dimensions left.
+            If it should be guranteed that the parameters/gradients with > target_parameter_dimensionality dimensions are reshaped to target_parameter_dimensionality-D tensors, then max_preconditioner_dim=math.inf has to be used.
+            For example, when target_parameter_dimensionality=1, we ideally want to precondition 1D gradients, e.g. with full-matrix Adagrad.
+            If target_parameter_dimensionality=2, we ideally want to consider 2D gradients, e.g. for spectral descent in Muon.
+            If target_parameter_dimensionality=math.inf, no dimensions are merged (besides dimensions of size 1).
+            (Default: 1)
         param_assignment_strategy (FSDPParamAssignmentStrategy): Strategy for assigning model parameters among the FSDP shards.
             (Default: FSDPParamAssignmentStrategy.DEFAULT)
     """
@@ -560,7 +634,7 @@ class FullyShardShampooConfig(DistributedConfig):
     )
 
 
-@dataclass
+@dataclass(kw_only=True)
 class HybridShardShampooConfig(FullyShardShampooConfig, DDPShampooConfig):
     """Configuration for HybridShard (per-parameter FSDP) Shampoo.
 
@@ -568,6 +642,13 @@ class HybridShardShampooConfig(FullyShardShampooConfig, DDPShampooConfig):
     parameters between different Hybrid Shard process groups.
 
     Attributes:
+        target_parameter_dimensionality (int | float): The idealized parameter dimensionality for a given algorithm.
+            The dimensions of parameters and gradients will be merged (after squeezing dimensions of size 1) while respecting max_preconditioner_dim until the tensor has target_parameter_dimensionality dimensions left.
+            If it should be guranteed that the parameters/gradients with > target_parameter_dimensionality dimensions are reshaped to target_parameter_dimensionality-D tensors, then max_preconditioner_dim=math.inf has to be used.
+            For example, when target_parameter_dimensionality=1, we ideally want to precondition 1D gradients, e.g. with full-matrix Adagrad.
+            If target_parameter_dimensionality=2, we ideally want to consider 2D gradients, e.g. for spectral descent in Muon.
+            If target_parameter_dimensionality=math.inf, no dimensions are merged (besides dimensions of size 1).
+            (Default: 1)
         param_assignment_strategy (FSDPParamAssignmentStrategy): Strategy for assigning model parameters among the FSDP shards.
             (Default: FSDPParamAssignmentStrategy.DEFAULT)
         device_mesh (torch.distributed.device_mesh.DeviceMesh): Device mesh for Hybrid Shard.

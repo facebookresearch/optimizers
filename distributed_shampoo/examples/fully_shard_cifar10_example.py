@@ -69,7 +69,6 @@ def create_model_and_optimizer_and_loss_fn(
         grafting_type=args.grafting_type,
         grafting_epsilon=args.grafting_epsilon,
         grafting_beta2=args.grafting_beta2,
-        use_merge_dims=args.use_merge_dims,
         distributed_config=FullyShardShampooConfig(
             param_assignment_strategy=args.param_assignment_strategy
         ),

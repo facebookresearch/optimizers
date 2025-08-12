@@ -50,7 +50,7 @@ Key distinctives of this implementation include:
 
 We have tested this implementation on the following versions of PyTorch:
 
-- PyTorch >= 2.7;
+- PyTorch >= 2.8;
 - Python >= 3.12;
 - CUDA 11.3-11.4; 12.2+;
 
@@ -277,6 +277,7 @@ import math
 from distributed_shampoo import (
     DistributedShampoo,
     NewtonSchulzOrthogonalizationConfig,
+    SingleDeviceDistributedConfig,
     SpectralDescentPreconditionerConfig,
 )
 
@@ -296,6 +297,11 @@ optimizer = DistributedShampoo(
                 orthogonalization_config=NewtonSchulzOrthogonalizationConfig(
                     scale_by_dims_fn=lambda d_in, d_out: max(1, d_out / d_in)**0.5,
                 ),
+            ),
+            # The two settings below guarantee that the >2D parameters are reshaped to 2D by flattening all but the first dimension (after squeezing dimensions of size 1).
+            "max_preconditioner_dim": math.inf,
+            "distributed_config": SingleDeviceDistributedConfig(
+                target_parameter_dimensionality=2,
             ),
         },
         # Use AdamW for other parameters.
