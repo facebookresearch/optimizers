@@ -681,3 +681,42 @@ def train_model(
         metrics._window_loss.item(),
         metrics._iteration,
     )
+
+
+def create_model_and_optimizer_and_loss_fn(
+    args: argparse.Namespace,
+    device: torch.device,
+    distributed_config: DistributedConfig,
+    post_model_decoration: Callable[[nn.Module], nn.Module | FSDPModule] = lambda x: x,
+) -> tuple[nn.Module, torch.optim.Optimizer, nn.Module]:
+    # instantiate model and loss function
+    model, loss_function = get_model_and_loss_fn(
+        device=device,
+        post_model_decoration=post_model_decoration,  # type: ignore
+    )
+    assert isinstance(model, nn.Module)
+
+    # instantiate optimizer (SGD, Adam, DistributedShampoo)
+    optimizer = instantiate_optimizer(
+        args.optimizer_type,
+        model.parameters(),
+        lr=args.lr,
+        betas=(args.beta1, args.beta2),
+        beta3=args.beta3,
+        epsilon=args.epsilon,
+        momentum=args.momentum,
+        dampening=args.dampening,
+        weight_decay=args.weight_decay,
+        max_preconditioner_dim=args.max_preconditioner_dim,
+        precondition_frequency=args.precondition_frequency,
+        start_preconditioning_step=args.start_preconditioning_step,
+        use_nesterov=args.use_nesterov,
+        use_bias_correction=args.use_bias_correction,
+        use_decoupled_weight_decay=args.use_decoupled_weight_decay,
+        grafting_type=args.grafting_type,
+        grafting_epsilon=args.grafting_epsilon,
+        grafting_beta2=args.grafting_beta2,
+        distributed_config=distributed_config,
+        preconditioner_computation_type=args.preconditioner_computation_type,
+    )
+    return model, optimizer, loss_function

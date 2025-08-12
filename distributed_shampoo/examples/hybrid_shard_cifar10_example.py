@@ -18,9 +18,8 @@ import torch.distributed as dist
 
 from distributed_shampoo import HybridShardShampooConfig
 from distributed_shampoo.examples.trainer_utils import (
+    create_model_and_optimizer_and_loss_fn,
     get_data_loader_and_sampler,
-    get_model_and_loss_fn,
-    instantiate_optimizer,
     Parser,
     set_seed,
     setup_distribution,
@@ -40,45 +39,6 @@ os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
 LOCAL_RANK = int(os.environ["LOCAL_RANK"])
 WORLD_RANK = int(os.environ["RANK"])
 WORLD_SIZE = int(os.environ["WORLD_SIZE"])
-
-
-def create_model_and_optimizer_and_loss_fn(
-    args: argparse.Namespace, device: torch.device, device_mesh: DeviceMesh
-) -> tuple[nn.Module, torch.optim.Optimizer, nn.Module]:
-    # instantiate model and loss function
-    model, loss_function = get_model_and_loss_fn(
-        device=device,
-        post_model_decoration=partial(fully_shard, mesh=device_mesh),
-    )
-    assert isinstance(model, nn.Module)
-
-    # instantiate optimizer (SGD, Adam, DistributedShampoo)
-    optimizer = instantiate_optimizer(
-        args.optimizer_type,
-        model.parameters(),
-        lr=args.lr,
-        betas=(args.beta1, args.beta2),
-        beta3=args.beta3,
-        epsilon=args.epsilon,
-        momentum=args.momentum,
-        dampening=args.dampening,
-        weight_decay=args.weight_decay,
-        max_preconditioner_dim=args.max_preconditioner_dim,
-        precondition_frequency=args.precondition_frequency,
-        start_preconditioning_step=args.start_preconditioning_step,
-        use_nesterov=args.use_nesterov,
-        use_bias_correction=args.use_bias_correction,
-        use_decoupled_weight_decay=args.use_decoupled_weight_decay,
-        grafting_type=args.grafting_type,
-        grafting_epsilon=args.grafting_epsilon,
-        grafting_beta2=args.grafting_beta2,
-        distributed_config=HybridShardShampooConfig(
-            device_mesh=device_mesh,
-            num_trainers_per_group=args.num_trainers_per_group,
-        ),
-        preconditioner_computation_type=args.preconditioner_computation_type,
-    )
-    return model, optimizer, loss_function
 
 
 if __name__ == "__main__":
@@ -132,7 +92,13 @@ if __name__ == "__main__":
     optimizer: torch.optim.Optimizer
     loss_fn: nn.Module
     model, optimizer, loss_fn = create_model_and_optimizer_and_loss_fn(
-        args, device, device_mesh
+        args=args,
+        device=device,
+        distributed_config=HybridShardShampooConfig(
+            device_mesh=device_mesh,
+            num_trainers_per_group=args.num_trainers_per_group,
+        ),
+        post_model_decoration=partial(fully_shard, mesh=device_mesh),
     )
 
     # instantiate data loader

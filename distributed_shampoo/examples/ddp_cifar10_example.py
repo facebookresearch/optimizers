@@ -21,9 +21,8 @@ import torch.distributed.checkpoint as dist_checkpoint
 
 from distributed_shampoo import DDPShampooConfig, DistributedShampoo
 from distributed_shampoo.examples.trainer_utils import (
+    create_model_and_optimizer_and_loss_fn,
     get_data_loader_and_sampler,
-    get_model_and_loss_fn,
-    instantiate_optimizer,
     Parser,
     set_seed,
     setup_distribution,
@@ -83,9 +82,16 @@ if __name__ == "__main__":
 
     # instantiate model and loss function
     model: nn.Module
+    optimizer: torch.optim.Optimizer
     loss_function: nn.Module
-    model, loss_function = get_model_and_loss_fn(
+    model, optimizer, loss_function = create_model_and_optimizer_and_loss_fn(
+        args=args,
         device=device,
+        distributed_config=DDPShampooConfig(
+            communication_dtype=args.communication_dtype,
+            num_trainers_per_group=args.num_trainers_per_group,
+            communicate_params=args.communicate_params,
+        ),
         post_model_decoration={
             "nccl": partial(
                 nn.parallel.DistributedDataParallel,
@@ -103,34 +109,6 @@ if __name__ == "__main__":
     ]
     data_loader, sampler = get_data_loader_and_sampler(
         args.data_path, WORLD_SIZE, WORLD_RANK, args.local_batch_size
-    )
-
-    # instantiate optimizer (SGD, Adam, DistributedShampoo)
-    optimizer: torch.optim.Optimizer = instantiate_optimizer(
-        args.optimizer_type,
-        model.parameters(),
-        lr=args.lr,
-        betas=(args.beta1, args.beta2),
-        beta3=args.beta3,
-        epsilon=args.epsilon,
-        momentum=args.momentum,
-        dampening=args.dampening,
-        weight_decay=args.weight_decay,
-        max_preconditioner_dim=args.max_preconditioner_dim,
-        precondition_frequency=args.precondition_frequency,
-        start_preconditioning_step=args.start_preconditioning_step,
-        use_nesterov=args.use_nesterov,
-        use_bias_correction=args.use_bias_correction,
-        use_decoupled_weight_decay=args.use_decoupled_weight_decay,
-        grafting_type=args.grafting_type,
-        grafting_beta2=args.grafting_beta2,
-        grafting_epsilon=args.grafting_epsilon,
-        distributed_config=DDPShampooConfig(
-            communication_dtype=args.communication_dtype,
-            num_trainers_per_group=args.num_trainers_per_group,
-            communicate_params=args.communicate_params,
-        ),
-        preconditioner_computation_type=args.preconditioner_computation_type,
     )
 
     # checks for checkpointing
