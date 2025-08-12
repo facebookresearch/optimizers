@@ -334,107 +334,6 @@ class DistributedShampoo(torch.optim.Optimizer):
         distributed_config: DistributedConfig = DefaultSingleDeviceDistributedConfig,
         preconditioner_config: PreconditionerConfig = DefaultShampooConfig,
     ) -> None:
-        # Hyperparameter checks.
-        if not lr >= 0.0:
-            raise ValueError(f"Invalid learning rate: {lr}. Must be >= 0.0.")
-        if not 0.0 <= betas[0] < 1.0:
-            raise ValueError(
-                f"Invalid beta parameter at index 0: {betas[0]}. Must be in [0.0, 1.0)."
-            )
-        if not 0.0 <= betas[1] <= 1.0:
-            raise ValueError(
-                f"Invalid beta parameter at index 1: {betas[1]}. Must be in [0.0, 1.0]."
-            )
-        if beta3 == -1.0:
-            beta3 = betas[0]
-        elif not 0.0 <= beta3 < 1.0:
-            raise ValueError(
-                f"Invalid beta3 parameter: {beta3}. Must be in [0.0, 1.0)."
-            )
-        if (
-            isinstance(
-                preconditioner_config,
-                AmortizedPreconditionerConfig,
-            )
-            and isinstance(
-                preconditioner_config.amortized_computation_config,
-                EigendecompositionConfig,
-            )
-            and isinstance(
-                preconditioner_config.amortized_computation_config.rank_deficient_stability_config,
-                PseudoInverseConfig,
-            )
-        ):
-            if epsilon != 0.0:
-                raise ValueError(
-                    f"Invalid epsilon value: {epsilon}. Must be == 0.0 when PseudoInverseConfig is used."
-                )
-        elif not epsilon > 0.0:
-            raise ValueError(f"Invalid epsilon value: {epsilon}. Must be > 0.0.")
-        if not 0.0 <= momentum < 1.0:
-            raise ValueError(
-                f"Invalid momentum parameter: {momentum}. Must be [0.0, 1.0)."
-            )
-        if not 0.0 <= dampening < 1.0:
-            raise ValueError(
-                f"Invalid damping parameter: {dampening}. Must be [0.0, 1.0)."
-            )
-        if not weight_decay >= 0.0:
-            raise ValueError(
-                f"Invalid weight_decay value: {weight_decay}. Must be >= 0.0."
-            )
-        if (
-            isinstance(max_preconditioner_dim, float)
-            and max_preconditioner_dim != math.inf
-        ):
-            raise ValueError(
-                f"Invalid {max_preconditioner_dim=} value. Must be an integer or math.inf."
-            )
-        if not max_preconditioner_dim >= 1:
-            raise ValueError(
-                f"Invalid max preconditioner dimension: {max_preconditioner_dim}. Must be >= 1."
-            )
-        if not precondition_frequency >= 1:
-            raise ValueError(
-                f"Invalid precondition frequency: {precondition_frequency}. Must be >= 1."
-            )
-        if not start_preconditioning_step >= -1:
-            raise ValueError(
-                f"Invalid start preconditioning step: {start_preconditioning_step}. Must be >= -1."
-            )
-
-        if isinstance(preconditioner_config, SpectralDescentPreconditionerConfig):
-            # Warn about hyperparameters that won't have any effect.
-            logger.warning(
-                f"{betas[1]=} does not have any effect when SpectralDescentPreconditionerConfig is used."
-            )
-            logger.warning(
-                f"{epsilon=} does not have any effect when SpectralDescentPreconditionerConfig is used."
-            )
-            logger.warning(
-                f"{precondition_frequency=} does not have any effect when SpectralDescentPreconditionerConfig is used. Setting precondition_frequency to 1..."
-            )
-            precondition_frequency = 1
-
-        # Provide warning/error for start_preconditioning_step.
-        if start_preconditioning_step == -1:
-            start_preconditioning_step = precondition_frequency
-            logger.warning(
-                "start_preconditioning_step set to -1. Setting start_preconditioning_step equal to "
-                f"precondition frequency {precondition_frequency} by default."
-            )
-        if start_preconditioning_step < precondition_frequency:
-            raise ValueError(
-                f"Invalid start_preconditioning_step value: {start_preconditioning_step}. Must be >= {precondition_frequency=}."
-            )
-
-        # Warn when Nesterov is used but momentum is 0.
-        if use_nesterov and momentum == 0.0:
-            logger.warning(
-                "Nesterov flag is enabled but momentum parameter is zero! "
-                "Continuing without using momentum or Nesterov acceleration..."
-            )
-
         super().__init__(
             params,
             {
@@ -456,6 +355,124 @@ class DistributedShampoo(torch.optim.Optimizer):
                 PRECONDITIONER_CONFIG: preconditioner_config,
             },
         )
+
+        def param_group_hyperparameter_check(param_group: dict[str, Any]) -> None:
+            if not param_group[LR] >= 0.0:
+                raise ValueError(
+                    f"Invalid learning rate: {param_group[LR]}. Must be >= 0.0."
+                )
+            if not 0.0 <= param_group[BETAS][0] < 1.0:
+                raise ValueError(
+                    f"Invalid beta parameter at index 0: {param_group[BETAS][0]}. Must be in [0.0, 1.0)."
+                )
+            if not 0.0 <= param_group[BETAS][1] <= 1.0:
+                raise ValueError(
+                    f"Invalid beta parameter at index 1: {param_group[BETAS][1]}. Must be in [0.0, 1.0]."
+                )
+            if param_group[BETA3] == -1.0:
+                param_group[BETA3] = param_group[BETAS][0]
+            elif not 0.0 <= param_group[BETA3] < 1.0:
+                raise ValueError(
+                    f"Invalid beta3 parameter: {param_group[BETA3]}. Must be in [0.0, 1.0)."
+                )
+            if (
+                isinstance(
+                    param_group[PRECONDITIONER_CONFIG],
+                    AmortizedPreconditionerConfig,
+                )
+                and isinstance(
+                    param_group[PRECONDITIONER_CONFIG].amortized_computation_config,
+                    EigendecompositionConfig,
+                )
+                and isinstance(
+                    param_group[
+                        PRECONDITIONER_CONFIG
+                    ].amortized_computation_config.rank_deficient_stability_config,
+                    PseudoInverseConfig,
+                )
+            ):
+                if param_group[EPSILON] != 0.0:
+                    raise ValueError(
+                        f"Invalid epsilon value: {param_group[EPSILON]}. Must be == 0.0 when PseudoInverseConfig is used."
+                    )
+            elif not param_group[EPSILON] > 0.0:
+                raise ValueError(
+                    f"Invalid epsilon value: {param_group[EPSILON]}. Must be > 0.0."
+                )
+            if not 0.0 <= param_group[MOMENTUM] < 1.0:
+                raise ValueError(
+                    f"Invalid momentum parameter: {param_group[MOMENTUM]}. Must be [0.0, 1.0)."
+                )
+            if not 0.0 <= param_group[DAMPENING] < 1.0:
+                raise ValueError(
+                    f"Invalid damping parameter: {param_group[DAMPENING]}. Must be [0.0, 1.0)."
+                )
+            if not param_group[WEIGHT_DECAY] >= 0.0:
+                raise ValueError(
+                    f"Invalid weight_decay value: {param_group[WEIGHT_DECAY]}. Must be >= 0.0."
+                )
+            if (
+                isinstance(param_group[MAX_PRECONDITIONER_DIM], float)
+                and param_group[MAX_PRECONDITIONER_DIM] != math.inf
+            ):
+                raise ValueError(
+                    f"Invalid {param_group[MAX_PRECONDITIONER_DIM]=} value. Must be an integer or math.inf."
+                )
+            if not param_group[MAX_PRECONDITIONER_DIM] >= 1:
+                raise ValueError(
+                    f"Invalid max preconditioner dimension: {param_group[MAX_PRECONDITIONER_DIM]}. Must be >= 1."
+                )
+            if not param_group[PRECONDITION_FREQUENCY] >= 1:
+                raise ValueError(
+                    f"Invalid precondition frequency: {param_group[PRECONDITION_FREQUENCY]}. Must be >= 1."
+                )
+            if not param_group[START_PRECONDITIONING_STEP] >= -1:
+                raise ValueError(
+                    f"Invalid start preconditioning step: {param_group[START_PRECONDITIONING_STEP]}. Must be >= -1."
+                )
+
+            if isinstance(
+                param_group[PRECONDITIONER_CONFIG], SpectralDescentPreconditionerConfig
+            ):
+                # Warn about hyperparameters that won't have any effect.
+                logger.warning(
+                    f"{param_group[BETAS][1]=} does not have any effect when SpectralDescentPreconditionerConfig is used."
+                )
+                logger.warning(
+                    f"{param_group[EPSILON]=} does not have any effect when SpectralDescentPreconditionerConfig is used."
+                )
+                logger.warning(
+                    f"{param_group[PRECONDITION_FREQUENCY]=} does not have any effect when SpectralDescentPreconditionerConfig is used. Setting precondition_frequency to 1..."
+                )
+                param_group[PRECONDITION_FREQUENCY] = 1
+
+            # Provide warning/error for start_preconditioning_step.
+            if param_group[START_PRECONDITIONING_STEP] == -1:
+                param_group[START_PRECONDITIONING_STEP] = param_group[
+                    PRECONDITION_FREQUENCY
+                ]
+                logger.warning(
+                    f"start_preconditioning_step set to -1. Setting start_preconditioning_step equal to {param_group[PRECONDITION_FREQUENCY]=} by default."
+                )
+            if (
+                param_group[START_PRECONDITIONING_STEP]
+                < param_group[PRECONDITION_FREQUENCY]
+            ):
+                raise ValueError(
+                    f"Invalid start_preconditioning_step value: {param_group[START_PRECONDITIONING_STEP]}. Must be >= {param_group[PRECONDITION_FREQUENCY]=}."
+                )
+
+            # Warn when Nesterov is used but momentum is 0.
+            if param_group[USE_NESTEROV] and param_group[MOMENTUM] == 0.0:
+                logger.warning(
+                    "Nesterov flag is enabled but momentum parameter is zero! "
+                    "Continuing without using momentum or Nesterov acceleration..."
+                )
+
+        # Perform per param_group hyperparameter checks.
+        for i, param_group in enumerate(self.param_groups):
+            logging.info(f"Checking param_group {i} hyperparameters...")
+            param_group_hyperparameter_check(param_group=param_group)
 
         # Initialize pin memory option to remove sync point in memory copy.
         self._use_pin_memory: bool = use_pin_memory

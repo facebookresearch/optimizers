@@ -134,7 +134,7 @@ class DistributedShampooInitTest(unittest.TestCase):
             ),
             (
                 {"max_preconditioner_dim": 3.14},
-                "Invalid max_preconditioner_dim=3.14 value. Must be an integer or math.inf.",
+                "Invalid param_group[MAX_PRECONDITIONER_DIM]=3.14 value. Must be an integer or math.inf.",
             ),
             (
                 {"max_preconditioner_dim": 0},
@@ -150,7 +150,7 @@ class DistributedShampooInitTest(unittest.TestCase):
             ),
             (
                 {"start_preconditioning_step": 10, "precondition_frequency": 100},
-                "Invalid start_preconditioning_step value: 10. Must be >= precondition_frequency=100.",
+                "Invalid start_preconditioning_step value: 10. Must be >= param_group[PRECONDITION_FREQUENCY]=100.",
             ),
         ],
     )
@@ -190,9 +190,9 @@ class DistributedShampooInitTest(unittest.TestCase):
                     ),
                 },
                 [
-                    "betas[1]=0.999 does not have any effect when SpectralDescentPreconditionerConfig is used.",
-                    "epsilon=1e-08 does not have any effect when SpectralDescentPreconditionerConfig is used.",
-                    "precondition_frequency=100 does not have any effect when SpectralDescentPreconditionerConfig is used. Setting precondition_frequency to 1...",
+                    "param_group[BETAS][1]=0.999 does not have any effect when SpectralDescentPreconditionerConfig is used.",
+                    "param_group[EPSILON]=1e-08 does not have any effect when SpectralDescentPreconditionerConfig is used.",
+                    "param_group[PRECONDITION_FREQUENCY]=100 does not have any effect when SpectralDescentPreconditionerConfig is used. Setting precondition_frequency to 1...",
                 ],
             ),
         ],
