@@ -471,7 +471,7 @@ class DistributedShampoo(torch.optim.Optimizer):
 
         # Perform per param_group hyperparameter checks.
         for i, param_group in enumerate(self.param_groups):
-            logging.info(f"Checking param_group {i} hyperparameters...")
+            logger.info(f"Checking param_group {i} hyperparameters...")
             param_group_hyperparameter_check(param_group=param_group)
 
         # Initialize pin memory option to remove sync point in memory copy.
