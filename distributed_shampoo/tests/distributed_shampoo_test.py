@@ -157,17 +157,41 @@ class DistributedShampooInitTest(unittest.TestCase):
     def test_invalid_with_incorrect_hyperparameter_setting(
         self, incorrect_hyperparameter_setting: dict[str, Any], expected_error_msg: str
     ) -> None:
-        with self.subTest(
-            incorrect_hyperparameter_setting=incorrect_hyperparameter_setting,
-            expected_error_msg=expected_error_msg,
-        ):
+        # Test the incorrect hyperparameter setting in the default hyperparameter setting.
+        self.assertRaisesRegex(
+            ValueError,
+            re.escape(expected_error_msg),
+            DistributedShampoo,
+            self._model.parameters(),
+            **incorrect_hyperparameter_setting,
+        )
+
+        # Test the incorrect hyperparameter setting in the param_group setting.
+        with self.assertLogs(level="INFO") as cm:
             self.assertRaisesRegex(
                 ValueError,
                 re.escape(expected_error_msg),
                 DistributedShampoo,
-                self._model.parameters(),
-                **incorrect_hyperparameter_setting,
+                [
+                    {"params": []},  # param_group 0 is valid
+                    {
+                        "params": self._model.parameters(),
+                        **incorrect_hyperparameter_setting,  # We intentionally let param_group 1 fail to test error detection
+                    },
+                    {"params": []},  # param_group 2 is valid
+                ],
             )
+
+            msgs = [r.msg for r in cm.records if r.levelname == "INFO"]
+
+        self.assertEqual(
+            msgs,
+            [
+                "Checking param_group 0 hyperparameters...",
+                "Checking param_group 1 hyperparameters...",
+                # We don't see param_group 2 message because validation stops after finding the first invalid param_group
+            ],
+        )
 
     @parametrize(
         "noop_hyperparameter_setting, expected_warning_msgs",
