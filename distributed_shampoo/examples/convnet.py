@@ -15,20 +15,6 @@ import torch
 from torch import nn
 
 
-def infer_conv_output_shape(
-    input_shape: list[int], kernel_size: int, stride: int, padding: int
-) -> list[int]:
-    output_shape = []
-    for input_length in input_shape:
-        output_length = (input_length - kernel_size + 2 * padding) / stride + 1
-        if not output_length.is_integer():
-            raise ValueError(
-                f"Stride {stride} is not compatible with input shape {input_shape}, kernel size {kernel_size} and padding {padding}!"
-            )
-        output_shape.append(int(output_length))
-    return output_shape
-
-
 class ConvNet(nn.Module):
     """Simple two-layer convolutional network for image classification.
     Takes in image represented by an order-3 tensor. Used for testing optimizers.
@@ -45,8 +31,8 @@ class ConvNet(nn.Module):
         self.activation = nn.ReLU()
         self.linear = nn.Linear(
             math.prod(
-                infer_conv_output_shape(
-                    [height, width], kernel_size=3, stride=1, padding=1
+                ConvNet._infer_conv_output_shape(
+                    input_shape=[height, width], kernel_size=3, stride=1, padding=1
                 )
             )
             * 64,
@@ -55,3 +41,17 @@ class ConvNet(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.linear(torch.flatten(self.activation(self.conv(x)), 1))
+
+    @staticmethod
+    def _infer_conv_output_shape(
+        input_shape: list[int], kernel_size: int, stride: int, padding: int
+    ) -> list[int]:
+        output_shape = []
+        for input_length in input_shape:
+            output_length = (input_length - kernel_size + 2 * padding) / stride + 1
+            if not output_length.is_integer():
+                raise ValueError(
+                    f"Stride {stride} is not compatible with input shape {input_shape}, kernel size {kernel_size} and padding {padding}!"
+                )
+            output_shape.append(int(output_length))
+        return output_shape
