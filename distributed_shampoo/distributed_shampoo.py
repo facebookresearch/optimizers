@@ -44,6 +44,7 @@ from distributed_shampoo.preconditioner.shampoo_preconditioner_list import (
     PreconditionerList,
     RootInvShampooPreconditionerList,
     SGDPreconditionerList,
+    SignDescentPreconditionerList,
     SpectralDescentPreconditionerList,
 )
 
@@ -91,6 +92,7 @@ from distributed_shampoo.shampoo_types import (
     SGDGraftingConfig,
     SHAMPOO_PRECONDITIONER_LIST,
     ShampooPT2CompileConfig,
+    SignDescentPreconditionerConfig,
     SingleDeviceDistributedConfig,
     SpectralDescentPreconditionerConfig,
     START_PRECONDITIONING_STEP,
@@ -432,17 +434,19 @@ class DistributedShampoo(torch.optim.Optimizer):
                 )
 
             if isinstance(
-                param_group[PRECONDITIONER_CONFIG], SpectralDescentPreconditionerConfig
+                param_group[PRECONDITIONER_CONFIG],
+                (SignDescentPreconditionerConfig, SpectralDescentPreconditionerConfig),
             ):
+                preconditioner_config_name = param_group[PRECONDITIONER_CONFIG].__name__
                 # Warn about hyperparameters that won't have any effect.
                 logger.warning(
-                    f"{param_group[BETAS][1]=} does not have any effect when SpectralDescentPreconditionerConfig is used."
+                    f"{param_group[BETAS][1]=} does not have any effect when {preconditioner_config_name} is used."
                 )
                 logger.warning(
-                    f"{param_group[EPSILON]=} does not have any effect when SpectralDescentPreconditionerConfig is used."
+                    f"{param_group[EPSILON]=} does not have any effect when {preconditioner_config_name} is used."
                 )
                 logger.warning(
-                    f"{param_group[PRECONDITION_FREQUENCY]=} does not have any effect when SpectralDescentPreconditionerConfig is used. Setting precondition_frequency to 1..."
+                    f"{param_group[PRECONDITION_FREQUENCY]=} does not have any effect when {preconditioner_config_name} is used. Setting precondition_frequency to 1..."
                 )
                 param_group[PRECONDITION_FREQUENCY] = 1
 
@@ -590,6 +594,8 @@ class DistributedShampoo(torch.optim.Optimizer):
                             use_bias_correction=group[USE_BIAS_CORRECTION],
                         )
                     )
+                case SignDescentPreconditionerConfig():
+                    preconditioner_list_cls = SignDescentPreconditionerList
                 case SpectralDescentPreconditionerConfig():
                     assert (
                         group[DISTRIBUTED_CONFIG].target_parameter_dimensionality == 2
