@@ -414,6 +414,136 @@ def matrix_eigendecomposition(
         NotImplementedError: If the eigendecomposition config is not implemented.
 
     """
+
+    def eigh_eigenvalue_decomposition(
+        A: Tensor,
+        retry_double_precision: bool = True,
+        eigendecomposition_offload_device: str = "",
+    ) -> tuple[Tensor, Tensor]:
+        """Compute the eigendecomposition of a symmetric matrix using torch.linalg.eigh.
+
+        Args:
+            A (Tensor): The input symmetric matrix.
+            retry_double_precision (bool): Whether to retry the computation in double precision if it fails in the current precision. (Default: True)
+            eigendecomposition_offload_device (str): Device to offload eigendecomposition computation. If value is empty string, do not perform offloading. (Default: "")
+
+        Returns:
+            eigenvalues (Tensor): The eigenvalues of the input matrix A.
+            eigenvectors (Tensor): The eigenvectors of the input matrix A.
+
+        Raises:
+            Exception: If the eigendecomposition fails and retry_double_precision is False or fails in double precision.
+
+        """
+        # Create a function that will convert tensors back to the original device and dtype of A
+        # This is used at the end to ensure the returned tensors match the input specifications
+        restore_original_format = partial(Tensor.to, device=A.device, dtype=A.dtype)
+
+        if eigendecomposition_offload_device != "":
+            A = A.to(device=eigendecomposition_offload_device)
+
+        try:
+            # Attempt to compute the eigendecomposition in the current precision
+            L, Q = torch.linalg.eigh(A)
+
+        except Exception as exception:
+            # If the computation fails and retry_double_precision is True, retry in double precision
+            # Higher precision can help with numerical stability issues
+            if retry_double_precision and A.dtype != torch.float64:
+                logger.warning(
+                    f"Failed to compute eigendecomposition in {A.dtype} precision with exception {exception}! Retrying in double precision..."
+                )
+                L, Q = torch.linalg.eigh(A.double())
+            else:
+                # If retry_double_precision is False or the computation fails in double precision, raise the exception
+                raise exception
+
+        # Convert the results back to the original device and dtype before returning
+        # This ensures consistency with the input tensor's specifications
+        return restore_original_format(L), restore_original_format(Q)
+
+    def eigenvalues_estimate_criterion_below_or_equal_tolerance(
+        eigenvalues_estimate: Tensor, tolerance: float
+    ) -> bool:
+        """Evaluates if a criterion using estimated eigenvalues is below or equal to the tolerance.
+
+        Let Q^T A Q =: B be the estimate of the eigenvalues of the matrix A, where Q is the matrix containing the last computed eigenvectors.
+        The criterion based on the estimated eigenvalues is defined as ||B - diag(B)||_F <= tolerance * ||B||_F.
+        The tolerance hyperparameter should therefore be in the interval [0.0, 1.0].
+
+        This convergence criterion can be motivated by considering A' = Q diag(B) Q^T as an approximation of A.
+        We have ||A - A'||_F = ||A - Q diag(B) Q^T||_F = ||Q^T A Q - diag(B)||_F = ||B - diag(B)||_F.
+        Moreover, we have ||B||_F = ||Q^T A Q||_F = ||A||_F.
+        Hence, the two relative errors are also equivalent: ||A - A'||_F / ||A||_F = ||B - diag(B)||_F / ||B||_F.
+
+        Args:
+            eigenvalues_estimate (Tensor): The estimated eigenvalues.
+            tolerance (float): The tolerance for the criterion.
+
+        Returns:
+            is_below_tolerance (bool): True if the criterion is below or equal to the tolerance, False otherwise.
+
+        """
+        norm = torch.linalg.norm(eigenvalues_estimate)
+        diagonal_norm = torch.linalg.norm(eigenvalues_estimate.diag())
+        off_diagonal_norm = torch.sqrt(norm**2 - diagonal_norm**2)
+        return bool(off_diagonal_norm <= tolerance * norm)
+
+    def qr_algorithm(
+        A: Tensor,
+        eigenvectors_estimate: Tensor,
+        max_iterations: int = 1,
+        tolerance: float = 0.01,
+    ) -> tuple[Tensor, Tensor]:
+        """Approximately compute the eigendecomposition of a symmetric matrix by performing the QR algorithm.
+
+        Given an initial estimate of the eigenvectors Q of matrix A, QR iterations are performed until the criterion based on the estimated eigenvalues is below or equal to the specified tolerance or until the maximum number of iterations is reached.
+
+        Note that if the criterion based on the estimated eigenvalues is already below or equal to the tolerance given the initial eigenvectors_estimate, the QR iterations will be skipped.
+
+        Args:
+            A (Tensor): The symmetric input matrix.
+            eigenvectors_estimate (Tensor): The current estimate of the eigenvectors of A.
+            max_iterations (int): The maximum number of iterations to perform. (Default: 1)
+            tolerance (float): The tolerance for determining convergence in terms of the norm of the off-diagonal elements of the eigenvalue estimate.
+                (Default: 0.01)
+
+        Returns:
+            eigenvalues_estimate (Tensor): The estimated eigenvalues of the input matrix A.
+            eigenvectors_estimate (Tensor): The estimated eigenvectors of the input matrix A.
+
+        Raises:
+            AssertionError: If the data types of Q and A do not match.
+
+        """
+        # Perform orthogonal/simultaneous iterations (QR algorithm).
+        Q = eigenvectors_estimate
+
+        # This assertion provides a more clear error message than the internal error message in `torch.mm`, and assertion makes sure that user-side is unable to catch the error.
+        assert (
+            Q.dtype == A.dtype
+        ), f"Q and A must have the same dtype! {Q.dtype=} {A.dtype=}"
+
+        eigenvalues_estimate = Q.T @ A @ Q
+        iteration = 0
+        # NOTE: This will skip the QR iterations if the criterion is already below or equal to the tolerance given the initial eigenvectors_estimate.
+        while (
+            iteration < max_iterations
+            and not eigenvalues_estimate_criterion_below_or_equal_tolerance(
+                eigenvalues_estimate, tolerance
+            )
+        ):
+            Q, R = torch.linalg.qr(eigenvalues_estimate)
+            eigenvalues_estimate = R @ Q
+            eigenvectors_estimate = eigenvectors_estimate @ Q
+            iteration += 1
+
+        # Ensure consistent ordering of estimated eigenvalues and eigenvectors.
+        eigenvalues_estimate, indices = eigenvalues_estimate.diag().sort(stable=True)
+        eigenvectors_estimate = eigenvectors_estimate[:, indices]
+
+        return eigenvalues_estimate, eigenvectors_estimate
+
     # TODO: reduce redundant code when rank_deficient_stability_config is generalized to all methods
     # check epsilon is 0 when using pseudo-inverse
     if (
@@ -450,164 +580,32 @@ def matrix_eigendecomposition(
                 eigenvalues_estimate = (
                     eigenvectors_estimate.T @ A_ridge @ eigenvectors_estimate
                 )
-                if _eigenvalues_estimate_criterion_below_or_equal_tolerance(
-                    eigenvalues_estimate,
-                    eigendecomposition_config.tolerance,
+                if eigenvalues_estimate_criterion_below_or_equal_tolerance(
+                    eigenvalues_estimate=eigenvalues_estimate,
+                    tolerance=eigendecomposition_config.tolerance,
                 ):
                     return eigenvalues_estimate.diag(), eigenvectors_estimate
-            return _eigh_eigenvalue_decomposition(
-                A_ridge,
+            return eigh_eigenvalue_decomposition(
+                A=A_ridge,
                 **_get_function_args_from_config(
-                    _eigh_eigenvalue_decomposition, eigendecomposition_config
+                    eigh_eigenvalue_decomposition, eigendecomposition_config
                 ),
             )
         case QREigendecompositionConfig():
             assert (
                 eigenvectors_estimate is not None
             ), "eigenvectors_estimate should not be None when QR algorithm is used."
-            return _qr_algorithm(
-                A_ridge,
-                eigenvectors_estimate,
+            return qr_algorithm(
+                A=A_ridge,
+                eigenvectors_estimate=eigenvectors_estimate,
                 **_get_function_args_from_config(
-                    _qr_algorithm, eigendecomposition_config
+                    qr_algorithm, eigendecomposition_config
                 ),
             )
         case _:
             raise NotImplementedError(
                 f"Eigendecomposition config is not implemented! Specified eigendecomposition config is {type(eigendecomposition_config).__name__}."
             )
-
-
-def _eigh_eigenvalue_decomposition(
-    A: Tensor,
-    retry_double_precision: bool = True,
-    eigendecomposition_offload_device: str = "",
-) -> tuple[Tensor, Tensor]:
-    """Compute the eigendecomposition of a symmetric matrix using torch.linalg.eigh.
-
-    Args:
-        A (Tensor): The input symmetric matrix.
-        retry_double_precision (bool): Whether to retry the computation in double precision if it fails in the current precision. (Default: True)
-        eigendecomposition_offload_device (str): Device to offload eigendecomposition computation. If value is empty string, do not perform offloading. (Default: "")
-
-    Returns:
-        eigenvalues (Tensor): The eigenvalues of the input matrix A.
-        eigenvectors (Tensor): The eigenvectors of the input matrix A.
-
-    Raises:
-        Exception: If the eigendecomposition fails and retry_double_precision is False or fails in double precision.
-
-    """
-    # Create a function that will convert tensors back to the original device and dtype of A
-    # This is used at the end to ensure the returned tensors match the input specifications
-    restore_original_format = partial(Tensor.to, device=A.device, dtype=A.dtype)
-
-    if eigendecomposition_offload_device != "":
-        A = A.to(device=eigendecomposition_offload_device)
-
-    try:
-        # Attempt to compute the eigendecomposition in the current precision
-        L, Q = torch.linalg.eigh(A)
-
-    except Exception as exception:
-        # If the computation fails and retry_double_precision is True, retry in double precision
-        # Higher precision can help with numerical stability issues
-        if retry_double_precision and A.dtype != torch.float64:
-            logger.warning(
-                f"Failed to compute eigendecomposition in {A.dtype} precision with exception {exception}! Retrying in double precision..."
-            )
-            L, Q = torch.linalg.eigh(A.double())
-        else:
-            # If retry_double_precision is False or the computation fails in double precision, raise the exception
-            raise exception
-
-    # Convert the results back to the original device and dtype before returning
-    # This ensures consistency with the input tensor's specifications
-    return restore_original_format(L), restore_original_format(Q)
-
-
-def _eigenvalues_estimate_criterion_below_or_equal_tolerance(
-    eigenvalues_estimate: Tensor, tolerance: float
-) -> bool:
-    """Evaluates if a criterion using estimated eigenvalues is below or equal to the tolerance.
-
-    Let Q^T A Q =: B be the estimate of the eigenvalues of the matrix A, where Q is the matrix containing the last computed eigenvectors.
-    The criterion based on the estimated eigenvalues is defined as ||B - diag(B)||_F <= tolerance * ||B||_F.
-    The tolerance hyperparameter should therefore be in the interval [0.0, 1.0].
-
-    This convergence criterion can be motivated by considering A' = Q diag(B) Q^T as an approximation of A.
-    We have ||A - A'||_F = ||A - Q diag(B) Q^T||_F = ||Q^T A Q - diag(B)||_F = ||B - diag(B)||_F.
-    Moreover, we have ||B||_F = ||Q^T A Q||_F = ||A||_F.
-    Hence, the two relative errors are also equivalent: ||A - A'||_F / ||A||_F = ||B - diag(B)||_F / ||B||_F.
-
-    Args:
-        eigenvalues_estimate (Tensor): The estimated eigenvalues.
-        tolerance (float): The tolerance for the criterion.
-
-    Returns:
-        is_below_tolerance (bool): True if the criterion is below or equal to the tolerance, False otherwise.
-
-    """
-    norm = torch.linalg.norm(eigenvalues_estimate)
-    diagonal_norm = torch.linalg.norm(eigenvalues_estimate.diag())
-    off_diagonal_norm = torch.sqrt(norm**2 - diagonal_norm**2)
-    return bool(off_diagonal_norm <= tolerance * norm)
-
-
-def _qr_algorithm(
-    A: Tensor,
-    eigenvectors_estimate: Tensor,
-    max_iterations: int = 1,
-    tolerance: float = 0.01,
-) -> tuple[Tensor, Tensor]:
-    """Approximately compute the eigendecomposition of a symmetric matrix by performing the QR algorithm.
-
-    Given an initial estimate of the eigenvectors Q of matrix A, QR iterations are performed until the criterion based on the estimated eigenvalues is below or equal to the specified tolerance or until the maximum number of iterations is reached.
-
-    Note that if the criterion based on the estimated eigenvalues is already below or equal to the tolerance given the initial eigenvectors_estimate, the QR iterations will be skipped.
-
-    Args:
-        A (Tensor): The symmetric input matrix.
-        eigenvectors_estimate (Tensor): The current estimate of the eigenvectors of A.
-        max_iterations (int): The maximum number of iterations to perform. (Default: 1)
-        tolerance (float): The tolerance for determining convergence in terms of the norm of the off-diagonal elements of the eigenvalue estimate.
-            (Default: 0.01)
-
-    Returns:
-        eigenvalues_estimate (Tensor): The estimated eigenvalues of the input matrix A.
-        eigenvectors_estimate (Tensor): The estimated eigenvectors of the input matrix A.
-
-    Raises:
-        AssertionError: If the data types of Q and A do not match.
-
-    """
-    # Perform orthogonal/simultaneous iterations (QR algorithm).
-    Q = eigenvectors_estimate
-
-    # This assertion provides a more clear error message than the internal error message in `torch.mm`, and assertion makes sure that user-side is unable to catch the error.
-    assert (
-        Q.dtype == A.dtype
-    ), f"Q and A must have the same dtype! {Q.dtype=} {A.dtype=}"
-
-    eigenvalues_estimate = Q.T @ A @ Q
-    iteration = 0
-    # NOTE: This will skip the QR iterations if the criterion is already below or equal to the tolerance given the initial eigenvectors_estimate.
-    while (
-        iteration < max_iterations
-        and not _eigenvalues_estimate_criterion_below_or_equal_tolerance(
-            eigenvalues_estimate, tolerance
-        )
-    ):
-        Q, R = torch.linalg.qr(eigenvalues_estimate)
-        eigenvalues_estimate = R @ Q
-        eigenvectors_estimate = eigenvectors_estimate @ Q
-        iteration += 1
-
-    # Ensure consistent ordering of estimated eigenvalues and eigenvectors.
-    eigenvalues_estimate, indices = eigenvalues_estimate.diag().sort(stable=True)
-    eigenvectors_estimate = eigenvectors_estimate[:, indices]
-
-    return eigenvalues_estimate, eigenvectors_estimate
 
 
 def _matrix_inverse_root_newton(
