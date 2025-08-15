@@ -24,7 +24,6 @@ See the [CONTRIBUTING](CONTRIBUTING.md) file for how to help out.
 Optimizers is released under the [BSD license](LICENSE).
 
 ## Installation and Dependencies
-This code requires `python>=3.12` and `torch>=2.7.0`.
 Install `distributed_shampoo` with all dependencies:
 ```bash
 git clone git@github.com:facebookresearch/optimizers.git
