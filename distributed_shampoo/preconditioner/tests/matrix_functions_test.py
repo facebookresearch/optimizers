@@ -18,15 +18,12 @@ from types import ModuleType
 from typing import Any
 from unittest import mock
 
-import numpy as np
-
 import torch
 
 from distributed_shampoo.preconditioner import matrix_functions
 from distributed_shampoo.preconditioner.matrix_functions import (
     _check_2d_tensor,
     _check_square_matrix,
-    _matrix_inverse_root_eigen,
     _matrix_inverse_root_newton,
     _matrix_perturbation,
     matrix_eigendecomposition,
@@ -38,6 +35,7 @@ from distributed_shampoo.preconditioner.matrix_functions import (
 from distributed_shampoo.preconditioner.matrix_functions_types import (
     CoupledHigherOrderConfig,
     CoupledNewtonConfig,
+    DefaultEigenConfig,
     EigenConfig,
     EigendecompositionConfig,
     EighEigendecompositionConfig,
@@ -405,17 +403,16 @@ class EigenRootTest(unittest.TestCase):
         root: int,
         epsilon: float,
         tolerance: float,
-        eig_sols: Callable[[int], Tensor],
     ) -> None:
-        X, L, _ = _matrix_inverse_root_eigen(
+        X = matrix_inverse_root(
             A=A(n),
             root=Fraction(root),
+            root_inv_config=DefaultEigenConfig,
             epsilon=epsilon,
         )
         abs_error = torch.dist(torch.linalg.matrix_power(X, -root), A(n), p=torch.inf)
         A_norm = torch.linalg.norm(A(n), ord=torch.inf)
         rel_error = abs_error / torch.maximum(torch.tensor(1.0), A_norm)
-        torch.testing.assert_close(L, eig_sols(n))
         self.assertLessEqual(rel_error.item(), tolerance)
 
     @parametrize("root", [1, 2, 4, 8])
@@ -427,7 +424,6 @@ class EigenRootTest(unittest.TestCase):
             root=root,
             epsilon=0.0,
             tolerance=1e-6,
-            eig_sols=torch.ones,
         )
 
     @parametrize("alpha, beta", feasible_alpha_beta_pairs)
@@ -436,13 +432,6 @@ class EigenRootTest(unittest.TestCase):
     def test_eigen_root_tridiagonal(
         self, n: int, root: int, alpha: float, beta: float
     ) -> None:
-        def eig_sols_tridiagonal_1(n: int, alpha: float, beta: float) -> Tensor:
-            eigs = alpha * torch.ones(n) + 2 * beta * torch.tensor(
-                [np.cos(j * torch.pi / n) for j in range(n)], dtype=torch.float
-            )
-            eigs, _ = torch.sort(eigs)
-            return eigs
-
         def A_tridiagonal_1(n: int, alpha: float, beta: float) -> Tensor:
             diag = alpha * torch.ones(n)
             diag[0] += beta
@@ -460,16 +449,7 @@ class EigenRootTest(unittest.TestCase):
             root=root,
             epsilon=0.0,
             tolerance=1e-4,
-            eig_sols=partial(eig_sols_tridiagonal_1, alpha=alpha, beta=beta),
         )
-
-        def eig_sols_tridiagonal_2(n: int, alpha: float, beta: float) -> Tensor:
-            eigs = alpha * torch.ones(n) + 2 * beta * torch.tensor(
-                [np.cos(2 * j * torch.pi / (2 * n + 1)) for j in range(1, n + 1)],
-                dtype=torch.float,
-            )
-            eigs, _ = torch.sort(eigs)
-            return eigs
 
         def A_tridiagonal_2(n: int, alpha: float, beta: float) -> Tensor:
             diag = alpha * torch.ones(n)
@@ -487,7 +467,6 @@ class EigenRootTest(unittest.TestCase):
             root=root,
             epsilon=0.0,
             tolerance=1e-4,
-            eig_sols=partial(eig_sols_tridiagonal_2, alpha=alpha, beta=beta),
         )
 
     def test_eigen_root_nonfull_rank(self) -> None:

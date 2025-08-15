@@ -276,14 +276,77 @@ def matrix_inverse_root(
         NotImplementedError: If the root inverse config is not implemented.
 
     """
+
+    def matrix_inverse_root_eigen(
+        A: Tensor,
+        root: Fraction,
+        epsilon: float = 0.0,
+        rank_deficient_stability_config: RankDeficientStabilityConfig = DefaultPerturbationConfig,
+        retry_double_precision: bool = True,
+        eigendecomposition_offload_device: str = "",
+    ) -> tuple[Tensor, Tensor, Tensor]:
+        """Compute matrix inverse root using eigendecomposition of symmetric positive (semi-)definite matrix.
+
+                A^{-1/r} = Q L^{-1/r} Q^T
+
+        Assumes matrix A is symmetric.
+
+        Args:
+            A (Tensor): Square matrix of interest.
+            root (Fraction): Root of interest. Any rational number.
+            epsilon (float): Adds epsilon * I to matrix before taking matrix root. (Default: 0.0)
+            rank_deficient_stability_config (RankDeficientStabilityConfig): Configuration for handling/stabilizing rank-deficient matrices. (Default: DefaultPerturbationConfig)
+            retry_double_precision (bool): Flag for retrying eigendecomposition with higher precision if lower precision fails due
+                to CuSOLVER failure. (Default: True)
+            eigendecomposition_offload_device (str): Device to offload eigendecomposition computation. If value is empty string, do not perform offloading. (Default: "")
+
+        Returns:
+            X (Tensor): (Inverse) root of matrix. Same dimensions as A.
+            L (Tensor): Eigenvalues of A.
+            Q (Tensor): Orthogonal matrix consisting of eigenvectors of A.
+
+        Raises:
+            ValueError: If the root is not a positive integer.
+            ValueError: If epsilon is 0.0 when using pseudo-inverse.
+
+        """
+
+        # check if root is positive integer
+        if root <= 0:
+            raise ValueError(f"Root {root} should be positive!")
+
+        # compute eigendecomposition and compute minimum eigenvalue
+        L, Q = matrix_eigendecomposition(
+            A=A,
+            epsilon=epsilon,
+            eigendecomposition_config=EighEigendecompositionConfig(
+                rank_deficient_stability_config=rank_deficient_stability_config,
+                retry_double_precision=retry_double_precision,
+                eigendecomposition_offload_device=eigendecomposition_offload_device,
+                tolerance=0.0,
+            ),
+        )
+
+        inv_power_L = stabilize_and_pow_eigenvalues(
+            L=L,
+            root=root,
+            epsilon=epsilon,
+            rank_deficient_stability_config=rank_deficient_stability_config,
+        )
+
+        # compute the matrix inverse root
+        X = Q * inv_power_L.unsqueeze(0) @ Q.T
+
+        return X, L, Q
+
     match root_inv_config:
         case EigenConfig():
-            X, _, _ = _matrix_inverse_root_eigen(
+            X, _, _ = matrix_inverse_root_eigen(
                 A=A,
                 root=root,
                 epsilon=epsilon,
                 **_get_function_args_from_config(
-                    _matrix_inverse_root_eigen, root_inv_config
+                    matrix_inverse_root_eigen, root_inv_config
                 ),
             )
         case CoupledNewtonConfig():
@@ -545,69 +608,6 @@ def _qr_algorithm(
     eigenvectors_estimate = eigenvectors_estimate[:, indices]
 
     return eigenvalues_estimate, eigenvectors_estimate
-
-
-def _matrix_inverse_root_eigen(
-    A: Tensor,
-    root: Fraction,
-    epsilon: float = 0.0,
-    rank_deficient_stability_config: RankDeficientStabilityConfig = DefaultPerturbationConfig,
-    retry_double_precision: bool = True,
-    eigendecomposition_offload_device: str = "",
-) -> tuple[Tensor, Tensor, Tensor]:
-    """Compute matrix inverse root using eigendecomposition of symmetric positive (semi-)definite matrix.
-
-            A^{-1/r} = Q L^{-1/r} Q^T
-
-    Assumes matrix A is symmetric.
-
-    Args:
-        A (Tensor): Square matrix of interest.
-        root (Fraction): Root of interest. Any rational number.
-        epsilon (float): Adds epsilon * I to matrix before taking matrix root. (Default: 0.0)
-        rank_deficient_stability_config (RankDeficientStabilityConfig): Configuration for handling/stabilizing rank-deficient matrices. (Default: DefaultPerturbationConfig)
-        retry_double_precision (bool): Flag for retrying eigendecomposition with higher precision if lower precision fails due
-            to CuSOLVER failure. (Default: True)
-        eigendecomposition_offload_device (str): Device to offload eigendecomposition computation. If value is empty string, do not perform offloading. (Default: "")
-
-    Returns:
-        X (Tensor): (Inverse) root of matrix. Same dimensions as A.
-        L (Tensor): Eigenvalues of A.
-        Q (Tensor): Orthogonal matrix consisting of eigenvectors of A.
-
-    Raises:
-        ValueError: If the root is not a positive integer.
-        ValueError: If epsilon is 0.0 when using pseudo-inverse.
-
-    """
-
-    # check if root is positive integer
-    if root <= 0:
-        raise ValueError(f"Root {root} should be positive!")
-
-    # compute eigendecomposition and compute minimum eigenvalue
-    L, Q = matrix_eigendecomposition(
-        A=A,
-        epsilon=epsilon,
-        eigendecomposition_config=EighEigendecompositionConfig(
-            rank_deficient_stability_config=rank_deficient_stability_config,
-            retry_double_precision=retry_double_precision,
-            eigendecomposition_offload_device=eigendecomposition_offload_device,
-            tolerance=0.0,
-        ),
-    )
-
-    inv_power_L = stabilize_and_pow_eigenvalues(
-        L,
-        root,
-        epsilon=epsilon,
-        rank_deficient_stability_config=rank_deficient_stability_config,
-    )
-
-    # compute the matrix inverse root
-    X = Q * inv_power_L.unsqueeze(0) @ Q.T
-
-    return X, L, Q
 
 
 def _matrix_inverse_root_newton(
