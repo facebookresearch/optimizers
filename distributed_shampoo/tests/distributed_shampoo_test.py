@@ -28,6 +28,7 @@ from distributed_shampoo.shampoo_types import (
     AdaGradGraftingConfig,
     DefaultEigenvalueCorrectedShampooConfig,
     DefaultShampooConfig,
+    DefaultSignDescentPreconditionerConfig,
     DefaultSingleDeviceDistributedConfig,
     DefaultSpectralDescentPreconditionerConfig,
     DistributedConfig,
@@ -39,6 +40,7 @@ from distributed_shampoo.shampoo_types import (
     PreconditionerConfig,
     RootInvShampooPreconditionerConfig,
     ShampooPT2CompileConfig,
+    SignDescentPreconditionerConfig,
     SingleDeviceDistributedConfig,
     SpectralDescentPreconditionerConfig,
 )
@@ -217,6 +219,19 @@ class DistributedShampooInitTest(unittest.TestCase):
                     "param_group[BETAS][1]=0.999 does not have any effect when SpectralDescentPreconditionerConfig is used.",
                     "param_group[EPSILON]=1e-08 does not have any effect when SpectralDescentPreconditionerConfig is used.",
                     "param_group[PRECONDITION_FREQUENCY]=100 does not have any effect when SpectralDescentPreconditionerConfig is used. Setting precondition_frequency to 1...",
+                ],
+            ),
+            (
+                {
+                    "betas": (0.9, 0.999),
+                    "epsilon": 1e-8,
+                    "precondition_frequency": 100,
+                    "preconditioner_config": DefaultSignDescentPreconditionerConfig,
+                },
+                [
+                    "param_group[BETAS][1]=0.999 does not have any effect when SignDescentPreconditionerConfig is used.",
+                    "param_group[EPSILON]=1e-08 does not have any effect when SignDescentPreconditionerConfig is used.",
+                    "param_group[PRECONDITION_FREQUENCY]=100 does not have any effect when SignDescentPreconditionerConfig is used. Setting precondition_frequency to 1...",
                 ],
             ),
         ],
@@ -1169,6 +1184,12 @@ class SpectralDescentDistributedStateDictTest(
                 }
             },
         }
+
+
+class SignDescentDistributedStateDictTest(SpectralDescentDistributedStateDictTest):
+    @property
+    def _preconditioner_config(self) -> SignDescentPreconditionerConfig:
+        return DefaultSignDescentPreconditionerConfig
 
 
 class DistributedShampooNoneGradTest(unittest.TestCase):
