@@ -35,6 +35,7 @@ from distributed_shampoo.preconditioner.matrix_functions_types import (
 from distributed_shampoo.shampoo_types import (
     AmortizedPreconditionerConfig,
     PreconditionerValueError,
+    SignDescentPreconditionerConfig,
     SpectralDescentPreconditionerConfig,
 )
 from distributed_shampoo.utils.dict_zip_iterator import DictZipIterator
@@ -160,6 +161,45 @@ class SGDPreconditionerList(PreconditionerList):
 
     def precondition(self, masked_grad_list: tuple[Tensor, ...]) -> tuple[Tensor, ...]:
         return masked_grad_list
+
+    def compress_preconditioner_list(
+        self, local_grad_selector: tuple[bool, ...]
+    ) -> None:
+        return
+
+
+class SignDescentPreconditionerList(PreconditionerList):
+    """Preconditioner list for sign descent.
+
+    Args:
+        block_list (tuple[Tensor, ...]): List of (blocks of) parameters.
+        preconditioner_config (SignDescentPreconditionerConfig): Configuration for sign descent.
+
+    """
+
+    def __init__(
+        self,
+        block_list: tuple[Tensor, ...],
+        preconditioner_config: SignDescentPreconditionerConfig,
+    ) -> None:
+        super().__init__(block_list)
+        self._preconditioner_config = preconditioner_config
+
+    @_profile_decorator
+    def update_preconditioners(
+        self,
+        masked_grad_list: tuple[Tensor, ...],
+        step: Tensor,
+        perform_amortized_computation: bool = False,
+    ) -> None:
+        return
+
+    @_profile_decorator
+    def precondition(self, masked_grad_list: tuple[Tensor, ...]) -> tuple[Tensor, ...]:
+        return tuple(
+            torch.sign(grad).mul_(self._preconditioner_config.scale_fn(grad))
+            for grad in masked_grad_list
+        )
 
     def compress_preconditioner_list(
         self, local_grad_selector: tuple[bool, ...]

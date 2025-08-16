@@ -9,6 +9,7 @@ LICENSE file in the root directory of this source tree.
 
 import enum
 import math
+from collections.abc import Callable
 from dataclasses import dataclass, field, make_dataclass
 from inspect import signature
 from typing import Any
@@ -28,6 +29,7 @@ from distributed_shampoo.preconditioner.matrix_functions_types import (
 )
 
 from distributed_shampoo.utils.abstract_dataclass import AbstractDataclass
+from torch import Tensor
 from torch.distributed.device_mesh import DeviceMesh
 from torch.distributed.fsdp import ShardingStrategy
 from torch.nn.parameter import Parameter
@@ -437,6 +439,25 @@ class SpectralDescentPreconditionerConfig(PreconditionerConfig):
 
 
 DefaultSpectralDescentPreconditionerConfig = SpectralDescentPreconditionerConfig()
+
+
+@dataclass(kw_only=True)
+class SignDescentPreconditionerConfig(PreconditionerConfig):
+    """Configuration for sign descent in DistributedShampoo.
+
+    Example for scale_fn to implement steepest descent under L-infinity norm:
+        scale_fn = lambda grad: grad.abs().sum()
+
+    Attributes:
+        scale_fn (Callable[[Tensor], float | Tensor]): Function to scale the sign update based on the gradient tensor.
+            (Default: lambda grad: 1.0)
+
+    """
+
+    scale_fn: Callable[[Tensor], float | Tensor] = lambda grad: 1.0
+
+
+DefaultSignDescentPreconditionerConfig = SignDescentPreconditionerConfig()
 
 
 @dataclass

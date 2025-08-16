@@ -28,6 +28,7 @@ from distributed_shampoo.shampoo_types import (
     AdaGradGraftingConfig,
     DefaultEigenvalueCorrectedShampooConfig,
     DefaultShampooConfig,
+    DefaultSignDescentPreconditionerConfig,
     DefaultSingleDeviceDistributedConfig,
     DefaultSpectralDescentPreconditionerConfig,
     DistributedConfig,
@@ -39,6 +40,7 @@ from distributed_shampoo.shampoo_types import (
     PreconditionerConfig,
     RootInvShampooPreconditionerConfig,
     ShampooPT2CompileConfig,
+    SignDescentPreconditionerConfig,
     SingleDeviceDistributedConfig,
     SpectralDescentPreconditionerConfig,
 )
@@ -217,6 +219,19 @@ class DistributedShampooInitTest(unittest.TestCase):
                     "param_group[BETAS][1]=0.999 does not have any effect when SpectralDescentPreconditionerConfig is used.",
                     "param_group[EPSILON]=1e-08 does not have any effect when SpectralDescentPreconditionerConfig is used.",
                     "param_group[PRECONDITION_FREQUENCY]=100 does not have any effect when SpectralDescentPreconditionerConfig is used. Setting precondition_frequency to 1...",
+                ],
+            ),
+            (
+                {
+                    "betas": (0.9, 0.999),
+                    "epsilon": 1e-8,
+                    "precondition_frequency": 100,
+                    "preconditioner_config": DefaultSignDescentPreconditionerConfig,
+                },
+                [
+                    "param_group[BETAS][1]=0.999 does not have any effect when SignDescentPreconditionerConfig is used.",
+                    "param_group[EPSILON]=1e-08 does not have any effect when SignDescentPreconditionerConfig is used.",
+                    "param_group[PRECONDITION_FREQUENCY]=100 does not have any effect when SignDescentPreconditionerConfig is used. Setting precondition_frequency to 1...",
                 ],
             ),
         ],
@@ -537,6 +552,98 @@ class AbstractTest:
                     [r.msg for r in cm.records],
                     ["Parameter 1 not found in state!"],
                 )
+
+    class NoPreconditionerStateDictTestBase(DistributedStateDictTestBase):
+        """A base class for methods that do not have a preconditioner."""
+
+        @property
+        def _distributed_state_dict(self) -> dict[str, Any]:
+            return {
+                "state": {
+                    "0.weight": {
+                        '["step"]': torch.tensor(0),
+                        '["block_0", "adagrad"]': torch.tensor(
+                            [
+                                [0.0, 0.0, 0.0, 0.0, 0.0],
+                                [0.0, 0.0, 0.0, 0.0, 0.0],
+                                [0.0, 0.0, 0.0, 0.0, 0.0],
+                                [0.0, 0.0, 0.0, 0.0, 0.0],
+                                [0.0, 0.0, 0.0, 0.0, 0.0],
+                            ]
+                        ),
+                        '["block_1", "adagrad"]': torch.tensor(
+                            [
+                                [0.0, 0.0, 0.0, 0.0, 0.0],
+                                [0.0, 0.0, 0.0, 0.0, 0.0],
+                                [0.0, 0.0, 0.0, 0.0, 0.0],
+                                [0.0, 0.0, 0.0, 0.0, 0.0],
+                                [0.0, 0.0, 0.0, 0.0, 0.0],
+                            ]
+                        ),
+                        '["block_0", "momentum"]': torch.tensor(
+                            [
+                                [0.0, 0.0, 0.0, 0.0, 0.0],
+                                [0.0, 0.0, 0.0, 0.0, 0.0],
+                                [0.0, 0.0, 0.0, 0.0, 0.0],
+                                [0.0, 0.0, 0.0, 0.0, 0.0],
+                                [0.0, 0.0, 0.0, 0.0, 0.0],
+                            ]
+                        ),
+                        '["block_1", "momentum"]': torch.tensor(
+                            [
+                                [0.0, 0.0, 0.0, 0.0, 0.0],
+                                [0.0, 0.0, 0.0, 0.0, 0.0],
+                                [0.0, 0.0, 0.0, 0.0, 0.0],
+                                [0.0, 0.0, 0.0, 0.0, 0.0],
+                                [0.0, 0.0, 0.0, 0.0, 0.0],
+                            ]
+                        ),
+                        '["block_0", "filtered_grad"]': torch.tensor(
+                            [
+                                [0.0, 0.0, 0.0, 0.0, 0.0],
+                                [0.0, 0.0, 0.0, 0.0, 0.0],
+                                [0.0, 0.0, 0.0, 0.0, 0.0],
+                                [0.0, 0.0, 0.0, 0.0, 0.0],
+                                [0.0, 0.0, 0.0, 0.0, 0.0],
+                            ]
+                        ),
+                        '["block_1", "filtered_grad"]': torch.tensor(
+                            [
+                                [0.0, 0.0, 0.0, 0.0, 0.0],
+                                [0.0, 0.0, 0.0, 0.0, 0.0],
+                                [0.0, 0.0, 0.0, 0.0, 0.0],
+                                [0.0, 0.0, 0.0, 0.0, 0.0],
+                                [0.0, 0.0, 0.0, 0.0, 0.0],
+                            ]
+                        ),
+                    },
+                },
+                "param_groups": {
+                    "0.weight": {
+                        "lr": 0.01,
+                        "betas": (0.9, 1.0),
+                        "beta3": 0.9,
+                        "epsilon": 1e-12,
+                        "momentum": 0.9,
+                        "dampening": 0.0,
+                        "weight_decay": 0.0,
+                        "max_preconditioner_dim": 5,
+                        "precondition_frequency": 1,
+                        "start_preconditioning_step": 1,
+                        "use_nesterov": False,
+                        "use_bias_correction": True,
+                        "use_decoupled_weight_decay": True,
+                        "grafting_config": AdaGradGraftingConfig(
+                            epsilon=0.001,
+                        ),
+                        "distributed_config": replace(
+                            DefaultSingleDeviceDistributedConfig,
+                            target_parameter_dimensionality=2,
+                        ),
+                        "preconditioner_config": self._preconditioner_config,
+                    }
+                },
+            }
 
 
 class ShampooDistributedStateDictTest(AbstractTest.DistributedStateDictTestBase):
@@ -1074,101 +1181,20 @@ class EigenvalueCorrectedShampooDistributedStateDictTest(
         }
 
 
+class SignDescentDistributedStateDictTest(
+    AbstractTest.NoPreconditionerStateDictTestBase
+):
+    @property
+    def _preconditioner_config(self) -> SignDescentPreconditionerConfig:
+        return DefaultSignDescentPreconditionerConfig
+
+
 class SpectralDescentDistributedStateDictTest(
-    AbstractTest.DistributedStateDictTestBase
+    AbstractTest.NoPreconditionerStateDictTestBase
 ):
     @property
     def _preconditioner_config(self) -> SpectralDescentPreconditionerConfig:
         return DefaultSpectralDescentPreconditionerConfig
-
-    @property
-    def _distributed_state_dict(self) -> dict[str, Any]:
-        return {
-            "state": {
-                "0.weight": {
-                    '["step"]': torch.tensor(0),
-                    '["block_0", "adagrad"]': torch.tensor(
-                        [
-                            [0.0, 0.0, 0.0, 0.0, 0.0],
-                            [0.0, 0.0, 0.0, 0.0, 0.0],
-                            [0.0, 0.0, 0.0, 0.0, 0.0],
-                            [0.0, 0.0, 0.0, 0.0, 0.0],
-                            [0.0, 0.0, 0.0, 0.0, 0.0],
-                        ]
-                    ),
-                    '["block_1", "adagrad"]': torch.tensor(
-                        [
-                            [0.0, 0.0, 0.0, 0.0, 0.0],
-                            [0.0, 0.0, 0.0, 0.0, 0.0],
-                            [0.0, 0.0, 0.0, 0.0, 0.0],
-                            [0.0, 0.0, 0.0, 0.0, 0.0],
-                            [0.0, 0.0, 0.0, 0.0, 0.0],
-                        ]
-                    ),
-                    '["block_0", "momentum"]': torch.tensor(
-                        [
-                            [0.0, 0.0, 0.0, 0.0, 0.0],
-                            [0.0, 0.0, 0.0, 0.0, 0.0],
-                            [0.0, 0.0, 0.0, 0.0, 0.0],
-                            [0.0, 0.0, 0.0, 0.0, 0.0],
-                            [0.0, 0.0, 0.0, 0.0, 0.0],
-                        ]
-                    ),
-                    '["block_1", "momentum"]': torch.tensor(
-                        [
-                            [0.0, 0.0, 0.0, 0.0, 0.0],
-                            [0.0, 0.0, 0.0, 0.0, 0.0],
-                            [0.0, 0.0, 0.0, 0.0, 0.0],
-                            [0.0, 0.0, 0.0, 0.0, 0.0],
-                            [0.0, 0.0, 0.0, 0.0, 0.0],
-                        ]
-                    ),
-                    '["block_0", "filtered_grad"]': torch.tensor(
-                        [
-                            [0.0, 0.0, 0.0, 0.0, 0.0],
-                            [0.0, 0.0, 0.0, 0.0, 0.0],
-                            [0.0, 0.0, 0.0, 0.0, 0.0],
-                            [0.0, 0.0, 0.0, 0.0, 0.0],
-                            [0.0, 0.0, 0.0, 0.0, 0.0],
-                        ]
-                    ),
-                    '["block_1", "filtered_grad"]': torch.tensor(
-                        [
-                            [0.0, 0.0, 0.0, 0.0, 0.0],
-                            [0.0, 0.0, 0.0, 0.0, 0.0],
-                            [0.0, 0.0, 0.0, 0.0, 0.0],
-                            [0.0, 0.0, 0.0, 0.0, 0.0],
-                            [0.0, 0.0, 0.0, 0.0, 0.0],
-                        ]
-                    ),
-                },
-            },
-            "param_groups": {
-                "0.weight": {
-                    "lr": 0.01,
-                    "betas": (0.9, 1.0),
-                    "beta3": 0.9,
-                    "epsilon": 1e-12,
-                    "momentum": 0.9,
-                    "dampening": 0.0,
-                    "weight_decay": 0.0,
-                    "max_preconditioner_dim": 5,
-                    "precondition_frequency": 1,
-                    "start_preconditioning_step": 1,
-                    "use_nesterov": False,
-                    "use_bias_correction": True,
-                    "use_decoupled_weight_decay": True,
-                    "grafting_config": AdaGradGraftingConfig(
-                        epsilon=0.001,
-                    ),
-                    "distributed_config": replace(
-                        DefaultSingleDeviceDistributedConfig,
-                        target_parameter_dimensionality=2,
-                    ),
-                    "preconditioner_config": self._preconditioner_config,
-                }
-            },
-        }
 
 
 class DistributedShampooNoneGradTest(unittest.TestCase):
