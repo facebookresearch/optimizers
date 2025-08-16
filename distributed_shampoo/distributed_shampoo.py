@@ -437,7 +437,9 @@ class DistributedShampoo(torch.optim.Optimizer):
                 param_group[PRECONDITIONER_CONFIG],
                 (SignDescentPreconditionerConfig, SpectralDescentPreconditionerConfig),
             ):
-                preconditioner_config_name = param_group[PRECONDITIONER_CONFIG].__name__
+                preconditioner_config_name = param_group[
+                    PRECONDITIONER_CONFIG
+                ].__class__.__name__
                 # Warn about hyperparameters that won't have any effect.
                 logger.warning(
                     f"{param_group[BETAS][1]=} does not have any effect when {preconditioner_config_name} is used."
