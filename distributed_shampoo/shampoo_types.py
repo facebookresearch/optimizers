@@ -9,9 +9,10 @@ LICENSE file in the root directory of this source tree.
 
 import enum
 import math
+from collections.abc import Callable
 from dataclasses import dataclass, field, make_dataclass
 from inspect import signature
-from typing import Any, Callable
+from typing import Any
 
 import torch
 
