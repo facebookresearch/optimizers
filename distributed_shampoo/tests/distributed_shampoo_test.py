@@ -210,15 +210,15 @@ class DistributedShampooInitTest(unittest.TestCase):
                     "epsilon": 1e-8,
                     "precondition_frequency": 100,
                     "preconditioner_config": DefaultSpectralDescentPreconditionerConfig,
-                    # distributed_config.target_parameter_dimensionality=2 is necessary to avoid reshaping parameter to 1D which prevents successful initialization of preconditioner list.
                     "distributed_config": SingleDeviceDistributedConfig(
-                        target_parameter_dimensionality=2,
+                        target_parameter_dimensionality=1,
                     ),
                 },
                 [
                     "param_group[BETAS][1]=0.999 does not have any effect when SpectralDescentPreconditionerConfig is used.",
                     "param_group[EPSILON]=1e-08 does not have any effect when SpectralDescentPreconditionerConfig is used.",
                     "param_group[PRECONDITION_FREQUENCY]=100 does not have any effect when SpectralDescentPreconditionerConfig is used. Setting precondition_frequency to 1...",
+                    "param_group[DISTRIBUTED_CONFIG].target_parameter_dimensionality=1 is not equal to 2. Setting target_parameter_dimensionality to 2...",
                 ],
             ),
             (

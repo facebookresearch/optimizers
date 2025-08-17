@@ -452,6 +452,18 @@ class DistributedShampoo(torch.optim.Optimizer):
                 )
                 param_group[PRECONDITION_FREQUENCY] = 1
 
+            if (
+                isinstance(
+                    param_group[PRECONDITIONER_CONFIG],
+                    SpectralDescentPreconditionerConfig,
+                )
+                and param_group[DISTRIBUTED_CONFIG].target_parameter_dimensionality != 2
+            ):
+                logger.warning(
+                    f"{param_group[DISTRIBUTED_CONFIG].target_parameter_dimensionality=} is not equal to 2. Setting target_parameter_dimensionality to 2..."
+                )
+                param_group[DISTRIBUTED_CONFIG].target_parameter_dimensionality = 2
+
             # Provide warning/error for start_preconditioning_step.
             if param_group[START_PRECONDITIONING_STEP] == -1:
                 param_group[START_PRECONDITIONING_STEP] = param_group[
