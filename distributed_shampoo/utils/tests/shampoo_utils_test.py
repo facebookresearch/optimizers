@@ -173,6 +173,13 @@ class MultiDimSplitTest(unittest.TestCase):
             multi_dim_split(grad, split_size=5), expected_split_grad
         )
 
+    def test_split_size_is_inf(self) -> None:
+        grad = torch.arange(15).reshape(5, 3)
+        expected_split_grad = (grad,)
+        torch.testing.assert_close(
+            multi_dim_split(grad, split_size=math.inf), expected_split_grad
+        )
+
 
 @instantiate_parametrized_tests
 class CompressListTest(unittest.TestCase):
