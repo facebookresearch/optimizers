@@ -360,22 +360,20 @@ class DistributedShampoo(torch.optim.Optimizer):
 
         def param_group_hyperparameter_check(param_group: dict[str, Any]) -> None:
             if not param_group[LR] >= 0.0:
-                raise ValueError(
-                    f"Invalid learning rate: {param_group[LR]}. Must be >= 0.0."
-                )
+                raise ValueError(f"Invalid {param_group[LR]=}. Must be >= 0.0.")
             if not 0.0 <= param_group[BETAS][0] < 1.0:
                 raise ValueError(
-                    f"Invalid beta parameter at index 0: {param_group[BETAS][0]}. Must be in [0.0, 1.0)."
+                    f"Invalid {param_group[BETAS][0]=}. Must be in [0.0, 1.0)."
                 )
             if not 0.0 <= param_group[BETAS][1] <= 1.0:
                 raise ValueError(
-                    f"Invalid beta parameter at index 1: {param_group[BETAS][1]}. Must be in [0.0, 1.0]."
+                    f"Invalid {param_group[BETAS][1]=}. Must be in [0.0, 1.0]."
                 )
             if param_group[BETA3] == -1.0:
                 param_group[BETA3] = param_group[BETAS][0]
             elif not 0.0 <= param_group[BETA3] < 1.0:
                 raise ValueError(
-                    f"Invalid beta3 parameter: {param_group[BETA3]}. Must be in [0.0, 1.0)."
+                    f"Invalid {param_group[BETA3]=}. Must be in [0.0, 1.0)."
                 )
             if (
                 isinstance(
@@ -395,42 +393,40 @@ class DistributedShampoo(torch.optim.Optimizer):
             ):
                 if param_group[EPSILON] != 0.0:
                     raise ValueError(
-                        f"Invalid epsilon value: {param_group[EPSILON]}. Must be == 0.0 when PseudoInverseConfig is used."
+                        f"Invalid {param_group[EPSILON]=}. Must be == 0.0 when PseudoInverseConfig is used."
                     )
             elif not param_group[EPSILON] > 0.0:
-                raise ValueError(
-                    f"Invalid epsilon value: {param_group[EPSILON]}. Must be > 0.0."
-                )
+                raise ValueError(f"Invalid {param_group[EPSILON]=}. Must be > 0.0.")
             if not 0.0 <= param_group[MOMENTUM] < 1.0:
                 raise ValueError(
-                    f"Invalid momentum parameter: {param_group[MOMENTUM]}. Must be [0.0, 1.0)."
+                    f"Invalid {param_group[MOMENTUM]=}. Must be [0.0, 1.0)."
                 )
             if not 0.0 <= param_group[DAMPENING] < 1.0:
                 raise ValueError(
-                    f"Invalid damping parameter: {param_group[DAMPENING]}. Must be [0.0, 1.0)."
+                    f"Invalid {param_group[DAMPENING]=}. Must be [0.0, 1.0)."
                 )
             if not param_group[WEIGHT_DECAY] >= 0.0:
                 raise ValueError(
-                    f"Invalid weight_decay value: {param_group[WEIGHT_DECAY]}. Must be >= 0.0."
+                    f"Invalid {param_group[WEIGHT_DECAY]=}. Must be >= 0.0."
                 )
             if (
                 isinstance(param_group[MAX_PRECONDITIONER_DIM], float)
                 and param_group[MAX_PRECONDITIONER_DIM] != math.inf
             ):
                 raise ValueError(
-                    f"Invalid {param_group[MAX_PRECONDITIONER_DIM]=} value. Must be an integer or math.inf."
+                    f"Invalid {param_group[MAX_PRECONDITIONER_DIM]=}. Must be an integer or math.inf."
                 )
             if not param_group[MAX_PRECONDITIONER_DIM] >= 1:
                 raise ValueError(
-                    f"Invalid max preconditioner dimension: {param_group[MAX_PRECONDITIONER_DIM]}. Must be >= 1."
+                    f"Invalid {param_group[MAX_PRECONDITIONER_DIM]=}. Must be >= 1."
                 )
             if not param_group[PRECONDITION_FREQUENCY] >= 1:
                 raise ValueError(
-                    f"Invalid precondition frequency: {param_group[PRECONDITION_FREQUENCY]}. Must be >= 1."
+                    f"Invalid {param_group[PRECONDITION_FREQUENCY]=}. Must be >= 1."
                 )
             if not param_group[START_PRECONDITIONING_STEP] >= -1:
                 raise ValueError(
-                    f"Invalid start preconditioning step: {param_group[START_PRECONDITIONING_STEP]}. Must be >= -1."
+                    f"Invalid {param_group[START_PRECONDITIONING_STEP]=}. Must be >= -1."
                 )
 
             if isinstance(
@@ -477,14 +473,13 @@ class DistributedShampoo(torch.optim.Optimizer):
                 < param_group[PRECONDITION_FREQUENCY]
             ):
                 raise ValueError(
-                    f"Invalid start_preconditioning_step value: {param_group[START_PRECONDITIONING_STEP]}. Must be >= {param_group[PRECONDITION_FREQUENCY]=}."
+                    f"Invalid {param_group[START_PRECONDITIONING_STEP]=}. Must be >= {param_group[PRECONDITION_FREQUENCY]=}."
                 )
 
             # Warn when Nesterov is used but momentum is 0.
             if param_group[USE_NESTEROV] and param_group[MOMENTUM] == 0.0:
                 logger.warning(
-                    "Nesterov flag is enabled but momentum parameter is zero! "
-                    "Continuing without using momentum or Nesterov acceleration..."
+                    "Nesterov flag is enabled but momentum parameter is zero! Continuing without using momentum or Nesterov acceleration..."
                 )
 
         # Perform per param_group hyperparameter checks.

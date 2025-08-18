@@ -93,23 +93,19 @@ class DistributedShampooInitTest(unittest.TestCase):
         [
             (
                 {"lr": -0.1},
-                "Invalid learning rate: -0.1. Must be >= 0.0.",
+                "Invalid param_group[LR]=-0.1. Must be >= 0.0.",
             ),
             (
                 {"betas": (-0.1, 1.0)},
-                "Invalid beta parameter at index 0: -0.1. Must be in [0.0, 1.0).",
+                "Invalid param_group[BETAS][0]=-0.1. Must be in [0.0, 1.0).",
             ),
             (
                 {"betas": (0.9, -0.1)},
-                "Invalid beta parameter at index 1: -0.1. Must be in [0.0, 1.0].",
+                "Invalid param_group[BETAS][1]=-0.1. Must be in [0.0, 1.0].",
             ),
             (
                 {"beta3": -0.1},
-                "Invalid beta3 parameter: -0.1. Must be in [0.0, 1.0).",
-            ),
-            (
-                {"epsilon": 0.0},
-                "Invalid epsilon value: 0.0. Must be > 0.0.",
+                "Invalid param_group[BETA3]=-0.1. Must be in [0.0, 1.0).",
             ),
             (
                 {
@@ -120,39 +116,43 @@ class DistributedShampooInitTest(unittest.TestCase):
                         )
                     ),
                 },
-                "Invalid epsilon value: 0.1. Must be == 0.0 when PseudoInverseConfig is used.",
+                "Invalid param_group[EPSILON]=0.1. Must be == 0.0 when PseudoInverseConfig is used.",
+            ),
+            (
+                {"epsilon": 0.0},
+                "Invalid param_group[EPSILON]=0.0. Must be > 0.0.",
             ),
             (
                 {"momentum": 3.14},
-                "Invalid momentum parameter: 3.14. Must be [0.0, 1.0).",
+                "Invalid param_group[MOMENTUM]=3.14. Must be [0.0, 1.0).",
             ),
             (
                 {"dampening": -0.1},
-                "Invalid damping parameter: -0.1. Must be [0.0, 1.0).",
+                "Invalid param_group[DAMPENING]=-0.1. Must be [0.0, 1.0).",
             ),
             (
                 {"weight_decay": -0.1},
-                "Invalid weight_decay value: -0.1. Must be >= 0.0.",
+                "Invalid param_group[WEIGHT_DECAY]=-0.1. Must be >= 0.0.",
             ),
             (
                 {"max_preconditioner_dim": 3.14},
-                "Invalid param_group[MAX_PRECONDITIONER_DIM]=3.14 value. Must be an integer or math.inf.",
+                "Invalid param_group[MAX_PRECONDITIONER_DIM]=3.14. Must be an integer or math.inf.",
             ),
             (
                 {"max_preconditioner_dim": 0},
-                "Invalid max preconditioner dimension: 0. Must be >= 1.",
+                "Invalid param_group[MAX_PRECONDITIONER_DIM]=0. Must be >= 1.",
             ),
             (
                 {"precondition_frequency": 0},
-                "Invalid precondition frequency: 0. Must be >= 1.",
+                "Invalid param_group[PRECONDITION_FREQUENCY]=0. Must be >= 1.",
             ),
             (
                 {"start_preconditioning_step": -2},
-                "Invalid start preconditioning step: -2. Must be >= -1.",
+                "Invalid param_group[START_PRECONDITIONING_STEP]=-2. Must be >= -1.",
             ),
             (
                 {"start_preconditioning_step": 10, "precondition_frequency": 100},
-                "Invalid start_preconditioning_step value: 10. Must be >= param_group[PRECONDITION_FREQUENCY]=100.",
+                "Invalid param_group[START_PRECONDITIONING_STEP]=10. Must be >= param_group[PRECONDITION_FREQUENCY]=100.",
             ),
         ],
     )
