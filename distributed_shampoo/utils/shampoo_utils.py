@@ -106,7 +106,7 @@ def merge_small_dims(
     return tuple(reversed(new_tensor_shape))
 
 
-def multi_dim_split(tensor: Tensor, split_size: int) -> tuple[Tensor, ...]:
+def multi_dim_split(tensor: Tensor, split_size: int | float) -> tuple[Tensor, ...]:
     """Chunks tensor across multiple dimensions based on splits.
 
     This function recursively splits a tensor along all of its dimensions using the
@@ -115,7 +115,8 @@ def multi_dim_split(tensor: Tensor, split_size: int) -> tuple[Tensor, ...]:
 
     Args:
         tensor (Tensor): Gradient or tensor to split.
-        split_size (int): Size of a single chunk along each dimension.
+        split_size (int | float): Size of a single chunk along each dimension.
+            If math.inf is provided, no splitting occurs.
 
     Returns:
         split_tensors (tuple[Tensor, ...]): Tuple of tensors after splitting.
@@ -139,7 +140,16 @@ def multi_dim_split(tensor: Tensor, split_size: int) -> tuple[Tensor, ...]:
         - multi_dim_split(tensor of shape (5, 3), split_size=5):
           Returns (original tensor,) since split_size ≥ all dimensions.
 
+        - multi_dim_split(tensor of shape (5, 3), split_size=math.inf):
+          Returns (original tensor,) since math.inf means no splitting.
+
     """
+    if isinstance(split_size, float):
+        assert (
+            split_size == math.inf
+        ), f"{split_size=} has to be an integer or math.inf."
+        return (tensor,)
+
     return reduce(
         lambda split_tensors, dim: tuple(
             s for t in split_tensors for s in torch.split(t, split_size, dim=dim)
