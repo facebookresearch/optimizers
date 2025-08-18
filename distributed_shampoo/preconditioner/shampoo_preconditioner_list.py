@@ -16,7 +16,7 @@ from functools import partial, reduce, wraps
 from itertools import chain
 from operator import attrgetter
 from pathlib import Path
-from typing import Any, Generic, get_args, NoReturn, overload, TypeVar
+from typing import Any, Generic, get_args, NoReturn, overload, TypeAlias, TypeVar
 
 import torch
 from distributed_shampoo.distributor.shampoo_block_info import BlockInfo
@@ -260,7 +260,8 @@ class SpectralDescentPreconditionerList(PreconditionerList):
 
 
 _SubStateValueType = TypeVar("_SubStateValueType")
-_StateValueType = dict[Hashable, _SubStateValueType]
+# NOTE: Use type _StateValueType instead when downstream applications are Python 3.12+ available
+_StateValueType: TypeAlias = dict[Hashable, _SubStateValueType]
 
 
 class AdagradPreconditionerList(PreconditionerList):
