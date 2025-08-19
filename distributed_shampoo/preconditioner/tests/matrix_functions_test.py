@@ -15,7 +15,6 @@ from dataclasses import dataclass
 from fractions import Fraction
 from functools import partial
 from types import ModuleType
-from typing import Any
 from unittest import mock
 
 import torch
@@ -546,7 +545,7 @@ class EigenRootTest(unittest.TestCase):
         with mock.patch.object(torch.linalg, "eigh") as mock_eigh:
             # Define a side effect function that fails on first call but succeeds on subsequent calls
             def only_first_call_runtime_error(
-                *args: Any, **kwargs: Any
+                *args: object, **kwargs: object
             ) -> tuple[Tensor, Tensor]:
                 if mock_eigh.call_count == 1:
                     raise RuntimeError("Mock Eigen Error")

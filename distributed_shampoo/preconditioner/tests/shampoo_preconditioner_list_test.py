@@ -96,7 +96,7 @@ class AbstractPreconditionerListTest:
 
         @abc.abstractmethod
         def _instantiate_preconditioner_list(
-            self, **kwargs: Any
+            self, **kwargs: object
         ) -> PreconditionerList: ...
 
         @property
@@ -207,7 +207,9 @@ class SGDPreconditionerListTest(AbstractPreconditionerListTest.Interface):
             torch.tensor([[3.0, 4.0], [5.0, 6.0]]),
         )
 
-    def _instantiate_preconditioner_list(self, **kwargs: Any) -> SGDPreconditionerList:
+    def _instantiate_preconditioner_list(
+        self, **kwargs: object
+    ) -> SGDPreconditionerList:
         return SGDPreconditionerList(block_list=self._block_list, **kwargs)
 
     def test_update_preconditioners_and_precondition(self) -> None:
@@ -322,7 +324,7 @@ class SpectralDescentPreconditionerListTest(AbstractPreconditionerListTest.Inter
         )
 
     def _instantiate_preconditioner_list(
-        self, **kwargs: Any
+        self, **kwargs: object
     ) -> SpectralDescentPreconditionerList:
         return SpectralDescentPreconditionerList(
             block_list=self._block_list,
@@ -696,7 +698,9 @@ class AbstractTest:
 
             super().setUp()
 
-        def _instantiate_preconditioner_list(self, **kwargs: Any) -> PreconditionerList:
+        def _instantiate_preconditioner_list(
+            self, **kwargs: object
+        ) -> PreconditionerList:
             return self._preconditioner_list_factory(
                 block_list=self._block_list,
                 state=self._state,

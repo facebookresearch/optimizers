@@ -12,7 +12,6 @@ import math
 from collections.abc import Callable
 from dataclasses import dataclass, field, make_dataclass
 from inspect import signature
-from typing import Any
 
 import torch
 
@@ -707,7 +706,7 @@ class ShampooPT2CompileConfig(
     The fields under ShampooPT2CompileConfig are the same as the arguments of torch.compile except `model`.
     """
 
-    def __init__(self, **kwargs: Any) -> None:
+    def __init__(self, **kwargs: object) -> None:
         super().__init__(**kwargs)
 
 

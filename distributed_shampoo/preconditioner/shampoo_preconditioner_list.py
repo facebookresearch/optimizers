@@ -72,7 +72,7 @@ def _profile_decorator(
     """
 
     @wraps(member_func)
-    def wrapper(them: object, *args: Any, **kwargs: Any) -> _MemberFuncReturnType:
+    def wrapper(them: object, *args: object, **kwargs: object) -> _MemberFuncReturnType:
         with profiler.record_function(
             f"## {them.__class__.__name__}:{member_func.__name__} ##"
         ):

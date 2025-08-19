@@ -9,7 +9,6 @@ LICENSE file in the root directory of this source tree.
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any
 
 
 @dataclass(init=False)
@@ -51,5 +50,5 @@ class AbstractDataclass(ABC):
     """
 
     @abstractmethod
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
+    def __init__(self, *args: object, **kwargs: object) -> None:
         """An abstract method that must be implemented by all subclasses."""

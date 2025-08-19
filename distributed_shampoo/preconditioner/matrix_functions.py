@@ -94,7 +94,7 @@ def _check_2d_tensor(
     """
 
     @wraps(func)
-    def wrapper(A: Tensor, *args: Any, **kwargs: Any) -> _FuncReturnType:
+    def wrapper(A: Tensor, *args: object, **kwargs: object) -> _FuncReturnType:
         if len(A.shape) != 2:
             raise ValueError(f"Matrix is not 2-dimensional! {A.shape=}")
         return func(A, *args, **kwargs)
@@ -121,7 +121,7 @@ def _check_square_matrix(
 
     @_check_2d_tensor
     @wraps(func)
-    def wrapper(A: Tensor, *args: Any, **kwargs: Any) -> _FuncReturnType:
+    def wrapper(A: Tensor, *args: object, **kwargs: object) -> _FuncReturnType:
         if A.shape[0] != A.shape[1]:
             raise ValueError(f"Matrix is not square! {A.shape=}")
         return func(A, *args, **kwargs)
