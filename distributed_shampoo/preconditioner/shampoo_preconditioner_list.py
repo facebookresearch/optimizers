@@ -8,11 +8,11 @@ LICENSE file in the root directory of this source tree.
 """
 
 import logging
-from abc import ABC, abstractmethod
+from abc import abstractmethod
 from collections.abc import Callable, Hashable, Mapping
 from dataclasses import asdict, dataclass, field, fields
 from fractions import Fraction
-from functools import partial, reduce, wraps
+from functools import partial, reduce
 from itertools import chain
 from operator import attrgetter
 from pathlib import Path
@@ -23,389 +23,36 @@ from distributed_shampoo.distributor.shampoo_block_info import BlockInfo
 from distributed_shampoo.preconditioner.matrix_functions import (
     matrix_eigendecomposition,
     matrix_inverse_root,
-    matrix_orthogonalization,
     stabilize_and_pow_eigenvalues,
 )
-
 from distributed_shampoo.preconditioner.matrix_functions_types import (
     EigendecompositionConfig,
     MatrixFunctionConfig,
     RootInvConfig,
 )
+from distributed_shampoo.preconditioner.preconditioner_list import (
+    PreconditionerList,
+    profile_decorator,
+)
 from distributed_shampoo.shampoo_types import (
     AmortizedPreconditionerConfig,
     PreconditionerValueError,
-    SignDescentPreconditionerConfig,
-    SpectralDescentPreconditionerConfig,
 )
 from distributed_shampoo.utils.dict_zip_iterator import DictZipIterator
 from distributed_shampoo.utils.optimizer_modules import OptimizerModule
 from distributed_shampoo.utils.shampoo_utils import compress_list, get_dtype_size
 from torch import Tensor
-from torch.autograd import profiler
 
 
 logger: logging.Logger = logging.getLogger(__name__)
 
-ADAGRAD = "adagrad"
 SHAMPOO = "shampoo"
 INVERSE_EXPONENT_OVERRIDE = "inverse_exponent_override"
-
-
-_MemberFuncReturnType = TypeVar("_MemberFuncReturnType")
-
-
-def _profile_decorator(
-    member_func: Callable[..., _MemberFuncReturnType],
-) -> Callable[..., _MemberFuncReturnType]:
-    """Decorator that profiles the execution of a class method.
-
-    This decorator wraps a class method with PyTorch's profiler.record_function
-    to track its execution time and resource usage. The profiling information
-    is recorded with a name that includes the class name and method name.
-
-    Args:
-        member_func (Callable[..., _MemberFuncReturnType]): The class method to be profiled.
-
-    Returns:
-        wrapper (Callable[..., _MemberFuncReturnType]): A wrapped function that profiles the execution of the original method.
-    """
-
-    @wraps(member_func)
-    def wrapper(them: object, *args: object, **kwargs: object) -> _MemberFuncReturnType:
-        with profiler.record_function(
-            f"## {them.__class__.__name__}:{member_func.__name__} ##"
-        ):
-            return member_func(them, *args, **kwargs)
-
-    return wrapper
-
-
-class PreconditionerList(ABC):
-    """Preconditioner base class.
-
-    Args:
-        block_list (tuple[Tensor, ...]): List of (blocks of) parameters.
-
-    """
-
-    def __init__(
-        self,
-        block_list: tuple[Tensor, ...],
-    ) -> None:
-        super().__init__()
-        self._numel_list: tuple[int, ...] = (0,) * len(block_list)
-        self._dims_list: tuple[torch.Size, ...] = tuple(
-            block.size() for block in block_list
-        )
-        self._num_bytes_list: tuple[int, ...] = (0,) * len(block_list)
-
-    @abstractmethod
-    def update_preconditioners(
-        self,
-        masked_grad_list: tuple[Tensor, ...],
-        step: Tensor,
-        perform_amortized_computation: bool,
-    ) -> None: ...
-
-    @abstractmethod
-    def precondition(
-        self, masked_grad_list: tuple[Tensor, ...]
-    ) -> tuple[Tensor, ...]: ...
-
-    @abstractmethod
-    def compress_preconditioner_list(
-        self, local_grad_selector: tuple[bool, ...]
-    ) -> None: ...
-
-    @property
-    def numel_list(self) -> tuple[int, ...]:
-        return self._numel_list
-
-    @property
-    def dims_list(self) -> tuple[torch.Size, ...]:
-        return self._dims_list
-
-    @property
-    def num_bytes_list(self) -> tuple[int, ...]:
-        return self._num_bytes_list
-
-    def numel(self) -> int:
-        return sum(self._numel_list)
-
-    def num_bytes(self) -> int:
-        return sum(self._num_bytes_list)
-
-
-class SGDPreconditionerList(PreconditionerList):
-    """SGD (identity) preconditioners for a list of parameters.
-
-    Args:
-        block_list (tuple[Tensor, ...]): List of (blocks of) parameters.
-
-    """
-
-    def __init__(
-        self,
-        block_list: tuple[Tensor, ...],
-    ) -> None:
-        super().__init__(block_list)
-
-    def update_preconditioners(
-        self,
-        masked_grad_list: tuple[Tensor, ...],
-        step: Tensor,
-        perform_amortized_computation: bool = False,
-    ) -> None:
-        return
-
-    def precondition(self, masked_grad_list: tuple[Tensor, ...]) -> tuple[Tensor, ...]:
-        return masked_grad_list
-
-    def compress_preconditioner_list(
-        self, local_grad_selector: tuple[bool, ...]
-    ) -> None:
-        return
-
-
-class SignDescentPreconditionerList(PreconditionerList):
-    """Preconditioner list for sign descent.
-
-    Args:
-        block_list (tuple[Tensor, ...]): List of (blocks of) parameters.
-        preconditioner_config (SignDescentPreconditionerConfig): Configuration for sign descent.
-
-    """
-
-    def __init__(
-        self,
-        block_list: tuple[Tensor, ...],
-        preconditioner_config: SignDescentPreconditionerConfig,
-    ) -> None:
-        super().__init__(block_list)
-        self._preconditioner_config = preconditioner_config
-
-    @_profile_decorator
-    def update_preconditioners(
-        self,
-        masked_grad_list: tuple[Tensor, ...],
-        step: Tensor,
-        perform_amortized_computation: bool = False,
-    ) -> None:
-        return
-
-    @_profile_decorator
-    def precondition(self, masked_grad_list: tuple[Tensor, ...]) -> tuple[Tensor, ...]:
-        return tuple(
-            torch.sign(grad).mul_(self._preconditioner_config.scale_fn(grad))
-            for grad in masked_grad_list
-        )
-
-    def compress_preconditioner_list(
-        self, local_grad_selector: tuple[bool, ...]
-    ) -> None:
-        return
-
-
-class SpectralDescentPreconditionerList(PreconditionerList):
-    """Preconditioner list for spectral descent.
-
-    NOTE: This algorithm can only be used for 2D parameters, or parameters that have been reshaped to 2D.
-    Which parameters are reshaped to 2D is determined by the max_preconditioner_dim argument in DistributedShampoo.
-    If all >2D parameters should be guaranteed to be reshaped to 2D, then max_preconditioner_dim=math.inf and distributed_config.target_parameter_dimensionality=2 has to be used.
-
-    Args:
-        block_list (tuple[Tensor, ...]): List of (blocks of) parameters.
-        preconditioner_config (SpectralDescentPreconditionerConfig): Configuration for spectral descent.
-
-    """
-
-    def __init__(
-        self,
-        block_list: tuple[Tensor, ...],
-        preconditioner_config: SpectralDescentPreconditionerConfig,
-    ) -> None:
-        if any(block.dim() != 2 for block in block_list):
-            raise ValueError(
-                "Spectral descent can only be used for 2D parameters, or parameters that have been reshaped to 2D. "
-                "To guarantee that all >2D parameters are reshaped to 2D, set max_preconditioner_dim=math.inf and distributed_config.target_parameter_dimensionality=2."
-            )
-        super().__init__(block_list)
-        self._preconditioner_config = preconditioner_config
-
-    @_profile_decorator
-    def update_preconditioners(
-        self,
-        masked_grad_list: tuple[Tensor, ...],
-        step: Tensor,
-        perform_amortized_computation: bool = False,
-    ) -> None:
-        return
-
-    @_profile_decorator
-    def precondition(self, masked_grad_list: tuple[Tensor, ...]) -> tuple[Tensor, ...]:
-        return tuple(
-            # An error will be raised when grad is not 2D.
-            matrix_orthogonalization(
-                grad,
-                orthogonalization_config=self._preconditioner_config.orthogonalization_config,
-            )
-            for grad in masked_grad_list
-        )
-
-    def compress_preconditioner_list(
-        self, local_grad_selector: tuple[bool, ...]
-    ) -> None:
-        return
 
 
 _SubStateValueType = TypeVar("_SubStateValueType")
 # NOTE: Use type _StateValueType instead when downstream applications are Python 3.12+ available
 _StateValueType: TypeAlias = dict[Hashable, _SubStateValueType]
-
-
-class AdagradPreconditionerList(PreconditionerList):
-    """Adagrad / Adam / RMSprop preconditioners for a list of parameters.
-
-    Operations are performed in-place with foreach operators.
-
-    NOTE: Does not support sparse gradients at this time.
-
-    To enable Adagrad, set beta2 = 1.0.
-    To enable RMSprop, set beta2 = 0.999.
-    To enable Adam, set beta2 = 0.999, use_bias_correction = True.
-
-    Other variants can also be specified.
-
-    Args:
-        block_list (tuple[Tensor, ...]): List of (blocks of) parameters.
-        state (Mapping[Tensor, _StateValueType]): Mapping containing optimizer state.
-        block_info_list (tuple[BlockInfo, ...]): List containing corresponding BlockInfo for each block/parameter in block_list.
-            Note that this should have the same length as block_list.
-        beta2 (float): Exponential moving average factor for Adam/RMSprop second moment state. If beta2 = 1., will use
-            unweighted sum. (Default: 1.0)
-        epsilon (float): Epsilon term for regularizing preconditioner to ensure positive definiteness. (Default: 1e-10)
-        use_bias_correction (bool): Flag for using bias correction. (Default: False)
-
-    """
-
-    def __init__(
-        self,
-        block_list: tuple[Tensor, ...],
-        state: Mapping[Tensor, _StateValueType],
-        block_info_list: tuple[BlockInfo, ...],
-        beta2: float = 1.0,
-        epsilon: float = 1e-10,
-        use_bias_correction: bool = True,
-    ) -> None:
-        super().__init__(block_list)
-
-        # Instantiate scalar hyperparameters.
-        self._beta2 = beta2
-        self._epsilon = epsilon
-        self._use_bias_correction = use_bias_correction
-        self._bias_correction2: Tensor = torch.tensor(1.0)
-
-        # Instantiate (blocked) AdaGrad preconditioners and construct preconditioner list.
-        # NOTE: We need to instantiate the AdaGrad preconditioner states within the optimizer's state dictionary,
-        # and do not explicitly store them as AdagradPreconditionerList attributes here.
-        # This is because the optimizer state is defined per-parameter, but AdagradPreconditionerList is defined
-        # across each parameter group (which includes multiple parameters).
-        preconditioner_list: list[Tensor] = []
-        for block, block_info in zip(block_list, block_info_list, strict=True):
-            param_index, block_index = block_info.composable_block_ids
-            assert block_index in state[block_info.param], (
-                f"{block_index=} not found in {state[block_info.param]=}. "
-                "Please check the initialization of self.state[block_info.param][block_index] "
-                "within DistributedShampoo._initialize_blocked_parameters_state, and check the initialization of BlockInfo "
-                "within Distributor for the correctness of block_index."
-            )
-            block_state = state[block_info.param][block_index]
-
-            # Instantiate AdaGrad optimizer state for this block.
-            preconditioner_index = str(param_index) + "." + str(block_index)
-            block_state[ADAGRAD] = block_info.allocate_zeros_tensor(
-                size=block.size(),
-                dtype=block.dtype,
-                device=block.device,
-            )
-            preconditioner_list.append(block_info.get_tensor(block_state[ADAGRAD]))
-
-            logger.info(
-                f"Instantiated Adagrad Preconditioner {preconditioner_index} ({block_state[ADAGRAD].shape} with dtype {block_state[ADAGRAD].dtype}) "
-                f"for Parameter {param_index} ({block_info.param.shape}), Block {block_index} ({block.shape})."
-            )
-
-        # Masked lists are the list of active preconditioners or values after filtering out gradients with None.
-        self._local_preconditioner_list: tuple[Tensor, ...] = tuple(preconditioner_list)
-        self._masked_preconditioner_list: tuple[Tensor, ...] = (
-            self._local_preconditioner_list
-        )
-
-        # Construct lists of numels and bytes for logging purposes.
-        self._numel_list: tuple[int, ...] = tuple(
-            preconditioner.numel() for preconditioner in self._local_preconditioner_list
-        )
-        self._num_bytes_list: tuple[int, ...] = tuple(
-            preconditioner.numel() * preconditioner.element_size()
-            for preconditioner in self._local_preconditioner_list
-        )
-
-    @_profile_decorator
-    def update_preconditioners(
-        self,
-        masked_grad_list: tuple[Tensor, ...],
-        step: Tensor,
-        perform_amortized_computation: bool = False,
-    ) -> None:
-        if self._beta2 == 1.0:
-            torch._foreach_addcmul_(
-                self._masked_preconditioner_list,
-                masked_grad_list,
-                masked_grad_list,
-                value=1.0,
-            )
-        else:
-            torch._foreach_mul_(self._masked_preconditioner_list, self._beta2)
-            torch._foreach_addcmul_(
-                self._masked_preconditioner_list,
-                masked_grad_list,
-                masked_grad_list,
-                value=1 - self._beta2,
-            )
-
-        # Update bias correction term based on step list.
-        if self._use_bias_correction and self._beta2 < 1.0:
-            self._bias_correction2 = torch.tensor(1.0) - self._beta2**step
-
-    @_profile_decorator
-    def precondition(self, masked_grad_list: tuple[Tensor, ...]) -> tuple[Tensor, ...]:
-        """
-        Preconditions the gradient list using the AdaGrad preconditioner.
-
-        Args:
-            masked_grad_list (tuple[Tensor, ...]): A tuple of gradients with None values removed.
-
-        Returns:
-            preconditioned_grads (tuple[Tensor, ...]): A list of preconditioned gradients.
-        """
-        masked_bias_corrected_preconditioner_list = torch._foreach_div(
-            self._masked_preconditioner_list,
-            self._bias_correction2,
-        )
-        torch._foreach_sqrt_(masked_bias_corrected_preconditioner_list)
-        torch._foreach_add_(masked_bias_corrected_preconditioner_list, self._epsilon)
-        return torch._foreach_div(
-            masked_grad_list, masked_bias_corrected_preconditioner_list
-        )
-
-    @_profile_decorator
-    def compress_preconditioner_list(
-        self, local_grad_selector: tuple[bool, ...]
-    ) -> None:
-        self._masked_preconditioner_list = compress_list(
-            self._local_preconditioner_list, local_grad_selector
-        )
 
 
 @dataclass
@@ -554,7 +201,7 @@ class BaseShampooKroneckerFactorsUnwrapped:
             exception (Exception | None): Any exception that occurred during computation, or None if successful.
         """
 
-    @_profile_decorator
+    @profile_decorator
     def amortized_computation(self, bias_correction2: float) -> None:
         """Performs amortized computation for Shampoo preconditioners.
 
@@ -1522,7 +1169,7 @@ class BaseShampooPreconditionerList(
             inverse_roots (tuple[float, ...]): Inverse roots for each preconditioner of a block.
         """
 
-    @_profile_decorator
+    @profile_decorator
     def update_preconditioners(
         self,
         masked_grad_list: tuple[Tensor, ...],
@@ -1600,7 +1247,7 @@ class BaseShampooPreconditionerList(
             for numel, block in zip(self._numel_list, block_list, strict=True)
         )
 
-    @_profile_decorator
+    @profile_decorator
     def compress_preconditioner_list(
         self, local_grad_selector: tuple[bool, ...]
     ) -> None:
@@ -1614,7 +1261,7 @@ class BaseShampooPreconditionerList(
             self._local_preconditioned_dims_selector_list, local_grad_selector
         )
 
-    @_profile_decorator
+    @profile_decorator
     def _update_factor_matrices(self, masked_grad_list: tuple[Tensor, ...]) -> None:
         # NOTE: Unlike AdagradPreconditionerList, we will loop through each gradient individually.
         # We apply foreach operators onto the list of Kronecker factor matrices (as opposed to the
@@ -1773,7 +1420,7 @@ class BaseShampooPreconditionerList(
             preconditioned_grad (Tensor): The preconditioned gradient tensor.
         """
 
-    @_profile_decorator
+    @profile_decorator
     def precondition(self, masked_grad_list: tuple[Tensor, ...]) -> tuple[Tensor, ...]:
         """
         Preconditions a list of gradients using the Shampoo preconditioner that rely on ShampooPreconditionerConfig.
@@ -1969,7 +1616,7 @@ class EigenvalueCorrectedShampooPreconditionerList(
             ),
         )
 
-    @_profile_decorator
+    @profile_decorator
     def update_preconditioners(
         self,
         masked_grad_list: tuple[Tensor, ...],

@@ -32,19 +32,26 @@ from distributed_shampoo.distributor.shampoo_hsdp_distributor import HSDPDistrib
 from distributed_shampoo.distributor.shampoo_hybrid_shard_distributor import (
     HybridShardDistributor,
 )
+from distributed_shampoo.preconditioner.adagrad_preconditioner_list import (
+    AdagradPreconditionerList,
+)
 from distributed_shampoo.preconditioner.matrix_functions_types import (
     EigendecompositionConfig,
     PseudoInverseConfig,
 )
-
+from distributed_shampoo.preconditioner.preconditioner_list import PreconditionerList
+from distributed_shampoo.preconditioner.sgd_preconditioner_list import (
+    SGDPreconditionerList,
+)
 from distributed_shampoo.preconditioner.shampoo_preconditioner_list import (
-    AdagradPreconditionerList,
     EigendecomposedShampooPreconditionerList,
     EigenvalueCorrectedShampooPreconditionerList,
-    PreconditionerList,
     RootInvShampooPreconditionerList,
-    SGDPreconditionerList,
+)
+from distributed_shampoo.preconditioner.sign_descent_preconditioner_list import (
     SignDescentPreconditionerList,
+)
+from distributed_shampoo.preconditioner.spectral_descent_preconditioner_list import (
     SpectralDescentPreconditionerList,
 )
 
