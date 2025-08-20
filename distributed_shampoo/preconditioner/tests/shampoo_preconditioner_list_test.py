@@ -42,6 +42,7 @@ from distributed_shampoo.preconditioner.shampoo_preconditioner_list import (
 from distributed_shampoo.shampoo_types import (
     AmortizedPreconditionerConfig,
     DefaultShampooConfig,
+    DefaultSignDescentPreconditionerConfig,
     DefaultSOAPConfig,
     DefaultSpectralDescentPreconditionerConfig,
     EigendecomposedShampooPreconditionerConfig,
@@ -257,11 +258,17 @@ class SignDescentPreconditionerListTest(AbstractPreconditionerListTest.Interface
         )
 
     def _instantiate_preconditioner_list(
-        self, **kwargs: Any
+        self, **kwargs: object
     ) -> SignDescentPreconditionerList:
+        assert isinstance(
+            preconditioner_config := kwargs.get(
+                "preconditioner_config", DefaultSignDescentPreconditionerConfig
+            ),
+            SignDescentPreconditionerConfig,
+        )
         return SignDescentPreconditionerList(
             block_list=self._block_list,
-            preconditioner_config=SignDescentPreconditionerConfig(**kwargs),
+            preconditioner_config=preconditioner_config,
         )
 
     @parametrize(
@@ -284,7 +291,7 @@ class SignDescentPreconditionerListTest(AbstractPreconditionerListTest.Interface
         )
         self._verify_preconditioner_updates(
             preconditioner_list=self._instantiate_preconditioner_list(
-                scale_fn=scale_fn
+                preconditioner_config=SignDescentPreconditionerConfig(scale_fn=scale_fn)
             ),
             masked_grad_lists=[masked_grad_list],
             masked_expected_preconditioned_grad_list=masked_expected_preconditioned_grad_list,
