@@ -23,7 +23,6 @@ from distributed_shampoo.preconditioner import matrix_functions
 from distributed_shampoo.preconditioner.matrix_functions import (
     _check_2d_tensor,
     _check_square_matrix,
-    _matrix_inverse_root_newton,
     _matrix_perturbation,
     matrix_eigendecomposition,
     matrix_inverse_root,
@@ -296,39 +295,32 @@ class MatrixInverseRootTest(unittest.TestCase):
         )
 
     @parametrize(
-        "root_inv_config, implementation, msg",
+        "root_inv_config, msg",
         [
-            (CoupledNewtonConfig(), "_matrix_inverse_root_newton", "Newton"),
+            (CoupledNewtonConfig(), "Newton"),
             (
                 CoupledHigherOrderConfig(rel_epsilon=0.0, abs_epsilon=0.0),
-                "_matrix_inverse_root_higher_order",
                 "Higher order method",
             ),
         ],
     )
     def test_matrix_inverse_root_reach_max_iterations(
-        self, root_inv_config: RootInvConfig, implementation: str, msg: str
+        self, root_inv_config: RootInvConfig, msg: str
     ) -> None:
         A = torch.tensor([[1.0, 0.0], [0.0, 4.0]])
         root = Fraction(4)
         with mock.patch.object(
             matrix_functions,
-            implementation,
-            return_value=(
+            "_assign_function_args_from_config",
+            return_value=lambda *args, **kwargs: (
                 None,
                 None,
                 NewtonConvergenceFlag.REACHED_MAX_ITERS,
                 None,
                 None,
             ),
-        ), self.assertLogs(
-            level="WARNING",
-        ) as cm:
-            matrix_inverse_root(
-                A=A,
-                root=root,
-                root_inv_config=root_inv_config,
-            )
+        ), self.assertLogs(level="WARNING") as cm:
+            matrix_inverse_root(A=A, root=root, root_inv_config=root_inv_config)
             self.assertIn(
                 f"{msg} did not converge and reached maximum number of iterations!",
                 [r.msg for r in cm.records],
@@ -583,13 +575,17 @@ class NewtonRootInverseTest(unittest.TestCase):
         A_tol: float,
         M_tol: float,
     ) -> None:
-        X, _, _, _, M_error = _matrix_inverse_root_newton(
-            A(n), root, epsilon, max_iterations, M_tol
+        X = matrix_inverse_root(
+            A=A(n),
+            root=root,
+            root_inv_config=CoupledNewtonConfig(
+                max_iterations=max_iterations, tolerance=M_tol
+            ),
+            epsilon=epsilon,
         )
         abs_A_error = torch.dist(torch.linalg.matrix_power(X, -root), A(n), p=torch.inf)
         A_norm = torch.linalg.norm(A(n), ord=torch.inf)
         rel_A_error = abs_A_error / torch.maximum(torch.tensor(1.0), A_norm)
-        self.assertLessEqual(M_error.item(), M_tol)
         self.assertLessEqual(rel_A_error.item(), A_tol)
 
     @parametrize("root", [2, 4, 8])

@@ -353,6 +353,287 @@ def matrix_inverse_root(
 
         return X, L, Q
 
+    def matrix_inverse_root_newton(
+        A: Tensor,
+        root: int,
+        epsilon: float = 0.0,
+        max_iterations: int = 100,
+        tolerance: float = 1e-6,
+    ) -> tuple[Tensor, Tensor, NewtonConvergenceFlag, int, Tensor]:
+        """Compute matrix inverse root using coupled inverse Newton iteration.
+
+            alpha <- -1 / p
+            X <- 1/c * I
+            M <- 1/c^p * A
+            repeat until convergence
+                M' <- (1 - alpha) * I + alpha * M
+                X <- X * M'
+                M <- M'^p * M
+
+        where c = (2 |A|_F / (p + 1))^{1/p}. This ensures that |A|_2 <= |A|_F < (p + 1) c^p, which guarantees convergence.
+        We will instead use z = (p + 1) / (2 * |A|_F).
+
+        NOTE: Exponent multiplier not compatible with coupled inverse Newton iteration!
+
+        Args:
+            A (Tensor): Matrix of interest.
+            root (int): Root of interest. Any natural number.
+            epsilon (float): Adds epsilon * I to matrix before taking matrix root. (Default: 0.0)
+            max_iterations (int): Maximum number of iterations. (Default: 100)
+            tolerance (float): Tolerance. (Default: 1e-6)
+
+        Returns:
+            A_root (Tensor): Inverse square root of matrix.
+            M (Tensor): Coupled matrix.
+            termination_flag (NewtonConvergenceFlag): Specifies convergence.
+            iteration (int): Number of iterations.
+            error (Tensor): Final error between M and I.
+
+        """
+
+        # initialize iteration, dimension, and alpha
+        iteration = 0
+        dim = A.shape[0]
+        alpha = -1 / root
+        identity = torch.eye(dim, dtype=A.dtype, device=A.device)
+
+        # add regularization
+        A_ridge = _matrix_perturbation(A, epsilon=epsilon, is_eigenvalues=False)
+
+        # initialize matrices
+        A_nrm = torch.linalg.norm(A_ridge)
+        z = (root + 1) / (2 * A_nrm)
+        X = z ** (-alpha) * identity
+        M = z * A_ridge
+        error = torch.dist(M, identity, p=torch.inf)
+
+        # main for loop
+        while error > tolerance and iteration < max_iterations:
+            iteration += 1
+            M_p = M.mul(alpha).add_(identity, alpha=(1 - alpha))
+            X = X @ M_p
+            M = torch.linalg.matrix_power(M_p, root) @ M
+            error = torch.dist(M, identity, p=torch.inf)
+
+        # determine convergence flag
+        termination_flag = (
+            NewtonConvergenceFlag.CONVERGED
+            if error <= tolerance
+            else NewtonConvergenceFlag.REACHED_MAX_ITERS
+        )
+
+        return X, M, termination_flag, iteration, error
+
+    def matrix_inverse_root_higher_order(
+        A: Tensor,
+        root: Fraction,
+        rel_epsilon: float = 0.0,
+        abs_epsilon: float = 0.0,
+        max_iterations: int = 100,
+        tolerance: float = 1e-20,
+        order: int = 3,  # 2 represents Newton's method
+        disable_tf32: bool = True,
+    ) -> tuple[Tensor, Tensor, NewtonConvergenceFlag, int, Tensor]:
+        """Compute matrix inverse root using coupled iterations, similar to above but generalized to support higher order.
+
+            Rough sketch (at order = 2, i.e., Newton)
+
+            alpha <- -1 / p
+            X <- 1/c * I
+            M <- 1/c^p * A
+            repeat until convergence
+                M' <- (1 - alpha) * I + alpha * M
+                X <- X * M'
+                M <- M'^p * M
+
+        where c = (k |A|_F / (p + 1))^{1/p}. This ensures that |A|_2 <= |A|_F < (p + 1) c^p, which guarantees convergence.
+        We will instead use z = (p + 1) / (k * |A|_F).
+        Here, k > 1, and typically lies in [1, 2]. It is picked internally in this method.
+
+        NOTE: Exponent multiplier not compatible with coupled iterations!
+
+        Args:
+            A (Tensor): Matrix of interest.
+            root (Fraction): Root of interest. Any rational number. Use small numerator, denominator for best numerics as well as performance.
+            rel_epsilon (float): Adds epsilon * lambda_max * I to matrix before taking matrix root, where lambda_max is an upper bound on maximum eigenvalue. (Default: 0.0)
+            abs_epsilon (float): Adds epsilon * I to matrix before taking matrix root. When both "abs_epsilon" and "rel_epsilon" are specified, max(rel_epsilon * lambda_max, abs_epsilon) * I is added to the matrix.
+                Generally recommend setting according to A.dtype (1e-3 for tf32, 1e-5 for fp32, 1e-9 for fp64) (Default: 0.0)
+            max_iterations (int): Maximum number of iterations. Typically we need < 20 iterations. (Default: 100)
+            tolerance (float): Tolerance for determining exit criterion from iterations. (Default: 1e-20, which in practice guarantees they run to convergence)
+            order (int): Order of the method. Order must be >= 2.  Higher order methods accelerate convergence (fewer iterations), but can take more matmuls per iteration. (Default: 3)
+            disable_tf32 (bool): Whether to disable tf32 matmuls or not internally. Highly recommend keeping True, since tf32 is challenging numerically here. (Default: True)
+
+        Returns:
+            A_root (Tensor): Inverse root of matrix (A^{-1/root}).
+            M (Tensor): Coupled matrix.
+            termination_flag (NewtonConvergenceFlag): Specifies convergence.
+            iteration (int): Number of iterations.
+            error (Tensor): Final error, measured as |A * A_root^(p/q) - I|_Inf, where root = -q/p.
+
+        Raises:
+            ArithmeticError: If the computed result is inaccurate, i.e., error > 1e-1 or if there is an internal error.
+            ArithmeticError: If the input matrix has entries close to infinity.
+            ArithmeticError: If NaN/Inf is found in the matrix inverse root after powering for fractions.
+
+        """
+
+        tf32_flag = torch.backends.cuda.matmul.allow_tf32
+        if disable_tf32:
+            torch.backends.cuda.matmul.allow_tf32 = False
+        logger.debug(
+            f"Using tf32 precision for fp32 matmul: {torch.backends.cuda.matmul.allow_tf32}"
+        )
+
+        try:
+            t_iter_begin = time.perf_counter()
+            p = root.numerator
+            q = root.denominator
+            dtype = A.dtype
+
+            if min(abs(p), abs(q)) >= 10:
+                logger.warning(
+                    f"{abs(root.numerator)=} and {abs(root.denominator)=} are probably too big for best performance."
+                )
+
+            # develop the b coefficients array first (ref: Lakic's paper)
+            b = torch.zeros(order, dtype=A.dtype, device=A.device)
+            b[0] = 1
+            num = 1
+            denom = 1
+            for i in range(1, order):
+                num *= 1 + (i - 1) * p
+                denom *= i * p
+                b[i] = num / denom
+
+            # initialize iteration, dimension, and s
+            iteration = 0
+            n = A.shape[0]
+            s = -1 / p
+
+            # We add a diagonal term to condition the matrix better
+            # We follow the Google style conditioning (in spirit) and scale by an upper bound on the max eigenvalue
+            # NOTE: this is different from other parts of Shampoo for now
+            # Simply use the basic upper bound on the spectral radius of A via infinity norm (should not underflow)
+            # NOTE: One may wish to use a cheap (|A^4|_inf)**0.25 to get a tighter upper bound, but beware of fp32 underflow!
+            lambda_max_approx = torch.linalg.matrix_norm(A, torch.inf)
+
+            # We have not seen lambda_max being Inf in practice, however there is not a whole lot we can do in this pathological case and its good to bail early
+            if not isfinite(lambda_max_approx):
+                raise ArithmeticError(
+                    "Input matrix has entries close to inf, exiting root inverse"
+                )
+
+            # Now scale and setup our variables
+            epsilon = max(rel_epsilon * lambda_max_approx, abs_epsilon)
+            identity = torch.eye(n, dtype=dtype, device=A.device)
+            A_ridge = _matrix_perturbation(A, epsilon=epsilon, is_eigenvalues=False)
+            lambda_max_approx += epsilon
+
+            # Figure out a constant that gives good starting location
+            # We stick to a conservative setting that gives very good accuracy
+            # For a ref, see https://github.com/google-research/google-research/blob/master/scalable_shampoo/pytorch/matrix_functions.py#L114
+            z = 1.0 / torch.trace(A_ridge).item()
+            X = (z ** (-s)) * identity
+            M = z * A_ridge
+            error = torch.linalg.vector_norm(M - identity, torch.inf)
+            t_iter_end = time.perf_counter()
+            logger.debug(
+                f"Iteration dur (s): {t_iter_end - t_iter_begin}, Error (|M-I|) at iteration {iteration}: {error.item()}"
+            )
+
+            # Do one iteration of basic Newton first. This is used to mathematically guarantee convergence of higher order method.
+            # TODO: we may be able to get rid of this with a more careful analysis of the convergence region
+            t_iter_begin = time.perf_counter()
+            M_p = M.mul(s).add_(identity, alpha=(1 - s))
+            X = X @ M_p
+            M = torch.linalg.matrix_power(M_p, p) @ M
+            error = torch.linalg.vector_norm(M - identity, torch.inf)
+            n_matmul = math.ceil(math.log2(p)) + 2
+            iteration += 1
+            t_iter_end = time.perf_counter()
+            logger.debug(
+                f"Iteration dur (s): {t_iter_end - t_iter_begin}, Error (|M-I|) at iteration {iteration}: {error.item()}"
+            )
+
+            # main while loop
+            while error > tolerance and iteration < max_iterations:
+                t_iter_begin = time.perf_counter()
+                iteration += 1
+
+                # create M_p via Horner's rule
+                base_matrix = identity - M
+                M_p = base_matrix.mul(b[order - 1]).add_(
+                    identity, alpha=float(b[order - 2])
+                )
+                for i in reversed(range(order - 2)):
+                    M_p = torch.addmm(identity, M_p, base_matrix, beta=float(b[i]))
+
+                # rest is same as Newton
+                X = X @ M_p
+                M = torch.linalg.matrix_power(M_p, p) @ M
+                new_error = torch.linalg.vector_norm(M - identity, torch.inf)
+                n_matmul += math.ceil(math.log2(p)) + order
+
+                # TODO: 1.2 is the value from the Google code, can be tuned
+                if new_error > error * 1.2 or (new_error == error and error < 1e-3):
+                    logger.debug(
+                        f"Coupled inverse Newton is stagnating or diverging based on comparing current error {new_error.item()} against last iteration's error {error.item()}."
+                        f"(We assume divergence if the new error > 1.2 * previous error, and assume stagnation if they are equal.)"
+                    )
+                    termination_flag = NewtonConvergenceFlag.EARLY_STOP
+                    break
+                error = new_error
+
+                t_iter_end = time.perf_counter()
+                logger.debug(
+                    f"Iteration dur (s): {t_iter_end - t_iter_begin}, Error (|M-I|) at iteration {iteration}: {error.item()}"
+                )
+            else:
+                # determine convergence flag based on error and tolerance because the main while loop exited with False condition.
+                termination_flag = (
+                    NewtonConvergenceFlag.REACHED_MAX_ITERS
+                    if error > tolerance
+                    else NewtonConvergenceFlag.CONVERGED
+                )
+
+            # compute a cheap error proxy
+            true_error = torch.linalg.vector_norm(
+                A_ridge @ torch.linalg.matrix_power(X, p) - identity, torch.inf
+            )
+            n_matmul += math.ceil(math.log2(p)) + 1
+
+            # If the error is too high, let us log and raise an exception for investigation. This should be relatively infrequent (if epsilon isn't too small)
+            if true_error > 1e-1:
+                raise ArithmeticError(
+                    f"Error in matrix inverse root (before powering for fractions) {true_error} exceeds threshold 1e-1, raising an exception!"
+                )
+
+            # Now power the root to q
+            if q > 1:
+                X = torch.linalg.matrix_power(X, q)
+                n_matmul += math.ceil(math.log2(q))
+
+            logger.debug(f"Upper bound on maximum eigenvalue: {lambda_max_approx}")
+            logger.debug(f"Number of matmuls: {n_matmul}")
+            logger.debug(f"Number of iterations: {iteration}")
+            logger.debug(f"Error before powering: {true_error}")
+            logger.debug(f"Termination Flag: {termination_flag}")
+
+            # If we have inf/nan in our answer also raise an arithmetic exception.
+            # Usually, this is due to the powering to q > 1 which can blow up entries.
+            # We have not seen this yet for q = 1 in Shampoo.
+            if not torch.isfinite(X).all():
+                raise ArithmeticError(
+                    "NaN/Inf in matrix inverse root (after powering for fractions), raising an exception!"
+                )
+
+        finally:
+            # Make sure we restore tf32 mode correctly before returning
+            if disable_tf32:
+                torch.backends.cuda.matmul.allow_tf32 = tf32_flag
+
+        return X, M, termination_flag, iteration, true_error
+
     match root_inv_config:
         case EigenConfig():
             X, _, _ = _assign_function_args_from_config(
@@ -366,7 +647,7 @@ def matrix_inverse_root(
                 )
 
             X, _, termination_flag, _, _ = _assign_function_args_from_config(
-                func=_matrix_inverse_root_newton, config=root_inv_config
+                func=matrix_inverse_root_newton, config=root_inv_config
             )(A=A, root=root.numerator, epsilon=epsilon)
             if termination_flag == NewtonConvergenceFlag.REACHED_MAX_ITERS:
                 logging.warning(
@@ -374,7 +655,7 @@ def matrix_inverse_root(
                 )
         case CoupledHigherOrderConfig():
             X, _, termination_flag, _, _ = _assign_function_args_from_config(
-                func=_matrix_inverse_root_higher_order, config=root_inv_config
+                func=matrix_inverse_root_higher_order, config=root_inv_config
             )(A=A, root=root)
             if termination_flag == NewtonConvergenceFlag.REACHED_MAX_ITERS:
                 logging.warning(
@@ -599,289 +880,6 @@ def matrix_eigendecomposition(
             raise NotImplementedError(
                 f"Eigendecomposition config is not implemented! Specified eigendecomposition config is {type(eigendecomposition_config).__name__}."
             )
-
-
-def _matrix_inverse_root_newton(
-    A: Tensor,
-    root: int,
-    epsilon: float = 0.0,
-    max_iterations: int = 100,
-    tolerance: float = 1e-6,
-) -> tuple[Tensor, Tensor, NewtonConvergenceFlag, int, Tensor]:
-    """Compute matrix inverse root using coupled inverse Newton iteration.
-
-        alpha <- -1 / p
-        X <- 1/c * I
-        M <- 1/c^p * A
-        repeat until convergence
-            M' <- (1 - alpha) * I + alpha * M
-            X <- X * M'
-            M <- M'^p * M
-
-    where c = (2 |A|_F / (p + 1))^{1/p}. This ensures that |A|_2 <= |A|_F < (p + 1) c^p, which guarantees convergence.
-    We will instead use z = (p + 1) / (2 * |A|_F).
-
-    NOTE: Exponent multiplier not compatible with coupled inverse Newton iteration!
-
-    Args:
-        A (Tensor): Matrix of interest.
-        root (int): Root of interest. Any natural number.
-        epsilon (float): Adds epsilon * I to matrix before taking matrix root. (Default: 0.0)
-        max_iterations (int): Maximum number of iterations. (Default: 100)
-        tolerance (float): Tolerance. (Default: 1e-6)
-
-    Returns:
-        A_root (Tensor): Inverse square root of matrix.
-        M (Tensor): Coupled matrix.
-        termination_flag (NewtonConvergenceFlag): Specifies convergence.
-        iteration (int): Number of iterations.
-        error (Tensor): Final error between M and I.
-
-    """
-
-    # initialize iteration, dimension, and alpha
-    iteration = 0
-    dim = A.shape[0]
-    alpha = -1 / root
-    identity = torch.eye(dim, dtype=A.dtype, device=A.device)
-
-    # add regularization
-    A_ridge = _matrix_perturbation(A, epsilon=epsilon, is_eigenvalues=False)
-
-    # initialize matrices
-    A_nrm = torch.linalg.norm(A_ridge)
-    z = (root + 1) / (2 * A_nrm)
-    X = z ** (-alpha) * identity
-    M = z * A_ridge
-    error = torch.dist(M, identity, p=torch.inf)
-
-    # main for loop
-    while error > tolerance and iteration < max_iterations:
-        iteration += 1
-        M_p = M.mul(alpha).add_(identity, alpha=(1 - alpha))
-        X = X @ M_p
-        M = torch.linalg.matrix_power(M_p, root) @ M
-        error = torch.dist(M, identity, p=torch.inf)
-
-    # determine convergence flag
-    termination_flag = (
-        NewtonConvergenceFlag.CONVERGED
-        if error <= tolerance
-        else NewtonConvergenceFlag.REACHED_MAX_ITERS
-    )
-
-    return X, M, termination_flag, iteration, error
-
-
-def _matrix_inverse_root_higher_order(
-    A: Tensor,
-    root: Fraction,
-    rel_epsilon: float = 0.0,
-    abs_epsilon: float = 0.0,
-    max_iterations: int = 100,
-    tolerance: float = 1e-20,
-    order: int = 3,  # 2 represents Newton's method
-    disable_tf32: bool = True,
-) -> tuple[Tensor, Tensor, NewtonConvergenceFlag, int, Tensor]:
-    """Compute matrix inverse root using coupled iterations, similar to above but generalized to support higher order.
-
-        Rough sketch (at order = 2, i.e., Newton)
-
-        alpha <- -1 / p
-        X <- 1/c * I
-        M <- 1/c^p * A
-        repeat until convergence
-            M' <- (1 - alpha) * I + alpha * M
-            X <- X * M'
-            M <- M'^p * M
-
-    where c = (k |A|_F / (p + 1))^{1/p}. This ensures that |A|_2 <= |A|_F < (p + 1) c^p, which guarantees convergence.
-    We will instead use z = (p + 1) / (k * |A|_F).
-    Here, k > 1, and typically lies in [1, 2]. It is picked internally in this method.
-
-    NOTE: Exponent multiplier not compatible with coupled iterations!
-
-    Args:
-        A (Tensor): Matrix of interest.
-        root (Fraction): Root of interest. Any rational number. Use small numerator, denominator for best numerics as well as performance.
-        rel_epsilon (float): Adds epsilon * lambda_max * I to matrix before taking matrix root, where lambda_max is an upper bound on maximum eigenvalue. (Default: 0.0)
-        abs_epsilon (float): Adds epsilon * I to matrix before taking matrix root. When both "abs_epsilon" and "rel_epsilon" are specified, max(rel_epsilon * lambda_max, abs_epsilon) * I is added to the matrix.
-            Generally recommend setting according to A.dtype (1e-3 for tf32, 1e-5 for fp32, 1e-9 for fp64) (Default: 0.0)
-        max_iterations (int): Maximum number of iterations. Typically we need < 20 iterations. (Default: 100)
-        tolerance (float): Tolerance for determining exit criterion from iterations. (Default: 1e-20, which in practice guarantees they run to convergence)
-        order (int): Order of the method. Order must be >= 2.  Higher order methods accelerate convergence (fewer iterations), but can take more matmuls per iteration. (Default: 3)
-        disable_tf32 (bool): Whether to disable tf32 matmuls or not internally. Highly recommend keeping True, since tf32 is challenging numerically here. (Default: True)
-
-    Returns:
-        A_root (Tensor): Inverse root of matrix (A^{-1/root}).
-        M (Tensor): Coupled matrix.
-        termination_flag (NewtonConvergenceFlag): Specifies convergence.
-        iteration (int): Number of iterations.
-        error (Tensor): Final error, measured as |A * A_root^(p/q) - I|_Inf, where root = -q/p.
-
-    Raises:
-        ArithmeticError: If the computed result is inaccurate, i.e., error > 1e-1 or if there is an internal error.
-        ArithmeticError: If the input matrix has entries close to infinity.
-        ArithmeticError: If NaN/Inf is found in the matrix inverse root after powering for fractions.
-
-    """
-
-    tf32_flag = torch.backends.cuda.matmul.allow_tf32
-    if disable_tf32:
-        torch.backends.cuda.matmul.allow_tf32 = False
-    logger.debug(
-        f"Using tf32 precision for fp32 matmul: {torch.backends.cuda.matmul.allow_tf32}"
-    )
-
-    try:
-        t_iter_begin = time.perf_counter()
-        p = root.numerator
-        q = root.denominator
-        dtype = A.dtype
-
-        if min(abs(p), abs(q)) >= 10:
-            logger.warning(
-                f"{abs(root.numerator)=} and {abs(root.denominator)=} are probably too big for best performance."
-            )
-
-        # develop the b coefficients array first (ref: Lakic's paper)
-        b = torch.zeros(order, dtype=A.dtype, device=A.device)
-        b[0] = 1
-        num = 1
-        denom = 1
-        for i in range(1, order):
-            num *= 1 + (i - 1) * p
-            denom *= i * p
-            b[i] = num / denom
-
-        # initialize iteration, dimension, and s
-        iteration = 0
-        n = A.shape[0]
-        s = -1 / p
-
-        # We add a diagonal term to condition the matrix better
-        # We follow the Google style conditioning (in spirit) and scale by an upper bound on the max eigenvalue
-        # NOTE: this is different from other parts of Shampoo for now
-        # Simply use the basic upper bound on the spectral radius of A via infinity norm (should not underflow)
-        # NOTE: One may wish to use a cheap (|A^4|_inf)**0.25 to get a tighter upper bound, but beware of fp32 underflow!
-        lambda_max_approx = torch.linalg.matrix_norm(A, torch.inf)
-
-        # We have not seen lambda_max being Inf in practice, however there is not a whole lot we can do in this pathological case and its good to bail early
-        if not isfinite(lambda_max_approx):
-            raise ArithmeticError(
-                "Input matrix has entries close to inf, exiting root inverse"
-            )
-
-        # Now scale and setup our variables
-        epsilon = max(rel_epsilon * lambda_max_approx, abs_epsilon)
-        identity = torch.eye(n, dtype=dtype, device=A.device)
-        A_ridge = _matrix_perturbation(A, epsilon=epsilon, is_eigenvalues=False)
-        lambda_max_approx += epsilon
-
-        # Figure out a constant that gives good starting location
-        # We stick to a conservative setting that gives very good accuracy
-        # For a ref, see https://github.com/google-research/google-research/blob/master/scalable_shampoo/pytorch/matrix_functions.py#L114
-        z = 1.0 / torch.trace(A_ridge).item()
-        X = (z ** (-s)) * identity
-        M = z * A_ridge
-        error = torch.linalg.vector_norm(M - identity, torch.inf)
-        t_iter_end = time.perf_counter()
-        logger.debug(
-            f"Iteration dur (s): {t_iter_end - t_iter_begin}, Error (|M-I|) at iteration {iteration}: {error.item()}"
-        )
-
-        # Do one iteration of basic Newton first. This is used to mathematically guarantee convergence of higher order method.
-        # TODO: we may be able to get rid of this with a more careful analysis of the convergence region
-        t_iter_begin = time.perf_counter()
-        M_p = M.mul(s).add_(identity, alpha=(1 - s))
-        X = X @ M_p
-        M = torch.linalg.matrix_power(M_p, p) @ M
-        error = torch.linalg.vector_norm(M - identity, torch.inf)
-        n_matmul = math.ceil(math.log2(p)) + 2
-        iteration += 1
-        t_iter_end = time.perf_counter()
-        logger.debug(
-            f"Iteration dur (s): {t_iter_end - t_iter_begin}, Error (|M-I|) at iteration {iteration}: {error.item()}"
-        )
-
-        # main while loop
-        while error > tolerance and iteration < max_iterations:
-            t_iter_begin = time.perf_counter()
-            iteration += 1
-
-            # create M_p via Horner's rule
-            base_matrix = identity - M
-            M_p = base_matrix.mul(b[order - 1]).add_(
-                identity, alpha=float(b[order - 2])
-            )
-            for i in reversed(range(order - 2)):
-                M_p = torch.addmm(identity, M_p, base_matrix, beta=float(b[i]))
-
-            # rest is same as Newton
-            X = X @ M_p
-            M = torch.linalg.matrix_power(M_p, p) @ M
-            new_error = torch.linalg.vector_norm(M - identity, torch.inf)
-            n_matmul += math.ceil(math.log2(p)) + order
-
-            # TODO: 1.2 is the value from the Google code, can be tuned
-            if new_error > error * 1.2 or (new_error == error and error < 1e-3):
-                logger.debug(
-                    f"Coupled inverse Newton is stagnating or diverging based on comparing current error {new_error.item()} against last iteration's error {error.item()}."
-                    f"(We assume divergence if the new error > 1.2 * previous error, and assume stagnation if they are equal.)"
-                )
-                termination_flag = NewtonConvergenceFlag.EARLY_STOP
-                break
-            error = new_error
-
-            t_iter_end = time.perf_counter()
-            logger.debug(
-                f"Iteration dur (s): {t_iter_end - t_iter_begin}, Error (|M-I|) at iteration {iteration}: {error.item()}"
-            )
-        else:
-            # determine convergence flag based on error and tolerance because the main while loop exited with False condition.
-            termination_flag = (
-                NewtonConvergenceFlag.REACHED_MAX_ITERS
-                if error > tolerance
-                else NewtonConvergenceFlag.CONVERGED
-            )
-
-        # compute a cheap error proxy
-        true_error = torch.linalg.vector_norm(
-            A_ridge @ torch.linalg.matrix_power(X, p) - identity, torch.inf
-        )
-        n_matmul += math.ceil(math.log2(p)) + 1
-
-        # If the error is too high, let us log and raise an exception for investigation. This should be relatively infrequent (if epsilon isn't too small)
-        if true_error > 1e-1:
-            raise ArithmeticError(
-                f"Error in matrix inverse root (before powering for fractions) {true_error} exceeds threshold 1e-1, raising an exception!"
-            )
-
-        # Now power the root to q
-        if q > 1:
-            X = torch.linalg.matrix_power(X, q)
-            n_matmul += math.ceil(math.log2(q))
-
-        logger.debug(f"Upper bound on maximum eigenvalue: {lambda_max_approx}")
-        logger.debug(f"Number of matmuls: {n_matmul}")
-        logger.debug(f"Number of iterations: {iteration}")
-        logger.debug(f"Error before powering: {true_error}")
-        logger.debug(f"Termination Flag: {termination_flag}")
-
-        # If we have inf/nan in our answer also raise an arithmetic exception.
-        # Usually, this is due to the powering to q > 1 which can blow up entries.
-        # We have not seen this yet for q = 1 in Shampoo.
-        if not torch.isfinite(X).all():
-            raise ArithmeticError(
-                "NaN/Inf in matrix inverse root (after powering for fractions), raising an exception!"
-            )
-
-    finally:
-        # Make sure we restore tf32 mode correctly before returning
-        if disable_tf32:
-            torch.backends.cuda.matmul.allow_tf32 = tf32_flag
-
-    return X, M, termination_flag, iteration, true_error
 
 
 @_check_2d_tensor
