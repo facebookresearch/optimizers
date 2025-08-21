@@ -63,17 +63,31 @@ class NewtonConvergenceFlag(enum.Enum):
 _FuncReturnType = TypeVar("_FuncReturnType")
 
 
-def _get_function_args_from_config(
+def _assign_function_args_from_config(
     func: Callable[..., _FuncReturnType], config: object
-) -> dict[str, Any]:
+) -> Callable[..., _FuncReturnType]:
     """
-    Returns a dict of arguments for func that are defined in config. Note that config is not expected to contain all arguments for func, nor are all fields in config expected to be applicable to func.
+    Creates a partial function with arguments from config that match func's parameter names.
+
+    This function examines the fields in the config object and creates a partial function
+    that pre-fills parameters of func with matching values from config. Only fields that
+    are present in both the config object and the function's parameter list are used.
+
+    Args:
+        func (Callable[..., _FuncReturnType]): The function to partially apply arguments to.
+        config (object): A dataclass object containing configuration values.
+
+    Returns:
+        decorated_func (Callable[..., _FuncReturnType]): A partial function with pre-filled arguments from config.
     """
-    return {
-        field.name: getattr(config, field.name)
-        for field in fields(config)  # type: ignore[arg-type]
-        if field.name in inspect.getfullargspec(func).args
-    }
+    return partial(
+        func,
+        **{
+            field.name: getattr(config, field.name)
+            for field in fields(config)  # type: ignore[arg-type]
+            if field.name in inspect.getfullargspec(func).args
+        },
+    )
 
 
 def _check_2d_tensor(
@@ -341,14 +355,9 @@ def matrix_inverse_root(
 
     match root_inv_config:
         case EigenConfig():
-            X, _, _ = matrix_inverse_root_eigen(
-                A=A,
-                root=root,
-                epsilon=epsilon,
-                **_get_function_args_from_config(
-                    matrix_inverse_root_eigen, root_inv_config
-                ),
-            )
+            X, _, _ = _assign_function_args_from_config(
+                func=matrix_inverse_root_eigen, config=root_inv_config
+            )(A=A, root=root, epsilon=epsilon)
         case CoupledNewtonConfig():
             # NOTE: Use Fraction.is_integer() instead when downstream applications are Python 3.12+ available
             if root.denominator != 1:
@@ -356,26 +365,17 @@ def matrix_inverse_root(
                     f"{root.denominator=} must be equal to 1 to use coupled inverse Newton iteration!"
                 )
 
-            X, _, termination_flag, _, _ = _matrix_inverse_root_newton(
-                A=A,
-                root=root.numerator,
-                epsilon=epsilon,
-                **_get_function_args_from_config(
-                    _matrix_inverse_root_newton, root_inv_config
-                ),
-            )
+            X, _, termination_flag, _, _ = _assign_function_args_from_config(
+                func=_matrix_inverse_root_newton, config=root_inv_config
+            )(A=A, root=root.numerator, epsilon=epsilon)
             if termination_flag == NewtonConvergenceFlag.REACHED_MAX_ITERS:
                 logging.warning(
                     "Newton did not converge and reached maximum number of iterations!"
                 )
         case CoupledHigherOrderConfig():
-            X, _, termination_flag, _, _ = _matrix_inverse_root_higher_order(
-                A=A,
-                root=root,
-                **_get_function_args_from_config(
-                    _matrix_inverse_root_higher_order, root_inv_config
-                ),
-            )
+            X, _, termination_flag, _, _ = _assign_function_args_from_config(
+                func=_matrix_inverse_root_higher_order, config=root_inv_config
+            )(A=A, root=root)
             if termination_flag == NewtonConvergenceFlag.REACHED_MAX_ITERS:
                 logging.warning(
                     "Higher order method did not converge and reached maximum number of iterations!"
@@ -585,23 +585,16 @@ def matrix_eigendecomposition(
                     tolerance=eigendecomposition_config.tolerance,
                 ):
                     return eigenvalues_estimate.diag(), eigenvectors_estimate
-            return eigh_eigenvalue_decomposition(
-                A=A_ridge,
-                **_get_function_args_from_config(
-                    eigh_eigenvalue_decomposition, eigendecomposition_config
-                ),
-            )
+            return _assign_function_args_from_config(
+                func=eigh_eigenvalue_decomposition, config=eigendecomposition_config
+            )(A=A_ridge)
         case QREigendecompositionConfig():
             assert (
                 eigenvectors_estimate is not None
             ), "eigenvectors_estimate should not be None when QR algorithm is used."
-            return qr_algorithm(
-                A=A_ridge,
-                eigenvectors_estimate=eigenvectors_estimate,
-                **_get_function_args_from_config(
-                    qr_algorithm, eigendecomposition_config
-                ),
-            )
+            return _assign_function_args_from_config(
+                func=qr_algorithm, config=eigendecomposition_config
+            )(A=A_ridge, eigenvectors_estimate=eigenvectors_estimate)
         case _:
             raise NotImplementedError(
                 f"Eigendecomposition config is not implemented! Specified eigendecomposition config is {type(eigendecomposition_config).__name__}."
@@ -991,19 +984,13 @@ def matrix_orthogonalization(
 
     match orthogonalization_config:
         case SVDOrthogonalizationConfig():
-            return svd_orthogonalization(
-                A=A,
-                **_get_function_args_from_config(
-                    svd_orthogonalization, orthogonalization_config
-                ),
-            ).mul_(scaling)
+            return _assign_function_args_from_config(
+                func=svd_orthogonalization, config=orthogonalization_config
+            )(A=A).mul_(scaling)
         case NewtonSchulzOrthogonalizationConfig():
-            return newton_schulz(
-                A=A,
-                **_get_function_args_from_config(
-                    newton_schulz, orthogonalization_config
-                ),
-            ).mul_(scaling)
+            return _assign_function_args_from_config(
+                func=newton_schulz, config=orthogonalization_config
+            )(A=A).mul_(scaling)
         case _:
             raise NotImplementedError(
                 f"Orthogonalization config is not implemented! Specified orthogonalization config is {type(orthogonalization_config).__name__}."
