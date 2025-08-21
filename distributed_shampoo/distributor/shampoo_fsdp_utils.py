@@ -7,31 +7,31 @@ LICENSE file in the root directory of this source tree.
 
 """
 
-from collections.abc import Callable
+import itertools
+from collections.abc import Callable, Iterable
 
 import torch
 from distributed_shampoo.shampoo_types import FSDPParameterMetadata
 
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP, ShardingStrategy
-
-from torch.distributed.fsdp._init_utils import HYBRID_SHARDING_STRATEGIES
 from torch.distributed.tensor import DTensor
-from torch.nn import Parameter
+
+from torch.optim.optimizer import ParamsT
 
 
 def compile_fsdp_parameter_metadata(
     module: torch.nn.Module,
-) -> dict[Parameter, FSDPParameterMetadata]:
+) -> dict[torch.nn.Parameter, FSDPParameterMetadata]:
     """Compiles parameter metadata necessary for FSDP Shampoo.
 
     Args:
         module (nn.Module): Module to compile metadata for.
 
     Returns:
-        param_metadata (dict[Parameter, FSDPParameterMetadata]): Dictionary mapping each parameter to its FSDP metadata.
+        param_metadata (dict[torch.nn.Parameter, FSDPParameterMetadata]): Dictionary mapping each parameter to its FSDP metadata.
 
     """
-    param_metadata: dict[Parameter, FSDPParameterMetadata] = {}
+    param_metadata: dict[torch.nn.Parameter, FSDPParameterMetadata] = {}
 
     for fsdp_module in FSDP.fsdp_modules(module):
         if (flat_param := fsdp_module._flat_param) is None:
@@ -76,108 +76,169 @@ def compile_fsdp_parameter_metadata(
 
 
 def _partition_params(
-    named_params: dict[str, Parameter],
-    fsdp_criteria: Callable[[Parameter], bool],
-    hsdp_criteria: Callable[[Parameter], bool],
-    other_criteria: Callable[[Parameter], bool],
-) -> tuple[dict[str, Parameter], dict[str, Parameter], dict[str, Parameter]]:
-    """Partitions parameters into FSDP, HSDP, and the rest of parameters.
+    params: ParamsT,
+    fsdp_criteria: Callable[[torch.Tensor], bool],
+    hsdp_criteria: Callable[[torch.Tensor], bool],
+) -> tuple[ParamsT, ParamsT, ParamsT]:
+    """Partitions parameters into FSDP, HSDP, and other parameters.
 
-    NOTE: The output dictionaries are guaranteed to be the partitions of the input `named_params`.
+    NOTE: The output partitions are guaranteed to cover all input `params`.
 
     Args:
-        named_params (dict[str, Parameter]): Dictionary mapping each parameter name to its corresponding parameter.
-        fsdp_criteria (Callable[[Parameter], bool]): Criteria for determining if a parameter is FSDP.
-        hsdp_criteria (Callable[[Parameter], bool]): Criteria for determining if a parameter is HSDP.
-        other_criteria (Callable[[Parameter], bool]): Criteria for determining if a parameter is not FSDP or HSDP.
-
+        params (ParamsT): Iterable of parameters, parameter groups, or dicts/tuples of parameters.
+        fsdp_criteria (Callable[[torch.Tensor], bool]): Function to determine if a parameter is FSDP.
+        hsdp_criteria (Callable[[torch.Tensor], bool]): Function to determine if a parameter is HSDP.
     Returns:
-        fsdp_params (dict[str, Parameter]): Dictionary mapping each parameter name to its corresponding FSDP parameter.
-        hsdp_params (dict[str, Parameter]): Dictionary mapping each parameter name to its corresponding HSDP parameter.
-        other_params (dict[str, Parameter]): Dictionary mapping each parameter name to its corresponding non-FSDP parameter.
+        fsdp_params (ParamsT): Partition of FSDP parameters in the same format as input.
+        hsdp_params (ParamsT): Partition of HSDP parameters in the same format as input.
+        other_params (ParamsT): Partition of non-FSDP and non-HSDP parameters in the same format as input.
 
     """
-    fsdp_params = {
-        fqn: param for fqn, param in named_params.items() if fsdp_criteria(param)
-    }
-    hsdp_params = {
-        fqn: param for fqn, param in named_params.items() if hsdp_criteria(param)
-    }
-    other_params = {
-        fqn: param for fqn, param in named_params.items() if other_criteria(param)
-    }
+    other_criteria: Callable[[torch.Tensor], bool] = lambda param: not fsdp_criteria(
+        param
+    ) and not hsdp_criteria(param)
+    params_to_peek, original_params = itertools.tee(iter(params))
+    peek_param = next(params_to_peek)
 
-    assert (
-        (unioned_keys := fsdp_params.keys() | hsdp_params.keys() | other_params.keys())
-        == named_params.keys()
-    ), f"{unioned_keys - named_params.keys()=} {named_params.keys() - unioned_keys=}"
-    assert not (
-        fsdp_and_other := fsdp_params.keys() & other_params.keys()
-    ), f"{fsdp_and_other} exist in both fsdp_params and other_params!"
-    assert not (
-        hsdp_and_other := hsdp_params.keys() & other_params.keys()
-    ), f"{hsdp_and_other} exist in both hsdp_params and other_params!"
-    assert not (
-        fsdp_and_hsdp := fsdp_params.keys() & hsdp_params.keys()
-    ), f"{fsdp_and_hsdp} exist in both fsdp_params and hsdp_params!"
+    def partition_param_list(
+        original_params: Iterable[torch.Tensor],
+    ) -> tuple[list[torch.Tensor], list[torch.Tensor], list[torch.Tensor]]:
+        """Partitions a list of parameters into FSDP, HSDP, and other parameters.
 
-    return fsdp_params, hsdp_params, other_params
+        Args:
+            original_params (Iterable[torch.Tensor]): Iterable of parameters to partition.
+
+        Returns:
+            fsdp_params (list[torch.Tensor]): Partition of FSDP parameters in a list.
+            hsdp_params (list[torch.Tensor]): Partition of HSDP parameters in a list.
+            other_params (list[torch.Tensor]): Partition of non-FSDP and non-HSDP parameters in a list.
+        """
+        original_params = list(original_params)
+        fsdp_params = [param for param in original_params if fsdp_criteria(param)]
+        hsdp_params = [param for param in original_params if hsdp_criteria(param)]
+        other_params = [param for param in original_params if other_criteria(param)]
+        return fsdp_params, hsdp_params, other_params
+
+    # case 1: The original params is a Iterable[torch.Tensor]
+    if isinstance(peek_param, torch.Tensor):
+        fsdp_params, hsdp_params, other_params = partition_param_list(
+            original_params=original_params  # type: ignore
+        )
+        return fsdp_params, hsdp_params, other_params
+    # case 2: The original params is a Iterable[dict[str, torch.Tensor]]
+    elif isinstance(peek_param, dict):
+        fsdp_params, hsdp_params, other_params = [], [], []
+        for cur_dict in original_params:
+            cur_fsdp_params, cur_hsdp_params, cur_other_params = partition_param_list(
+                original_params=cur_dict[
+                    "params"  # type: ignore
+                ]
+            )
+            fsdp_params.append({"params": cur_fsdp_params})
+            hsdp_params.append({"params": cur_hsdp_params})
+            other_params.append({"params": cur_other_params})
+        return fsdp_params, hsdp_params, other_params
+    # case 3: The original params is a Iterable[tuple[str, torch.Tensor]]
+    elif isinstance(peek_param, tuple):
+        original_params = dict(
+            original_params  # type: ignore
+        )
+        fsdp_params = {
+            fqn: param for fqn, param in original_params.items() if fsdp_criteria(param)
+        }
+        hsdp_params = {
+            fqn: param for fqn, param in original_params.items() if hsdp_criteria(param)
+        }
+        other_params = {
+            fqn: param
+            for fqn, param in original_params.items()
+            if other_criteria(param)
+        }
+
+        assert (
+            (
+                unioned_keys := fsdp_params.keys()
+                | hsdp_params.keys()
+                | other_params.keys()
+            )
+            == original_params.keys()
+        ), f"{unioned_keys - original_params.keys()=} {original_params.keys() - unioned_keys=}"
+        assert not (
+            fsdp_and_other := fsdp_params.keys() & other_params.keys()
+        ), f"{fsdp_and_other} exist in both fsdp_params and other_params!"
+        assert not (
+            hsdp_and_other := hsdp_params.keys() & other_params.keys()
+        ), f"{hsdp_and_other} exist in both hsdp_params and other_params!"
+        assert not (
+            fsdp_and_hsdp := fsdp_params.keys() & hsdp_params.keys()
+        ), f"{fsdp_and_hsdp} exist in both fsdp_params and hsdp_params!"
+
+        return (
+            list(fsdp_params.items()),
+            list(hsdp_params.items()),
+            list(other_params.items()),
+        )
+    else:
+        raise ValueError(
+            f"Unsupported params type: {type(peek_param)}. "
+            "Please use a list of parameters, parameter groups, or tuples of named parameters."
+        )
 
 
 def parse_fsdp_params(
-    named_params: dict[str, Parameter],
-    param_metadata: dict[Parameter, FSDPParameterMetadata],
-) -> tuple[dict[str, Parameter], dict[str, Parameter], dict[str, Parameter]]:
+    params: ParamsT,
+    param_metadata: dict[torch.nn.Parameter, FSDPParameterMetadata],
+) -> tuple[ParamsT, ParamsT, ParamsT]:
     """Splits parameters into FSDP, HSDP, and the rest of parameters.
 
     This is useful for parsing the parameters when FSDP and HSDP are wrapping a subset of modules within a model.
 
-    NOTE: The output dictionaries are guaranteed to be the partitions of the input `named_params`.
+    NOTE: The output partitions are guaranteed to cover all input `params`.
 
     Args:
-        named_params (dict[str, Parameter]): Dictionary mapping each parameter name to its corresponding parameter.
-        param_metadata (dict[Parameter, FSDPParameterMetadata]): Dictionary mapping each parameter to its FSDP metadata.
+        params (ParamsT): Iterable of parameters to optimize or dicts/tuples of parameters.
+        param_metadata (dict[torch.nn.Parameter, FSDPParameterMetadata]): Dictionary mapping each parameter to its FSDP metadata.
 
     Returns:
-        fsdp_params (dict[str, Parameter]): Dictionary mapping each parameter name to its corresponding FSDP parameter.
-        hsdp_params (dict[str, Parameter]): Dictionary mapping each parameter name to its corresponding HSDP parameter.
-        other_params (dict[str, Parameter]): Dictionary mapping each parameter name to its corresponding non-FSDP parameter.
-
+        fsdp_params (ParamsT): Partition of FSDP parameters in the same format as input.
+        hsdp_params (ParamsT): Partition of HSDP parameters in the same format as input.
+        other_params (ParamsT): Partition of non-FSDP and non-HSDP parameters in the same format as input.
     """
     return _partition_params(
-        named_params=named_params,
+        params=params,
         fsdp_criteria=lambda param: param in param_metadata
         and param_metadata[param].sharding_strategy
         in [ShardingStrategy.FULL_SHARD, ShardingStrategy.SHARD_GRAD_OP],
         hsdp_criteria=lambda param: param in param_metadata
-        and param_metadata[param].sharding_strategy in HYBRID_SHARDING_STRATEGIES,
-        other_criteria=lambda param: param not in param_metadata
-        or param_metadata[param].sharding_strategy == ShardingStrategy.NO_SHARD,
+        and param_metadata[param].sharding_strategy
+        in [ShardingStrategy.HYBRID_SHARD, ShardingStrategy._HYBRID_SHARD_ZERO2],
+        # The implied other_criteria is that param not in param_metadata or
+        # param_metadata[param].sharding_strategy == ShardingStrategy.NO_SHARD.
     )
 
 
 def parse_fully_shard_params(
-    named_params: dict[str, Parameter],
-) -> tuple[dict[str, Parameter], dict[str, Parameter], dict[str, Parameter]]:
-    """Splits parameters into fully shard(per parameter FSDP), hybrid shard parameters(per parameter FSDP) and the rest of parameters.
+    params: ParamsT,
+) -> tuple[ParamsT, ParamsT, ParamsT]:
+    """Splits parameters into fully shard, hybrid shard, and other parameters.
 
     This is useful for parsing the parameters when fully shard or hybrid shard are wrapping a subset of modules within a model.
 
-    NOTE: The output dictionaries are guaranteed to be the partitions of the input `named_params`.
+    NOTE: The output partitions are guaranteed to cover all input `params`.
 
     Args:
-        named_params (dict[str, Parameter]): Dictionary mapping each parameter name to its corresponding parameter.
+        params (ParamsT): Iterable of parameters to optimize or dicts/tuples of parameters.
 
     Returns:
-        fully_shard_params (dict[str, Parameter]): Dictionary mapping each parameter name to its corresponding fully shard parameter.
-        hybrid_shard_params (dict[str, Parameter]): Dictionary mapping each parameter name to its corresponding hybrid shard parameter.
-        other_params (dict[str, Parameter]): Dictionary mapping each parameter name to its corresponding non fully shard parameter.
+        fully_shard_params (ParamsT): Partition of fully shard parameters in the same format as input.
+        hybrid_shard_params (ParamsT): Partition of hybrid shard parameters in the same format as input.
+        other_params (ParamsT): Partition of parameters that do not use FSDP or HSDP in the same format as input.
     """
     return _partition_params(
-        named_params=named_params,
+        params=params,
         fsdp_criteria=lambda param: isinstance(param, DTensor)
         and len(param.device_mesh.shape) == 1,
         hsdp_criteria=lambda param: isinstance(param, DTensor)
         and len(param.device_mesh.shape) == 2,
-        other_criteria=lambda param: not isinstance(param, DTensor),
+        # The implied other_criteria is that the parameter is not a DTensor.
     )

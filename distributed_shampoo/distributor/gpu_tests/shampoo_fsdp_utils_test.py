@@ -7,7 +7,9 @@ LICENSE file in the root directory of this source tree.
 
 """
 
+import re
 import unittest
+from collections.abc import Callable, Iterator
 
 import torch
 from distributed_shampoo.distributor.shampoo_fsdp_utils import (
@@ -124,120 +126,212 @@ class ParseFSDPParamsTest(FSDPTest):
 
     @skip_if_lt_x_gpu(4)
     @parametrize(
-        "sharding_strategy, expected_fsdp_keys, expected_hsdp_keys, expected_other_keys",
+        "model_to_params, named_params_to_expected_parsed_params",
         (
+            # Case 1: model.parameters() - returns iterator of parameters
             (
-                ShardingStrategy.HYBRID_SHARD,
-                [],
-                [
-                    "0._fsdp_wrapped_module.linear_layers.0.weight",
-                    "0._fsdp_wrapped_module.linear_layers.1.weight",
-                ],
-                ["1.weight"],
-            ),
-            (
-                ShardingStrategy._HYBRID_SHARD_ZERO2,
-                [],
-                [
-                    "0._fsdp_wrapped_module.linear_layers.0.weight",
-                    "0._fsdp_wrapped_module.linear_layers.1.weight",
-                ],
-                ["1.weight"],
-            ),
-            (
-                ShardingStrategy.NO_SHARD,
-                [],
-                [],
-                [
-                    "0._fsdp_wrapped_module.linear_layers.0.weight",
-                    "0._fsdp_wrapped_module.linear_layers.1.weight",
-                    "1.weight",
+                lambda model: model.parameters(),
+                lambda named_parameters, filter_condition: [
+                    param for name, param in named_parameters if filter_condition(name)
                 ],
             ),
+            # Case 2: optimizer-style param groups - returns list with dict containing params
             (
-                ShardingStrategy.SHARD_GRAD_OP,
-                [
-                    "0._fsdp_wrapped_module.linear_layers.0.weight",
-                    "0._fsdp_wrapped_module.linear_layers.1.weight",
+                lambda model: [{"params": model.parameters()}],
+                lambda named_parameters, filter_condition: [
+                    {
+                        "params": [
+                            param
+                            for name, param in named_parameters
+                            if filter_condition(name)
+                        ]
+                    }
                 ],
-                [],
-                ["1.weight"],
             ),
+            # Case 3: model.named_parameters() - returns iterator of (name, param) tuples
             (
-                ShardingStrategy.FULL_SHARD,
-                [
-                    "0._fsdp_wrapped_module.linear_layers.0.weight",
-                    "0._fsdp_wrapped_module.linear_layers.1.weight",
+                lambda model: model.named_parameters(),
+                lambda named_parameters, filter_condition: [
+                    (name, param)
+                    for name, param in named_parameters
+                    if filter_condition(name)
                 ],
-                [],
-                ["1.weight"],
             ),
         ),
     )
     def test_parse_fsdp_params(
         self,
-        sharding_strategy: ShardingStrategy,
-        expected_fsdp_keys: list[str],
-        expected_hsdp_keys: list[str],
-        expected_other_keys: list[str],
+        model_to_params: Callable[[nn.Module], Iterator[tuple[str, Parameter]]],
+        named_params_to_expected_parsed_params: Callable[
+            [Iterator[tuple[str, Parameter]], Callable[[str], bool]], list[object]
+        ],
     ) -> None:
-        HYBRID_SHARDING_STRATEGIES: tuple[ShardingStrategy, ...] = (
-            ShardingStrategy.HYBRID_SHARD,
-            ShardingStrategy._HYBRID_SHARD_ZERO2,
-        )
-
-        fsdp_module = FSDP(
+        # Create modules with different sharding strategies
+        # FULL_SHARD strategy - parameters fully sharded across devices
+        fsdp_module_0 = FSDP(
             _create_model_and_params()[0],
-            sharding_strategy=sharding_strategy,
-            device_mesh=(
-                init_device_mesh("cuda", (2, 2))
-                if sharding_strategy in HYBRID_SHARDING_STRATEGIES
-                else None
-            ),
+            sharding_strategy=ShardingStrategy.FULL_SHARD,
             use_orig_params=True,
         )
+        # SHARD_GRAD_OP strategy - only gradients and optimizer states are sharded
+        fsdp_module_1 = FSDP(
+            _create_model_and_params()[0],
+            sharding_strategy=ShardingStrategy.SHARD_GRAD_OP,
+            use_orig_params=True,
+        )
+        # HYBRID_SHARD strategy - uses 2D mesh for sharding
+        hsdp_module_2 = FSDP(
+            _create_model_and_params()[0],
+            sharding_strategy=ShardingStrategy.HYBRID_SHARD,
+            device_mesh=init_device_mesh("cuda", (2, 2)),  # 2x2 device mesh
+            use_orig_params=True,
+        )
+        # _HYBRID_SHARD_ZERO2 strategy - another hybrid sharding approach
+        hsdp_module_3 = FSDP(
+            _create_model_and_params()[0],
+            sharding_strategy=ShardingStrategy._HYBRID_SHARD_ZERO2,
+            device_mesh=init_device_mesh("cuda", (2, 2)),
+            use_orig_params=True,
+        )
+        # NO_SHARD strategy
+        other_module_4 = FSDP(
+            _create_model_and_params()[0],
+            sharding_strategy=ShardingStrategy.NO_SHARD,
+            use_orig_params=True,
+        )
+        # Regular nn.Linear module - not FSDP
+        other_module_5 = nn.Linear(3, 2, bias=False)
 
-        model = nn.Sequential(fsdp_module, nn.Linear(3, 2, bias=False))
-
-        fsdp_parameter_metadata = compile_fsdp_parameter_metadata(model)
-        named_params = dict(model.named_parameters())
-        actual_fsdp_params, actual_hsdp_params, actual_other_params = parse_fsdp_params(
-            named_params,
-            fsdp_parameter_metadata,
+        model = nn.Sequential(
+            fsdp_module_0,
+            fsdp_module_1,
+            hsdp_module_2,
+            hsdp_module_3,
+            other_module_4,
+            other_module_5,
         )
 
-        actual_fsdp_keys = list(actual_fsdp_params.keys())
-        actual_hsdp_keys = list(actual_hsdp_params.keys())
-        actual_other_keys = list(actual_other_params.keys())
+        fsdp_parameter_metadata = compile_fsdp_parameter_metadata(module=model)
 
-        self.assertEqual(actual_fsdp_keys, expected_fsdp_keys)
-        self.assertEqual(actual_hsdp_keys, expected_hsdp_keys)
-        self.assertEqual(actual_other_keys, expected_other_keys)
+        # Parse parameters into three categories based on sharding strategy
+        actual_fsdp_params, actual_hsdp_params, actual_other_params = parse_fsdp_params(
+            params=model_to_params(model), param_metadata=fsdp_parameter_metadata
+        )
+
+        # Create expected parameter lists for each category
+        # FSDP params: modules 0 and 1
+        expected_fsdp_params = named_params_to_expected_parsed_params(
+            model.named_parameters(),
+            lambda name: name.startswith("0.") or name.startswith("1."),
+        )
+        # HSDP params: modules 2 and 3
+        expected_hsdp_params = named_params_to_expected_parsed_params(
+            model.named_parameters(),
+            lambda name: name.startswith("2.") or name.startswith("3."),
+        )
+        # Other params: modules 4 and 5
+        expected_other_params = named_params_to_expected_parsed_params(
+            model.named_parameters(),
+            lambda name: name.startswith("4.") or name.startswith("5."),
+        )
+
+        self.assertEqual(actual_fsdp_params, expected_fsdp_params)
+        self.assertEqual(actual_hsdp_params, expected_hsdp_params)
+        self.assertEqual(actual_other_params, expected_other_params)
 
     @skip_if_lt_x_gpu(4)
-    def test_parse_fully_shard_params(self) -> None:
+    @parametrize(
+        "model_to_params, named_params_to_expected_parsed_params",
+        (
+            # Case 1: model.parameters() - returns iterator of parameters
+            (
+                lambda model: model.parameters(),
+                lambda named_parameters, filter_condition: [
+                    param for name, param in named_parameters if filter_condition(name)
+                ],
+            ),
+            # Case 2: optimizer-style param groups - returns list with dict containing params
+            (
+                lambda model: [{"params": model.parameters()}],
+                lambda named_parameters, filter_condition: [
+                    {
+                        "params": [
+                            param
+                            for name, param in named_parameters
+                            if filter_condition(name)
+                        ]
+                    }
+                ],
+            ),
+            # Case 3: model.named_parameters() - returns iterator of (name, param) tuples
+            (
+                lambda model: model.named_parameters(),
+                lambda named_parameters, filter_condition: [
+                    (name, param)
+                    for name, param in named_parameters
+                    if filter_condition(name)
+                ],
+            ),
+        ),
+    )
+    def test_parse_fully_shard_params(
+        self,
+        model_to_params: Callable[[nn.Module], Iterator[tuple[str, Parameter]]],
+        named_params_to_expected_parsed_params: Callable[
+            [Iterator[tuple[str, Parameter]], Callable[[str], bool]], list[object]
+        ],
+    ) -> None:
+        # Create 1D mesh for fully sharded module
         mesh_1d = init_device_mesh("cuda", (self.world_size,))
         fully_shard_module, _ = _create_model_and_params((16, 8, 1))
         fully_shard(fully_shard_module, mesh=mesh_1d)
+
+        # Create 2D mesh for hybrid sharded module
         mesh_2d = init_device_mesh(
             "cuda",
-            (2, self.world_size // 2),
-            mesh_dim_names=("dp_replicate", "dp_shard"),
+            (2, self.world_size // 2),  # 2 x 2 mesh for 4 GPUs
+            mesh_dim_names=("dp_replicate", "dp_shard"),  # Named dimensions
         )
         hybrid_shard_module, _ = _create_model_and_params((16, 8, 1))
         fully_shard(hybrid_shard_module, mesh=mesh_2d)
 
+        # Combine modules into a sequential model
         model = nn.Sequential(
             fully_shard_module, hybrid_shard_module, nn.Linear(3, 2, bias=False)
         )
 
-        fully_shard_params = {f"0.{k}": v for k, v in model[0].named_parameters()}
-        hybrid_shard_params = {f"1.{k}": v for k, v in model[1].named_parameters()}
-        other_params = {f"2.{k}": v for k, v in model[2].named_parameters()}
-        parsed_fully_shard_params, parsed_hybrid_shard_params, parsed_other_params = (
-            parse_fully_shard_params(dict(model.named_parameters()))
+        # Parse parameters into three categories based on sharding type
+        actual_fully_shard_params, actual_hybrid_shard_params, actual_other_params = (
+            parse_fully_shard_params(params=model_to_params(model))
         )
 
-        self.assertEqual(fully_shard_params, parsed_fully_shard_params)
-        self.assertEqual(hybrid_shard_params, parsed_hybrid_shard_params)
-        self.assertEqual(other_params, parsed_other_params)
+        # Create expected parameter lists for each category
+        # Fully sharded params: module 0
+        expected_fully_shard_params = named_params_to_expected_parsed_params(
+            model.named_parameters(),
+            lambda name: name.startswith("0."),
+        )
+        # Hybrid sharded params: module 1
+        expected_hybrid_shard_params = named_params_to_expected_parsed_params(
+            model.named_parameters(),
+            lambda name: name.startswith("1."),
+        )
+        # Other params: module 2
+        expected_other_params = named_params_to_expected_parsed_params(
+            model.named_parameters(),
+            lambda name: name.startswith("2."),
+        )
+
+        self.assertEqual(actual_fully_shard_params, expected_fully_shard_params)
+        self.assertEqual(actual_hybrid_shard_params, expected_hybrid_shard_params)
+        self.assertEqual(actual_other_params, expected_other_params)
+
+    def test_parse_fully_shard_params_invalid_paramsT(self) -> None:
+        self.assertRaisesRegex(
+            ValueError,
+            re.escape(
+                "Please use a list of parameters, parameter groups, or tuples of named parameters."
+            ),
+            parse_fully_shard_params,
+            [0, 1],
+        )
