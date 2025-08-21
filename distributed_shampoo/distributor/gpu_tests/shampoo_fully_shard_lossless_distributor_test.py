@@ -198,18 +198,17 @@ class FullyShardLosslessDistributorOnEmptyParamTest(
         # - linear_layers are empty params (second dimension is 0)
         # - dead_layers will be replicated on the two ranks. After the merge and block,
         #   each rank will have 3 blocks of torch.size((PRECONDITIONER_DIM, PRECONDITIONER_DIM))
-        model = construct_training_problem(
-            model_linear_layers_dims=(PRECONDITIONER_DIM, 0),
-            model_dead_layers_dims=(PRECONDITIONER_DIM, 3 * PRECONDITIONER_DIM),
-            enable_learnable_scalar=False,  # Disable 0D learnable parameter because FSDP doesn't support it.
-            device=torch.device("cuda"),
-            fill=0.01,
-            post_model_decoration=partial(fully_shard),
-        )[0]
-        fully_shard_config = FullyShardShampooConfig(
-            param_assignment_strategy=FSDPParamAssignmentStrategy.REPLICATE
+        assert isinstance(
+            model := construct_training_problem(
+                model_linear_layers_dims=(PRECONDITIONER_DIM, 0),
+                model_dead_layers_dims=(PRECONDITIONER_DIM, 3 * PRECONDITIONER_DIM),
+                enable_learnable_scalar=False,  # Disable 0D learnable parameter because FSDP doesn't support it.
+                device=torch.device("cuda"),
+                fill=0.01,
+                post_model_decoration=partial(fully_shard),
+            )[0],
+            nn.Module,
         )
-        assert isinstance(model, nn.Module)
         shampoo_optimizer = DistributedShampoo(
             model.parameters(),
             lr=0.001,
@@ -220,7 +219,9 @@ class FullyShardLosslessDistributorOnEmptyParamTest(
             precondition_frequency=1,
             start_preconditioning_step=-1,
             max_preconditioner_dim=PRECONDITIONER_DIM,
-            distributed_config=fully_shard_config,
+            distributed_config=FullyShardShampooConfig(
+                param_assignment_strategy=FSDPParamAssignmentStrategy.REPLICATE
+            ),
         )
         distributor = FullyShardLosslessDistributor(
             param_group=shampoo_optimizer.param_groups[0]

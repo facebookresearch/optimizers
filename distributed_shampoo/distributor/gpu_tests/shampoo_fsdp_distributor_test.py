@@ -177,9 +177,12 @@ class ShampooFSDPDistributorTest(FSDPTest):
         fsdp_config = FSDPShampooConfig(
             param_to_metadata=compile_fsdp_parameter_metadata(model)
         )
-        optim_factory = ShampooFSDPDistributorTest._shampoo_optim_factory(fsdp_config)
-        optimizer = optim_factory(model.parameters())
-        assert isinstance(optimizer, DistributedShampoo)
+        assert isinstance(
+            optimizer := ShampooFSDPDistributorTest._shampoo_optim_factory(fsdp_config)(
+                model.parameters()
+            ),
+            DistributedShampoo,
+        )
         state_dict = optimizer.distributed_state_dict(
             key_to_param=model.named_parameters()
         )

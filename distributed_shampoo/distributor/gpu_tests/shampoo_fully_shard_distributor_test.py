@@ -224,16 +224,17 @@ class FullyShardDistributorOnEmptyParamTest(
         # - dead_layers will be partitioned into two split params for each rank
         # For rank 0: One split param with torch.Size((PRECONDITIONER_DIM, PRECONDITIONER_DIM)) and another with torch.Size((PRECONDITIONER_DIM // 2, PRECONDITIONER_DIM))
         # For rank 1: One split param with torch.Size((PRECONDITIONER_DIM // 2, PRECONDITIONER_DIM)) and another with torch.Size((PRECONDITIONER_DIM, PRECONDITIONER_DIM))
-        model = construct_training_problem(
-            model_linear_layers_dims=(PRECONDITIONER_DIM, 0),
-            model_dead_layers_dims=(PRECONDITIONER_DIM, 3 * PRECONDITIONER_DIM),
-            enable_learnable_scalar=False,  # Disable 0D learnable parameter because FSDP doesn't support it.
-            device=torch.device("cuda"),
-            fill=0.01,
-            post_model_decoration=partial(fully_shard),
-        )[0]
-        distributed_config = FullyShardShampooConfig()
-        assert isinstance(model, nn.Module)
+        assert isinstance(
+            model := construct_training_problem(
+                model_linear_layers_dims=(PRECONDITIONER_DIM, 0),
+                model_dead_layers_dims=(PRECONDITIONER_DIM, 3 * PRECONDITIONER_DIM),
+                enable_learnable_scalar=False,  # Disable 0D learnable parameter because FSDP doesn't support it.
+                device=torch.device("cuda"),
+                fill=0.01,
+                post_model_decoration=partial(fully_shard),
+            )[0],
+            nn.Module,
+        )
         distributor = FullyShardDistributor(
             param_group=DistributedShampoo(
                 model.parameters(),
@@ -245,7 +246,7 @@ class FullyShardDistributorOnEmptyParamTest(
                 precondition_frequency=1,
                 start_preconditioning_step=-1,
                 max_preconditioner_dim=PRECONDITIONER_DIM,
-                distributed_config=distributed_config,
+                distributed_config=FullyShardShampooConfig(),
             ).param_groups[0],
         )
 
