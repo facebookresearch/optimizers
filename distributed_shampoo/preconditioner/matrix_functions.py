@@ -17,7 +17,7 @@ from dataclasses import fields
 from fractions import Fraction
 from functools import partial, wraps
 from math import isfinite
-from typing import Any, TypeVar
+from typing import TypeVar
 
 import torch
 from distributed_shampoo.preconditioner.matrix_functions_types import (
