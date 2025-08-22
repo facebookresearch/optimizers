@@ -94,9 +94,10 @@ def _partition_params(
         other_params (ParamsT): Partition of non-FSDP and non-HSDP parameters in the same format as input.
 
     """
-    other_criteria: Callable[[torch.Tensor], bool] = lambda param: not fsdp_criteria(
-        param
-    ) and not hsdp_criteria(param)
+
+    def other_criteria(param: torch.Tensor) -> bool:
+        return not fsdp_criteria(param) and not hsdp_criteria(param)
+
     params_to_peek, original_params = itertools.tee(iter(params))
     peek_param = next(params_to_peek)
 
@@ -114,75 +115,73 @@ def _partition_params(
             other_params (list[torch.Tensor]): Partition of non-FSDP and non-HSDP parameters in a list.
         """
         original_params = list(original_params)
-        fsdp_params = [param for param in original_params if fsdp_criteria(param)]
-        hsdp_params = [param for param in original_params if hsdp_criteria(param)]
-        other_params = [param for param in original_params if other_criteria(param)]
-        return fsdp_params, hsdp_params, other_params
-
-    # case 1: The original params is a Iterable[torch.Tensor]
-    if isinstance(peek_param, torch.Tensor):
-        fsdp_params, hsdp_params, other_params = partition_param_list(
-            original_params=original_params  # type: ignore
+        fsdp_params, hsdp_params, other_params = (
+            list(filter(lambda p: criteria(p), original_params))
+            for criteria in (fsdp_criteria, hsdp_criteria, other_criteria)
         )
         return fsdp_params, hsdp_params, other_params
-    # case 2: The original params is a Iterable[dict[str, torch.Tensor]]
-    elif isinstance(peek_param, dict):
-        fsdp_params, hsdp_params, other_params = [], [], []
-        for cur_dict in original_params:
-            cur_fsdp_params, cur_hsdp_params, cur_other_params = partition_param_list(
-                original_params=cur_dict[
-                    "params"  # type: ignore
-                ]
+
+    match peek_param:
+        # Case 1: The original params is a Iterable[torch.Tensor]
+        case torch.Tensor():
+            return partition_param_list(
+                original_params=original_params  # type: ignore
             )
-            fsdp_params.append({"params": cur_fsdp_params})
-            hsdp_params.append({"params": cur_hsdp_params})
-            other_params.append({"params": cur_other_params})
-        return fsdp_params, hsdp_params, other_params
-    # case 3: The original params is a Iterable[tuple[str, torch.Tensor]]
-    elif isinstance(peek_param, tuple):
-        original_params = dict(
-            original_params  # type: ignore
-        )
-        fsdp_params = {
-            fqn: param for fqn, param in original_params.items() if fsdp_criteria(param)
-        }
-        hsdp_params = {
-            fqn: param for fqn, param in original_params.items() if hsdp_criteria(param)
-        }
-        other_params = {
-            fqn: param
-            for fqn, param in original_params.items()
-            if other_criteria(param)
-        }
+        # Case 2: The original params is a Iterable[dict[str, torch.Tensor]]
+        case dict():
+            fsdp_params_list, hsdp_params_list, other_params_list = [], [], []
+            for cur_dict in original_params:
+                cur_fsdp_params, cur_hsdp_params, cur_other_params = (
+                    partition_param_list(
+                        original_params=cur_dict[
+                            "params"  # type: ignore
+                        ]
+                    )
+                )
+                fsdp_params_list.append({"params": cur_fsdp_params})
+                hsdp_params_list.append({"params": cur_hsdp_params})
+                other_params_list.append({"params": cur_other_params})
+            return fsdp_params_list, hsdp_params_list, other_params_list
 
-        assert (
-            (
-                unioned_keys := fsdp_params.keys()
-                | hsdp_params.keys()
-                | other_params.keys()
+        # Case 3: The original params is a Iterable[tuple[str, torch.Tensor]]
+        case tuple():
+            original_params_dict: dict[str, torch.Tensor] = dict(
+                original_params  # type: ignore
             )
-            == original_params.keys()
-        ), f"{unioned_keys - original_params.keys()=} {original_params.keys() - unioned_keys=}"
-        assert not (
-            fsdp_and_other := fsdp_params.keys() & other_params.keys()
-        ), f"{fsdp_and_other} exist in both fsdp_params and other_params!"
-        assert not (
-            hsdp_and_other := hsdp_params.keys() & other_params.keys()
-        ), f"{hsdp_and_other} exist in both hsdp_params and other_params!"
-        assert not (
-            fsdp_and_hsdp := fsdp_params.keys() & hsdp_params.keys()
-        ), f"{fsdp_and_hsdp} exist in both fsdp_params and hsdp_params!"
+            fsdp_params_dict, hsdp_params_dict, other_params_dict = (
+                {k: v for k, v in original_params_dict.items() if criteria(v)}
+                for criteria in (fsdp_criteria, hsdp_criteria, other_criteria)
+            )
 
-        return (
-            list(fsdp_params.items()),
-            list(hsdp_params.items()),
-            list(other_params.items()),
-        )
-    else:
-        raise ValueError(
-            f"Unsupported params type: {type(peek_param)}. "
-            "Please use a list of parameters, parameter groups, or tuples of named parameters."
-        )
+            assert (
+                (
+                    unioned_keys := fsdp_params_dict.keys()
+                    | hsdp_params_dict.keys()
+                    | other_params_dict.keys()
+                )
+                == original_params_dict.keys()
+            ), f"{unioned_keys - original_params_dict.keys()=} {original_params_dict.keys() - unioned_keys=}"
+            assert not (
+                fsdp_and_other := fsdp_params_dict.keys() & other_params_dict.keys()
+            ), f"{fsdp_and_other} exist in both fsdp_params_dict and other_params_dict!"
+            assert not (
+                hsdp_and_other := hsdp_params_dict.keys() & other_params_dict.keys()
+            ), f"{hsdp_and_other} exist in both hsdp_params_dict and other_params_dict!"
+            assert not (
+                fsdp_and_hsdp := fsdp_params_dict.keys() & hsdp_params_dict.keys()
+            ), f"{fsdp_and_hsdp} exist in both fsdp_params_dict and hsdp_params_dict!"
+
+            return (
+                list(fsdp_params_dict.items()),
+                list(hsdp_params_dict.items()),
+                list(other_params_dict.items()),
+            )
+        # Default case for unsupported types
+        case _:
+            raise ValueError(
+                f"Unsupported params type: {type(peek_param)}. "
+                "Please use a list of parameters, parameter groups, or tuples of named parameters."
+            )
 
 
 def parse_fsdp_params(
@@ -206,10 +205,12 @@ def parse_fsdp_params(
     """
     return _partition_params(
         params=params,
-        fsdp_criteria=lambda param: param in param_metadata
+        fsdp_criteria=lambda param: isinstance(param, torch.nn.Parameter)
+        and param in param_metadata
         and param_metadata[param].sharding_strategy
         in [ShardingStrategy.FULL_SHARD, ShardingStrategy.SHARD_GRAD_OP],
-        hsdp_criteria=lambda param: param in param_metadata
+        hsdp_criteria=lambda param: isinstance(param, torch.nn.Parameter)
+        and param in param_metadata
         and param_metadata[param].sharding_strategy
         in [ShardingStrategy.HYBRID_SHARD, ShardingStrategy._HYBRID_SHARD_ZERO2],
         # The implied other_criteria is that param not in param_metadata or
