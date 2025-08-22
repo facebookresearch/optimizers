@@ -95,8 +95,12 @@ def _partition_params(
 
     """
 
-    def other_criteria(param: torch.Tensor) -> bool:
-        return not fsdp_criteria(param) and not hsdp_criteria(param)
+    # Create a tuple of criteria functions for FSDP, HSDP, and other parameters
+    fsdp_hsdp_other_criterions: tuple[Callable[[torch.Tensor], bool], ...] = (
+        fsdp_criteria,
+        hsdp_criteria,
+        lambda param: not fsdp_criteria(param) and not hsdp_criteria(param),
+    )
 
     params_to_peek, original_params = itertools.tee(iter(params))
     peek_param = next(params_to_peek)
@@ -117,7 +121,7 @@ def _partition_params(
         original_params = list(original_params)
         fsdp_params, hsdp_params, other_params = (
             list(filter(lambda p: criteria(p), original_params))
-            for criteria in (fsdp_criteria, hsdp_criteria, other_criteria)
+            for criteria in fsdp_hsdp_other_criterions
         )
         return fsdp_params, hsdp_params, other_params
 
@@ -150,7 +154,7 @@ def _partition_params(
             )
             fsdp_params_dict, hsdp_params_dict, other_params_dict = (
                 {k: v for k, v in original_params_dict.items() if criteria(v)}
-                for criteria in (fsdp_criteria, hsdp_criteria, other_criteria)
+                for criteria in fsdp_hsdp_other_criterions
             )
 
             assert (
@@ -161,15 +165,17 @@ def _partition_params(
                 )
                 == original_params_dict.keys()
             ), f"{unioned_keys - original_params_dict.keys()=} {original_params_dict.keys() - unioned_keys=}"
-            assert not (
-                fsdp_and_other := fsdp_params_dict.keys() & other_params_dict.keys()
-            ), f"{fsdp_and_other} exist in both fsdp_params_dict and other_params_dict!"
-            assert not (
-                hsdp_and_other := hsdp_params_dict.keys() & other_params_dict.keys()
-            ), f"{hsdp_and_other} exist in both hsdp_params_dict and other_params_dict!"
-            assert not (
-                fsdp_and_hsdp := fsdp_params_dict.keys() & hsdp_params_dict.keys()
-            ), f"{fsdp_and_hsdp} exist in both fsdp_params_dict and hsdp_params_dict!"
+            for (name1, dict1), (name2, dict2) in itertools.combinations(
+                (
+                    ("fsdp_params_dict", fsdp_params_dict),
+                    ("hsdp_params_dict", hsdp_params_dict),
+                    ("other_params_dict", other_params_dict),
+                ),
+                2,
+            ):
+                assert not (
+                    common_keys := dict1.keys() & dict2.keys()
+                ), f"{common_keys} exist in both {name1} and {name2}!"
 
             return (
                 list(fsdp_params_dict.items()),
