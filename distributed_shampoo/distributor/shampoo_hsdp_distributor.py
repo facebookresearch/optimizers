@@ -539,6 +539,10 @@ class HSDPDistributor(DistributorInterface):
                 # Skip split_tensor_block_recovery and multi_dim_split if this blocked grad will not be used locally.
                 continue
 
+            assert (
+                flattened_grad is not None and torch.isfinite(flattened_grad).all()
+            ), f"Encountered gradient containing NaN/Inf in parameter with shape {flattened_grad.shape}. Check your model for numerical instability or consider gradient clipping."
+
             # Split flattened gradients into valid tensor blocks of the gradient.
             split_grads = HSDPDistributor._split_tensor_block_recovery(
                 flattened_grad,

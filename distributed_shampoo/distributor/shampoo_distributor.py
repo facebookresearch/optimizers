@@ -267,7 +267,10 @@ class DistributorInterface(ABC):
                 # Skip multi_dim_split if this blocked grad will not be used locally.
                 continue
 
-            assert grad is not None
+            assert (
+                grad is not None and torch.isfinite(grad).all()
+            ), f"Encountered gradient containing NaN/Inf in parameter with shape {attrgetter('shape')(grad)}. Check your model for numerical instability or consider gradient clipping."
+
             # Obtain blocks for each gradient after merging.
             blocks_within_grad = multi_dim_split(
                 grad.view(merge_dims(tensor_shape=grad.size())),
