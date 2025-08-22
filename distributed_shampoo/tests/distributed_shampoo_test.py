@@ -636,6 +636,7 @@ class AbstractTest:
                         "grafting_config": AdaGradGraftingConfig(
                             epsilon=0.001,
                         ),
+                        "use_pin_memory": False,
                         "distributed_config": replace(
                             DefaultSingleDeviceDistributedConfig,
                             target_parameter_dimensionality=2,
@@ -803,6 +804,7 @@ class ShampooDistributedStateDictTest(AbstractTest.DistributedStateDictTestBase)
                     "grafting_config": AdaGradGraftingConfig(
                         epsilon=0.001,
                     ),
+                    "use_pin_memory": False,
                     "distributed_config": replace(
                         DefaultSingleDeviceDistributedConfig,
                         target_parameter_dimensionality=2,
@@ -984,6 +986,7 @@ class EigendecomposedShampooDistributedStateDictTest(
                     "grafting_config": AdaGradGraftingConfig(
                         epsilon=0.001,
                     ),
+                    "use_pin_memory": False,
                     "distributed_config": replace(
                         DefaultSingleDeviceDistributedConfig,
                         target_parameter_dimensionality=2,
@@ -1171,6 +1174,7 @@ class EigenvalueCorrectedShampooDistributedStateDictTest(
                     "grafting_config": AdaGradGraftingConfig(
                         epsilon=0.001,
                     ),
+                    "use_pin_memory": False,
                     "distributed_config": replace(
                         DefaultSingleDeviceDistributedConfig,
                         target_parameter_dimensionality=2,

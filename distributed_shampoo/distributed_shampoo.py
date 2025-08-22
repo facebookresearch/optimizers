@@ -107,6 +107,7 @@ from distributed_shampoo.shampoo_types import (
     USE_BIAS_CORRECTION,
     USE_DECOUPLED_WEIGHT_DECAY,
     USE_NESTEROV,
+    USE_PIN_MEMORY,
     WEIGHT_DECAY,
 )
 
@@ -360,6 +361,7 @@ class DistributedShampoo(torch.optim.Optimizer):
                 USE_BIAS_CORRECTION: use_bias_correction,
                 USE_DECOUPLED_WEIGHT_DECAY: use_decoupled_weight_decay,
                 GRAFTING_CONFIG: grafting_config,
+                USE_PIN_MEMORY: use_pin_memory,
                 DISTRIBUTED_CONFIG: distributed_config,
                 PRECONDITIONER_CONFIG: preconditioner_config,
             },
@@ -493,9 +495,6 @@ class DistributedShampoo(torch.optim.Optimizer):
         for i, param_group in enumerate(self.param_groups):
             logger.info(f"Checking param_group {i} hyperparameters...")
             param_group_hyperparameter_check(param_group=param_group)
-
-        # Initialize pin memory option to remove sync point in memory copy.
-        self._use_pin_memory: bool = use_pin_memory
 
         # Initialize non-group-related fields.
         self._shampoo_pt2_compile_config: ShampooPT2CompileConfig | None = (
@@ -1198,7 +1197,7 @@ class DistributedShampoo(torch.optim.Optimizer):
             # Send 0D tensor to GPU in `non_blocking` to avoid QPS regression. Remove the gpu
             # tensor impl once PT2 supports cpu 0D tensor properly.
             lr = torch.tensor(
-                group[LR], dtype=torch.float, pin_memory=self._use_pin_memory
+                group[LR], dtype=torch.float, pin_memory=group[USE_PIN_MEMORY]
             ).to(
                 # NOTE: Assume all parameter groups consistently exist on the same rank.
                 state_lists[DISTRIBUTOR].local_blocked_params[0].device,

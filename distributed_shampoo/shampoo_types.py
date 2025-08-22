@@ -55,6 +55,7 @@ USE_EIGENVALUE_CORRECTION = "use_eigenvalue_correction"
 USE_BIAS_CORRECTION = "use_bias_correction"
 USE_DECOUPLED_WEIGHT_DECAY = "use_decoupled_weight_decay"
 USE_NESTEROV = "use_nesterov"
+USE_PIN_MEMORY = "use_pin_memory"
 WEIGHT_DECAY = "weight_decay"
 
 # Keys for lists of blocked states and metadata (never checkpointed)
