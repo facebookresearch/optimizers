@@ -7,8 +7,6 @@ LICENSE file in the root directory of this source tree.
 
 """
 
-#!/usr/bin/env python3
-
 import math
 
 import torch
