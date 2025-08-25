@@ -52,7 +52,7 @@ distributor.update_params(masked_blocked_search_directions=search_directions)
 # Set up parameter group with DDP configuration
 param_group = {
     PARAMS: model.parameters(),
-    DISTRIBUTED_CONFIG: DDPShampooConfig(
+    DISTRIBUTED_CONFIG: DDPDistributedConfig(
         num_trainers_per_group=4,  # Use 4 GPUs in group
         communicate_params=False,  # Communicate search directions
         communication_dtype=torch.float16
@@ -86,7 +86,7 @@ param_to_metadata = {
 # Set up parameter group with FSDP configuration
 param_group = {
     PARAMS: model.parameters(),
-    DISTRIBUTED_CONFIG: FSDPShampooConfig(
+    DISTRIBUTED_CONFIG: FSDPDistributedConfig(
         param_to_metadata=param_to_metadata
     )
 }
@@ -331,7 +331,7 @@ config = SingleDeviceDistributedConfig()
 ### DDP Configuration
 
 ```python
-config = DDPShampooConfig(
+config = DDPDistributedConfig(
     num_trainers_per_group=-1,  # Use all GPUs
     communicate_params=False,   # Communicate search directions
     communication_dtype=torch.float16
@@ -354,7 +354,7 @@ param_to_metadata = {
     for param, param_name, start_idx, end_idx in param_metadata_list
 }
 
-config = FSDPShampooConfig(
+config = FSDPDistributedConfig(
     param_to_metadata=param_to_metadata
 )
 ```
@@ -365,7 +365,7 @@ config = FSDPShampooConfig(
 # Create device mesh for HSDP (e.g., 2 nodes × 4 GPUs = 8 total)
 device_mesh = init_device_mesh("cuda", mesh=(2, 4))  # (replicate_dim, shard_dim)
 
-config = HSDPShampooConfig(
+config = HSDPDistributedConfig(
     param_to_metadata=param_to_metadata,
     device_mesh=device_mesh,
     num_trainers_per_group=4,
@@ -377,12 +377,12 @@ config = HSDPShampooConfig(
 ### Fully Shard Configuration
 
 ```python
-config = FullyShardShampooConfig(
+config = FullyShardDistributedConfig(
     param_assignment_strategy=FSDPParamAssignmentStrategy.DEFAULT
 )
 
 # For lossless precision variant (if available)
-config_lossless = FullyShardLosslessShampooConfig(
+config_lossless = FullyShardLosslessDistributedConfig(
     param_assignment_strategy=FSDPParamAssignmentStrategy.REPLICATE
 )
 ```
@@ -393,7 +393,7 @@ config_lossless = FullyShardLosslessShampooConfig(
 # Create device mesh for hybrid sharding (e.g., 4 GPUs total)
 device_mesh = init_device_mesh("cuda", mesh=(4,))
 
-config = HybridShardShampooConfig(
+config = HybridShardDistributedConfig(
     device_mesh=device_mesh,
     communication_dtype=torch.bfloat16,
     num_trainers_per_group=4,

@@ -556,8 +556,8 @@ DefaultSingleDeviceDistributedConfig = SingleDeviceDistributedConfig()
 
 
 @dataclass(kw_only=True)
-class DDPShampooConfig(DistributedConfig):
-    """Configuration for DDP Shampoo.
+class DDPDistributedConfig(DistributedConfig):
+    """Configuration for DDP distributed computation.
 
     Enables distributed computation and optimizer states (like ZeRO-1) via DTensor for Shampoo.
 
@@ -583,8 +583,8 @@ class DDPShampooConfig(DistributedConfig):
 
 
 @dataclass(kw_only=True)
-class FSDPShampooConfig(DistributedConfig):
-    """Configuration for FSDP Shampoo.
+class FSDPDistributedConfig(DistributedConfig):
+    """Configuration for FSDP distributed computation.
 
     Passes in additional metadata necessary to run FSDP Shampoo.
 
@@ -604,8 +604,8 @@ class FSDPShampooConfig(DistributedConfig):
 
 
 @dataclass(kw_only=True)
-class HSDPShampooConfig(FSDPShampooConfig, DDPShampooConfig):
-    """Configuration for HSDP Shampoo.
+class HSDPDistributedConfig(FSDPDistributedConfig, DDPDistributedConfig):
+    """Configuration for HSDP distributed computation.
 
     Enables distributed computation and optimizer states (like ZeRO-1) via DTensor for Shampoo across ranks with shared
     parameters between different HSDP process groups.
@@ -634,8 +634,8 @@ class HSDPShampooConfig(FSDPShampooConfig, DDPShampooConfig):
 
 
 @dataclass(kw_only=True)
-class FullyShardShampooConfig(DistributedConfig):
-    """Configuration for FullyShard (per-parameter FSDP) Shampoo.
+class FullyShardDistributedConfig(DistributedConfig):
+    """Configuration for FullyShard (per-parameter FSDP) distributed computation.
 
 
     Attributes:
@@ -656,8 +656,8 @@ class FullyShardShampooConfig(DistributedConfig):
 
 
 @dataclass(kw_only=True)
-class HybridShardShampooConfig(FullyShardShampooConfig, DDPShampooConfig):
-    """Configuration for HybridShard (per-parameter FSDP) Shampoo.
+class HybridShardDistributedConfig(FullyShardDistributedConfig, DDPDistributedConfig):
+    """Configuration for HybridShard (per-parameter FSDP) distributed computation.
 
     Enables distributed computation and optimizer states (like ZeRO-1) via DTensor for Shampoo across ranks with shared
     parameters between different Hybrid Shard process groups.

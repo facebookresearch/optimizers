@@ -22,9 +22,9 @@ from distributed_shampoo.shampoo_types import (
     AmortizedPreconditionerConfig,
     DistributedConfig,
     EigenvalueCorrectedShampooPreconditionerConfig,
-    FSDPShampooConfig,
-    HSDPShampooConfig,
-    HybridShardShampooConfig,
+    FSDPDistributedConfig,
+    HSDPDistributedConfig,
+    HybridShardDistributedConfig,
     RMSpropGraftingConfig,
     ShampooPreconditionerConfig,
 )
@@ -292,9 +292,9 @@ class DistributedConfigSubclassesTest(unittest.TestCase):
         kwargs: dict[str, Any] = {
             "target_parameter_dimensionality": target_parameter_dimensionality
         }
-        if cls in (FSDPShampooConfig, HSDPShampooConfig):
+        if cls in (FSDPDistributedConfig, HSDPDistributedConfig):
             kwargs["param_to_metadata"] = {}
-        if cls in (HSDPShampooConfig, HybridShardShampooConfig):
+        if cls in (HSDPDistributedConfig, HybridShardDistributedConfig):
             # Mock DeviceMesh to avoid distributed initialization.
             kwargs["device_mesh"] = MagicMock()
 

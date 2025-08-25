@@ -31,7 +31,7 @@ from distributed_shampoo.preconditioner.shampoo_preconditioner_list import SHAMP
 from distributed_shampoo.shampoo_types import (
     AdaGradGraftingConfig,
     DefaultSingleDeviceDistributedConfig,
-    HSDPShampooConfig,
+    HSDPDistributedConfig,
     SingleDeviceDistributedConfig,
 )
 from distributed_shampoo.tests.shampoo_test_utils import (
@@ -66,7 +66,7 @@ class ShampooHSDPDistributorTest(FSDPTest):
     @staticmethod
     def _construct_model(
         post_model_decoration: Callable[[nn.Module], nn.Module] = lambda x: x,
-        distributed_config: HSDPShampooConfig | None = None,
+        distributed_config: HSDPDistributedConfig | None = None,
     ) -> tuple[nn.Module, nn.Module, torch.Tensor, torch.Tensor]:
         # NOTE: We construct the model here specifically in order to ensure that
         #       HSDP Shampoo and default Shampoo produce equivalent results.
@@ -99,7 +99,7 @@ class ShampooHSDPDistributorTest(FSDPTest):
             fill=0.01,
             post_model_decoration=post_model_decoration,
         )
-        if isinstance(distributed_config, HSDPShampooConfig):
+        if isinstance(distributed_config, HSDPDistributedConfig):
             assert (
                 sum(param.numel() for param in model.parameters())
                 == sum(a * b for a, b in pairwise(model_linear_layers_dims)) // 2
@@ -111,7 +111,7 @@ class ShampooHSDPDistributorTest(FSDPTest):
 
     @staticmethod
     def _shampoo_optim_factory(
-        distributed_config: HSDPShampooConfig | SingleDeviceDistributedConfig,
+        distributed_config: HSDPDistributedConfig | SingleDeviceDistributedConfig,
     ) -> Callable[[ParamsT], torch.optim.Optimizer]:
         return partial(
             DistributedShampoo,
@@ -145,7 +145,7 @@ class ShampooHSDPDistributorTest(FSDPTest):
         communication_dtype: torch.dtype,
         communicate_params: bool,
     ) -> None:
-        hsdp_config = HSDPShampooConfig(
+        hsdp_config = HSDPDistributedConfig(
             param_to_metadata={},
             device_mesh=init_device_mesh("cuda", (2, 2)),
             communication_dtype=communication_dtype,
@@ -176,7 +176,7 @@ class ShampooHSDPDistributorTest(FSDPTest):
     @skip_if_lt_x_gpu(4)
     def test_hsdp_shampoo_block_index(self) -> None:
         mesh_2d = init_device_mesh("cuda", (2, 2))
-        hsdp_config = HSDPShampooConfig(
+        hsdp_config = HSDPDistributedConfig(
             param_to_metadata={},
             device_mesh=mesh_2d,
         )
@@ -228,7 +228,7 @@ class ShampooHSDPDistributorTest(FSDPTest):
     @skip_if_lt_x_gpu(4)
     @parametrize("communicate_params", (False, True))
     def test_all_ranks_with_no_grads(self, communicate_params: bool) -> None:
-        hsdp_config = HSDPShampooConfig(
+        hsdp_config = HSDPDistributedConfig(
             param_to_metadata={},
             device_mesh=init_device_mesh("cuda", (2, 2)),
             communicate_params=communicate_params,
@@ -260,7 +260,7 @@ class ShampooHSDPDistributorTest(FSDPTest):
 
     @skip_if_lt_x_gpu(4)
     def test_number_of_trainers_per_group_out_of_range(self) -> None:
-        hsdp_config = HSDPShampooConfig(
+        hsdp_config = HSDPDistributedConfig(
             param_to_metadata={},
             device_mesh=init_device_mesh("cuda", (2, 2)),
             num_trainers_per_group=3,
@@ -288,7 +288,7 @@ class ShampooHSDPDistributorTest(FSDPTest):
 
     @skip_if_lt_x_gpu(4)
     def test_dist_is_initialized(self) -> None:
-        hsdp_config = HSDPShampooConfig(
+        hsdp_config = HSDPDistributedConfig(
             param_to_metadata={},
             device_mesh=init_device_mesh("cuda", (2, 2)),
         )
@@ -316,7 +316,7 @@ class ShampooHSDPDistributorTest(FSDPTest):
     def test_incompatible_replicated_group_size_and_num_trainers_per_group(
         self,
     ) -> None:
-        hsdp_config = HSDPShampooConfig(
+        hsdp_config = HSDPDistributedConfig(
             param_to_metadata={},
             device_mesh=init_device_mesh("cuda", (2, 2)),
             num_trainers_per_group=3,
@@ -374,7 +374,7 @@ class HSDPDistributorOnEmptyParamTest(FSDPTest, DistributorOnEmptyParamTest.Inte
                 use_orig_params=True,
             ),
         )[0]
-        distributed_config = HSDPShampooConfig(
+        distributed_config = HSDPDistributedConfig(
             device_mesh=device_mesh,
             param_to_metadata=compile_fsdp_parameter_metadata(model),
             num_trainers_per_group=1,

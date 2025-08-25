@@ -335,7 +335,7 @@ We support:
 - Specification of the number of trainers within each process group to distribute compute and memory. This trades off the amount of communication and compute each trainer is responsible for.
 - Option to communicate updated parameters.
 
-To use DDP Shampoo, simply configure the `distributed_config` as `DDPShampooConfig`:
+To use DDP Shampoo, simply configure the `distributed_config` as `DDPDistributedConfig`:
 ```python
 import os
 
@@ -344,7 +344,7 @@ import torch.distributed as dist
 
 from distributed_shampoo import (
     AdamGraftingConfig,
-    DDPShampooConfig,
+    DDPDistributedConfig,
     DistributedShampoo,
 )
 from torch import nn
@@ -380,7 +380,7 @@ optimizer = DistributedShampoo(
         beta2=0.999,
         epsilon=1e-12,
     ),
-    distributed_config=DDPShampooConfig(
+    distributed_config=DDPDistributedConfig(
         communication_dtype=torch.float32,
         num_trainers_per_group=8,
         communicate_params=False,
@@ -407,7 +407,7 @@ from distributed_shampoo import (
     AdamGraftingConfig,
     compile_fsdp_parameter_metadata,
     DistributedShampoo,
-    FSDPShampooConfig,
+    FSDPDistributedConfig,
 )
 
 LOCAL_RANK = int(os.environ["LOCAL_RANK"])
@@ -438,7 +438,7 @@ optimizer = DistributedShampoo(
         beta2=0.999,
         epsilon=1e-12,
     ),
-    distributed_config=FSDPShampooConfig(
+    distributed_config=FSDPDistributedConfig(
         param_to_metadata=compile_fsdp_parameter_metadata(model),
     ),
 )
@@ -459,7 +459,7 @@ from distributed_shampoo import (
     AdamGraftingConfig,
     compile_fsdp_parameter_metadata,
     DistributedShampoo,
-    HSDPShampooConfig,
+    HSDPDistributedConfig,
 )
 
 LOCAL_RANK = int(os.environ["LOCAL_RANK"])
@@ -497,7 +497,7 @@ optimizer = DistributedShampoo(
         beta2=0.999,
         epsilon=1e-12,
     ),
-    distributed_config=HSDPShampooConfig(
+    distributed_config=HSDPDistributedConfig(
         param_to_metadata=compile_fsdp_parameter_metadata(model),
         device_mesh=device_mesh,
     ),
@@ -521,7 +521,7 @@ from torch.distributed.fsdp import fully_shard
 from distributed_shampoo import (
     AdamGraftingConfig,
     DistributedShampoo,
-    FullyShardShampooConfig,
+    FullyShardDistributedConfig,
 )
 
 LOCAL_RANK = int(os.environ["LOCAL_RANK"])
@@ -552,7 +552,7 @@ optimizer = DistributedShampoo(
         beta2=0.999,
         epsilon=1e-12,
     ),
-    distributed_config=FullyShardShampooConfig(),
+    distributed_config=FullyShardDistributedConfig(),
 )
 ```
 
@@ -572,7 +572,7 @@ from torch.distributed.fsdp import fully_shard
 from distributed_shampoo import (
     AdamGraftingConfig,
     DistributedShampoo,
-    HybridShardShampooConfig,
+    HybridShardDistributedConfig,
 )
 
 LOCAL_RANK = int(os.environ["LOCAL_RANK"])
@@ -610,7 +610,7 @@ optimizer = DistributedShampoo(
         beta2=0.999,
         epsilon=1e-12,
     ),
-    distributed_config=HybridShardShampooConfig(device_mesh=device_mesh),
+    distributed_config=HybridShardDistributedConfig(device_mesh=device_mesh),
 )
 ```
 Please see [`hybrid_shard_cifar10_example.py`](https://github.com/facebookresearch/optimizers/blob/main/distributed_shampoo/examples/hybrid_shard_cifar10_example.py) as an example.

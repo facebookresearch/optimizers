@@ -27,7 +27,7 @@ from distributed_shampoo.shampoo_types import (
     AdaGradGraftingConfig,
     DefaultSingleDeviceDistributedConfig,
     FSDPParamAssignmentStrategy,
-    FullyShardShampooConfig,
+    FullyShardDistributedConfig,
     SingleDeviceDistributedConfig,
 )
 from distributed_shampoo.tests.shampoo_test_utils import (
@@ -107,7 +107,7 @@ class ShampooFullyShardLosslessDistributorTest(DTensorTestBase):
 
     @staticmethod
     def _shampoo_optim_factory(
-        distributed_config: FullyShardShampooConfig | SingleDeviceDistributedConfig,
+        distributed_config: FullyShardDistributedConfig | SingleDeviceDistributedConfig,
     ) -> Callable[[ParamsT], torch.optim.Optimizer]:
         return partial(
             DistributedShampoo,
@@ -131,7 +131,7 @@ class ShampooFullyShardLosslessDistributorTest(DTensorTestBase):
         self,
         model_linear_layers_dims: tuple[int, ...],
     ) -> None:
-        fully_shard_config = FullyShardShampooConfig(
+        fully_shard_config = FullyShardDistributedConfig(
             param_assignment_strategy=FSDPParamAssignmentStrategy.REPLICATE
         )
 
@@ -161,7 +161,7 @@ class ShampooFullyShardLosslessDistributorTest(DTensorTestBase):
         self,
         model_linear_layers_dims: tuple[int, ...],
     ) -> None:
-        fully_shard_config = FullyShardShampooConfig(
+        fully_shard_config = FullyShardDistributedConfig(
             param_assignment_strategy=FSDPParamAssignmentStrategy.REPLICATE
         )
         control_model_factory = partial(
@@ -219,7 +219,7 @@ class FullyShardLosslessDistributorOnEmptyParamTest(
             precondition_frequency=1,
             start_preconditioning_step=-1,
             max_preconditioner_dim=PRECONDITIONER_DIM,
-            distributed_config=FullyShardShampooConfig(
+            distributed_config=FullyShardDistributedConfig(
                 param_assignment_strategy=FSDPParamAssignmentStrategy.REPLICATE
             ),
         )

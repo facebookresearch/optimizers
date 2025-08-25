@@ -16,7 +16,7 @@ from functools import partial
 import torch
 
 import torch.distributed as dist
-from distributed_shampoo import FSDPShampooConfig
+from distributed_shampoo import FSDPDistributedConfig
 
 from distributed_shampoo.distributor.shampoo_fsdp_utils import (
     compile_fsdp_parameter_metadata,
@@ -119,7 +119,7 @@ if __name__ == "__main__":
         grafting_type=args.grafting_type,
         grafting_epsilon=args.grafting_epsilon,
         grafting_beta2=args.grafting_beta2,
-        distributed_config=FSDPShampooConfig(
+        distributed_config=FSDPDistributedConfig(
             param_to_metadata=compile_fsdp_parameter_metadata(model),
         ),
         preconditioner_computation_type=args.preconditioner_computation_type,

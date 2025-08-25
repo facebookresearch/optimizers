@@ -19,7 +19,7 @@ from distributed_shampoo.distributor.shampoo_dist_utils import get_device_mesh
 from distributed_shampoo.distributor.shampoo_distributor import DistributorInterface
 from distributed_shampoo.shampoo_types import (
     DISTRIBUTED_CONFIG,
-    HybridShardShampooConfig,
+    HybridShardDistributedConfig,
     PARAMS,
 )
 from distributed_shampoo.utils.commons import batched
@@ -82,7 +82,9 @@ class HybridShardDistributor(DistributorInterface):
     """
 
     def __init__(self, param_group: dict[str, Any]) -> None:
-        distributed_config: HybridShardShampooConfig = param_group[DISTRIBUTED_CONFIG]
+        distributed_config: HybridShardDistributedConfig = param_group[
+            DISTRIBUTED_CONFIG
+        ]
         self._hybrid_shard_device_mesh: torch.distributed.device_mesh.DeviceMesh = (
             distributed_config.device_mesh
         )
