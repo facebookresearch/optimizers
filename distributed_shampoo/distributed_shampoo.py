@@ -89,6 +89,7 @@ from distributed_shampoo.shampoo_types import (
     MAX_PRECONDITIONER_DIM,
     MOMENTUM,
     MOMENTUM_LIST,
+    MuonGraftingConfig,
     PARAMS,
     PRECONDITION_FREQUENCY,
     PRECONDITIONER_CONFIG,
@@ -634,7 +635,7 @@ class DistributedShampoo(torch.optim.Optimizer):
             match group[GRAFTING_CONFIG]:
                 case None:
                     state_lists[GRAFTING_PRECONDITIONER_LIST] = None
-                case SGDGraftingConfig():
+                case SGDGraftingConfig() | MuonGraftingConfig():
                     state_lists[GRAFTING_PRECONDITIONER_LIST] = SGDPreconditionerList(
                         block_list=state_lists[DISTRIBUTOR].local_blocked_params,
                     )

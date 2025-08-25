@@ -21,6 +21,7 @@ from distributed_shampoo.shampoo_types import (
     AdamGraftingConfig,
     DefaultShampooConfig,
     EigendecomposedShampooPreconditionerConfig,
+    MuonGraftingConfig,
     PreconditionerConfig,
     RMSpropGraftingConfig,
     SGDGraftingConfig,
@@ -271,6 +272,56 @@ class DistributedShampooGraftingTest(unittest.TestCase):
             use_nesterov=use_nesterov,
             use_decoupled_weight_decay=False,
             grafting_config=SGDGraftingConfig(),  # type: ignore[abstract]
+            preconditioner_config=preconditioner_config,
+        )
+
+        compare_two_optimizers_on_weight_and_loss(
+            control_optim_factory=partial(
+                optim_factory,
+                optim_cls=SGD,
+                nesterov=use_nesterov,
+            ),
+            experimental_optim_factory=experimental_optim_factory,
+            # Setting model_linear_layers_dims to (10, 10) to ensure a simple model structure,
+            # as SGD can be sensitive to the choice of model architecture.
+            model_linear_layers_dims=(10, 10),
+            device=device,
+        )
+
+    @parametrize(
+        "preconditioner_config",
+        (
+            DefaultShampooConfig,
+            EigendecomposedShampooPreconditionerConfig(),
+        ),
+    )
+    @parametrize("device", available_devices)
+    @parametrize("use_nesterov", (True, False))
+    @parametrize("weight_decay", (0.0, 0.3))
+    def test_muon_grafting(
+        self,
+        weight_decay: float,
+        use_nesterov: bool,
+        device: torch.device,
+        preconditioner_config: PreconditionerConfig,
+    ) -> None:
+        optim_factory = partial(
+            DistributedShampooGraftingTest._optim_factory,
+            lr=0.1,
+            momentum=0.9,
+            weight_decay=weight_decay,
+        )
+        experimental_optim_factory = partial(
+            optim_factory,
+            optim_cls=DistributedShampoo,
+            betas=(0.0, 0.9),
+            epsilon=1e-10,
+            max_preconditioner_dim=10,
+            precondition_frequency=1,
+            start_preconditioning_step=math.inf,
+            use_nesterov=use_nesterov,
+            use_decoupled_weight_decay=False,
+            grafting_config=MuonGraftingConfig(),
             preconditioner_config=preconditioner_config,
         )
 
