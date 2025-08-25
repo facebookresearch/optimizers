@@ -26,8 +26,8 @@ from distributed_shampoo.distributor.shampoo_fully_shard_distributor import (
 from distributed_shampoo.shampoo_types import (
     AdaGradGraftingConfig,
     DefaultSingleDeviceDistributedConfig,
-    FullyShardShampooConfig,
-    HybridShardShampooConfig,
+    FullyShardDistributedConfig,
+    HybridShardDistributedConfig,
     SingleDeviceDistributedConfig,
 )
 from distributed_shampoo.tests.shampoo_test_utils import (
@@ -115,7 +115,7 @@ class ShampooFullyShardDistributorTest(DTensorTestBase):
 
     @staticmethod
     def _shampoo_optim_factory(
-        distributed_config: FullyShardShampooConfig | SingleDeviceDistributedConfig,
+        distributed_config: FullyShardDistributedConfig | SingleDeviceDistributedConfig,
     ) -> Callable[[ParamsT], torch.optim.Optimizer]:
         return partial(
             DistributedShampoo,
@@ -135,7 +135,7 @@ class ShampooFullyShardDistributorTest(DTensorTestBase):
     @with_comms
     @skip_if_lt_x_gpu(2)
     def test_all_ranks_with_no_grads(self) -> None:
-        fully_shard_config = FullyShardShampooConfig()
+        fully_shard_config = FullyShardDistributedConfig()
 
         steps_without_gradients = 2
         with unittest.mock.patch.object(torch.Tensor, "backward") as mock_backward:
@@ -158,7 +158,7 @@ class ShampooFullyShardDistributorTest(DTensorTestBase):
     @with_comms
     @skip_if_lt_x_gpu(2)
     def test_fully_shard_shampoo_against_default_shampoo(self) -> None:
-        fully_shard_config = FullyShardShampooConfig()
+        fully_shard_config = FullyShardDistributedConfig()
         compare_two_optimizers_models_devices_on_weight_and_loss(
             control_optim_factory=ShampooFullyShardDistributorTest._shampoo_optim_factory(
                 distributed_config=DefaultSingleDeviceDistributedConfig,
@@ -176,14 +176,14 @@ class ShampooFullyShardDistributorTest(DTensorTestBase):
     @with_comms
     @skip_if_lt_x_gpu(2)
     @parametrize("communicate_params", (True, False))
-    def test_hybrid_shard_shampoo_config_against_fully_shard_shampoo_config_bitwise_identical(
+    def test_hybrid_shard_distributed_config_against_fully_shard_distributed_config_bitwise_identical(
         self, communicate_params: bool
     ) -> None:
         mesh_2d = init_device_mesh(
             "cuda", (1, self.world_size), mesh_dim_names=("replicate", "shard")
         )
-        fully_shard_config = FullyShardShampooConfig()
-        hybrid_shard_config = HybridShardShampooConfig(
+        fully_shard_config = FullyShardDistributedConfig()
+        hybrid_shard_config = HybridShardDistributedConfig(
             device_mesh=mesh_2d, communicate_params=communicate_params
         )
 
@@ -246,7 +246,7 @@ class FullyShardDistributorOnEmptyParamTest(
                 precondition_frequency=1,
                 start_preconditioning_step=-1,
                 max_preconditioner_dim=PRECONDITIONER_DIM,
-                distributed_config=FullyShardShampooConfig(),
+                distributed_config=FullyShardDistributedConfig(),
             ).param_groups[0],
         )
 

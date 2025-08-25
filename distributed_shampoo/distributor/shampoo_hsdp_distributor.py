@@ -20,7 +20,7 @@ from distributed_shampoo.distributor.shampoo_distributor import DistributorInter
 from distributed_shampoo.shampoo_types import (
     DISTRIBUTED_CONFIG,
     FSDPParameterMetadata,
-    HSDPShampooConfig,
+    HSDPDistributedConfig,
     MAX_PRECONDITIONER_DIM,
     PARAMS,
 )
@@ -90,7 +90,7 @@ class HSDPDistributor(DistributorInterface):
     """
 
     def __init__(self, param_group: dict[str, Any]) -> None:
-        distributed_config: HSDPShampooConfig = param_group[DISTRIBUTED_CONFIG]
+        distributed_config: HSDPDistributedConfig = param_group[DISTRIBUTED_CONFIG]
         self._param_to_metadata: dict[Parameter, FSDPParameterMetadata] = (
             distributed_config.param_to_metadata
         )

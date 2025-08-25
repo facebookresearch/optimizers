@@ -29,8 +29,8 @@ from distributed_shampoo.preconditioner.shampoo_preconditioner_list import SHAMP
 from distributed_shampoo.shampoo_types import (
     AdaGradGraftingConfig,
     DefaultSingleDeviceDistributedConfig,
-    FSDPShampooConfig,
-    HSDPShampooConfig,
+    FSDPDistributedConfig,
+    HSDPDistributedConfig,
     SingleDeviceDistributedConfig,
 )
 from distributed_shampoo.tests.shampoo_test_utils import (
@@ -65,7 +65,7 @@ class ShampooFSDPDistributorTest(FSDPTest):
     @staticmethod
     def _construct_model(
         post_model_decoration: Callable[[nn.Module], nn.Module] = lambda x: x,
-        distributed_config: FSDPShampooConfig | None = None,
+        distributed_config: FSDPDistributedConfig | None = None,
     ) -> tuple[nn.Module, nn.Module, torch.Tensor, torch.Tensor]:
         # NOTE: We construct the model here specifically in order to ensure that
         #       FSDP1 Shampoo and default Shampoo produce equivalent results.
@@ -98,7 +98,7 @@ class ShampooFSDPDistributorTest(FSDPTest):
             fill=0.01,
             post_model_decoration=post_model_decoration,
         )
-        if isinstance(distributed_config, FSDPShampooConfig):
+        if isinstance(distributed_config, FSDPDistributedConfig):
             assert (
                 sum(param.numel() for param in model.parameters())
                 == sum(a * b for a, b in pairwise(model_linear_layers_dims)) // 2
@@ -111,7 +111,7 @@ class ShampooFSDPDistributorTest(FSDPTest):
 
     @staticmethod
     def _shampoo_optim_factory(
-        distributed_config: FSDPShampooConfig | SingleDeviceDistributedConfig,
+        distributed_config: FSDPDistributedConfig | SingleDeviceDistributedConfig,
     ) -> Callable[[ParamsT], torch.optim.Optimizer]:
         return partial(
             DistributedShampoo,
@@ -130,7 +130,7 @@ class ShampooFSDPDistributorTest(FSDPTest):
 
     @skip_if_lt_x_gpu(2)
     def test_all_ranks_with_no_grads(self) -> None:
-        fsdp_config = FSDPShampooConfig(param_to_metadata={})
+        fsdp_config = FSDPDistributedConfig(param_to_metadata={})
 
         steps_without_gradients = 2
         with unittest.mock.patch.object(torch.Tensor, "backward") as mock_backward:
@@ -153,7 +153,7 @@ class ShampooFSDPDistributorTest(FSDPTest):
 
     @skip_if_lt_x_gpu(2)
     def test_fsdp_shampoo_against_default_shampoo(self) -> None:
-        fsdp_config = FSDPShampooConfig(param_to_metadata={})
+        fsdp_config = FSDPDistributedConfig(param_to_metadata={})
         compare_two_optimizers_models_devices_on_weight_and_loss(
             control_optim_factory=ShampooFSDPDistributorTest._shampoo_optim_factory(
                 distributed_config=DefaultSingleDeviceDistributedConfig,
@@ -174,7 +174,7 @@ class ShampooFSDPDistributorTest(FSDPTest):
         model = ShampooFSDPDistributorTest._construct_model(
             post_model_decoration=partial(FSDP1, use_orig_params=True)
         )[0]
-        fsdp_config = FSDPShampooConfig(
+        fsdp_config = FSDPDistributedConfig(
             param_to_metadata=compile_fsdp_parameter_metadata(model)
         )
         assert isinstance(
@@ -206,11 +206,11 @@ class ShampooFSDPDistributorTest(FSDPTest):
 
     @skip_if_lt_x_gpu(2)
     @parametrize("communicate_params", (True, False))
-    def test_fsdp_shampoo_config_against_hsdp_shampoo_config_bitwise_identical(
+    def test_fsdp_distributed_config_against_hsdp_distributed_config_bitwise_identical(
         self, communicate_params: bool
     ) -> None:
-        fsdp_config = FSDPShampooConfig(param_to_metadata={})
-        hsdp_config = HSDPShampooConfig(
+        fsdp_config = FSDPDistributedConfig(param_to_metadata={})
+        hsdp_config = HSDPDistributedConfig(
             param_to_metadata={},
             device_mesh=init_device_mesh("cuda", (1, self.world_size)),
             communicate_params=communicate_params,
@@ -264,7 +264,7 @@ class FSDPDistributorOnEmptyParamTest(FSDPTest, DistributorOnEmptyParamTest.Inte
             fill=0.01,
             post_model_decoration=partial(FSDP1, use_orig_params=True),
         )[0]
-        distributed_config = FSDPShampooConfig(
+        distributed_config = FSDPDistributedConfig(
             param_to_metadata=compile_fsdp_parameter_metadata(model)
         )
         distributor = FSDPDistributor(

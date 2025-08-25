@@ -18,7 +18,7 @@ from distributed_shampoo.distributor.shampoo_distributor import Distributor
 from distributed_shampoo.shampoo_types import (
     DISTRIBUTED_CONFIG,
     FSDPParamAssignmentStrategy,
-    FullyShardShampooConfig,
+    FullyShardDistributedConfig,
     PARAMS,
 )
 from torch import distributed as dist, Tensor
@@ -38,7 +38,9 @@ class FullyShardLosslessDistributor(Distributor):
     """
 
     def __init__(self, param_group: dict[str, Any]) -> None:
-        distributed_config: FullyShardShampooConfig = param_group[DISTRIBUTED_CONFIG]
+        distributed_config: FullyShardDistributedConfig = param_group[
+            DISTRIBUTED_CONFIG
+        ]
         self._param_assignment_strategy: FSDPParamAssignmentStrategy = (
             distributed_config.param_assignment_strategy
         )

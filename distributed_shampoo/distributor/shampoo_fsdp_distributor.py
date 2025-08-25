@@ -15,8 +15,8 @@ import torch
 from distributed_shampoo.distributor.shampoo_distributor import Distributor
 from distributed_shampoo.shampoo_types import (
     DISTRIBUTED_CONFIG,
+    FSDPDistributedConfig,
     FSDPParameterMetadata,
-    FSDPShampooConfig,
     MAX_PRECONDITIONER_DIM,
     PARAMS,
 )
@@ -43,7 +43,7 @@ class FSDPDistributor(Distributor):
     """
 
     def __init__(self, param_group: dict[str, Any]) -> None:
-        distributed_config: FSDPShampooConfig = param_group[DISTRIBUTED_CONFIG]
+        distributed_config: FSDPDistributedConfig = param_group[DISTRIBUTED_CONFIG]
         self._param_to_metadata: dict[Parameter, FSDPParameterMetadata] = (
             distributed_config.param_to_metadata
         )

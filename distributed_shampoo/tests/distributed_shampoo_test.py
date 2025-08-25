@@ -35,7 +35,7 @@ from distributed_shampoo.shampoo_types import (
     EigendecomposedShampooPreconditionerConfig,
     EigenvalueCorrectedShampooPreconditionerConfig,
     FSDPParamAssignmentStrategy,
-    FullyShardShampooConfig,
+    FullyShardDistributedConfig,
     GraftingConfig,
     PreconditionerConfig,
     RootInvShampooPreconditionerConfig,
@@ -275,10 +275,10 @@ class DistributedShampooInitTest(unittest.TestCase):
 
         self.assertRaisesRegex(
             NotImplementedError,
-            r"group\[DISTRIBUTED_CONFIG\]=.*FullyShardShampooConfig\(.*ROUND_ROBIN.*\) not supported!",
+            r"group\[DISTRIBUTED_CONFIG\]=.*FullyShardDistributedConfig\(.*ROUND_ROBIN.*\) not supported!",
             DistributedShampoo,
             params=self._model.parameters(),
-            distributed_config=FullyShardShampooConfig(
+            distributed_config=FullyShardDistributedConfig(
                 param_assignment_strategy=FSDPParamAssignmentStrategy.ROUND_ROBIN
             ),
         )

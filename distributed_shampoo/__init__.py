@@ -35,7 +35,7 @@ from distributed_shampoo.shampoo_types import (
     AdaGradGraftingConfig,
     AdamGraftingConfig,
     AmortizedPreconditionerConfig,
-    DDPShampooConfig,
+    DDPDistributedConfig,
     DefaultEigenvalueCorrectedShampooConfig,
     DefaultShampooConfig,
     DefaultSignDescentPreconditionerConfig,
@@ -45,12 +45,12 @@ from distributed_shampoo.shampoo_types import (
     DistributedConfig,
     EigendecomposedShampooPreconditionerConfig,
     EigenvalueCorrectedShampooPreconditionerConfig,
+    FSDPDistributedConfig,
     FSDPParamAssignmentStrategy,
-    FSDPShampooConfig,
-    FullyShardShampooConfig,
+    FullyShardDistributedConfig,
     GraftingConfig,
-    HSDPShampooConfig,
-    HybridShardShampooConfig,
+    HSDPDistributedConfig,
+    HybridShardDistributedConfig,
     PreconditionerConfig,
     RMSpropGraftingConfig,
     RootInvShampooPreconditionerConfig,
@@ -75,12 +75,12 @@ __all__ = [
     # `distributed_config` options.
     "DefaultSingleDeviceDistributedConfig",
     "DistributedConfig",  # Abstract base class.
-    "DDPShampooConfig",
+    "DDPDistributedConfig",
     "FSDPParamAssignmentStrategy",
-    "FSDPShampooConfig",
-    "FullyShardShampooConfig",
-    "HSDPShampooConfig",
-    "HybridShardShampooConfig",
+    "FSDPDistributedConfig",
+    "FullyShardDistributedConfig",
+    "HSDPDistributedConfig",
+    "HybridShardDistributedConfig",
     # `precision_config`.
     # `preconditioner_config` options.
     "PreconditionerConfig",  # Abstract base class.
@@ -116,5 +116,5 @@ __all__ = [
     "NewtonSchulzOrthogonalizationConfig",  # Based on `OrthogonalizationConfig`.
     "DefaultNewtonSchulzOrthogonalizationConfig",  # Default `OrthogonalizationConfig` using `NewtonSchulzOrthogonalizationConfig`.
     # Other utilities.
-    "compile_fsdp_parameter_metadata",  # For `FSDPShampooConfig` and `HSDPShampooConfig`.
+    "compile_fsdp_parameter_metadata",  # For `FSDPDistributedConfig` and `HSDPDistributedConfig`.
 ]

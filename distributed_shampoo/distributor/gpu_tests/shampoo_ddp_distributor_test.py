@@ -28,7 +28,7 @@ from distributed_shampoo.distributor.shampoo_block_info import DTensorBlockInfo
 from distributed_shampoo.distributor.shampoo_ddp_distributor import DDPDistributor
 from distributed_shampoo.shampoo_types import (
     AdaGradGraftingConfig,
-    DDPShampooConfig,
+    DDPDistributedConfig,
     DefaultEigenvalueCorrectedShampooConfig,
     DefaultShampooConfig,
     DefaultSingleDeviceDistributedConfig,
@@ -89,7 +89,7 @@ class AbstractTest:
 
         @staticmethod
         def _shampoo_optim_factory(
-            distributed_config: DDPShampooConfig | SingleDeviceDistributedConfig,
+            distributed_config: DDPDistributedConfig | SingleDeviceDistributedConfig,
             preconditioner_config: PreconditionerConfig = DefaultShampooConfig,
         ) -> Callable[[ParamsT], torch.optim.Optimizer]:
             return partial(
@@ -156,7 +156,7 @@ class AbstractTest:
                     preconditioner_config=preconditioner_config,
                 ),
                 experimental_optim_factory=self._shampoo_optim_factory(
-                    distributed_config=DDPShampooConfig(
+                    distributed_config=DDPDistributedConfig(
                         communication_dtype=communication_dtype,
                         num_trainers_per_group=num_trainers_per_group,
                         communicate_params=communicate_params,
@@ -181,7 +181,7 @@ class AbstractTest:
             num_steps = 3
             model, _, _, _, optimizer = train_model(
                 optim_factory=AbstractTest.ShampooDDPDistributorDeviceTest._shampoo_optim_factory(
-                    distributed_config=DDPShampooConfig()
+                    distributed_config=DDPDistributedConfig()
                 ),
                 # Setting model_linear_layers_dims to creates an model with one linear layer with (PRECONDITIONER_DIM * 2)xPRECONDITIONER_DIM weight.
                 # Because Shampoo's max_preconditioner_dim = PRECONDITIONER_DIM, there will be two blocks; rank 0 has block 0 and rank 1 has block 1.
@@ -574,7 +574,7 @@ class AbstractTest:
                 # This effectively simulates running forward passes without computing gradients.
                 train_model(
                     optim_factory=AbstractTest.ShampooDDPDistributorDeviceTest._shampoo_optim_factory(
-                        distributed_config=DDPShampooConfig(
+                        distributed_config=DDPDistributedConfig(
                             communicate_params=communicate_params
                         )
                     ),
@@ -603,7 +603,7 @@ class AbstractTest:
             num_steps = 3
             model, _, _, _, optimizer = train_model(
                 optim_factory=AbstractTest.ShampooDDPDistributorDeviceTest._shampoo_optim_factory(
-                    distributed_config=DDPShampooConfig(
+                    distributed_config=DDPDistributedConfig(
                         communicate_params=communicate_params
                     )
                 ),
@@ -646,7 +646,7 @@ class AbstractTest:
             ):
                 train_model(
                     optim_factory=AbstractTest.ShampooDDPDistributorDeviceTest._shampoo_optim_factory(
-                        distributed_config=DDPShampooConfig()
+                        distributed_config=DDPDistributedConfig()
                     ),
                     # Setting model_linear_layers_dims to (PRECONDITIONER_DIM, 1) creates an model with one linear layer with PRECONDITIONER_DIMx1 weight.
                     # Because Shampoo's max_preconditioner_dim = PRECONDITIONER_DIM, there will be only one block.
@@ -704,7 +704,7 @@ class AbstractTest:
                 device=self._device,
                 fill=0.01,
             )[0]
-            distributed_config = DDPShampooConfig(num_trainers_per_group=1)
+            distributed_config = DDPDistributedConfig(num_trainers_per_group=1)
             distributor = DDPDistributor(
                 param_group=DistributedShampoo(
                     model.parameters(),

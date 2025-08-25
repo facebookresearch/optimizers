@@ -30,10 +30,10 @@ from distributed_shampoo.distributor.shampoo_hybrid_shard_distributor import (
 from distributed_shampoo.preconditioner.shampoo_preconditioner_list import SHAMPOO
 from distributed_shampoo.shampoo_types import (
     AdaGradGraftingConfig,
-    DDPShampooConfig,
+    DDPDistributedConfig,
     DefaultSingleDeviceDistributedConfig,
-    FullyShardShampooConfig,
-    HybridShardShampooConfig,
+    FullyShardDistributedConfig,
+    HybridShardDistributedConfig,
     SingleDeviceDistributedConfig,
 )
 from distributed_shampoo.tests.shampoo_test_utils import (
@@ -129,9 +129,9 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
 
     @staticmethod
     def _shampoo_optim_factory(
-        distributed_config: DDPShampooConfig
-        | FullyShardShampooConfig
-        | HybridShardShampooConfig
+        distributed_config: DDPDistributedConfig
+        | FullyShardDistributedConfig
+        | HybridShardDistributedConfig
         | SingleDeviceDistributedConfig,
         start_preconditioning_step: int = 2,
     ) -> Callable[[ParamsT], torch.optim.Optimizer]:
@@ -168,7 +168,7 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
         communication_dtype: torch.dtype,
         communicate_params: bool,
     ) -> None:
-        hybrid_shard_config = HybridShardShampooConfig(
+        hybrid_shard_config = HybridShardDistributedConfig(
             device_mesh=init_device_mesh(
                 "cuda", (2, 2), mesh_dim_names=("replicate", "shard")
             ),
@@ -216,7 +216,7 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
         by comparing it with default shampoo. (n, 1) mesh is a special case of hybrid shard.
         The shard size is 1 so it is equivalent to default or DDP Shampoo.
         """
-        hybrid_shard_config = HybridShardShampooConfig(
+        hybrid_shard_config = HybridShardDistributedConfig(
             device_mesh=init_device_mesh(
                 "cuda", (4, 1), mesh_dim_names=("replicate", "shard")
             ),
@@ -268,11 +268,11 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
         by comparing it with DDP Shampoo. (n, 1) mesh is a special case of hybrid shard.
         The shard size is 1 so it is equivalent to DDP Shampoo.
         """
-        ddp_config = DDPShampooConfig(
+        ddp_config = DDPDistributedConfig(
             communication_dtype=communication_dtype,
             num_trainers_per_group=num_trainers_per_group,
         )
-        hybrid_shard_config = HybridShardShampooConfig(
+        hybrid_shard_config = HybridShardDistributedConfig(
             device_mesh=init_device_mesh(
                 "cuda", (4, 1), mesh_dim_names=("replicate", "shard")
             ),
@@ -313,7 +313,7 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
         ),
     )
     @parametrize("num_trainers_per_group", (-1, 1, 2))
-    def test_hybrid_shard_shampoo_config_against_fully_shard_shampoo_config(
+    def test_hybrid_shard_distributed_config_against_fully_shard_distributed_config(
         self,
         num_trainers_per_group: int,
         communication_dtype: torch.dtype,
@@ -326,8 +326,8 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
         mesh_2d = init_device_mesh(
             "cuda", (2, 2), mesh_dim_names=("replicate", "shard")
         )
-        fully_shard_config = FullyShardShampooConfig()
-        hybrid_shard_config = HybridShardShampooConfig(
+        fully_shard_config = FullyShardDistributedConfig()
+        hybrid_shard_config = HybridShardDistributedConfig(
             device_mesh=mesh_2d,
             communication_dtype=communication_dtype,
             num_trainers_per_group=num_trainers_per_group,
@@ -355,7 +355,7 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
     @skip_if_lt_x_gpu(4)
     @parametrize("communicate_params", (False, True))
     def test_all_ranks_with_no_grads(self, communicate_params: bool) -> None:
-        hybrid_shard_config = HybridShardShampooConfig(
+        hybrid_shard_config = HybridShardDistributedConfig(
             device_mesh=init_device_mesh(
                 "cuda", (2, 2), mesh_dim_names=("replicate", "shard")
             ),
@@ -390,7 +390,7 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
         )
         model, _, _, _, optimizer = train_model(
             optim_factory=ShampooHybridShardDistributorTest._shampoo_optim_factory(
-                distributed_config=HybridShardShampooConfig(device_mesh=mesh_2d)
+                distributed_config=HybridShardDistributedConfig(device_mesh=mesh_2d)
             ),
             model_factory=partial(
                 ShampooHybridShardDistributorTest._construct_model,
@@ -430,7 +430,7 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
     @with_comms
     @skip_if_lt_x_gpu(4)
     def test_number_of_trainers_per_group_out_of_range(self) -> None:
-        hybrid_shard_config = HybridShardShampooConfig(
+        hybrid_shard_config = HybridShardDistributedConfig(
             device_mesh=init_device_mesh(
                 "cuda", (2, 2), mesh_dim_names=("replicate", "shard")
             ),
@@ -457,7 +457,7 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
     @with_comms
     @skip_if_lt_x_gpu(4)
     def test_dist_is_initialized(self) -> None:
-        hybrid_shard_config = HybridShardShampooConfig(
+        hybrid_shard_config = HybridShardDistributedConfig(
             device_mesh=init_device_mesh(
                 "cuda", (2, 2), mesh_dim_names=("replicate", "shard")
             )
@@ -486,7 +486,7 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
     def test_incompatible_replicated_group_size_and_num_trainers_per_group(
         self,
     ) -> None:
-        hybrid_shard_config = HybridShardShampooConfig(
+        hybrid_shard_config = HybridShardDistributedConfig(
             device_mesh=init_device_mesh(
                 "cuda", (2, 2), mesh_dim_names=("replicate", "shard")
             ),
@@ -543,7 +543,7 @@ class HybridShardDistributorOnEmptyParamTest(
             fill=0.01,
             post_model_decoration=partial(fully_shard, mesh=device_mesh),
         )[0]
-        distributed_config = HybridShardShampooConfig(
+        distributed_config = HybridShardDistributedConfig(
             device_mesh=device_mesh, num_trainers_per_group=1
         )
         assert isinstance(model, nn.Module)

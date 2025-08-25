@@ -17,7 +17,7 @@ import torch
 
 import torch.distributed as dist
 
-from distributed_shampoo import HSDPShampooConfig
+from distributed_shampoo import HSDPDistributedConfig
 from distributed_shampoo.distributor.shampoo_fsdp_utils import (
     compile_fsdp_parameter_metadata,
 )
@@ -134,7 +134,7 @@ if __name__ == "__main__":
         grafting_type=args.grafting_type,
         grafting_epsilon=args.grafting_epsilon,
         grafting_beta2=args.grafting_beta2,
-        distributed_config=HSDPShampooConfig(
+        distributed_config=HSDPDistributedConfig(
             param_to_metadata=compile_fsdp_parameter_metadata(model),
             device_mesh=device_mesh,
             num_trainers_per_group=args.num_trainers_per_group,

@@ -16,7 +16,7 @@ from functools import partial
 import torch
 import torch.distributed as dist
 
-from distributed_shampoo import HybridShardShampooConfig
+from distributed_shampoo import HybridShardDistributedConfig
 from distributed_shampoo.examples.trainer_utils import (
     create_model_and_optimizer_and_loss_fn,
     get_data_loader_and_sampler,
@@ -94,7 +94,7 @@ if __name__ == "__main__":
     model, optimizer, loss_fn = create_model_and_optimizer_and_loss_fn(
         args=args,
         device=device,
-        distributed_config=HybridShardShampooConfig(
+        distributed_config=HybridShardDistributedConfig(
             device_mesh=device_mesh,
             num_trainers_per_group=args.num_trainers_per_group,
         ),

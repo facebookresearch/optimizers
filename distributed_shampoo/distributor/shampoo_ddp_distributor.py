@@ -18,7 +18,7 @@ from distributed_shampoo.distributor.shampoo_block_info import DTensorBlockInfo
 from distributed_shampoo.distributor.shampoo_dist_utils import get_device_mesh
 from distributed_shampoo.distributor.shampoo_distributor import DistributorInterface
 from distributed_shampoo.shampoo_types import (
-    DDPShampooConfig,
+    DDPDistributedConfig,
     DISTRIBUTED_CONFIG,
     PARAMS,
 )
@@ -136,7 +136,7 @@ class DDPDistributor(DistributorInterface):
 
     def __init__(self, param_group: dict[str, Any]) -> None:
         super().__init__(param_group)
-        distributed_config: DDPShampooConfig = param_group[DISTRIBUTED_CONFIG]
+        distributed_config: DDPDistributedConfig = param_group[DISTRIBUTED_CONFIG]
 
         # Construct global masked blocked parameters (which is DDP-specific).
         self._global_masked_blocked_params: tuple[Tensor, ...] = (

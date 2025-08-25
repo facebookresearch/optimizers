@@ -19,7 +19,7 @@ import torch
 import torch.distributed as dist
 import torch.distributed.checkpoint as dist_checkpoint
 
-from distributed_shampoo import DDPShampooConfig, DistributedShampoo
+from distributed_shampoo import DDPDistributedConfig, DistributedShampoo
 from distributed_shampoo.examples.trainer_utils import (
     create_model_and_optimizer_and_loss_fn,
     get_data_loader_and_sampler,
@@ -87,7 +87,7 @@ if __name__ == "__main__":
     model, optimizer, loss_function = create_model_and_optimizer_and_loss_fn(
         args=args,
         device=device,
-        distributed_config=DDPShampooConfig(
+        distributed_config=DDPDistributedConfig(
             communication_dtype=args.communication_dtype,
             num_trainers_per_group=args.num_trainers_per_group,
             communicate_params=args.communicate_params,

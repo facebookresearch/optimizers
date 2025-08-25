@@ -15,7 +15,7 @@ import os
 import torch
 import torch.distributed as dist
 
-from distributed_shampoo import FullyShardShampooConfig
+from distributed_shampoo import FullyShardDistributedConfig
 from distributed_shampoo.examples.trainer_utils import (
     create_model_and_optimizer_and_loss_fn,
     get_data_loader_and_sampler,
@@ -85,7 +85,7 @@ if __name__ == "__main__":
     model, optimizer, loss_fn = create_model_and_optimizer_and_loss_fn(
         args=args,
         device=device,
-        distributed_config=FullyShardShampooConfig(
+        distributed_config=FullyShardDistributedConfig(
             param_assignment_strategy=args.param_assignment_strategy
         ),
         post_model_decoration=fully_shard,

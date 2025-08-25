@@ -62,7 +62,7 @@ from distributed_shampoo.shampoo_types import (
     BETA3,
     BETAS,
     DAMPENING,
-    DDPShampooConfig,
+    DDPDistributedConfig,
     DefaultShampooConfig,
     DefaultSingleDeviceDistributedConfig,
     DISTRIBUTED_CONFIG,
@@ -73,14 +73,14 @@ from distributed_shampoo.shampoo_types import (
     EPSILON,
     FILTERED_GRAD,
     FILTERED_GRAD_LIST,
+    FSDPDistributedConfig,
     FSDPParamAssignmentStrategy,
-    FSDPShampooConfig,
-    FullyShardShampooConfig,
+    FullyShardDistributedConfig,
     GRAFTING_CONFIG,
     GRAFTING_PRECONDITIONER_LIST,
     GraftingConfig,
-    HSDPShampooConfig,
-    HybridShardShampooConfig,
+    HSDPDistributedConfig,
+    HybridShardDistributedConfig,
     LR,
     MASKED_BLOCKED_GRADS,
     MASKED_BLOCKED_PARAMS,
@@ -177,7 +177,7 @@ class DistributedShampoo(torch.optim.Optimizer):
         - None: Performs serial single-GPU training. Replicates all computation and optimizer states across all
             devices.
 
-        - DDPShampooConfig: Supports multi-GPU distributed data-parallel training via torch.distributed. Assigns optimizer states
+        - DDPDistributedConfig: Supports multi-GPU distributed data-parallel training via torch.distributed. Assigns optimizer states
             and computation for each block in a greedy fashion to different workers. Leverages DTensor in order to distribute the
             per-block optimizer states from Shampoo. An AllGather communication is performed in order to synchronize the parameter
             updates to applied to all parameter blocks.
@@ -197,7 +197,7 @@ class DistributedShampoo(torch.optim.Optimizer):
                 - torch.distributed must be initialized in advance.
                 - Only supports homogeneous hardware architectures.
 
-        - FSDPShampooConfig: Supports multi-GPU fully-sharded data-parallel training via torch.distributed. This option uses
+        - FSDPDistributedConfig: Supports multi-GPU fully-sharded data-parallel training via torch.distributed. This option uses
             additional metadata in order to reconstruct valid tensor blocks of the original parameter from the flattened parameter
             representation.
 
@@ -210,7 +210,7 @@ class DistributedShampoo(torch.optim.Optimizer):
                 - torch.distributed must be initialized in advance.
                 - One must enable the option use_orig_params = True in FSDP.
 
-        - HSDPShampooConfig: Supports hierarchical parallelism approach that combines DDP and FSDP to scale up training on large models.
+        - HSDPDistributedConfig: Supports hierarchical parallelism approach that combines DDP and FSDP to scale up training on large models.
             It works by dividing the model into smaller sub-models, each of which is trained in parallel using data parallelism.
             The gradients from each sub-model are then aggregated and used to update the full model.
 
@@ -235,13 +235,13 @@ class DistributedShampoo(torch.optim.Optimizer):
                 - Only works with the option sharding_strategy=ShardingStrategy.HYBRID_SHARD.
                 - Within data parallelism process groups, only supports homogeneous hardware architectures.
 
-        - FullyShardShampooConfig: Supports per-parameter FSDP training, a.k.a. FSDP2, or "fully_shard" api in torch.distributed. Please see
+        - FullyShardDistributedConfig: Supports per-parameter FSDP training, a.k.a. FSDP2, or "fully_shard" api in torch.distributed. Please see
             README for more detailed introduction on Shampoo FSDP2.
 
             Requirements:
                 - torch.distributed must be initialized in advance.
 
-        - HybridShardShampooConfig: Supports hierarchical parallelism approach that combines DDP and FSDP to scale up training on large models
+        - HybridShardDistributedConfig: Supports hierarchical parallelism approach that combines DDP and FSDP to scale up training on large models
             for FSDP2. Please see README for more detailed introduction.
 
             Distributed Training Specific Fields:
@@ -527,19 +527,19 @@ class DistributedShampoo(torch.optim.Optimizer):
             match group[DISTRIBUTED_CONFIG]:
                 case SingleDeviceDistributedConfig():
                     distributor_cls: type[DistributorInterface] = Distributor
-                case HSDPShampooConfig():
+                case HSDPDistributedConfig():
                     distributor_cls = HSDPDistributor
-                case HybridShardShampooConfig():
+                case HybridShardDistributedConfig():
                     distributor_cls = HybridShardDistributor
-                case DDPShampooConfig():
+                case DDPDistributedConfig():
                     distributor_cls = DDPDistributor
-                case FSDPShampooConfig():
+                case FSDPDistributedConfig():
                     distributor_cls = FSDPDistributor
-                case FullyShardShampooConfig(
+                case FullyShardDistributedConfig(
                     param_assignment_strategy=FSDPParamAssignmentStrategy.DEFAULT
                 ):
                     distributor_cls = FullyShardDistributor
-                case FullyShardShampooConfig(
+                case FullyShardDistributedConfig(
                     param_assignment_strategy=FSDPParamAssignmentStrategy.REPLICATE
                 ):
                     distributor_cls = FullyShardLosslessDistributor
