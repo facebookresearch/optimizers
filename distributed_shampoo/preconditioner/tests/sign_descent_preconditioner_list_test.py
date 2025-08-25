@@ -7,6 +7,8 @@ LICENSE file in the root directory of this source tree.
 
 """
 
+#!/usr/bin/env python3
+
 from collections.abc import Callable
 
 import torch
