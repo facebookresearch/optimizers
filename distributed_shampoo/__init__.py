@@ -58,6 +58,7 @@ from distributed_shampoo.shampoo_types import (
     ShampooPreconditionerConfig,
     ShampooPT2CompileConfig,
     SignDescentPreconditionerConfig,
+    SingleDeviceDistributedConfig,
     SpectralDescentPreconditionerConfig,
 )
 
@@ -73,8 +74,9 @@ __all__ = [
     # PT2 compile.
     "ShampooPT2CompileConfig",
     # `distributed_config` options.
-    "DefaultSingleDeviceDistributedConfig",
     "DistributedConfig",  # Abstract base class.
+    "SingleDeviceDistributedConfig",
+    "DefaultSingleDeviceDistributedConfig",  # Default `SingleDeviceDistributedConfig`.
     "DDPDistributedConfig",
     "FSDPParamAssignmentStrategy",
     "FSDPDistributedConfig",
