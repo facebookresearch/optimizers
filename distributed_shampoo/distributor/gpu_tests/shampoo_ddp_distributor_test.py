@@ -27,7 +27,7 @@ from distributed_shampoo.distributor.gpu_tests.distributor_test_utils import (
 from distributed_shampoo.distributor.shampoo_block_info import DTensorBlockInfo
 from distributed_shampoo.distributor.shampoo_ddp_distributor import DDPDistributor
 from distributed_shampoo.shampoo_types import (
-    AdaGradGraftingConfig,
+    AdaGradPreconditionerConfig,
     DDPDistributedConfig,
     DefaultEigenvalueCorrectedShampooConfig,
     DefaultShampooConfig,
@@ -103,7 +103,7 @@ class AbstractTest:
                 precondition_frequency=1,
                 start_preconditioning_step=2,
                 use_decoupled_weight_decay=True,
-                grafting_config=AdaGradGraftingConfig(epsilon=1e-8),
+                grafting_config=AdaGradPreconditionerConfig(epsilon=1e-8),
                 distributed_config=distributed_config,
                 preconditioner_config=preconditioner_config,
             )

@@ -29,7 +29,7 @@ from distributed_shampoo.distributor.shampoo_hybrid_shard_distributor import (
 )
 from distributed_shampoo.preconditioner.shampoo_preconditioner_list import SHAMPOO
 from distributed_shampoo.shampoo_types import (
-    AdaGradGraftingConfig,
+    AdaGradPreconditionerConfig,
     DDPDistributedConfig,
     DefaultSingleDeviceDistributedConfig,
     FullyShardDistributedConfig,
@@ -146,7 +146,7 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
             precondition_frequency=1,
             start_preconditioning_step=start_preconditioning_step,
             use_decoupled_weight_decay=True,
-            grafting_config=AdaGradGraftingConfig(epsilon=1e-8),
+            grafting_config=AdaGradPreconditionerConfig(epsilon=1e-8),
             distributed_config=distributed_config,
         )
 

@@ -25,7 +25,7 @@ from distributed_shampoo.preconditioner.matrix_functions_types import (
     PseudoInverseConfig,
 )
 from distributed_shampoo.shampoo_types import (
-    AdaGradGraftingConfig,
+    AdaGradPreconditionerConfig,
     DefaultEigenvalueCorrectedShampooConfig,
     DefaultShampooConfig,
     DefaultSignDescentPreconditionerConfig,
@@ -36,7 +36,6 @@ from distributed_shampoo.shampoo_types import (
     EigenvalueCorrectedShampooPreconditionerConfig,
     FSDPParamAssignmentStrategy,
     FullyShardDistributedConfig,
-    GraftingConfig,
     PreconditionerConfig,
     RootInvShampooPreconditionerConfig,
     ShampooPT2CompileConfig,
@@ -67,25 +66,10 @@ class DistributedShampooInitTest(unittest.TestCase):
 
         self.assertRaisesRegex(
             NotImplementedError,
-            r"group\[PRECONDITIONER_CONFIG\]=.*\.NotSupportedPreconditionerConfig\(.*\) not supported!",
+            r"preconditioner_config=.*\.NotSupportedPreconditionerConfig\(.*\) not supported!",
             DistributedShampoo,
             self._model.parameters(),
             preconditioner_config=NotSupportedPreconditionerConfig(),
-        )
-
-    def test_invalid_grafting_config(self) -> None:
-        @dataclass
-        class NotSupportedGraftingConfig(GraftingConfig):
-            """A dummy grafting config that is not supported."""
-
-            unsupported_epsilon: float = 1e-7
-
-        self.assertRaisesRegex(
-            NotImplementedError,
-            r"group\[GRAFTING_CONFIG\]=.*\.NotSupportedGraftingConfig\(unsupported_epsilon=1e-07\) not supported!",
-            DistributedShampoo,
-            self._model.parameters(),
-            grafting_config=NotSupportedGraftingConfig(),
         )
 
     @parametrize(
@@ -300,7 +284,7 @@ class DistributedShampooTest(unittest.TestCase):
             precondition_frequency=1,
             start_preconditioning_step=1,
             distributed_config=DefaultSingleDeviceDistributedConfig,
-            # Explicity set grafting_config=None to test the case that no grafting is used.
+            # Explicitly set grafting_config=None to test the case that no grafting config is used.
             grafting_config=None,
         )
 
@@ -379,7 +363,7 @@ class AbstractTest:
                     # distributed_config.target_parameter_dimensionality=2 is necessary to prevent SpectralDescentPreconditionerConfig assertion error.
                     target_parameter_dimensionality=2,
                 ),
-                grafting_config=AdaGradGraftingConfig(
+                grafting_config=AdaGradPreconditionerConfig(
                     epsilon=0.001,
                 ),
                 preconditioner_config=self._preconditioner_config,
@@ -633,7 +617,7 @@ class AbstractTest:
                         "use_nesterov": False,
                         "use_bias_correction": True,
                         "use_decoupled_weight_decay": True,
-                        "grafting_config": AdaGradGraftingConfig(
+                        "grafting_config": AdaGradPreconditionerConfig(
                             epsilon=0.001,
                         ),
                         "use_pin_memory": False,
@@ -801,7 +785,7 @@ class ShampooDistributedStateDictTest(AbstractTest.DistributedStateDictTestBase)
                     "use_nesterov": False,
                     "use_bias_correction": True,
                     "use_decoupled_weight_decay": True,
-                    "grafting_config": AdaGradGraftingConfig(
+                    "grafting_config": AdaGradPreconditionerConfig(
                         epsilon=0.001,
                     ),
                     "use_pin_memory": False,
@@ -983,7 +967,7 @@ class EigendecomposedShampooDistributedStateDictTest(
                     "use_nesterov": False,
                     "use_bias_correction": True,
                     "use_decoupled_weight_decay": True,
-                    "grafting_config": AdaGradGraftingConfig(
+                    "grafting_config": AdaGradPreconditionerConfig(
                         epsilon=0.001,
                     ),
                     "use_pin_memory": False,
@@ -1171,7 +1155,7 @@ class EigenvalueCorrectedShampooDistributedStateDictTest(
                     "use_nesterov": False,
                     "use_bias_correction": True,
                     "use_decoupled_weight_decay": True,
-                    "grafting_config": AdaGradGraftingConfig(
+                    "grafting_config": AdaGradPreconditionerConfig(
                         epsilon=0.001,
                     ),
                     "use_pin_memory": False,
@@ -1218,7 +1202,7 @@ class DistributedShampooNoneGradTest(unittest.TestCase):
             start_preconditioning_step=1,
             shampoo_pt2_compile_config=ShampooPT2CompileConfig(backend="eager"),
             distributed_config=DefaultSingleDeviceDistributedConfig,
-            # Explicity set grafting_config=None to test the case that no grafting is used.
+            # Explicitly set grafting_config=None to test the case that no grafting config is used.
             grafting_config=None,
         )
 

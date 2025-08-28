@@ -24,7 +24,7 @@ from distributed_shampoo.distributor.shampoo_fully_shard_lossless_distributor im
     FullyShardLosslessDistributor,
 )
 from distributed_shampoo.shampoo_types import (
-    AdaGradGraftingConfig,
+    AdaGradPreconditionerConfig,
     DefaultSingleDeviceDistributedConfig,
     FSDPParamAssignmentStrategy,
     FullyShardDistributedConfig,
@@ -120,7 +120,7 @@ class ShampooFullyShardLosslessDistributorTest(DTensorTestBase):
             precondition_frequency=1,
             start_preconditioning_step=2,
             use_decoupled_weight_decay=True,
-            grafting_config=AdaGradGraftingConfig(epsilon=1e-8),
+            grafting_config=AdaGradPreconditionerConfig(epsilon=1e-8),
             distributed_config=distributed_config,
         )
 

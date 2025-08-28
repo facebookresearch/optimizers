@@ -20,14 +20,14 @@ from distributed_shampoo.preconditioner.matrix_functions_types import (
 )
 
 from distributed_shampoo.shampoo_types import (
-    AdaGradGraftingConfig,
+    AdaGradPreconditionerConfig,
     AmortizedPreconditionerConfig,
     DistributedConfig,
     EigenvalueCorrectedShampooPreconditionerConfig,
     FSDPDistributedConfig,
     HSDPDistributedConfig,
     HybridShardDistributedConfig,
-    RMSpropGraftingConfig,
+    RMSpropPreconditionerConfig,
     ShampooPreconditionerConfig,
 )
 
@@ -39,15 +39,15 @@ from torch.testing._internal.common_utils import (
 
 
 @instantiate_parametrized_tests
-class AdaGradGraftingConfigSubclassesTest(unittest.TestCase):
-    subclasses_types: list[type[AdaGradGraftingConfig]] = list(
-        get_all_non_abstract_subclasses(AdaGradGraftingConfig)
+class AdaGradPreconditionerConfigSubclassesTest(unittest.TestCase):
+    subclasses_types: list[type[AdaGradPreconditionerConfig]] = list(
+        get_all_non_abstract_subclasses(AdaGradPreconditionerConfig)
     )
 
     @parametrize("epsilon", (0.0, -1.0))
     @parametrize("cls", subclasses_types)
     def test_illegal_epsilon(
-        self, cls: type[AdaGradGraftingConfig], epsilon: float
+        self, cls: type[AdaGradPreconditionerConfig], epsilon: float
     ) -> None:
         self.assertRaisesRegex(
             ValueError,
@@ -58,15 +58,15 @@ class AdaGradGraftingConfigSubclassesTest(unittest.TestCase):
 
 
 @instantiate_parametrized_tests
-class RMSpropGraftingConfigSubclassesTest(unittest.TestCase):
-    subclasses_types: list[type[RMSpropGraftingConfig]] = list(
-        get_all_non_abstract_subclasses(RMSpropGraftingConfig)
+class RMSpropPreconditionerConfigSubclassesTest(unittest.TestCase):
+    subclasses_types: list[type[RMSpropPreconditionerConfig]] = list(
+        get_all_non_abstract_subclasses(RMSpropPreconditionerConfig)
     )
 
     @parametrize("beta2", (-1.0, 0.0, 1.3))
     @parametrize("cls", subclasses_types)
     def test_illegal_beta2(
-        self, cls: type[RMSpropGraftingConfig], beta2: float
+        self, cls: type[RMSpropPreconditionerConfig], beta2: float
     ) -> None:
         self.assertRaisesRegex(
             ValueError,
