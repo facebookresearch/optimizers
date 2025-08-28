@@ -16,8 +16,8 @@ from functools import partial
 import torch
 from distributed_shampoo.distributed_shampoo import DistributedShampoo
 from distributed_shampoo.shampoo_types import (
-    AdaGradGraftingConfig,
-    GraftingConfig,
+    AdaGradPreconditionerConfig,
+    PreconditionerConfig,
     ShampooPT2CompileConfig,
 )
 from distributed_shampoo.tests.shampoo_test_utils import (
@@ -41,7 +41,7 @@ class DistributedShampooPytorchCompileTest(unittest.TestCase):
         start_preconditioning_step: int,
         weight_decay: float,
         betas: tuple[float, float],
-        grafting_config: GraftingConfig | None,
+        grafting_config: PreconditionerConfig | None,
     ) -> Callable[[ParamsT], torch.optim.Optimizer]:
         return partial(
             DistributedShampoo,
@@ -63,14 +63,14 @@ class DistributedShampooPytorchCompileTest(unittest.TestCase):
         "precondition_frequency, start_preconditioning_step, total_steps",
         ((1, 1000, 5), (10, 10, 5)),
     )
-    @parametrize("grafting_config", (None, AdaGradGraftingConfig(epsilon=1e-10)))
+    @parametrize("grafting_config", (None, AdaGradPreconditionerConfig(epsilon=1e-10)))
     @parametrize("betas", ((0.0, 1.0), (0.9, 0.999)))
     @parametrize("weight_decay", (0.0, 0.1))
     def test_pt2_shampoo_before_preconditioning(
         self,
         weight_decay: float,
         betas: tuple[float, float],
-        grafting_config: GraftingConfig | None,
+        grafting_config: PreconditionerConfig | None,
         precondition_frequency: int,
         start_preconditioning_step: int,
         total_steps: int,
@@ -123,7 +123,7 @@ class DistributedShampooPytorchCompileTest(unittest.TestCase):
             start_preconditioning_step=start_preconditioning_step,
             weight_decay=0.1,
             betas=betas,
-            grafting_config=AdaGradGraftingConfig(epsilon=1e-10),
+            grafting_config=AdaGradPreconditionerConfig(epsilon=1e-10),
         )
 
         compare_two_optimizers_on_weight_and_loss(

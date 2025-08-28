@@ -32,8 +32,8 @@ from distributed_shampoo.preconditioner.matrix_functions_types import (
     SVDOrthogonalizationConfig,
 )
 from distributed_shampoo.shampoo_types import (
-    AdaGradGraftingConfig,
-    AdamGraftingConfig,
+    AdaGradPreconditionerConfig,
+    AdamPreconditionerConfig,
     AmortizedPreconditionerConfig,
     DDPDistributedConfig,
     DefaultEigenvalueCorrectedShampooConfig,
@@ -48,13 +48,12 @@ from distributed_shampoo.shampoo_types import (
     FSDPDistributedConfig,
     FSDPParamAssignmentStrategy,
     FullyShardDistributedConfig,
-    GraftingConfig,
     HSDPDistributedConfig,
     HybridShardDistributedConfig,
     PreconditionerConfig,
-    RMSpropGraftingConfig,
+    RMSpropPreconditionerConfig,
     RootInvShampooPreconditionerConfig,
-    SGDGraftingConfig,
+    SGDPreconditionerConfig,
     ShampooPreconditionerConfig,
     ShampooPT2CompileConfig,
     SignDescentPreconditionerConfig,
@@ -65,12 +64,6 @@ from distributed_shampoo.shampoo_types import (
 
 __all__ = [
     "DistributedShampoo",
-    # `grafting_config` options.
-    "GraftingConfig",  # Abstract base class.
-    "SGDGraftingConfig",
-    "AdaGradGraftingConfig",
-    "RMSpropGraftingConfig",
-    "AdamGraftingConfig",
     # PT2 compile.
     "ShampooPT2CompileConfig",
     # `distributed_config` options.
@@ -98,6 +91,10 @@ __all__ = [
     "SignDescentPreconditionerConfig",  # Based on `PreconditionerConfig`.
     "DefaultSpectralDescentPreconditionerConfig",  # Default `SpectralDescentPreconditionerConfig` using `NewtonSchulzOrthogonalizationConfig`.
     "DefaultSignDescentPreconditionerConfig",  # Default `SignDescentPreconditionerConfig`.
+    "SGDPreconditionerConfig",
+    "AdaGradPreconditionerConfig",
+    "RMSpropPreconditionerConfig",
+    "AdamPreconditionerConfig",
     # matrix functions configs.
     "RankDeficientStabilityConfig",  # Abstract base class.
     "PerturbationConfig",  # Based on `RankDeficientStabilityConfig`.

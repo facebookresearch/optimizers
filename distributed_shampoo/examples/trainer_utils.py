@@ -25,18 +25,17 @@ import torch
 import torch.distributed as dist
 
 from distributed_shampoo import (
-    AdaGradGraftingConfig,
-    AdamGraftingConfig,
+    AdaGradPreconditionerConfig,
+    AdamPreconditionerConfig,
     DefaultEigenvalueCorrectedShampooConfig,
     DefaultSOAPConfig,
     DistributedConfig,
     DistributedShampoo,
     FSDPParamAssignmentStrategy,
-    GraftingConfig,
     PreconditionerConfig,
-    RMSpropGraftingConfig,
+    RMSpropPreconditionerConfig,
     RootInvShampooPreconditionerConfig,
-    SGDGraftingConfig,
+    SGDPreconditionerConfig,
 )
 from distributed_shampoo.examples.convnet import ConvNet
 
@@ -70,16 +69,12 @@ class OptimizerType(enum.Enum):
 
 
 @enum.unique
-class GraftingType(enum.Enum):
+class PreconditionerComputationType(enum.Enum):
     NONE = enum.auto()
     SGD = enum.auto()
     ADAGRAD = enum.auto()
     RMSPROP = enum.auto()
     ADAM = enum.auto()
-
-
-@enum.unique
-class PreconditionerComputationType(enum.Enum):
     EIGEN_ROOT_INV = enum.auto()
     COUPLED_NEWTON_ROOT_INV = enum.auto()
     COUPLED_HIGHER_ORDER_ROOT_INV = enum.auto()
@@ -209,8 +204,8 @@ class Parser:
         # Arguments for grafting.
         parser.add_argument(
             "--grafting-type",
-            type=lambda t: enum_type_parse(t, GraftingType),
-            default=GraftingType.SGD,
+            type=lambda t: enum_type_parse(t, PreconditionerComputationType),
+            default=PreconditionerComputationType.SGD,
             help="Grafted method for Shampoo.",
         )
         parser.add_argument(
@@ -389,7 +384,7 @@ def instantiate_optimizer(
     use_nesterov: bool,
     use_bias_correction: bool,
     use_decoupled_weight_decay: bool,
-    grafting_type: GraftingType,
+    grafting_type: PreconditionerComputationType,
     grafting_beta2: float,
     grafting_epsilon: float,
     distributed_config: DistributedConfig,
@@ -411,6 +406,11 @@ def instantiate_optimizer(
             weight_decay=weight_decay,
         )
     elif optimizer_type == OptimizerType.DISTRIBUTED_SHAMPOO:
+        assert (
+            preconditioner_config := instantiate_preconditioner_config(
+                preconditioner_computation_type=preconditioner_computation_type,
+            )
+        ) is not None
         optimizer_cls = partial(
             DistributedShampoo,
             betas=betas,
@@ -425,13 +425,13 @@ def instantiate_optimizer(
             use_nesterov=use_nesterov,
             use_bias_correction=use_bias_correction,
             use_decoupled_weight_decay=use_decoupled_weight_decay,
-            grafting_config=instantiate_grafting_config(
-                grafting_type, grafting_beta2, grafting_epsilon
+            grafting_config=instantiate_preconditioner_config(
+                preconditioner_computation_type=grafting_type,
+                grafting_beta2=grafting_beta2,
+                grafting_epsilon=grafting_epsilon,
             ),
             distributed_config=distributed_config,
-            preconditioner_config=instantiate_preconditioner_config(
-                preconditioner_computation_type=preconditioner_computation_type,
-            ),
+            preconditioner_config=preconditioner_config,
         )
     else:
         raise ValueError(f"Invalid OptimizerType {optimizer_type}!")
@@ -439,37 +439,32 @@ def instantiate_optimizer(
     return optimizer_cls(parameters, lr=lr)
 
 
-def instantiate_grafting_config(
-    grafting_type: GraftingType,
-    grafting_beta2: float,
-    grafting_epsilon: float,
-) -> GraftingConfig | None:
-    if grafting_type == GraftingType.NONE:
-        return None
-    elif grafting_type == GraftingType.SGD:
-        return SGDGraftingConfig()  # type: ignore[abstract]
-    elif grafting_type == GraftingType.ADAGRAD:
-        return AdaGradGraftingConfig(
-            epsilon=grafting_epsilon,
-        )
-    elif grafting_type == GraftingType.RMSPROP:
-        return RMSpropGraftingConfig(
-            beta2=grafting_beta2,
-            epsilon=grafting_epsilon,
-        )
-    elif grafting_type == GraftingType.ADAM:
-        return AdamGraftingConfig(
-            beta2=grafting_beta2,
-            epsilon=grafting_epsilon,
-        )
-    else:
-        raise ValueError(f"Invalid GraftingType {grafting_type}!")
-
-
 def instantiate_preconditioner_config(
     preconditioner_computation_type: PreconditionerComputationType,
-) -> PreconditionerConfig:
-    if preconditioner_computation_type == PreconditionerComputationType.EIGEN_ROOT_INV:
+    grafting_beta2: float = 1.0,
+    grafting_epsilon: float = 0.0,
+) -> PreconditionerConfig | None:
+    if preconditioner_computation_type == PreconditionerComputationType.NONE:
+        return None
+    elif preconditioner_computation_type == PreconditionerComputationType.SGD:
+        return SGDPreconditionerConfig()  # type: ignore[abstract]
+    elif preconditioner_computation_type == PreconditionerComputationType.ADAGRAD:
+        return AdaGradPreconditionerConfig(
+            epsilon=grafting_epsilon,
+        )
+    elif preconditioner_computation_type == PreconditionerComputationType.RMSPROP:
+        return RMSpropPreconditionerConfig(
+            beta2=grafting_beta2,
+            epsilon=grafting_epsilon,
+        )
+    elif preconditioner_computation_type == PreconditionerComputationType.ADAM:
+        return AdamPreconditionerConfig(
+            beta2=grafting_beta2,
+            epsilon=grafting_epsilon,
+        )
+    elif (
+        preconditioner_computation_type == PreconditionerComputationType.EIGEN_ROOT_INV
+    ):
         return RootInvShampooPreconditionerConfig(
             amortized_computation_config=EigenConfig()
         )
@@ -500,9 +495,7 @@ def instantiate_preconditioner_config(
     ):
         return DefaultSOAPConfig
     else:
-        raise ValueError(
-            f"Invalid PreconditionerComputationType {preconditioner_computation_type}!"
-        )
+        raise ValueError(f"Invalid {preconditioner_computation_type=}!")
 
 
 ###### DATA LOADER ######

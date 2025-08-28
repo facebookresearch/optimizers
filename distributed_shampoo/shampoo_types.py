@@ -82,6 +82,65 @@ class PreconditionerConfig(AbstractDataclass):
     """Configuration for preconditioner computation in DistributedShampoo."""
 
 
+@dataclass
+class SGDPreconditionerConfig(PreconditionerConfig):
+    """Configuration for SGD preconditioner computation."""
+
+
+@dataclass(kw_only=True)
+class AdaGradPreconditionerConfig(PreconditionerConfig):
+    """Configuration for AdaGrad preconditioner computation.
+
+    Attributes:
+        epsilon (float): Epsilon term for regularizing square-root of the aggregated second moment to ensure positive definiteness.
+            (Default: 1e-10)
+
+    """
+
+    epsilon: float = 1e-10
+
+    def __post_init__(self) -> None:
+        if not self.epsilon > 0.0:
+            raise ValueError(f"Invalid epsilon value: {self.epsilon}. Must be > 0.0.")
+
+
+@dataclass(kw_only=True)
+class RMSpropPreconditionerConfig(AdaGradPreconditionerConfig):
+    """Configuration for RMSprop preconditioner computation.
+
+    Attributes:
+        beta2 (float): Exponential moving average factor for second moment. (Default: 0.99)
+        epsilon (float): Epsilon term for regularizing square-root of the second moment to ensure positive definiteness.
+            (Default: 1e-10)
+
+    """
+
+    beta2: float = 0.99
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if not 0.0 < self.beta2 <= 1.0:
+            raise ValueError(
+                f"Invalid grafting beta2 parameter: {self.beta2}. Must be in (0.0, 1.0]."
+            )
+
+
+@dataclass(kw_only=True)
+class AdamPreconditionerConfig(RMSpropPreconditionerConfig):
+    """Configuration for Adam preconditioner computation.
+
+    Attributes:
+        beta2 (float): Exponential moving average factor for second moment. (Default: 0.999)
+        epsilon (float): Epsilon term for regularizing square-root of the second moment to ensure positive definiteness.
+            (Default: 1e-10)
+
+    Note:
+        The traditional beta1 parameter in Adam is set by betas[0] in DistributedShampoo's hyperparameters.
+    """
+
+    beta2: float = 0.999
+
+
 @dataclass(init=False)
 class AmortizedPreconditionerConfig(PreconditionerConfig):
     """Configuration for amortized preconditioner computation in DistributedShampoo.
@@ -709,67 +768,3 @@ class ShampooPT2CompileConfig(
 
     def __init__(self, **kwargs: object) -> None:
         super().__init__(**kwargs)
-
-
-@dataclass(init=False)
-class GraftingConfig(AbstractDataclass):
-    """Abstract dataclass for grafting configurations in Shampoo."""
-
-
-@dataclass
-class SGDGraftingConfig(GraftingConfig):
-    """Configuration for grafting from SGD."""
-
-
-@dataclass(kw_only=True)
-class AdaGradGraftingConfig(GraftingConfig):
-    """Configuration for grafting from AdaGrad.
-
-    Attributes:
-        epsilon (float): Epsilon term for regularizing square-root of the aggregated second moment to ensure positive definiteness.
-            (Default: 1e-10)
-
-    """
-
-    epsilon: float = 1e-10
-
-    def __post_init__(self) -> None:
-        if not self.epsilon > 0.0:
-            raise ValueError(f"Invalid epsilon value: {self.epsilon}. Must be > 0.0.")
-
-
-@dataclass(kw_only=True)
-class RMSpropGraftingConfig(AdaGradGraftingConfig):
-    """Configuration for grafting from RMSprop.
-
-    Attributes:
-        beta2 (float): Exponential moving average factor for second moment. (Default: 0.99)
-        epsilon (float): Epsilon term for regularizing square-root of the second moment to ensure positive definiteness.
-            (Default: 1e-10)
-
-    """
-
-    beta2: float = 0.99
-
-    def __post_init__(self) -> None:
-        super().__post_init__()
-        if not 0.0 < self.beta2 <= 1.0:
-            raise ValueError(
-                f"Invalid grafting beta2 parameter: {self.beta2}. Must be in (0.0, 1.0]."
-            )
-
-
-@dataclass(kw_only=True)
-class AdamGraftingConfig(RMSpropGraftingConfig):
-    """Configuration for grafting from Adam.
-
-    Attributes:
-        beta2 (float): Exponential moving average factor for second moment. (Default: 0.999)
-        epsilon (float): Epsilon term for regularizing square-root of the second moment to ensure positive definiteness.
-            (Default: 1e-10)
-
-    Note:
-        The traditional beta1 parameter in Adam is set by betas[0] in DistributedShampoo's hyperparameters.
-    """
-
-    beta2: float = 0.999

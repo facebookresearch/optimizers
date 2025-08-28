@@ -17,13 +17,13 @@ from typing import Any
 import torch
 from distributed_shampoo.distributed_shampoo import DistributedShampoo
 from distributed_shampoo.shampoo_types import (
-    AdaGradGraftingConfig,
-    AdamGraftingConfig,
+    AdaGradPreconditionerConfig,
+    AdamPreconditionerConfig,
     DefaultShampooConfig,
     EigendecomposedShampooPreconditionerConfig,
     PreconditionerConfig,
-    RMSpropGraftingConfig,
-    SGDGraftingConfig,
+    RMSpropPreconditionerConfig,
+    SGDPreconditionerConfig,
 )
 from distributed_shampoo.tests.shampoo_test_utils import (
     compare_optimizer_on_cpu_and_device,
@@ -85,7 +85,7 @@ class DistributedShampooGraftingTest(unittest.TestCase):
             precondition_frequency=1,
             start_preconditioning_step=math.inf,
             use_decoupled_weight_decay=False,
-            grafting_config=AdaGradGraftingConfig(epsilon=1e-10),
+            grafting_config=AdaGradPreconditionerConfig(epsilon=1e-10),
             preconditioner_config=preconditioner_config,
         )
 
@@ -129,7 +129,7 @@ class DistributedShampooGraftingTest(unittest.TestCase):
             precondition_frequency=1,
             start_preconditioning_step=math.inf,
             use_decoupled_weight_decay=False,
-            grafting_config=AdamGraftingConfig(beta2=0.999, epsilon=1e-8),
+            grafting_config=AdamPreconditionerConfig(beta2=0.999, epsilon=1e-8),
             preconditioner_config=preconditioner_config,
         )
 
@@ -173,7 +173,7 @@ class DistributedShampooGraftingTest(unittest.TestCase):
             precondition_frequency=1,
             start_preconditioning_step=math.inf,
             use_decoupled_weight_decay=True,
-            grafting_config=AdamGraftingConfig(beta2=0.999, epsilon=1e-8),
+            grafting_config=AdamPreconditionerConfig(beta2=0.999, epsilon=1e-8),
             preconditioner_config=preconditioner_config,
         )
 
@@ -218,7 +218,7 @@ class DistributedShampooGraftingTest(unittest.TestCase):
             start_preconditioning_step=math.inf,
             use_bias_correction=False,
             use_decoupled_weight_decay=False,
-            grafting_config=RMSpropGraftingConfig(beta2=0.99, epsilon=1e-8),
+            grafting_config=RMSpropPreconditionerConfig(beta2=0.99, epsilon=1e-8),
             preconditioner_config=preconditioner_config,
         )
 
@@ -270,7 +270,7 @@ class DistributedShampooGraftingTest(unittest.TestCase):
             start_preconditioning_step=math.inf,
             use_nesterov=use_nesterov,
             use_decoupled_weight_decay=False,
-            grafting_config=SGDGraftingConfig(),  # type: ignore[abstract]
+            grafting_config=SGDPreconditionerConfig(),  # type: ignore[abstract]
             preconditioner_config=preconditioner_config,
         )
 
