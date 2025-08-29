@@ -13,26 +13,9 @@ import argparse
 import os
 from functools import partial
 
-import torch
-
-import torch.distributed as dist
 from distributed_shampoo import FSDPDistributedConfig
-
-from distributed_shampoo.distributor.shampoo_fsdp_utils import (
-    compile_fsdp_parameter_metadata,
-)
-from distributed_shampoo.examples.trainer_utils import (
-    get_data_loader_and_sampler,
-    get_model_and_loss_fn,
-    instantiate_optimizer,
-    Parser,
-    set_seed,
-    setup_distribution,
-    train_model,
-)
-from torch import nn
-from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
-from torchvision.datasets import VisionDataset
+from distributed_shampoo.examples.hsdp_cifar10_example import main
+from distributed_shampoo.examples.trainer_utils import Parser
 
 # for reproducibility, set environmental variable for CUBLAS
 os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
@@ -72,74 +55,8 @@ if __name__ == "__main__":
 
     args: argparse.Namespace = Parser.get_args()
 
-    # set seed for reproducibility
-    set_seed(args.seed)
-
-    # initialize distributed process group
-    device: torch.device = setup_distribution(
-        backend=args.backend,
-        world_rank=WORLD_RANK,
-        world_size=WORLD_SIZE,
-        local_rank=LOCAL_RANK,
+    main(
+        args=args,
+        device_mesh=None,
+        partial_distributed_config=partial(FSDPDistributedConfig),
     )
-
-    # instantiate model and loss function
-    model: nn.Module
-    loss_function: nn.Module
-    model, loss_function = get_model_and_loss_fn(
-        device=device, post_model_decoration=partial(FSDP, use_orig_params=True)
-    )
-
-    # instantiate data loader
-    data_loader: torch.utils.data.DataLoader[VisionDataset]
-    sampler: torch.utils.data.distributed.DistributedSampler[
-        torch.utils.data.Dataset[VisionDataset]
-    ]
-    data_loader, sampler = get_data_loader_and_sampler(
-        args.data_path, WORLD_SIZE, WORLD_RANK, args.local_batch_size
-    )
-
-    # instantiate optimizer (SGD, Adam, DistributedShampoo)
-    optimizer: torch.optim.Optimizer = instantiate_optimizer(
-        args.optimizer_type,
-        model.parameters(),
-        lr=args.lr,
-        betas=(args.beta1, args.beta2),
-        beta3=args.beta3,
-        epsilon=args.epsilon,
-        momentum=args.momentum,
-        dampening=args.dampening,
-        weight_decay=args.weight_decay,
-        max_preconditioner_dim=args.max_preconditioner_dim,
-        precondition_frequency=args.precondition_frequency,
-        start_preconditioning_step=args.start_preconditioning_step,
-        use_nesterov=args.use_nesterov,
-        use_bias_correction=args.use_bias_correction,
-        use_decoupled_weight_decay=args.use_decoupled_weight_decay,
-        grafting_type=args.grafting_type,
-        grafting_epsilon=args.grafting_epsilon,
-        grafting_beta2=args.grafting_beta2,
-        distributed_config=FSDPDistributedConfig(
-            param_to_metadata=compile_fsdp_parameter_metadata(model),
-        ),
-        preconditioner_computation_type=args.preconditioner_computation_type,
-    )
-
-    # train model
-    train_model(
-        model,
-        WORLD_SIZE,
-        loss_function,
-        sampler,
-        data_loader,
-        optimizer,
-        device=device,
-        checkpoint_dir=args.checkpoint_dir,
-        epochs=args.epochs,
-        window_size=args.window_size,
-        local_rank=LOCAL_RANK,
-        metrics_dir=args.metrics_dir if WORLD_RANK == 0 else None,
-    )
-
-    # clean up process group
-    dist.destroy_process_group()

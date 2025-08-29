@@ -11,13 +11,14 @@ LICENSE file in the root directory of this source tree.
 
 import argparse
 import os
+from collections.abc import Callable
 from functools import partial
 
 import torch
 
 import torch.distributed as dist
 
-from distributed_shampoo import HSDPDistributedConfig
+from distributed_shampoo import DistributedConfig, HSDPDistributedConfig
 from distributed_shampoo.distributor.shampoo_fsdp_utils import (
     compile_fsdp_parameter_metadata,
 )
@@ -45,35 +46,11 @@ WORLD_RANK = int(os.environ["RANK"])
 WORLD_SIZE = int(os.environ["WORLD_SIZE"])
 
 
-if __name__ == "__main__":
-    """Multi-GPU CIFAR-10 Distributed Data Parallel Training Example Script
-
-    Uses torch.distributed to launch distributed training run.
-
-    Requirements:
-        - Python 3.12 or above
-        - PyTorch / TorchVision
-
-    To run this training script with a single node, one can run from the optimizers directory:
-
-    SGD (with learning rate = 1e-2, momentum = 0.9):
-        torchrun --standalone --nnodes=1 --nproc_per_node=$NUM_TRAINERS -m distributed_shampoo.examples.hsdp_cifar10_example --optimizer-type SGD --lr 1e-2 --momentum 0.9
-
-    Adam (with default parameters):
-        torchrun --standalone --nnodes=1 --nproc_per_node=$NUM_TRAINERS -m distributed_shampoo.examples.hsdp_cifar10_example --optimizer-type ADAM
-
-    Distributed Shampoo (with default Adam grafting, precondition frequency = 100):
-        torchrun --standalone --nnodes=1 --nproc_per_node=$NUM_TRAINERS -m distributed_shampoo.examples.hsdp_cifar10_example --optimizer-type DISTRIBUTED_SHAMPOO --precondition-frequency 100 --grafting-type ADAM --num-trainers-per-group 2 --use-bias-correction --use-decoupled-weight-decay --use-merge-dims
-
-    To use distributed checkpointing on Distributed Shampoo, append the flag with --checkpoint-dir argument.
-
-    The script will produce lifetime and window loss values retrieved from the forward pass over the data.
-    Guaranteed reproducibility on a single GPU.
-
-    """
-
-    args: argparse.Namespace = Parser.get_args()
-
+def main(
+    args: argparse.Namespace,
+    device_mesh: DeviceMesh | None,
+    partial_distributed_config: Callable[..., DistributedConfig],
+) -> None:
     # set seed for reproducibility
     set_seed(args.seed)
 
@@ -83,13 +60,6 @@ if __name__ == "__main__":
         world_rank=WORLD_RANK,
         world_size=WORLD_SIZE,
         local_rank=LOCAL_RANK,
-    )
-
-    # Instantiate device mesh for HSDP Shampoo.
-    # For example, with 8 GPUs and dp_replicate_degree set to 2, the device mesh will be:
-    # ([[0, 1, 2, 3], [4, 5, 6, 7]])
-    device_mesh: DeviceMesh = init_device_mesh(
-        "cuda", (args.dp_replicate_degree, WORLD_SIZE // args.dp_replicate_degree)
     )
 
     # instantiate model and loss function
@@ -134,10 +104,8 @@ if __name__ == "__main__":
         grafting_type=args.grafting_type,
         grafting_epsilon=args.grafting_epsilon,
         grafting_beta2=args.grafting_beta2,
-        distributed_config=HSDPDistributedConfig(
-            param_to_metadata=compile_fsdp_parameter_metadata(model),
-            device_mesh=device_mesh,
-            num_trainers_per_group=args.num_trainers_per_group,
+        distributed_config=partial_distributed_config(
+            param_to_metadata=compile_fsdp_parameter_metadata(model)
         ),
         preconditioner_computation_type=args.preconditioner_computation_type,
     )
@@ -160,3 +128,48 @@ if __name__ == "__main__":
 
     # clean up process group
     dist.destroy_process_group()
+
+
+if __name__ == "__main__":
+    """Multi-GPU CIFAR-10 Distributed Data Parallel Training Example Script
+
+    Uses torch.distributed to launch distributed training run.
+
+    Requirements:
+        - Python 3.12 or above
+        - PyTorch / TorchVision
+
+    To run this training script with a single node, one can run from the optimizers directory:
+
+    SGD (with learning rate = 1e-2, momentum = 0.9):
+        torchrun --standalone --nnodes=1 --nproc_per_node=$NUM_TRAINERS -m distributed_shampoo.examples.hsdp_cifar10_example --optimizer-type SGD --lr 1e-2 --momentum 0.9
+
+    Adam (with default parameters):
+        torchrun --standalone --nnodes=1 --nproc_per_node=$NUM_TRAINERS -m distributed_shampoo.examples.hsdp_cifar10_example --optimizer-type ADAM
+
+    Distributed Shampoo (with default Adam grafting, precondition frequency = 100):
+        torchrun --standalone --nnodes=1 --nproc_per_node=$NUM_TRAINERS -m distributed_shampoo.examples.hsdp_cifar10_example --optimizer-type DISTRIBUTED_SHAMPOO --precondition-frequency 100 --grafting-type ADAM --num-trainers-per-group 2 --use-bias-correction --use-decoupled-weight-decay --use-merge-dims
+
+    To use distributed checkpointing on Distributed Shampoo, append the flag with --checkpoint-dir argument.
+
+    The script will produce lifetime and window loss values retrieved from the forward pass over the data.
+    Guaranteed reproducibility on a single GPU.
+
+    """
+    args: argparse.Namespace = Parser.get_args()
+    # Instantiate device mesh for HSDP Shampoo.
+    # For example, with 8 GPUs and dp_replicate_degree set to 2, the device mesh will be:
+    # ([[0, 1, 2, 3], [4, 5, 6, 7]])
+    device_mesh: DeviceMesh = init_device_mesh(
+        "cuda", (args.dp_replicate_degree, WORLD_SIZE // args.dp_replicate_degree)
+    )
+
+    main(
+        args=args,
+        device_mesh=device_mesh,
+        partial_distributed_config=partial(
+            HSDPDistributedConfig,
+            device_mesh=device_mesh,
+            num_trainers_per_group=args.num_trainers_per_group,
+        ),
+    )
