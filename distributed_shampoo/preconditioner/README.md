@@ -281,7 +281,7 @@ optimizer = DistributedShampoo(
     precondition_frequency=50,
     use_bias_correction=True,
     use_decoupled_weight_decay=True,
-    grafting_config=RMSpropGraftingConfig(beta2=0.95, epsilon=1e-8),
+    grafting_config=RMSpropPreconditionerConfig(beta2=0.95, epsilon=1e-8),
     preconditioner_config=RootInvShampooPreconditionerConfig(
         amortized_computation_config=EigenConfig(
             max_iterations=1000,

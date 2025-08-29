@@ -26,11 +26,7 @@ Ganesh Ajjanagadde (Meta), Rohan Anil (Google), Adnan Aziz (Meta), Pavan Balaji 
 
 Key distinctives of this implementation include:
 - Homogeneous multi-node multi-GPU support in PyTorch.
-- Learning rate grafting [3]. Our version of grafting only grafts the second moment/diagonal preconditioner. Momentum/first moment updates are performed separate from grafting. Supports the methods:
-    - SGD
-    - Adagrad
-    - RMSprop
-    - Adam
+- Learning rate grafting [3]. Our version of grafting only grafts the second moment/diagonal preconditioner. Momentum/first moment updates are performed separate from grafting.
 - Supports both normal and AdamW (decoupled) weight decay.
 - Incorporates exponential moving averaging (with or without bias correction) to the estimate the first moment (akin to Adam).
 - Incorporates momentum and Nesterov acceleration.
@@ -91,7 +87,7 @@ optimizer = SGD(
 we would instead use:
 ```python
 import torch
-from distributed_shampoo import DistributedShampoo, SGDGraftingConfig
+from distributed_shampoo import DistributedShampoo, SGDPreconditionerConfig
 
 model = instantiate_model()
 
@@ -104,7 +100,7 @@ optimizer = DistributedShampoo(
     weight_decay=1e-05,
     max_preconditioner_dim=8192,
     precondition_frequency=100,
-    grafting_config=SGDGraftingConfig(),
+    grafting_config=SGDPreconditionerConfig(),
 )
 ```
 
@@ -129,7 +125,7 @@ optimizer = Adam(
 we would instead use:
 ```python
 import torch
-from distributed_shampoo import AdamGraftingConfig, DistributedShampoo
+from distributed_shampoo import AdamPreconditionerConfig, DistributedShampoo
 
 model = instantiate_model()
 
@@ -142,7 +138,7 @@ optimizer = DistributedShampoo(
     max_preconditioner_dim=8192,
     precondition_frequency=100,
     use_decoupled_weight_decay=False,
-    grafting_config=AdamGraftingConfig(
+    grafting_config=AdamPreconditionerConfig(
         beta2=0.999,
         epsilon=1e-08,
     ),
@@ -168,7 +164,7 @@ optimizer = Adagrad(
 we would instead use:
 ```python
 import torch
-from distributed_shampoo import AdaGradGraftingConfig, DistributedShampoo
+from distributed_shampoo import AdaGradPreconditionerConfig, DistributedShampoo
 
 model = instantiate_model()
 
@@ -181,7 +177,7 @@ optimizer = DistributedShampoo(
     max_preconditioner_dim=8192,
     precondition_frequency=100,
     use_decoupled_weight_decay=False,
-    grafting_config=AdaGradGraftingConfig(
+    grafting_config=AdaGradPreconditionerConfig(
         epsilon=1e-10,
     ),
 )
@@ -207,7 +203,7 @@ optimizer = AdamW(
 we would instead use:
 ```python
 import torch
-from distributed_shampoo import AdamGraftingConfig, DistributedShampoo
+from distributed_shampoo import AdamPreconditionerConfig, DistributedShampoo
 
 model = instantiate_model()
 
@@ -220,7 +216,7 @@ optimizer = DistributedShampoo(
     max_preconditioner_dim=8192,
     precondition_frequency=100,
     use_decoupled_weight_decay=True,
-    grafting_config=AdamGraftingConfig(
+    grafting_config=AdamPreconditionerConfig(
         beta2=0.999,
         epsilon=1e-08,
     ),
@@ -308,8 +304,8 @@ optimizer = DistributedShampoo(
         {
             "params": other_params,
             "lr": 3e-4,
-            "start_preconditioning_step", math.inf,
-            "grafting_config": AdamGraftingConfig(
+            "start_preconditioning_step": math.inf,
+            "grafting_config": AdamPreconditionerConfig(
                 beta2=0.95,
                 epsilon=1e-10,
             ),
@@ -343,7 +339,7 @@ import torch
 import torch.distributed as dist
 
 from distributed_shampoo import (
-    AdamGraftingConfig,
+    AdamPreconditionerConfig,
     DDPDistributedConfig,
     DistributedShampoo,
 )
@@ -376,7 +372,7 @@ optimizer = DistributedShampoo(
     max_preconditioner_dim=8192,
     precondition_frequency=100,
     use_decoupled_weight_decay=True,
-    grafting_config=AdamGraftingConfig(
+    grafting_config=AdamPreconditionerConfig(
         beta2=0.999,
         epsilon=1e-12,
     ),
@@ -404,7 +400,7 @@ import torch.distributed as dist
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 
 from distributed_shampoo import (
-    AdamGraftingConfig,
+    AdamPreconditionerConfig,
     compile_fsdp_parameter_metadata,
     DistributedShampoo,
     FSDPDistributedConfig,
@@ -434,7 +430,7 @@ optimizer = DistributedShampoo(
     max_preconditioner_dim=8192,
     precondition_frequency=100,
     use_decoupled_weight_decay=True,
-    grafting_config=AdamGraftingConfig(
+    grafting_config=AdamPreconditionerConfig(
         beta2=0.999,
         epsilon=1e-12,
     ),
@@ -456,7 +452,7 @@ import torch.distributed as dist
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP, ShardingStrategy
 
 from distributed_shampoo import (
-    AdamGraftingConfig,
+    AdamPreconditionerConfig,
     compile_fsdp_parameter_metadata,
     DistributedShampoo,
     HSDPDistributedConfig,
@@ -493,7 +489,7 @@ optimizer = DistributedShampoo(
     max_preconditioner_dim=8192,
     precondition_frequency=100,
     use_decoupled_weight_decay=True,
-    grafting_config=AdamGraftingConfig(
+    grafting_config=AdamPreconditionerConfig(
         beta2=0.999,
         epsilon=1e-12,
     ),
@@ -519,7 +515,7 @@ import torch.distributed as dist
 from torch.distributed.fsdp import fully_shard
 
 from distributed_shampoo import (
-    AdamGraftingConfig,
+    AdamPreconditionerConfig,
     DistributedShampoo,
     FullyShardDistributedConfig,
 )
@@ -548,7 +544,7 @@ optimizer = DistributedShampoo(
     max_preconditioner_dim=8192,
     precondition_frequency=100,
     use_decoupled_weight_decay=True,
-    grafting_config=AdamGraftingConfig(
+    grafting_config=AdamPreconditionerConfig(
         beta2=0.999,
         epsilon=1e-12,
     ),
@@ -570,7 +566,7 @@ import torch.distributed as dist
 from torch.distributed.fsdp import fully_shard
 
 from distributed_shampoo import (
-    AdamGraftingConfig,
+    AdamPreconditionerConfig,
     DistributedShampoo,
     HybridShardDistributedConfig,
 )
@@ -606,7 +602,7 @@ optimizer = DistributedShampoo(
     max_preconditioner_dim=8192,
     precondition_frequency=100,
     use_decoupled_weight_decay=True,
-    grafting_config=AdamGraftingConfig(
+    grafting_config=AdamPreconditionerConfig(
         beta2=0.999,
         epsilon=1e-12,
     ),
@@ -678,7 +674,7 @@ With the inclusion of learning rate grafting, we can extract a good learning rat
         momentum=0.9,
         weight_decay=0.01,
         max_preconditioner_dim=4096,
-        grafting_config=SGDGraftingConfig(),
+        grafting_config=SGDPreconditionerConfig(),
     )
     ```
 
@@ -699,7 +695,7 @@ With the inclusion of learning rate grafting, we can extract a good learning rat
         momentum=0.9,
         weight_decay=0.01,
         precondition_frequency=100,
-        grafting_config=SGDGraftingConfig(),
+        grafting_config=SGDPreconditionerConfig(),
     )
     ```
 
@@ -718,7 +714,7 @@ With the inclusion of learning rate grafting, we can extract a good learning rat
         momentum=0.9,
         weight_decay=0.01,
         start_preconditioning_step=300,
-        grafting_config=SGDGraftingConfig(),
+        grafting_config=SGDPreconditionerConfig(),
     )
     ```
 
