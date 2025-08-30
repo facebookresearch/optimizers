@@ -960,16 +960,15 @@ def matrix_orthogonalization(
         # Normalize the matrix A in order to ensure spectral norm <= 1.
         X = A / max(torch.linalg.matrix_norm(A), 1e-8)
 
-        transpose = A.shape[0] < A.shape[1]
-        if transpose:
+        if transpose := A.shape[0] < A.shape[1]:
             X = X.T
 
         # Compute X <- p(X) = a * X + b * X * X^T * X + c * (X * X^T)^2 * X.
         a, b, c = coefficients
         for _ in range(num_iterations):
             A = X.T @ X
-            B = b * A + c * A @ A
-            X = a * X + X @ B
+            B = torch.addmm(A, A, A, beta=b, alpha=c)
+            X = torch.addmm(X, X, B, beta=a, alpha=1.0)
 
         if transpose:
             X = X.T
