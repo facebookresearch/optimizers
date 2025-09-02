@@ -20,12 +20,6 @@ from distributed_shampoo.examples.trainer_utils import Parser
 # for reproducibility, set environmental variable for CUBLAS
 os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
 
-# get local and world rank and world size
-LOCAL_RANK = int(os.environ["LOCAL_RANK"])
-WORLD_RANK = int(os.environ["RANK"])
-WORLD_SIZE = int(os.environ["WORLD_SIZE"])
-
-
 if __name__ == "__main__":
     """Multi-GPU CIFAR-10 Distributed Data Parallel Training Example Script
 
