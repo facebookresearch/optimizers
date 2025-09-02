@@ -45,7 +45,7 @@ DefaultPerturbationConfig = PerturbationConfig()
 @dataclass(kw_only=True)
 class PseudoInverseConfig(RankDeficientStabilityConfig):
     """
-    Configuration for filtering zero/near-zero singular values (i.e. determining rank) to return a pseudo-inverse when the matrix is non-invertible.
+    Configuration for filtering zero/near-zero singular values (i.e., determining rank) to return a pseudo-inverse when the matrix is non-invertible.
     For more information, refer to https://pytorch.org/docs/stable/generated/torch.linalg.matrix_rank.html.
 
     Attributes:

@@ -19,7 +19,10 @@ from distributed_shampoo.distributed_shampoo import DistributedShampoo
 from distributed_shampoo.shampoo_types import (
     AdaGradPreconditionerConfig,
     AdamPreconditionerConfig,
+    DefaultEigenvalueCorrectedShampooConfig,
     DefaultShampooConfig,
+    DefaultSignDescentPreconditionerConfig,
+    DefaultSOAPConfig,
     EigendecomposedShampooPreconditionerConfig,
     PreconditionerConfig,
     RMSpropPreconditionerConfig,
@@ -55,13 +58,15 @@ class DistributedShampooGraftingTest(unittest.TestCase):
         torch.device("cuda"),
     ) * torch.cuda.is_available()
 
-    @parametrize(
-        "preconditioner_config",
-        (
-            DefaultShampooConfig,
-            EigendecomposedShampooPreconditionerConfig(),
-        ),
+    preconditioner_configs: tuple[PreconditionerConfig, ...] = (
+        DefaultShampooConfig,
+        EigendecomposedShampooPreconditionerConfig(),
+        DefaultEigenvalueCorrectedShampooConfig,
+        DefaultSOAPConfig,
+        DefaultSignDescentPreconditionerConfig,
     )
+
+    @parametrize("preconditioner_config", preconditioner_configs)
     @parametrize("device", available_devices)
     @parametrize("weight_decay", (0.0, 0.3))
     def test_adagrad_grafting(
@@ -99,13 +104,7 @@ class DistributedShampooGraftingTest(unittest.TestCase):
             optim_factory=experimental_optim_factory, device=device
         )
 
-    @parametrize(
-        "preconditioner_config",
-        (
-            DefaultShampooConfig,
-            EigendecomposedShampooPreconditionerConfig(),
-        ),
-    )
+    @parametrize("preconditioner_config", preconditioner_configs)
     @parametrize("device", available_devices)
     @parametrize("weight_decay", (0.0, 0.3))
     def test_adam_grafting(
@@ -143,13 +142,7 @@ class DistributedShampooGraftingTest(unittest.TestCase):
             optim_factory=experimental_optim_factory, device=device
         )
 
-    @parametrize(
-        "preconditioner_config",
-        (
-            DefaultShampooConfig,
-            EigendecomposedShampooPreconditionerConfig(),
-        ),
-    )
+    @parametrize("preconditioner_config", preconditioner_configs)
     @parametrize("device", available_devices)
     @parametrize("weight_decay", (0.0, 0.3))
     def test_adamw_grafting(
@@ -187,13 +180,7 @@ class DistributedShampooGraftingTest(unittest.TestCase):
             optim_factory=experimental_optim_factory, device=device
         )
 
-    @parametrize(
-        "preconditioner_config",
-        (
-            DefaultShampooConfig,
-            EigendecomposedShampooPreconditionerConfig(),
-        ),
-    )
+    @parametrize("preconditioner_config", preconditioner_configs)
     @parametrize("device", available_devices)
     @parametrize("weight_decay", (0.0, 0.3))
     def test_rmsprop_grafting(
@@ -237,13 +224,7 @@ class DistributedShampooGraftingTest(unittest.TestCase):
             optim_factory=experimental_optim_factory, device=device
         )
 
-    @parametrize(
-        "preconditioner_config",
-        (
-            DefaultShampooConfig,
-            EigendecomposedShampooPreconditionerConfig(),
-        ),
-    )
+    @parametrize("preconditioner_config", preconditioner_configs)
     @parametrize("device", available_devices)
     @parametrize("use_nesterov", (True, False))
     @parametrize("weight_decay", (0.0, 0.3))
