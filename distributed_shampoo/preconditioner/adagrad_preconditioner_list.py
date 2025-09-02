@@ -97,9 +97,9 @@ class AdagradPreconditionerList(PreconditionerList):
             )
             preconditioner_list.append(block_info.get_tensor(block_state[ADAGRAD]))
 
+            # Note: the block_info.param.shape is the shape of the local parameter if the original parameter is a DTensor.
             logger.info(
-                f"Instantiated Adagrad Preconditioner {preconditioner_index} ({block_state[ADAGRAD].shape} with dtype {block_state[ADAGRAD].dtype}) "
-                f"for Parameter {param_index} ({block_info.param.shape}), Block {block_index} ({block.shape})."
+                f"Instantiated Adagrad Preconditioner {preconditioner_index} ({block_state[ADAGRAD].shape} with dtype {block_state[ADAGRAD].dtype}) for Parameter {param_index} ({block_info.param.shape}), Block {block_index} ({block.shape})."
             )
 
         # Masked lists are the list of active preconditioners or values after filtering out gradients with None.

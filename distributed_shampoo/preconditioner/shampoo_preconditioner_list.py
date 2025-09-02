@@ -1145,6 +1145,7 @@ class BaseShampooPreconditionerList(
                 )
             )
 
+            # Note: the block_info.param.shape is the shape of the local parameter if the original parameter is a DTensor.
             logger.info(
                 f"Instantiated Shampoo Preconditioner {str(param_index) + '.' + str(block_index)} for Parameter {param_index} ({block_info.param.shape}), Block {block_index} ({block.shape})."
             )
