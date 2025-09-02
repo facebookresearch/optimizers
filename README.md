@@ -37,7 +37,7 @@ If you also want to try the [examples](./distributed_shampoo/examples/), replace
 After installation, basic usage looks like:
 ```python
 import torch
-from distributed_shampoo import AdamGraftingConfig, DistributedShampoo
+from distributed_shampoo import AdamPreconditionerConfig, DistributedShampoo
 
 model = ...  # Instantiate model
 
@@ -46,7 +46,7 @@ optim = DistributedShampoo(
     lr=1e-3,
     betas=(0.9, 0.999),
     epsilon=1e-8,
-    grafting_config=AdamGraftingConfig(
+    grafting_config=AdamPreconditionerConfig(
         beta2=0.999,
         epsilon=1e-8,
     ),
