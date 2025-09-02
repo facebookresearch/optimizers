@@ -31,7 +31,7 @@ _StateValueType = dict[Hashable, _SubStateValueType]
 
 
 class AdagradPreconditionerList(PreconditionerList):
-    """Adagrad / Adam / RMSprop preconditioners for a list of parameters.
+    """Adagrad / RMSprop / Adam preconditioners for a list of parameters.
 
     Operations are performed in-place with foreach operators.
 
