@@ -895,7 +895,7 @@ def matrix_orthogonalization(
             (Default: DefaultNewtonSchulzOrthogonalizationConfig)
 
     Returns:
-        Tensor: The orthogonalized matrix.
+        orthogonalized_matrix (Tensor): The orthogonalized matrix.
 
     Raises:
         NotImplementedError: If the orthogonalization config is not implemented.
@@ -914,7 +914,7 @@ def matrix_orthogonalization(
                 (Default: False)
 
         Returns:
-            A_orthogonal (Tensor): The orthogonalized matrix.
+            A_orthogonal (Tensor): The approximated orthogonalized matrix.
 
         """
         # Orthogonalize A via reduced SVD.
