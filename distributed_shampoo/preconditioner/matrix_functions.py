@@ -13,6 +13,7 @@ import logging
 import math
 import time
 from collections.abc import Callable
+from contextlib import nullcontext
 from dataclasses import fields
 from fractions import Fraction
 from functools import partial, wraps
@@ -39,6 +40,7 @@ from distributed_shampoo.preconditioner.matrix_functions_types import (
     RootInvConfig,
     SVDOrthogonalizationConfig,
 )
+from distributed_shampoo.utils.shampoo_utils import ParameterizeEnterExitContext
 
 from torch import Tensor
 
@@ -960,18 +962,23 @@ def matrix_orthogonalization(
         # Normalize the matrix A in order to ensure spectral norm <= 1.
         X = A / max(torch.linalg.matrix_norm(A), 1e-8)
 
-        if transpose := A.shape[0] < A.shape[1]:
-            X = X.T
-
-        # Compute X <- p(X) = a * X + b * X * X^T * X + c * (X * X^T)^2 * X.
         a, b, c = coefficients
-        for _ in range(num_iterations):
-            A = X.T @ X
-            B = torch.addmm(A, A, A, beta=b, alpha=c)
-            X = torch.addmm(X, X, B, beta=a, alpha=1.0)
 
-        if transpose:
-            X = X.T
+        # Use transpose optimization for wide matrices.
+        # When A is wider than tall (more columns than rows), it's more efficient to transpose the matrix before performing the Newton-Schulz iterations.
+        with ParameterizeEnterExitContext(
+            input_with_enter_exit_context=X,
+            enter_method_caller=Tensor.t_,
+            exit_method_caller=Tensor.t_,
+        ) if A.shape[0] < A.shape[1] else nullcontext():
+            # Compute X <- p(X) = a * X + b * X * X^T * X + c * (X * X^T)^2 * X.
+            for _ in range(num_iterations):
+                # A = X^T * X (intermediate matrix for computing orthogonalization)
+                A = X.T @ X
+                # B = b*A + c*A^2 = b*(X^T * X) + c*(X^T * X)^2 (coefficient matrix)
+                B = torch.addmm(A, A, A, beta=b, alpha=c)
+                # X = a*X + X*B = a*X + X*(b*(X^T * X) + c*(X^T * X)^2) (Newton-Schulz iteration)
+                X = torch.addmm(X, X, B, beta=a, alpha=1.0)
 
         return X
 
