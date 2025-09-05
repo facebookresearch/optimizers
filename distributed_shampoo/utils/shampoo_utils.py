@@ -14,7 +14,7 @@ from collections.abc import Callable, Iterator, Sequence
 from functools import cache, partial, reduce
 from itertools import accumulate, chain, compress, islice, pairwise
 from types import TracebackType
-from typing import TypeVar
+from typing import Any, TypeVar
 
 import torch
 from torch import Tensor
@@ -233,21 +233,21 @@ class ParameterizeEnterExitContext:
 
     Args:
         input_with_enter_exit_context (ParameterizeEnterExitContextType): Input whose state will be changed while entering and exiting the context by enter_method_caller and exit_method_caller and exit_method_caller respectively.
-        enter_method_caller (Callable[[ParameterizeEnterExitContextType], None]): Method caller for entering the context.
-        exit_method_caller (Callable[[ParameterizeEnterExitContextType], None]): Method caller for exiting the context.
+        enter_method_caller (Callable[[ParameterizeEnterExitContextType], Any]): Method caller for entering the context.
+        exit_method_caller (Callable[[ParameterizeEnterExitContextType], Any]): Method caller for exiting the context.
 
     """
 
     def __init__(
         self,
         input_with_enter_exit_context: _ParameterizeEnterExitContextType,
-        enter_method_caller: Callable[[_ParameterizeEnterExitContextType], None],
-        exit_method_caller: Callable[[_ParameterizeEnterExitContextType], None],
+        enter_method_caller: Callable[[_ParameterizeEnterExitContextType], Any],
+        exit_method_caller: Callable[[_ParameterizeEnterExitContextType], Any],
     ) -> None:
-        self._enter_method: Callable[[], None] = partial(
+        self._enter_method: Callable[[], Any] = partial(
             enter_method_caller, input_with_enter_exit_context
         )
-        self._exit_method: Callable[[], None] = partial(
+        self._exit_method: Callable[[], Any] = partial(
             exit_method_caller, input_with_enter_exit_context
         )
 
