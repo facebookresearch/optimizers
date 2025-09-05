@@ -12,32 +12,12 @@ LICENSE file in the root directory of this source tree.
 import argparse
 import os
 
-import torch
-import torch.distributed as dist
-
 from distributed_shampoo import FullyShardDistributedConfig
-from distributed_shampoo.examples.trainer_utils import (
-    create_model_and_optimizer_and_loss_fn,
-    get_data_loader_and_sampler,
-    Parser,
-    set_seed,
-    setup_distribution,
-    train_model,
-)
-
-from torch import nn
-from torch.distributed._composable.fsdp import fully_shard
-from torch.distributed.fsdp import FSDPModule
-from torchvision.datasets import VisionDataset
+from distributed_shampoo.examples.hybrid_shard_cifar10_example import main
+from distributed_shampoo.examples.trainer_utils import Parser
 
 # for reproducibility, set environmental variable for CUBLAS
 os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
-
-# get local and world rank and world size
-LOCAL_RANK = int(os.environ["LOCAL_RANK"])
-WORLD_RANK = int(os.environ["RANK"])
-WORLD_SIZE = int(os.environ["WORLD_SIZE"])
-
 
 if __name__ == "__main__":
     """Multi-GPU CIFAR-10 Per-parameter Fully Sharded Data Parallel (a.k.a FSDP2) Training Example Script
@@ -68,53 +48,4 @@ if __name__ == "__main__":
 
     args: argparse.Namespace = Parser.get_args()
 
-    # set seed for reproducibility
-    set_seed(args.seed)
-
-    # initialize distributed process group
-    device: torch.device = setup_distribution(
-        backend=args.backend,
-        world_rank=WORLD_RANK,
-        world_size=WORLD_SIZE,
-        local_rank=LOCAL_RANK,
-    )
-
-    model: nn.Module | FSDPModule
-    optimizer: torch.optim.Optimizer
-    loss_fn: nn.Module
-    model, optimizer, loss_fn = create_model_and_optimizer_and_loss_fn(
-        args=args,
-        device=device,
-        distributed_config=FullyShardDistributedConfig(
-            param_assignment_strategy=args.param_assignment_strategy
-        ),
-        post_model_decoration=fully_shard,
-    )
-
-    # instantiate data loader
-    data_loader: torch.utils.data.DataLoader[VisionDataset]
-    sampler: torch.utils.data.distributed.DistributedSampler[
-        torch.utils.data.Dataset[VisionDataset]
-    ]
-    data_loader, sampler = get_data_loader_and_sampler(
-        args.data_path, WORLD_SIZE, WORLD_RANK, args.local_batch_size
-    )
-
-    # train model
-    train_model(
-        model,
-        WORLD_SIZE,
-        loss_fn,
-        sampler,
-        data_loader,
-        optimizer,
-        device=device,
-        checkpoint_dir=args.checkpoint_dir,
-        epochs=args.epochs,
-        window_size=args.window_size,
-        local_rank=LOCAL_RANK,
-        metrics_dir=args.metrics_dir if WORLD_RANK == 0 else None,
-    )
-
-    # clean up process group
-    dist.destroy_process_group()
+    main(args=args, device_mesh=None, distributed_config=FullyShardDistributedConfig())
