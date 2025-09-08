@@ -83,16 +83,16 @@ class PreconditionerComputationType(enum.Enum):
 
 
 ###### ARGPARSER ######
-def enum_type_parse(s: str, enum_type: Type[enum.Enum]) -> enum.Enum:
-    try:
-        return enum_type[s]  # type: ignore[index]
-    except KeyError:
-        raise argparse.ArgumentTypeError(
-            "Use one of {}".format(", ".join([t.name for t in enum_type]))  # type: ignore[attr-defined]
-        )
-
-
 class Parser:
+    @staticmethod
+    def enum_type_parse(s: str, enum_type: Type[enum.Enum]) -> enum.Enum:
+        try:
+            return enum_type[s]  # type: ignore[index]
+        except KeyError:
+            raise argparse.ArgumentTypeError(
+                "Use one of {}".format(", ".join([t.name for t in enum_type]))  # type: ignore[attr-defined]
+            )
+
     @staticmethod
     def get_args() -> argparse.Namespace:
         parser = argparse.ArgumentParser(description="Arguments for Shampoo run.")
@@ -100,7 +100,7 @@ class Parser:
         # Arguments for training script.
         parser.add_argument(
             "--optimizer-type",
-            type=lambda t: enum_type_parse(t, OptimizerType),
+            type=lambda t: Parser.enum_type_parse(t, OptimizerType),
             help="Optimizer type.",
         )
         parser.add_argument("--batch-size", type=int, default=128, help="Batch size.")
@@ -196,7 +196,7 @@ class Parser:
         )
         parser.add_argument(
             "--preconditioner-computation-type",
-            type=lambda t: enum_type_parse(t, PreconditionerComputationType),
+            type=lambda t: Parser.enum_type_parse(t, PreconditionerComputationType),
             default=PreconditionerComputationType.EIGEN_ROOT_INV,
             help="Preconditioner computation method for Shampoo.",
         )
@@ -204,7 +204,7 @@ class Parser:
         # Arguments for grafting.
         parser.add_argument(
             "--grafting-type",
-            type=lambda t: enum_type_parse(t, PreconditionerComputationType),
+            type=lambda t: Parser.enum_type_parse(t, PreconditionerComputationType),
             default=PreconditionerComputationType.SGD,
             help="Grafted method for Shampoo.",
         )
@@ -274,7 +274,7 @@ class Parser:
         )
         parser.add_argument(
             "--param-assignment-strategy",
-            type=lambda t: enum_type_parse(t, FSDPParamAssignmentStrategy),
+            type=lambda t: Parser.enum_type_parse(t, FSDPParamAssignmentStrategy),
             default=FSDPParamAssignmentStrategy.DEFAULT,
             help="Parameter assignment strategy in FSDP / HSDP distributor.",
         )
