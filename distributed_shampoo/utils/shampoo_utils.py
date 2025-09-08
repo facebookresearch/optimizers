@@ -210,7 +210,7 @@ def generate_pairwise_indices(input_list: Sequence[int]) -> Iterator[tuple[int, 
         input_list (Sequence[int]): A list of integers specifying the number of elements within each partition.
 
     Returns:
-        partition_indices: Iterator[tuple[int, int]]: An iterator containing pairs of indices which specify
+        partition_indices (Iterator[tuple[int, int]]): An iterator containing pairs of indices which specify
             the start and the ending indices of each partition specified in the input_list.
 
     Example:
