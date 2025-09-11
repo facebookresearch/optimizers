@@ -25,31 +25,39 @@ class ConvNet(nn.Module):
 
     def __init__(self, height: int, width: int) -> None:
         super().__init__()
-        self.conv = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
+        OUT_CHANNELS, KERNEL_SIZE, STRIDE, PADDING = 64, 3, 1, 1
+        self.conv = nn.Conv2d(
+            in_channels=3,
+            out_channels=OUT_CHANNELS,
+            kernel_size=KERNEL_SIZE,
+            stride=STRIDE,
+            padding=PADDING,
+            bias=False,
+        )
         self.activation = nn.ReLU()
         self.linear = nn.Linear(
-            math.prod(
+            in_features=math.prod(
                 ConvNet._infer_conv_output_shape(
-                    input_shape=[height, width], kernel_size=3, stride=1, padding=1
+                    input_shape=(height, width),
+                    kernel_size=KERNEL_SIZE,
+                    stride=STRIDE,
+                    padding=PADDING,
                 )
             )
-            * 64,
-            10,
+            * OUT_CHANNELS,
+            out_features=10,
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.linear(torch.flatten(self.activation(self.conv(x)), 1))
+        return self.linear(torch.flatten(self.activation(self.conv(x)), start_dim=1))
 
     @staticmethod
     def _infer_conv_output_shape(
-        input_shape: list[int], kernel_size: int, stride: int, padding: int
+        input_shape: tuple[int, ...], kernel_size: int, stride: int, padding: int
     ) -> list[int]:
         output_shape = []
         for input_length in input_shape:
             output_length = (input_length - kernel_size + 2 * padding) / stride + 1
-            if not output_length.is_integer():
-                raise ValueError(
-                    f"Stride {stride} is not compatible with input shape {input_shape}, kernel size {kernel_size} and padding {padding}!"
-                )
+            assert output_length.is_integer(), f"Stride {stride} is not compatible with input shape {input_shape}, kernel size {kernel_size} and padding {padding}!"
             output_shape.append(int(output_length))
         return output_shape
