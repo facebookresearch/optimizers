@@ -390,6 +390,65 @@ def instantiate_optimizer(
     distributed_config: DistributedConfig,
     preconditioner_computation_type: PreconditionerComputationType,
 ) -> torch.optim.Optimizer:
+    def instantiate_preconditioner_config(
+        preconditioner_computation_type: PreconditionerComputationType,
+        grafting_beta2: float = 1.0,
+        grafting_epsilon: float = 0.0,
+    ) -> PreconditionerConfig | None:
+        if preconditioner_computation_type == PreconditionerComputationType.NONE:
+            return None
+        elif preconditioner_computation_type == PreconditionerComputationType.SGD:
+            return SGDPreconditionerConfig()  # type: ignore[abstract]
+        elif preconditioner_computation_type == PreconditionerComputationType.ADAGRAD:
+            return AdaGradPreconditionerConfig(
+                epsilon=grafting_epsilon,
+            )
+        elif preconditioner_computation_type == PreconditionerComputationType.RMSPROP:
+            return RMSpropPreconditionerConfig(
+                beta2=grafting_beta2,
+                epsilon=grafting_epsilon,
+            )
+        elif preconditioner_computation_type == PreconditionerComputationType.ADAM:
+            return AdamPreconditionerConfig(
+                beta2=grafting_beta2,
+                epsilon=grafting_epsilon,
+            )
+        elif (
+            preconditioner_computation_type
+            == PreconditionerComputationType.EIGEN_ROOT_INV
+        ):
+            return RootInvShampooPreconditionerConfig(
+                amortized_computation_config=EigenConfig()
+            )
+        elif (
+            preconditioner_computation_type
+            == PreconditionerComputationType.COUPLED_NEWTON_ROOT_INV
+        ):
+            return RootInvShampooPreconditionerConfig(
+                amortized_computation_config=CoupledNewtonConfig(),
+            )
+        elif (
+            preconditioner_computation_type
+            == PreconditionerComputationType.COUPLED_HIGHER_ORDER_ROOT_INV
+        ):
+            return RootInvShampooPreconditionerConfig(
+                amortized_computation_config=CoupledHigherOrderConfig(
+                    rel_epsilon=0.0, abs_epsilon=0.0
+                ),
+            )
+        elif (
+            preconditioner_computation_type
+            == PreconditionerComputationType.EIGH_EIGENVALUE_CORRECTION
+        ):
+            return DefaultEigenvalueCorrectedShampooConfig
+        elif (
+            preconditioner_computation_type
+            == PreconditionerComputationType.QR_EIGENVALUE_CORRECTION
+        ):
+            return DefaultSOAPConfig
+        else:
+            raise ValueError(f"Invalid {preconditioner_computation_type=}!")
+
     if optimizer_type == OptimizerType.SGD:
         optimizer_cls: Callable[..., torch.optim.Optimizer] = partial(
             torch.optim.SGD,
@@ -437,65 +496,6 @@ def instantiate_optimizer(
         raise ValueError(f"Invalid OptimizerType {optimizer_type}!")
 
     return optimizer_cls(parameters, lr=lr)
-
-
-def instantiate_preconditioner_config(
-    preconditioner_computation_type: PreconditionerComputationType,
-    grafting_beta2: float = 1.0,
-    grafting_epsilon: float = 0.0,
-) -> PreconditionerConfig | None:
-    if preconditioner_computation_type == PreconditionerComputationType.NONE:
-        return None
-    elif preconditioner_computation_type == PreconditionerComputationType.SGD:
-        return SGDPreconditionerConfig()  # type: ignore[abstract]
-    elif preconditioner_computation_type == PreconditionerComputationType.ADAGRAD:
-        return AdaGradPreconditionerConfig(
-            epsilon=grafting_epsilon,
-        )
-    elif preconditioner_computation_type == PreconditionerComputationType.RMSPROP:
-        return RMSpropPreconditionerConfig(
-            beta2=grafting_beta2,
-            epsilon=grafting_epsilon,
-        )
-    elif preconditioner_computation_type == PreconditionerComputationType.ADAM:
-        return AdamPreconditionerConfig(
-            beta2=grafting_beta2,
-            epsilon=grafting_epsilon,
-        )
-    elif (
-        preconditioner_computation_type == PreconditionerComputationType.EIGEN_ROOT_INV
-    ):
-        return RootInvShampooPreconditionerConfig(
-            amortized_computation_config=EigenConfig()
-        )
-    elif (
-        preconditioner_computation_type
-        == PreconditionerComputationType.COUPLED_NEWTON_ROOT_INV
-    ):
-        return RootInvShampooPreconditionerConfig(
-            amortized_computation_config=CoupledNewtonConfig(),
-        )
-    elif (
-        preconditioner_computation_type
-        == PreconditionerComputationType.COUPLED_HIGHER_ORDER_ROOT_INV
-    ):
-        return RootInvShampooPreconditionerConfig(
-            amortized_computation_config=CoupledHigherOrderConfig(
-                rel_epsilon=0.0, abs_epsilon=0.0
-            ),
-        )
-    elif (
-        preconditioner_computation_type
-        == PreconditionerComputationType.EIGH_EIGENVALUE_CORRECTION
-    ):
-        return DefaultEigenvalueCorrectedShampooConfig
-    elif (
-        preconditioner_computation_type
-        == PreconditionerComputationType.QR_EIGENVALUE_CORRECTION
-    ):
-        return DefaultSOAPConfig
-    else:
-        raise ValueError(f"Invalid {preconditioner_computation_type=}!")
 
 
 ###### DATA LOADER ######
