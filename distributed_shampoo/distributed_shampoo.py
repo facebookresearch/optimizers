@@ -937,6 +937,9 @@ class DistributedShampoo(torch.optim.Optimizer):
     ) -> tuple[torch.Tensor, ...]:
         if beta1 != 0.0:
             # Computes filtered gradient or EMA of the gradients with respect to beta3 if beta3 != beta1.
+
+            logger.info('gzzz {state_lists[MASKED_FILTERED_GRAD_LIST]=}')
+            logger.info('gzzz {state_lists[MASKED_BLOCKED_GRADS]=}')
             masked_filtered_grad_list = (
                 torch._foreach_lerp(
                     state_lists[MASKED_FILTERED_GRAD_LIST],
@@ -947,12 +950,17 @@ class DistributedShampoo(torch.optim.Optimizer):
                 else state_lists[MASKED_FILTERED_GRAD_LIST]
             )
 
+            logger.info('gzzzzzzzzz {state_lists[MASKED_FILTERED_GRAD_LIST]=}')
+            logger.info('gzzzzzzzzz {state_lists[MASKED_BLOCKED_GRADS]=}')
+
             # Update EMA of the gradients (with respect to beta1).
             torch._foreach_lerp_(
                 state_lists[MASKED_FILTERED_GRAD_LIST],
                 state_lists[MASKED_BLOCKED_GRADS],
                 weight=1 - beta1,
             )
+
+            
 
             # Apply bias correction if necessary.
             if use_bias_correction:
