@@ -306,7 +306,7 @@ class DistributedShampoo(torch.optim.Optimizer):
         use_nesterov (bool): Flag for using Nesterov momentum. (Default: False)
         use_bias_correction (bool): Flag for using bias correction. (Default: True)
         use_decoupled_weight_decay (bool): Flag for using AdamW-style decoupled weight decay. (Default: True)
-        grafting_config (GraftingConfig | None): Configuration for grafting method. If None, ignores grafting.
+        grafting_config (PreconditionerConfig | None): Configuration for grafting method. If None, ignores grafting.
             (Default: None)
         use_pin_memory (bool): Whether to use pin memory to remove sync point in memory copy. (Default: False)
         shampoo_pt2_compile_config (ShampooPT2CompileConfig | None): Configuration for Shampoo PT2 compilation. If None,
