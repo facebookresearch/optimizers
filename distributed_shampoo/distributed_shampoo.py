@@ -365,6 +365,8 @@ class DistributedShampoo(torch.optim.Optimizer):
             },
         )
 
+        assert False
+
         def param_group_hyperparameter_check(param_group: dict[str, Any]) -> None:
             if not param_group[LR] >= 0.0:
                 raise ValueError(f"Invalid {param_group[LR]=}. Must be >= 0.0.")
