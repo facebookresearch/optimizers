@@ -364,9 +364,7 @@ class DistributedShampoo(torch.optim.Optimizer):
                 PRECONDITIONER_CONFIG: preconditioner_config,
             },
         )
-
-        assert False
-
+        
         def param_group_hyperparameter_check(param_group: dict[str, Any]) -> None:
             if not param_group[LR] >= 0.0:
                 raise ValueError(f"Invalid {param_group[LR]=}. Must be >= 0.0.")
@@ -492,6 +490,9 @@ class DistributedShampoo(torch.optim.Optimizer):
                 )
 
         # Perform per param_group hyperparameter checks.
+        
+        logger.info(f"gzzzzz, number of param_groups is {len(self.param_groups)}")
+
         for i, param_group in enumerate(self.param_groups):
             logger.info(f"Checking param_group {i} hyperparameters...")
             param_group_hyperparameter_check(param_group=param_group)
@@ -525,6 +526,7 @@ class DistributedShampoo(torch.optim.Optimizer):
             self._per_group_state_lists, self.param_groups, strict=True
         ):
             match group[DISTRIBUTED_CONFIG]:
+                logger.info(f'gzzzz, {group[DISTRIBUTED_CONFIG] = }')
                 case SingleDeviceDistributedConfig():
                     distributor_cls: type[DistributorInterface] = Distributor
                 case HSDPDistributedConfig():
@@ -861,6 +863,8 @@ class DistributedShampoo(torch.optim.Optimizer):
         # If the step count is less than start_preconditioning_step, then we use the grafting method.
         # Assumes that the step state is consistent across all parameters.
         if use_grafting_method:
+            logger.info(f'gzzzz, in _precondition_and_grafting, using grafting method for step {state_lists[STEP]=}')
+
             masked_blocked_search_directions = state_lists[
                 GRAFTING_PRECONDITIONER_LIST
             ].precondition(
@@ -869,6 +873,7 @@ class DistributedShampoo(torch.optim.Optimizer):
 
         # Otherwise, we use Shampoo.
         else:
+            logger.info(f'gzzzz, in _precondition_and_grafting, using shampoo for step {state_lists[STEP]=}')
             masked_blocked_search_directions = state_lists[
                 SHAMPOO_PRECONDITIONER_LIST
             ].precondition(
@@ -940,8 +945,9 @@ class DistributedShampoo(torch.optim.Optimizer):
         if beta1 != 0.0:
             # Computes filtered gradient or EMA of the gradients with respect to beta3 if beta3 != beta1.
 
-            logger.info(f'gz {state_lists[MASKED_FILTERED_GRAD_LIST]=}')
-            logger.info(f'gz {state_lists[MASKED_BLOCKED_GRADS]=}')
+            logger.info(f'gz {state_lists[MASKED_FILTERED_GRAD_LIST]=} for step {state_lists[STEP]} ')
+
+            logger.info(f'gz {state_lists[MASKED_BLOCKED_GRADS]=} for step {state_lists[STEP]}')
             
             masked_filtered_grad_list = (
                 torch._foreach_lerp(
@@ -1046,6 +1052,9 @@ class DistributedShampoo(torch.optim.Optimizer):
     ) -> tuple[torch.Tensor, ...]:
         # Incorporate L2-regularization or (coupled) weight decay if enabled.
         #   G <- G + lr * weight_decay * W
+
+        logger.info(f'gzzzz, started compute_search directions for step {state_lists[STEP]=}')
+
         self._add_l2_regularization(
             state_lists,
             weight_decay,
@@ -1145,6 +1154,9 @@ class DistributedShampoo(torch.optim.Optimizer):
 
         # Call update_params on the distributor with the computed search directions
         # The distributor is responsible for applying updates to the actual parameters
+
+        logger.info(f'gzzzz, per group step impl started for step {state_lists[STEP]=}')
+
         state_lists[DISTRIBUTOR].update_params(
             # Compute search directions based on current state and optimization parameters
             # This returns the directions in which parameters should be updated
@@ -1188,6 +1200,8 @@ class DistributedShampoo(torch.optim.Optimizer):
         Returns:
             loss (float | None): The loss value returned by the closure if provided, otherwise None.
         """
+
+        logger.info(f'gzzzz, started distributed.shampoo.step() for step {state_lists[STEP]=}')
         loss = None
         if closure is not None:
             with torch.enable_grad():
@@ -1260,6 +1274,7 @@ class DistributedShampoo(torch.optim.Optimizer):
             # Explicitly set masked blocked gradients to None to save memory so the original param.grad has no pointer to it.
             state_lists[MASKED_BLOCKED_GRADS] = None
 
+            
         return loss
 
     def state_dict(self) -> StateDict:
