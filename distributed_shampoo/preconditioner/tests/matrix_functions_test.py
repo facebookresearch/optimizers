@@ -28,9 +28,9 @@ from distributed_shampoo.preconditioner.matrix_functions import (
     _matrix_perturbation,
     matrix_eigendecomposition,
     matrix_inverse_root,
+    matrix_inverse_root_from_eigendecomposition,
     matrix_orthogonalization,
     NewtonConvergenceFlag,
-    stabilize_and_pow_eigenvalues,
 )
 from distributed_shampoo.preconditioner.matrix_functions_types import (
     CoupledHigherOrderConfig,
@@ -115,18 +115,19 @@ class MatrixPerturbationTest(unittest.TestCase):
 
 
 @instantiate_parametrized_tests
-class StabilizeAndPowEigenvaluesTest(unittest.TestCase):
+class MatrixInverseRootFromEigendecomposition(unittest.TestCase):
     @parametrize("perturb_before_computation", (True, False))
-    def test_stabilize_and_pow_eigenvalues_perturbation(
+    def test_perturbation_before_computation(
         self, perturb_before_computation: bool
     ) -> None:
         L = torch.tensor([0.1, 3.1])
-        # The stabilized eigenvalues is [1.0, 4.0] and with root = 2,
-        # that is why expected output is [1.0, 0.5]
+        Q = torch.tensor([[1.0, 0.0], [0.0, 1.0]])
+        # The stabilized eigenvalues is [1.0, 4.0] and root = 2, inv_power_L is [1.0, 0.5].
         torch.testing.assert_close(
-            torch.tensor([1.0, 0.5]),
-            stabilize_and_pow_eigenvalues(
+            torch.tensor([[1.0, 0.0], [0.0, 0.5]]),
+            matrix_inverse_root_from_eigendecomposition(
                 L=L,
+                Q=Q,
                 root=Fraction(2),
                 epsilon=1.0 - torch.min(L).item() * (not perturb_before_computation),
                 rank_deficient_stability_config=PerturbationConfig(
@@ -136,14 +137,14 @@ class StabilizeAndPowEigenvaluesTest(unittest.TestCase):
         )
 
     @parametrize("rank_rtol", (None, 1e-6))
-    def test_stabilize_and_pow_eigenvalues_pseudoinverse(
-        self, rank_rtol: float | None
-    ) -> None:
+    def test_pseudoinverse(self, rank_rtol: float | None) -> None:
         L = torch.tensor([1.0, 4.0, 0.0])
+        Q = torch.tensor([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])
         torch.testing.assert_close(
-            torch.tensor([1.0, 0.5, 0.0]),
-            stabilize_and_pow_eigenvalues(
+            torch.tensor([[1.0, 0.0, 0.0], [0.0, 0.5, 0.0], [0.0, 0.0, 0.0]]),
+            matrix_inverse_root_from_eigendecomposition(
                 L=L,
+                Q=Q,
                 root=Fraction(2),
                 epsilon=0.0,
                 rank_deficient_stability_config=PseudoInverseConfig(
@@ -153,13 +154,12 @@ class StabilizeAndPowEigenvaluesTest(unittest.TestCase):
         )
 
     @parametrize("perturb_before_computation", (True, False))
-    def test_stabilize_and_pow_eigenvalues_perturbation_after_with_disportionate_epsilon(
+    def test_test_perturbation_before_computation_with_disportionate_epsilon(
         self, perturb_before_computation: bool
     ) -> None:
-        # This test verifies that stabilize_and_pow_eigenvalues handles matrices with large values correctly
-        # Note that the smallest entries in L have absolute magnitude of 100000.0, which is much larger
-        # than epsilon (1e-5). In a numerically unstable implementation, such a small epsilon would get
-        # "absorbed" or lost when added to these large values, causing potential numerical instability.
+        # This test verifies that matrix_inverse_root_from_eigenvalues_and_eigenvectors handles matrices with large values correctly.
+        # Note that the smallest entries in L have absolute magnitude of 100000.0, which is much larger than epsilon (1e-5).
+        # In a numerically unstable implementation, such a small epsilon would get "absorbed" or lost when added to these large values, causing potential numerical instability.
         L = torch.tensor(
             [
                 [30000.0, 30000.0, -100000.0],
@@ -167,24 +167,28 @@ class StabilizeAndPowEigenvaluesTest(unittest.TestCase):
                 [-100000.0, -100000.0, 400000.0],
             ]
         )
-        inv_power_L = stabilize_and_pow_eigenvalues(
+        Q = torch.tensor([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])
+        inverse_root = matrix_inverse_root_from_eigendecomposition(
             L=L,
+            Q=Q,
             root=Fraction(2),
             epsilon=1e-5,
             rank_deficient_stability_config=PerturbationConfig(
                 perturb_before_computation=perturb_before_computation,
             ),
         )
-        self.assertTrue(torch.isfinite(inv_power_L).all())
+        self.assertTrue(torch.isfinite(inverse_root).all())
 
     def test_pseudoinverse_with_invalid_epsilon(self) -> None:
         L = torch.tensor([1.0, 4.0, 0.0])
+        Q = torch.tensor([[1.0, 0.0, 2.0], [2.0, 0.0, 1.0], [2.0, 0.0, 0.0]])
         epsilon = 1e-8
         self.assertRaisesRegex(
             ValueError,
             re.escape(f"{epsilon=} should be 0.0 when using pseudo-inverse!"),
-            stabilize_and_pow_eigenvalues,
+            matrix_inverse_root_from_eigendecomposition,
             L=L,
+            Q=Q,
             root=Fraction(2),
             epsilon=epsilon,
             rank_deficient_stability_config=PseudoInverseConfig(rank_rtol=None),
@@ -198,11 +202,13 @@ class StabilizeAndPowEigenvaluesTest(unittest.TestCase):
             unsupported_mode: str = ""
 
         L = torch.tensor([1.0, 4.0, 0.0])
+        Q = torch.tensor([[1.0, 0.0, 2.0], [2.0, 0.0, 1.0], [2.0, 0.0, 0.0]])
         self.assertRaisesRegex(
             NotImplementedError,
             r"rank_deficient_stability_config=.*\.NotSupportedRankDeficientStabilityConfig\(.*\) is not supported\.",
-            stabilize_and_pow_eigenvalues,
+            matrix_inverse_root_from_eigendecomposition,
             L=L,
+            Q=Q,
             root=Fraction(2),
             rank_deficient_stability_config=NotSupportedRankDeficientStabilityConfig(),
         )

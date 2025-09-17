@@ -172,32 +172,32 @@ def _matrix_perturbation(
     )
 
 
-def stabilize_and_pow_eigenvalues(
+def matrix_inverse_root_from_eigendecomposition(
     L: Tensor,
+    Q: Tensor,
     root: Fraction,
     epsilon: float = 0.0,
     rank_deficient_stability_config: RankDeficientStabilityConfig = DefaultPerturbationConfig,
 ) -> Tensor:
-    """
-    Stabilize the eigenvalues of a matrix and raise them to a negative fractional power.
+    """Compute A^(-1/root) from eigendecomposition A = Q diag(L) Q^T.
 
-    If using epsilon (i.e. rank_deficient_stability_config is a PerturbationConfig), stabilization entails adding epsilon to the eigenvalues, i.e. regularization. See _matrix_perturbation() and PerturbationConfig for details.
-
-    If using pseudo-inverse (i.e. rank_deficient_stability_config is a PseudoInverseConfig), stabilization entails ignoring all eigenvalues sufficiently close to zero as determined by some cutoff. See compute_eigenvalue_threshold() and PseudoInverseConfig for details.
+    This function computes A^(-1/root) given the eigendecomposition of A = Q diag(L) Q^T.
+    It handles rank-deficient matrices through either pseudo-inverse or perturbation approaches.
 
     Args:
-        L (Tensor): The input matrix.
-        root (Fraction): The fractional power to which the eigenvalues should be raised.
-        epsilon (float): A small value added to the eigenvalues for stability. (Default: 0.0)
-        rank_deficient_stability_config (RankDeficientStabilityConfig): Configuration for handling/stabilizing rank-deficient matrices. (Default: DefaultPerturbationConfig)
+        L (Tensor): Eigenvalues of the matrix.
+        Q (Tensor): Eigenvectors of the matrix (orthogonal matrix).
+        root (Fraction): Root of interest (e.g., 2 for inverse square root).
+        epsilon (float): Regularization parameter for numerical stability. (Default: 0.0)
+        rank_deficient_stability_config (RankDeficientStabilityConfig): Configuration for
+            handling rank-deficient matrices. (Default: DefaultPerturbationConfig)
 
     Returns:
-        inv_power_L (Tensor): The resulting matrix with stabilized and powered eigenvalues.
+        X (Tensor): Inverse root of matrix, computed as Q * diag(L^(-1/root)) * Q^T.
 
     Raises:
         ValueError: If epsilon is not 0.0 when using pseudo-inverse.
-        ValueError: If rank_deficient_stability_config is not a supported config type.
-
+        NotImplementedError: If rank_deficient_stability_config is not a supported config type.
     """
 
     def compute_eigenvalue_threshold(
@@ -205,16 +205,19 @@ def stabilize_and_pow_eigenvalues(
         rank_rtol: float | None = None,
         rank_atol: float = 0.0,
     ) -> float:
-        """Computes a threshold for filtering eigenvalues based on the numerical rank of the matrix.
-        The procedure follows the approach described in the documentation of torch.linalg.matrix_rank.
+        """Compute threshold for filtering eigenvalues based on numerical rank.
+
+        Determines which eigenvalues should be considered numerically zero based on
+        relative and absolute tolerances. Follows the approach used in torch.linalg.matrix_rank.
 
         Args:
             L (Tensor): Eigenvalues of matrix.
-            rank_rtol (float | None): Relative tolerance for determining numerical rank of matrix. (Default: None)
-            rank_atol (float): Absolute tolerance for determining numerical rank of matrix. (Default: 0.0)
+            rank_rtol (float | None): Relative tolerance for determining numerical rank.
+                If None, uses machine epsilon scaled by tensor size. (Default: None)
+            rank_atol (float): Absolute tolerance for determining numerical rank. (Default: 0.0)
 
         Returns:
-            threshold (float): Threshold value to filter out insignificant eigenvalues.
+            threshold (float): Threshold value below which eigenvalues are treated as zero.
         """
         if rank_rtol is None:
             rtol = L.numel() * torch.finfo(L.dtype).eps
@@ -266,7 +269,7 @@ def stabilize_and_pow_eigenvalues(
                 f"{rank_deficient_stability_config=} is not supported."
             )
 
-    return inv_power_L
+    return Q * inv_power_L.unsqueeze(0) @ Q.T
 
 
 @_check_square_matrix
@@ -343,17 +346,17 @@ def matrix_inverse_root(
             ),
         )
 
-        inv_power_L = stabilize_and_pow_eigenvalues(
-            L=L,
-            root=root,
-            epsilon=epsilon,
-            rank_deficient_stability_config=rank_deficient_stability_config,
+        return (
+            matrix_inverse_root_from_eigendecomposition(
+                L=L,
+                Q=Q,
+                root=root,
+                epsilon=epsilon,
+                rank_deficient_stability_config=rank_deficient_stability_config,
+            ),
+            L,
+            Q,
         )
-
-        # compute the matrix inverse root
-        X = Q * inv_power_L.unsqueeze(0) @ Q.T
-
-        return X, L, Q
 
     def matrix_inverse_root_newton(
         A: Tensor,

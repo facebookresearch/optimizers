@@ -23,7 +23,7 @@ from distributed_shampoo.distributor.shampoo_block_info import BlockInfo
 from distributed_shampoo.preconditioner.matrix_functions import (
     matrix_eigendecomposition,
     matrix_inverse_root,
-    stabilize_and_pow_eigenvalues,
+    matrix_inverse_root_from_eigendecomposition,
 )
 from distributed_shampoo.preconditioner.matrix_functions_types import (
     EigendecompositionConfig,
@@ -1567,14 +1567,13 @@ class EigendecomposedShampooPreconditionerList(
             grad=grad,
             preconditioned_dims_selector=preconditioned_dims_selector,
             preconditioner_list=tuple(
-                eigenvectors
-                * stabilize_and_pow_eigenvalues(
-                    eigenvalues,
+                matrix_inverse_root_from_eigendecomposition(
+                    L=eigenvalues,
+                    Q=eigenvectors,
                     root=Fraction(root),
                     epsilon=self._epsilon,
                     rank_deficient_stability_config=rank_deficient_stability_config,
-                ).unsqueeze(0)
-                @ eigenvectors.T
+                )
                 for eigenvectors, eigenvalues, root in zip(
                     kronecker_factors.factor_matrices_eigenvectors,
                     kronecker_factors.factor_matrices_eigenvalues,
@@ -1684,10 +1683,6 @@ class EigenvalueCorrectedShampooPreconditionerList(
         )
 
         # Precondition with inverse root of corrected eigenvalues.
-        # NOTE: We don't use the stabilize_and_pow_eigenvalues function here because:
-        # 1. We have to add epsilon even it has been added to the factor matrices before the eigendecomposition already.
-        # 2. We compute the root before adding epsilon to be consistent with the PyTorch Adam(W) implementation.
-        # 3. We don't support a pseudo-inverse here.
         preconditioned_grad.div_(
             kronecker_factors.corrected_eigenvalues.div(self._bias_correction2)
             .pow_(1 / kronecker_factors.roots[0])
