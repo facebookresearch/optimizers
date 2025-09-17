@@ -1,60 +1,60 @@
-"""
-Copyright (c) Meta Platforms, Inc. and affiliates.
-All rights reserved.
-
-This source code is licensed under the BSD-style license found in the
-LICENSE file in the root directory of this source tree.
-
-"""
-
+# pyre-strict
 import logging
 import math
 from collections.abc import Callable, Iterator
 from copy import deepcopy
 from dataclasses import asdict
-from typing import Any, overload
+from typing import Any, OrderedDict, overload
 
 import torch
-from distributed_shampoo.distributor.shampoo_ddp_distributor import DDPDistributor
-from distributed_shampoo.distributor.shampoo_distributor import (
+from hpc.optimizers.distributed_shampoo.dev.distributor.shampoo_ddp_distributor import (
+    DDPDistributor,
+)
+from hpc.optimizers.distributed_shampoo.dev.distributor.shampoo_distributor import (
     Distributor,
     DistributorInterface,
 )
-from distributed_shampoo.distributor.shampoo_fsdp_distributor import FSDPDistributor
-from distributed_shampoo.distributor.shampoo_fully_shard_distributor import (
+from hpc.optimizers.distributed_shampoo.dev.distributor.shampoo_fsdp_distributor import (
+    FSDPDistributor,
+)
+from hpc.optimizers.distributed_shampoo.dev.distributor.shampoo_fully_shard_distributor import (
     FullyShardDistributor,
 )
-from distributed_shampoo.distributor.shampoo_fully_shard_lossless_distributor import (
+from hpc.optimizers.distributed_shampoo.dev.distributor.shampoo_fully_shard_lossless_distributor import (
     FullyShardLosslessDistributor,
 )
-from distributed_shampoo.distributor.shampoo_hsdp_distributor import HSDPDistributor
-from distributed_shampoo.distributor.shampoo_hybrid_shard_distributor import (
+from hpc.optimizers.distributed_shampoo.dev.distributor.shampoo_hsdp_distributor import (
+    HSDPDistributor,
+)
+from hpc.optimizers.distributed_shampoo.dev.distributor.shampoo_hybrid_shard_distributor import (
     HybridShardDistributor,
 )
-from distributed_shampoo.preconditioner.adagrad_preconditioner_list import (
+from hpc.optimizers.distributed_shampoo.dev.preconditioner.adagrad_preconditioner_list import (
     AdagradPreconditionerList,
 )
-from distributed_shampoo.preconditioner.matrix_functions_types import (
+from hpc.optimizers.distributed_shampoo.dev.preconditioner.matrix_functions_types import (
     EigendecompositionConfig,
     PseudoInverseConfig,
 )
-from distributed_shampoo.preconditioner.preconditioner_list import PreconditionerList
-from distributed_shampoo.preconditioner.sgd_preconditioner_list import (
+from hpc.optimizers.distributed_shampoo.dev.preconditioner.preconditioner_list import (
+    PreconditionerList,
+)
+from hpc.optimizers.distributed_shampoo.dev.preconditioner.sgd_preconditioner_list import (
     SGDPreconditionerList,
 )
-from distributed_shampoo.preconditioner.shampoo_preconditioner_list import (
+from hpc.optimizers.distributed_shampoo.dev.preconditioner.shampoo_preconditioner_list import (
     EigendecomposedShampooPreconditionerList,
     EigenvalueCorrectedShampooPreconditionerList,
     RootInvShampooPreconditionerList,
 )
-from distributed_shampoo.preconditioner.sign_descent_preconditioner_list import (
+from hpc.optimizers.distributed_shampoo.dev.preconditioner.sign_descent_preconditioner_list import (
     SignDescentPreconditionerList,
 )
-from distributed_shampoo.preconditioner.spectral_descent_preconditioner_list import (
+from hpc.optimizers.distributed_shampoo.dev.preconditioner.spectral_descent_preconditioner_list import (
     SpectralDescentPreconditionerList,
 )
 
-from distributed_shampoo.shampoo_types import (
+from hpc.optimizers.distributed_shampoo.dev.shampoo_types import (
     AdaGradPreconditionerConfig,
     AdamPreconditionerConfig,
     AmortizedPreconditionerConfig,
@@ -109,15 +109,15 @@ from distributed_shampoo.shampoo_types import (
     WEIGHT_DECAY,
 )
 
-from distributed_shampoo.utils.shampoo_checkpoint_utils import (
+from hpc.optimizers.distributed_shampoo.dev.utils.shampoo_checkpoint_utils import (
     extract_state_dict_content,
     flatten,
     unflatten,
     update_param_state_dict_object,
 )
-from distributed_shampoo.utils.shampoo_utils import compress_list
+from hpc.optimizers.distributed_shampoo.dev.utils.shampoo_utils import compress_list
 
-from torch.optim.optimizer import ParamsT, StateDict
+from torch.optim.optimizer import Optimizer, ParamsT, StateDict
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -364,6 +364,7 @@ class DistributedShampoo(torch.optim.Optimizer):
                 PRECONDITIONER_CONFIG: preconditioner_config,
             },
         )
+        self.register_state_dict_post_hook(self._post_state_dict_hook)
 
         def param_group_hyperparameter_check(param_group: dict[str, Any]) -> None:
             if not param_group[LR] >= 0.0:
@@ -1253,16 +1254,6 @@ class DistributedShampoo(torch.optim.Optimizer):
 
         return loss
 
-    def state_dict(self) -> StateDict:
-        raise NotImplementedError(
-            "Distributed Shampoo does not support the standard state_dict() method for checkpointing!"
-        )
-
-    def load_state_dict(self, state_dict: StateDict) -> None:
-        raise NotImplementedError(
-            "Distributed Shampoo does not support the standard load_state_dict() method for checkpointing!"
-        )
-
     @staticmethod
     def _construct_param_group_key(
         group: dict[str, Any], param_to_key: dict[torch.Tensor, str]
@@ -1405,3 +1396,84 @@ class DistributedShampoo(torch.optim.Optimizer):
                     key: deepcopy(value)
                     for key, value in param_groups_to_load[param_group_key].items()
                 }
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        """Override __setstate__ to handle OptimizerModule conversion during state dict loading.
+
+        This method is called by the parent's load_state_dict() method after tensor casting.
+        We need to properly convert nested dictionaries back to OptimizerModule objects
+        using the same logic as update_param_state_dict_object.
+
+        Args:
+            state (dict[str, Any]): The state dictionary containing optimizer state and param_groups.
+        """
+
+        # We handle "state" separately from the rest of the state dict because it contains
+        # OptimizerModule.
+        if "state" in state:
+            # The current `self.state`` should already have OptimizerModule objects from initialization.
+            # `state["state"]` is a nested dictionary of tensors, so we need to use the data from the
+            # nested dictionary to update the OptimizerModule objects.
+            for param_id, param_state_to_load in state["state"].items():
+                if param_id in self.state:
+                    update_param_state_dict_object(
+                        current_param_state_dict=self.state[param_id],
+                        param_state_dict_to_load=param_state_to_load,
+                        enable_missing_key_check=False,
+                    )
+                else:
+                    # If parameter doesn't exist in current state, just assign it directly.
+                    logger.warning(
+                        f"Found parameter {param_id} in state dict to load that doesn't "
+                        "exist in current state. Directly assigning it."
+                    )
+                    self.state[param_id] = param_state_to_load
+
+        state.pop("state", None)
+        self.__dict__.update(state)
+        if "_optimizer_step_pre_hooks" not in self.__dict__:
+            self._optimizer_step_pre_hooks = OrderedDict()
+        if "_optimizer_step_post_hooks" not in self.__dict__:
+            self._optimizer_step_post_hooks = OrderedDict()
+        if "_optimizer_state_dict_pre_hooks" not in self.__dict__:
+            self._optimizer_state_dict_pre_hooks = OrderedDict()
+        if "_optimizer_state_dict_post_hooks" not in self.__dict__:
+            self._optimizer_state_dict_post_hooks = OrderedDict()
+        if "_optimizer_load_state_dict_pre_hooks" not in self.__dict__:
+            self._optimizer_load_state_dict_pre_hooks = OrderedDict()
+        if "_optimizer_load_state_dict_post_hooks" not in self.__dict__:
+            self._optimizer_load_state_dict_post_hooks = OrderedDict()
+        self._patch_step_function()  # To support multiprocessing pickle/unpickle
+        self.defaults.setdefault("differentiable", False)
+
+    @staticmethod
+    def _post_state_dict_hook(optimizer: Optimizer, state_dict: StateDict) -> None:
+        """Process the state dictionary after it's created by state_dict().
+
+        This hook extracts the actual content from each parameter state using the
+        extract_state_dict_content utility function. This ensures that custom dataclass
+        objects in the state are converted to nested dictionaries so that their tensor fields
+        are recognized as tensors during serialization.
+
+        Args:
+            state_dict (StateDict): The state dictionary created by state_dict() method
+                containing optimizer state and parameter groups.
+
+        Returns:
+            None: The state_dict is modified in-place.
+        """
+        state = state_dict["state"]
+        # for state exist on the ranks
+        state_dict["state"] = {
+            k: extract_state_dict_content(v) for k, v in state.items()
+        }
+        # for state that doesn't exist on the rank, we assign empty dict
+        # to make sure all ranks have the same keys in state_dict['state']
+        param_ids = [
+            param
+            for param_group in state_dict["param_groups"]
+            for param in param_group["params"]
+        ]
+        state_dict["state"].update(
+            {param_id: {} for param_id in param_ids if param_id not in state.keys()}
+        )
