@@ -7,54 +7,46 @@ from dataclasses import asdict
 from typing import Any, OrderedDict, overload
 
 import torch
-from hpc.optimizers.distributed_shampoo.dev.distributor.shampoo_ddp_distributor import (
-    DDPDistributor,
-)
-from hpc.optimizers.distributed_shampoo.dev.distributor.shampoo_distributor import (
+from distributed_shampoo.distributor.shampoo_ddp_distributor import DDPDistributor
+from distributed_shampoo.distributor.shampoo_distributor import (
     Distributor,
     DistributorInterface,
 )
-from hpc.optimizers.distributed_shampoo.dev.distributor.shampoo_fsdp_distributor import (
-    FSDPDistributor,
-)
-from hpc.optimizers.distributed_shampoo.dev.distributor.shampoo_fully_shard_distributor import (
+from distributed_shampoo.distributor.shampoo_fsdp_distributor import FSDPDistributor
+from distributed_shampoo.distributor.shampoo_fully_shard_distributor import (
     FullyShardDistributor,
 )
-from hpc.optimizers.distributed_shampoo.dev.distributor.shampoo_fully_shard_lossless_distributor import (
+from distributed_shampoo.distributor.shampoo_fully_shard_lossless_distributor import (
     FullyShardLosslessDistributor,
 )
-from hpc.optimizers.distributed_shampoo.dev.distributor.shampoo_hsdp_distributor import (
-    HSDPDistributor,
-)
-from hpc.optimizers.distributed_shampoo.dev.distributor.shampoo_hybrid_shard_distributor import (
+from distributed_shampoo.distributor.shampoo_hsdp_distributor import HSDPDistributor
+from distributed_shampoo.distributor.shampoo_hybrid_shard_distributor import (
     HybridShardDistributor,
 )
-from hpc.optimizers.distributed_shampoo.dev.preconditioner.adagrad_preconditioner_list import (
+from distributed_shampoo.preconditioner.adagrad_preconditioner_list import (
     AdagradPreconditionerList,
 )
-from hpc.optimizers.distributed_shampoo.dev.preconditioner.matrix_functions_types import (
+from distributed_shampoo.preconditioner.matrix_functions_types import (
     EigendecompositionConfig,
     PseudoInverseConfig,
 )
-from hpc.optimizers.distributed_shampoo.dev.preconditioner.preconditioner_list import (
-    PreconditionerList,
-)
-from hpc.optimizers.distributed_shampoo.dev.preconditioner.sgd_preconditioner_list import (
+from distributed_shampoo.preconditioner.preconditioner_list import PreconditionerList
+from distributed_shampoo.preconditioner.sgd_preconditioner_list import (
     SGDPreconditionerList,
 )
-from hpc.optimizers.distributed_shampoo.dev.preconditioner.shampoo_preconditioner_list import (
+from distributed_shampoo.preconditioner.shampoo_preconditioner_list import (
     EigendecomposedShampooPreconditionerList,
     EigenvalueCorrectedShampooPreconditionerList,
     RootInvShampooPreconditionerList,
 )
-from hpc.optimizers.distributed_shampoo.dev.preconditioner.sign_descent_preconditioner_list import (
+from distributed_shampoo.preconditioner.sign_descent_preconditioner_list import (
     SignDescentPreconditionerList,
 )
-from hpc.optimizers.distributed_shampoo.dev.preconditioner.spectral_descent_preconditioner_list import (
+from distributed_shampoo.preconditioner.spectral_descent_preconditioner_list import (
     SpectralDescentPreconditionerList,
 )
 
-from hpc.optimizers.distributed_shampoo.dev.shampoo_types import (
+from distributed_shampoo.shampoo_types import (
     AdaGradPreconditionerConfig,
     AdamPreconditionerConfig,
     AmortizedPreconditionerConfig,
@@ -109,13 +101,13 @@ from hpc.optimizers.distributed_shampoo.dev.shampoo_types import (
     WEIGHT_DECAY,
 )
 
-from hpc.optimizers.distributed_shampoo.dev.utils.shampoo_checkpoint_utils import (
+from distributed_shampoo.utils.shampoo_checkpoint_utils import (
     extract_state_dict_content,
     flatten,
     unflatten,
     update_param_state_dict_object,
 )
-from hpc.optimizers.distributed_shampoo.dev.utils.shampoo_utils import compress_list
+from distributed_shampoo.utils.shampoo_utils import compress_list
 
 from torch.optim.optimizer import Optimizer, ParamsT, StateDict
 
