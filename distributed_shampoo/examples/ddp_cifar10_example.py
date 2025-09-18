@@ -20,10 +20,10 @@ import torch.distributed as dist
 import torch.distributed.checkpoint as dist_checkpoint
 
 from distributed_shampoo import DDPDistributedConfig, DistributedShampoo
+from distributed_shampoo.examples.argument_parser import Parser
 from distributed_shampoo.examples.trainer_utils import (
     create_model_and_optimizer_and_loss_fn,
     get_data_loader_and_sampler,
-    Parser,
     set_seed,
     setup_distribution,
     train_model,

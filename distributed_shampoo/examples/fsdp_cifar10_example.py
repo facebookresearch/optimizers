@@ -14,8 +14,8 @@ import os
 from functools import partial
 
 from distributed_shampoo import FSDPDistributedConfig
+from distributed_shampoo.examples.argument_parser import Parser
 from distributed_shampoo.examples.hsdp_cifar10_example import main
-from distributed_shampoo.examples.trainer_utils import Parser
 
 # for reproducibility, set environmental variable for CUBLAS
 os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"

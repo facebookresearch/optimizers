@@ -13,8 +13,8 @@ import argparse
 import os
 
 from distributed_shampoo import FullyShardDistributedConfig
+from distributed_shampoo.examples.argument_parser import Parser
 from distributed_shampoo.examples.hybrid_shard_cifar10_example import main
-from distributed_shampoo.examples.trainer_utils import Parser
 
 # for reproducibility, set environmental variable for CUBLAS
 os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"

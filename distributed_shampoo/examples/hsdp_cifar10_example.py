@@ -22,12 +22,11 @@ from distributed_shampoo import DistributedConfig, HSDPDistributedConfig
 from distributed_shampoo.distributor.shampoo_fsdp_utils import (
     compile_fsdp_parameter_metadata,
 )
-
+from distributed_shampoo.examples.argument_parser import Parser
 from distributed_shampoo.examples.trainer_utils import (
     get_data_loader_and_sampler,
     get_model_and_loss_fn,
     instantiate_optimizer,
-    Parser,
     set_seed,
     setup_distribution,
     train_model,
