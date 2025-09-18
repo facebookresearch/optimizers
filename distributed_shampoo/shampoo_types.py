@@ -499,6 +499,8 @@ class SpectralDescentPreconditionerConfig(PreconditionerConfig):
 
 DefaultSpectralDescentPreconditionerConfig = SpectralDescentPreconditionerConfig()
 
+def default_scale_fn(grad: Tensor) -> float | Tensor:
+    return 1.0
 
 @dataclass(kw_only=True)
 class SignDescentPreconditionerConfig(PreconditionerConfig):
@@ -513,7 +515,7 @@ class SignDescentPreconditionerConfig(PreconditionerConfig):
 
     """
 
-    scale_fn: Callable[[Tensor], float | Tensor] = lambda grad: 1.0
+    scale_fn: Callable[[Tensor], float | Tensor] = default_scale_fn
 
 
 DefaultSignDescentPreconditionerConfig = SignDescentPreconditionerConfig()
