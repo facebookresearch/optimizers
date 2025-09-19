@@ -1025,7 +1025,11 @@ class RootInvShampooPreconditionerListTest(
 
     @property
     def _default_preconditioner_config(self) -> RootInvShampooPreconditionerConfig:
-        return replace(DefaultShampooConfig, factor_matrix_dtype=torch.float64)
+        return replace(
+            DefaultShampooConfig,
+            factor_matrix_dtype=torch.float64,
+            inv_factor_matrix_dtype=torch.float64,
+        )
 
     @property
     def _preconditioner_list_factory(self) -> Callable[..., PreconditionerList]:
@@ -1051,6 +1055,8 @@ class EigendecomposedShampooPreconditionerListTest(
         return EigendecomposedShampooPreconditionerConfig(
             amortized_computation_config=QREigendecompositionConfig(),
             factor_matrix_dtype=torch.float64,
+            factor_matrix_eigenvectors_dtype=torch.float64,
+            factor_matrix_eigenvalues_dtype=torch.float64,
         )
 
     @property
@@ -1069,7 +1075,12 @@ class EigenvalueCorrectedShampooPreconditionerListTest(
     def _default_preconditioner_config(
         self,
     ) -> EigenvalueCorrectedShampooPreconditionerConfig:
-        return replace(DefaultSOAPConfig, factor_matrix_dtype=torch.float64)
+        return replace(
+            DefaultSOAPConfig,
+            factor_matrix_dtype=torch.float64,
+            factor_matrix_eigenvectors_dtype=torch.float64,
+            corrected_eigenvalues_dtype=torch.float64,
+        )
 
     @property
     def _preconditioner_list_factory(self) -> Callable[..., PreconditionerList]:
