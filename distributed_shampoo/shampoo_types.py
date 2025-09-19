@@ -504,16 +504,29 @@ DefaultSpectralDescentPreconditionerConfig = SpectralDescentPreconditionerConfig
 class SignDescentPreconditionerConfig(PreconditionerConfig):
     """Configuration for sign descent in DistributedShampoo.
 
-    Example for scale_fn to implement steepest descent under L-infinity norm:
-        scale_fn = lambda grad: grad.abs().sum()
+    Note: When using custom scale functions, avoid lambda functions as they may cause
+    pickling issues during serialization/deserialization. Use regular named functions
+    instead for better compatibility with distributed training and checkpointing.
 
     Attributes:
         scale_fn (Callable[[Tensor], float | Tensor]): Function to scale the sign update based on the gradient tensor.
-            (Default: lambda grad: 1.0)
+            (Default: _default_scale_fn)
+
+    Example:
+        - For scale_fn to implement steepest descent under L-infinity norm:
+        def l_infinity_scale_fn(grad: Tensor) -> float:
+            return grad.abs().sum()
+
+        scale_fn = l_infinity_scale_fn
 
     """
 
-    scale_fn: Callable[[Tensor], float | Tensor] = lambda grad: 1.0
+    @staticmethod
+    def _default_scale_fn(grad: Tensor) -> float:
+        """Default scale function that returns 1.0. Implemented as staticmethod for pickleable concerns."""
+        return 1.0
+
+    scale_fn: Callable[[Tensor], float | Tensor] = _default_scale_fn
 
 
 DefaultSignDescentPreconditionerConfig = SignDescentPreconditionerConfig()
