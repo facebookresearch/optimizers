@@ -14,6 +14,8 @@ import unittest
 from typing import Any
 from unittest.mock import MagicMock
 
+import torch
+
 from distributed_shampoo.preconditioner.matrix_functions_types import (
     EighEigendecompositionConfig,
     PseudoInverseConfig,
@@ -29,8 +31,8 @@ from distributed_shampoo.shampoo_types import (
     HybridShardDistributedConfig,
     RMSpropPreconditionerConfig,
     ShampooPreconditionerConfig,
+    SignDescentPreconditionerConfig,
 )
-
 from distributed_shampoo.utils.commons import get_all_non_abstract_subclasses
 from torch.testing._internal.common_utils import (
     instantiate_parametrized_tests,
@@ -267,6 +269,31 @@ class EigenvalueCorrectedShampooPreconditionerConfigSubclassesTest(unittest.Test
             cls,
             amortized_computation_config=invalid_amortized_computation_config,
         )
+
+
+@instantiate_parametrized_tests
+class SignDescentPreconditionerConfigSubclassesTest(unittest.TestCase):
+    subclasses_types: list[type[SignDescentPreconditionerConfig]] = list(
+        get_all_non_abstract_subclasses(SignDescentPreconditionerConfig)
+    )
+
+    @parametrize("cls", subclasses_types)
+    def test_default_scale_fn(self, cls: type[SignDescentPreconditionerConfig]) -> None:
+        # Test default scale_fn returns 1.0 for any input
+        config = cls()
+        grad = torch.randn(3, 4)
+        self.assertEqual(config.scale_fn(grad), 1.0)
+
+    @parametrize("cls", subclasses_types)
+    def test_custom_scale_fn(self, cls: type[SignDescentPreconditionerConfig]) -> None:
+        # Define a custom scale function
+        def l1_norm_scale_fn(grad: torch.Tensor) -> float:
+            return grad.abs().sum().item()
+
+        config = cls(scale_fn=l1_norm_scale_fn)
+        grad = torch.tensor([[1.0, -2.0], [3.0, -4.0]])
+        # Expected result is 10.0 because L1 norm = |1.0| + |-2.0| + |3.0| + |-4.0| = 1 + 2 + 3 + 4 = 10.0
+        self.assertEqual(config.scale_fn(grad), 10.0)
 
 
 @instantiate_parametrized_tests
