@@ -54,7 +54,7 @@ class PolynomialComputationalCostModel(CostModel):
 
     def cost(self, tensor: torch.Tensor) -> float:
         return sum(
-            max(self.min_cost, polyval(x=dim_size, c=self.coefficients))
+            max(self.min_cost, polyval(x=dim_size, c=self.coefficients))  # type: ignore[misc]
             for dim_size in tensor.shape
         )
 
