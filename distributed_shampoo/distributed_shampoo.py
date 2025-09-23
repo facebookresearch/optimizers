@@ -9,6 +9,7 @@ LICENSE file in the root directory of this source tree.
 
 import logging
 import math
+import operator
 from collections.abc import Callable, Iterator
 from copy import deepcopy
 from dataclasses import asdict
@@ -600,11 +601,11 @@ class DistributedShampoo(torch.optim.Optimizer):
                     block_info_list=state_lists[DISTRIBUTOR].local_block_info_list,
                     beta2=(
                         1.0
-                        if type(group[GRAFTING_CONFIG]) is AdaGradPreconditionerConfig
-                        else group[GRAFTING_CONFIG].beta2
+                        if type(preconditioner_config) is AdaGradPreconditionerConfig
+                        else operator.attrgetter("beta2")(preconditioner_config)
                     ),
-                    epsilon=group[GRAFTING_CONFIG].epsilon,
-                    use_bias_correction=type(group[GRAFTING_CONFIG])
+                    epsilon=preconditioner_config.epsilon,
+                    use_bias_correction=type(preconditioner_config)
                     is AdamPreconditionerConfig,
                 )
             case (
@@ -621,7 +622,7 @@ class DistributedShampoo(torch.optim.Optimizer):
                 }
                 return preconditioner_config_to_list_cls[type(preconditioner_config)](
                     block_list=state_lists[DISTRIBUTOR].local_blocked_params,
-                    preconditioner_config=group[PRECONDITIONER_CONFIG],
+                    preconditioner_config=preconditioner_config,
                     state=self.state,
                     block_info_list=state_lists[DISTRIBUTOR].local_block_info_list,
                     beta2=group[BETAS][1],
@@ -631,7 +632,7 @@ class DistributedShampoo(torch.optim.Optimizer):
             case SignDescentPreconditionerConfig():
                 return SignDescentPreconditionerList(
                     block_list=state_lists[DISTRIBUTOR].local_blocked_params,
-                    preconditioner_config=group[PRECONDITIONER_CONFIG],
+                    preconditioner_config=preconditioner_config,
                 )
             case SpectralDescentPreconditionerConfig():
                 assert (
@@ -639,7 +640,7 @@ class DistributedShampoo(torch.optim.Optimizer):
                 ), f"{group[DISTRIBUTED_CONFIG].target_parameter_dimensionality=} must be 2 when using SpectralDescentPreconditionerConfig."
                 return SpectralDescentPreconditionerList(
                     block_list=state_lists[DISTRIBUTOR].local_blocked_params,
-                    preconditioner_config=group[PRECONDITIONER_CONFIG],
+                    preconditioner_config=preconditioner_config,
                 )
             case _:
                 raise NotImplementedError(f"{preconditioner_config=} not supported!")
