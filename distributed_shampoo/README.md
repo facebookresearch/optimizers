@@ -22,6 +22,16 @@ with contributions and support from:
 
 Ganesh Ajjanagadde (Meta), Rohan Anil (Google), Adnan Aziz (Meta), Pavan Balaji (Meta), Shuo Chang (Meta), Weiwei Chu (Meta), Assaf Eisenman (Meta), Will Feng (Meta), Zhuobo Feng (Meta), Jose Gallego-Posada (Mila / Meta Platforms, Inc.), Avirup Ghosh (Meta), Yizi Gu (Meta), Vineet Gupta (Google), Yuchen Hao (Meta), Brian Hirsh (Meta), Yusuo Hu (Meta), Yuxi Hu (Meta), Minhui Huang (Meta), Guna Lakshminarayanan (Meta), Michael Lazos (Meta), Zhijing Li (Meta), Ming Liang (Meta), Wanchao Liang (Meta), Ying Liu (Meta), Wenguang Mao (Meta), Dheevatsa Mudigere (NVIDIA), Maxim Naumov (Meta), Jongsoo Park (Meta), Mike Rabbat (Meta), Kaushik Rangadurai (Meta), Dennis van der Staay (Meta), Fei Tian (Meta), Rohan Varma (Meta), Sanjay Vishwakarma (Meta), Xunnan (Shawn) Xu (Meta), Jiyan Yang (Meta), Chunxing Yin (Meta), Iris Zhang (Meta), Chuanhao Zhuge (Meta), Haoran Zhang (Meta), and Will Zou (Meta).
 
+## 🏆 Competition Winner 🏆
+
+**Shampoo won the [MLCommons AlgoPerf: Training Algorithms Benchmark Competition](https://mlcommons.org/2024/08/mlc-algoperf-benchmark-competition/)!** 🥇
+
+The external tuning ruleset saw four submissions beating the challenging prize-qualification baseline, improving over the state-of-the-art training algorithm. The "Distributed Shampoo" submission provides an impressive **28% faster model training** compared to the baseline, establishing it as a leading optimizer in the field.
+
+This achievement was recognized by major AI organizations:
+- 🐦 [AI at Meta announcement](https://x.com/AIatMeta/status/1819128535002538016)
+- 🐦 [Google AI announcement](https://x.com/GoogleAI/status/1819138806647316504)
+
 ## Features
 
 Key distinctives of this implementation include:
