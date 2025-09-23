@@ -28,6 +28,7 @@ from distributed_shampoo.preconditioner.matrix_functions_types import (
 )
 
 from distributed_shampoo.utils.abstract_dataclass import AbstractDataclass
+from distributed_shampoo.utils.load_balancing_utils import CostModel, DefaultCostModel
 from torch import Tensor
 from torch.distributed.device_mesh import DeviceMesh
 from torch.distributed.fsdp import ShardingStrategy
@@ -577,6 +578,21 @@ class FSDPParamAssignmentStrategy(enum.Enum):
     ROUND_ROBIN = enum.auto()
 
 
+@dataclass(kw_only=True)
+class LoadBalancingConfig:
+    """Load balancing configuration for distributing workloads across ranks.
+
+    The `cost_model` defines how the cost of a tensor is computed, and the distributor uses this cost to partition workloads.
+    By default, it uses `AlignedMemoryCostModel`, other options include `PolynomialComputationalCostModel`.
+
+    Args:
+        cost_model (CostModel): The cost model used for load balancing. (Default: DefaultCostModel)
+
+    """
+
+    cost_model: CostModel = field(default_factory=lambda: DefaultCostModel)
+
+
 @dataclass(init=False)
 class DistributedConfig(AbstractDataclass):
     """Abstract dataclass for distributed configs in Shampoo.
@@ -646,12 +662,16 @@ class DDPDistributedConfig(DistributedConfig):
             If num_trainers_per_group = -1 is used, then defaults to using the LOCAL_WORLD_SIZE. (Default: -1)
         communicate_params (bool): Flag for all-gathering updated params across multiple workers.
             If False, all-gathers parameter updates across multiple workers. (Default: False)
+        load_balancing_config (LoadBalancingConfig): Configuration for load balancing. (Default: LoadBalancingConfig(cost_model=AlignedMemoryCostModel()))
 
     """
 
     communication_dtype: torch.dtype = torch.float32
     num_trainers_per_group: int = -1
     communicate_params: bool = False
+    load_balancing_config: LoadBalancingConfig = field(
+        default_factory=lambda: LoadBalancingConfig()
+    )
 
 
 @dataclass(kw_only=True)

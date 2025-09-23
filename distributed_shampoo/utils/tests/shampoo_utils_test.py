@@ -15,6 +15,10 @@ import unittest
 from operator import methodcaller
 
 import torch
+from distributed_shampoo.shampoo_types import LoadBalancingConfig
+from distributed_shampoo.utils.load_balancing_utils import (
+    PolynomialComputationalCostModel,
+)
 
 from distributed_shampoo.utils.shampoo_utils import (
     compress_list,
@@ -283,13 +287,20 @@ class ParameterizeEnterExitContextTest(unittest.TestCase):
 
 @instantiate_parametrized_tests
 class DistributeBufferSizesTest(unittest.TestCase):
+    @staticmethod
+    def empty_tensor_list(sizes: tuple[int, ...]) -> tuple[torch.Tensor, ...]:
+        return tuple(
+            torch.empty(size, device="meta", dtype=torch.bool) for size in sizes
+        )
+
     @parametrize(
-        "buffer_sizes, group_size, expected_result",
+        "blocked_params, group_size, load_balancing_config, expected_result",
         (
             # Test case 1: Even distribution of buffer sizes
             (
-                (128, 64, 500, 256),
+                empty_tensor_list((128, 64, 500, 256)),
                 2,
+                LoadBalancingConfig(),
                 (
                     (128, 1),
                     (64, 1),
@@ -299,8 +310,9 @@ class DistributeBufferSizesTest(unittest.TestCase):
             ),
             # Test case 2: Single group
             (
-                (128, 64, 500, 256),
+                empty_tensor_list((128, 64, 500, 256)),
                 1,
+                LoadBalancingConfig(),
                 (
                     (128, 0),
                     (64, 0),
@@ -309,18 +321,58 @@ class DistributeBufferSizesTest(unittest.TestCase):
                 ),
             ),
             # Test case 3: More groups than buffers
-            ((128, 64), 4, ((128, 0), (64, 1))),
+            (
+                empty_tensor_list((128, 64)),
+                4,
+                LoadBalancingConfig(),
+                ((128, 0), (64, 1)),
+            ),
             # Test case 4: Empty buffer sizes
-            ((), 2, ()),
+            ((), 2, LoadBalancingConfig(), ()),
+            # Test case 5: Linear Compute Cost Model
+            (
+                empty_tensor_list((128, 64, 512, 256)),
+                2,
+                LoadBalancingConfig(
+                    cost_model=PolynomialComputationalCostModel(coefficients=(0, 2))
+                ),
+                (
+                    (128, 1),
+                    (64, 1),
+                    (512, 0),
+                    (256, 1),
+                ),
+            ),
+            # Test case 6: Quadratic Compute Cost Model
+            # Rank 0 gets tensors of sizes 256, 256, and 128, Rank 1 gets a tensor of size 384.
+            # The quadratic computational cost of Rank 0 equals that of Rank 1: 384² = 256² + 256² + 128²
+            (
+                empty_tensor_list((256, 128, 384, 256)),
+                2,
+                LoadBalancingConfig(
+                    cost_model=PolynomialComputationalCostModel(coefficients=(0, 0, 1))
+                ),
+                (
+                    (256, 1),
+                    (128, 1),
+                    (384, 0),
+                    (256, 1),
+                ),
+            ),
         ),
     )
     def test_distribute_buffer_sizes(
         self,
-        buffer_sizes: tuple[int, ...],
+        blocked_params: tuple[torch.Tensor, ...],
         group_size: int,
+        load_balancing_config: LoadBalancingConfig,
         expected_result: tuple[tuple[int, int], ...],
     ) -> None:
         self.assertEqual(
-            distribute_buffer_sizes(buffer_sizes=buffer_sizes, group_size=group_size),
+            distribute_buffer_sizes(
+                blocked_params=blocked_params,
+                group_size=group_size,
+                load_balancing_config=load_balancing_config,
+            ),
             expected_result,
         )

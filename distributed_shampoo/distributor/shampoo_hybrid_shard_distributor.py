@@ -20,6 +20,7 @@ from distributed_shampoo.distributor.shampoo_distributor import DistributorInter
 from distributed_shampoo.shampoo_types import (
     DISTRIBUTED_CONFIG,
     HybridShardDistributedConfig,
+    LoadBalancingConfig,
     PARAMS,
 )
 from distributed_shampoo.utils.commons import batched
@@ -166,14 +167,16 @@ class HybridShardDistributor(DistributorInterface):
 
         comms_group_rank: int = dist.get_rank(self._comms_dist_group)
 
-        # Assign ranks to blocks with their respective buffer size.
+        # blocked_params created on meta device with communication dtype (no actual data).
+        blocked_params = tuple(
+            block.to(device="meta", dtype=distributed_config.communication_dtype)
+            for block in self._global_blocked_params
+        )
+
         buffer_size_ranks = distribute_buffer_sizes(
-            buffer_sizes=tuple(
-                blocked_param.numel()
-                * get_dtype_size(distributed_config.communication_dtype)
-                for blocked_param in self._global_blocked_params
-            ),
+            blocked_params=blocked_params,
             group_size=self._dist_group_size,
+            load_balancing_config=LoadBalancingConfig(),
         )
 
         self._local_block_info_list: tuple[DTensorBlockInfo, ...] = (

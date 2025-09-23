@@ -17,6 +17,8 @@ from types import TracebackType
 from typing import Any, TypeVar
 
 import torch
+from distributed_shampoo.shampoo_types import LoadBalancingConfig
+from distributed_shampoo.utils.load_balancing_utils import AlignedMemoryCostModel
 from torch import Tensor
 
 
@@ -265,71 +267,66 @@ class ParameterizeEnterExitContext:
 
 
 def distribute_buffer_sizes(
-    buffer_sizes: tuple[int, ...],
+    blocked_params: tuple[Tensor, ...],
     group_size: int,
+    load_balancing_config: LoadBalancingConfig,
 ) -> tuple[tuple[int, int], ...]:
-    """Distribute given buffer sizes across ranks in a group.
+    """Distribute given param blocks across ranks in a group.
 
-    Buffer sizes will be rounded up for memory allocation. Buffers are distributed such that
-    total buffer sizes of each rank are as even as possible. This is currently performed
-    using a greedy algorithm. We do not currently consider computational cost
-    or kernel launching overheads.
+    Param blocks are distributed such that the total assigned load of each rank is as even as possible.
+    The load of a param block is determined by ``load_balance_config``.
+    By default, the load is measured purely by buffer size. If ``load_balance_config`` specifies
+    a compute-based strategy, the distribution will instead weigh each buffer by its estimated
+    computational cost (e.g., cost of processing or kernel execution time) rather than size alone.
+    This is currently performed using a greedy algorithm.
 
     Note: A better distribution strategy should try to minimize the delta of buffer sizes
     between the most and the least allocated groups.
 
     Args:
-        buffer_sizes (tuple[int, ...]): Buffer sizes of blocks to be distributed.
+        blocked_params (tuple[Tensor, ...]): A list of blocked parameters.
         group_size (int): Number of groups to distribute across.
+        load_balance_config (LoadBalanceConfig): Memory or compute load balance config.
 
     Returns:
         buffer_size_ranks (tuple[tuple[int, int], ...]): A list of tuples containing the
             buffer size for each block and its assigned rank.
-
-    Example:
-        Assuming ALIGNMENT_BYTES = 64, given buffer_sizes = [128, 64, 500, 256], group_size = 2
-        -> buffer_size_ranks = [(128, 1), (64, 1), (512, 0), (256, 1)]
-
-        This means buffer at index 0 (size 128) is assigned to rank 1,
-        buffer at index 1 (size 64) is assigned to rank 1,
-        buffer at index 2 (size 512) is assigned to rank 0, and
-        buffer at index 3 (size 256) is assigned to rank 1.
     """
-    ALIGNMENT_BYTES = (
-        64  # necessary for determining buffer size, possibly hardware-dependent
+    buffer_sizes_aligned = tuple(
+        int(AlignedMemoryCostModel().cost(blocked_param))
+        for blocked_param in blocked_params
     )
 
-    # Convert each of buffer_sizes into smallest multiple of ALIGNMENT_BYTES that is >= buffer size.
-    aligned_buffer_sizes = [
-        (buffer_size + ALIGNMENT_BYTES - 1) // ALIGNMENT_BYTES * ALIGNMENT_BYTES
-        for buffer_size in buffer_sizes
-    ]
-    buffer_size_ranks = [(-1, -1)] * len(buffer_sizes)
-    allocated_buffer_sizes = [(0, group_index) for group_index in range(group_size)]
-    heapq.heapify(allocated_buffer_sizes)
+    param_block_costs = tuple(
+        load_balancing_config.cost_model.cost(block) for block in blocked_params
+    )
+    param_block_ranks = [-1] * len(blocked_params)
+    allocated_load_sizes = [(0.0, group_index) for group_index in range(group_size)]
+    heapq.heapify(allocated_load_sizes)
 
-    for index, aligned_buffer_size in sorted(
-        enumerate(aligned_buffer_sizes),
+    for index, block_cost in sorted(
+        enumerate(param_block_costs),
         key=operator.itemgetter(1),
         reverse=True,
     ):
-        # Greedily find the group with the least allocated buffer size and its group index
+        # Greedily find the group with the least allocated load and its group index
         # in order to allocate buffers on that group.
         (
-            min_allocated_buffer_size,
-            min_allocated_buffer_size_group_index,
-        ) = heapq.heappop(allocated_buffer_sizes)
+            min_allocated_load,
+            min_allocated_load_group_index,
+        ) = heapq.heappop(allocated_load_sizes)
+
+        new_load_size = min_allocated_load + block_cost
 
         heapq.heappush(
-            allocated_buffer_sizes,
+            allocated_load_sizes,
             (
-                min_allocated_buffer_size + aligned_buffer_size,
-                min_allocated_buffer_size_group_index,
+                new_load_size,
+                min_allocated_load_group_index,
             ),
         )
-        buffer_size_ranks[index] = (
-            aligned_buffer_size,
-            min_allocated_buffer_size_group_index,
-        )
+        param_block_ranks[index] = min_allocated_load_group_index
 
-    return tuple(buffer_size_ranks)
+    buffer_size_ranks = tuple(zip(buffer_sizes_aligned, param_block_ranks, strict=True))
+
+    return buffer_size_ranks
