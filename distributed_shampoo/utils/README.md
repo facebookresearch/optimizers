@@ -12,6 +12,7 @@ This module provides essential utility components for the Distributed Shampoo op
 - [Model Utilities](#model-utilities)
 - [Checkpoint Management](#checkpoint-management)
 - [Quantization Support](#quantization-support)
+- [Load Balancing Utilities](#load-balancing-utilities)
 - [Examples](#examples)
 - [Contributing](#contributing)
 
@@ -484,6 +485,102 @@ selector = (True, False, True, False, True)
 compressed_list = quantized_list.compress(selector)
 # Returns new QuantizedTensorList with only selected tensors
 ```
+
+## Load Balancing Utilities
+
+### Cost Models ([`load_balancing_utils.py`](load_balancing_utils.py))
+
+Provides cost models for estimating computational and memory costs of tensors, enabling load balancing in distributed training scenarios.
+
+#### Abstract Base Class
+
+##### `CostModel`
+
+```python
+from abc import abstractmethod
+
+class CostModel(AbstractDataclass):
+    """Abstract base class for computing tensor cost metrics."""
+
+    @abstractmethod
+    def cost(self, tensor: torch.Tensor) -> float:
+        """Compute cost for a tensor."""
+        pass
+```
+
+#### Computational Cost Models
+
+##### `PolynomialComputationalCostModel`
+
+Estimates computational costs using polynomial functions based on tensor dimensions:
+
+```python
+# Create a quadratic cost model: cost = a + b*x + c*x²
+cost_model = PolynomialComputationalCostModel(
+    coefficients=(1.0, 0.1, 0.01),  # a=1.0, b=0.1, c=0.01
+    min_cost=10.0  # Minimum cost threshold
+)
+
+# Example tensor computation cost
+tensor = torch.randn(100, 200)
+total_cost = cost_model.cost(tensor)
+# Cost = max(10.0, (1.0 + 0.1*100 + 0.01*100²)) + max(10.0, (1.0 + 0.1*200 + 0.01*200²))
+```
+
+**Features**:
+- Polynomial degree determined by coefficient count
+- Applies to each tensor dimension separately
+- Minimum cost thresholding for stability
+- Suitable for computational complexity estimation
+
+#### Memory Cost Models
+
+##### `AlignedMemoryCostModel`
+
+Calculates memory costs with alignment padding considerations:
+
+```python
+# Default 64-byte alignment
+memory_model = AlignedMemoryCostModel(alignment_bytes=64)
+
+# Memory cost calculation
+tensor = torch.randn(100, 100, dtype=torch.float32)
+memory_cost = memory_model.cost(tensor)
+# Calculates: aligned_size = ceil(100*100*4 / 64) * 64 bytes
+
+# Custom alignment
+cache_aligned_model = AlignedMemoryCostModel(alignment_bytes=128)
+cost_128 = cache_aligned_model.cost(tensor)
+```
+
+**Features**:
+- Accounts for memory alignment padding
+- Considers tensor data type size (`element_size()`)
+- Configurable alignment boundaries
+- Returns aligned buffer size in bytes
+
+#### Usage in Load Balancing
+
+```python
+# Distribute tensors based on computational cost
+tensors = [torch.randn(size) for size in [(100, 50), (200, 100), (50, 200)]]
+comp_model = PolynomialComputationalCostModel(coefficients=(0, 1, 0))  # Linear in dimension
+
+# Calculate costs for load balancing
+costs = [comp_model.cost(t) for t in tensors]
+# Use costs to distribute across devices/processes
+
+# Memory-aware distribution
+mem_model = AlignedMemoryCostModel(alignment_bytes=64)
+memory_costs = [mem_model.cost(t) for t in tensors]
+# Balance memory usage across devices
+```
+
+**Applications**:
+- Distributed preconditioner assignment
+- Memory-aware tensor partitioning
+- Computational load balancing
+- Resource allocation optimization
 
 ## Examples
 
