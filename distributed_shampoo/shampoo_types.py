@@ -298,6 +298,7 @@ class RootInvShampooPreconditionerConfig(ShampooPreconditionerConfig):
                                     |          (^0.1667), the default inverse exponent 1/(2*3) since inverse_exponent_override[3][2] is not specified
                                     |
                             no preconditioning since inverse_exponent_override[3][0]=0.0
+        inv_factor_matrix_dtype (torch.dtype): Data type for inverse factor matrix. (Default: torch.float32)
 
 
     """
@@ -305,6 +306,7 @@ class RootInvShampooPreconditionerConfig(ShampooPreconditionerConfig):
     amortized_computation_config: RootInvConfig = field(
         default_factory=lambda: DefaultEigenConfig
     )
+    inv_factor_matrix_dtype: torch.dtype = torch.float32
 
 
 DefaultShampooConfig = RootInvShampooPreconditionerConfig()
@@ -353,6 +355,8 @@ class EigendecomposedShampooPreconditionerConfig(ShampooPreconditionerConfig):
                                     |          (^0.1667), the default inverse exponent 1/(2*3) since inverse_exponent_override[3][2] is not specified
                                     |
                             no preconditioning since inverse_exponent_override[3][0]=0.0
+        factor_matrix_eigenvectors_dtype (torch.dtype): Data type for factor matrix eigenvectors. (Default: torch.float32)
+        factor_matrix_eigenvalues_dtype (torch.dtype): Data type for factor matrix eigenvalues. (Default: torch.float32)
 
 
     """
@@ -360,6 +364,8 @@ class EigendecomposedShampooPreconditionerConfig(ShampooPreconditionerConfig):
     amortized_computation_config: EigendecompositionConfig = field(
         default_factory=lambda: DefaultEigendecompositionConfig
     )
+    factor_matrix_eigenvectors_dtype: torch.dtype = torch.float32
+    factor_matrix_eigenvalues_dtype: torch.dtype = torch.float32
 
 
 @dataclass(kw_only=True)
@@ -410,6 +416,8 @@ class EigenvalueCorrectedShampooPreconditionerConfig(AmortizedPreconditionerConf
         inverse_exponent_override (dict[int, float]): The inverse_exponent_override attribute is a dictionary that allows for customizing the inverse exponent used in eigenvalue correction.
             The keys of the dictionary represent the order of the tensor, and the values are the exponent override values. For example, if we want to use a custom inverse exponent for 3-D tensors, we can set inverse_exponent_override as inverse_exponent_override={3: 0.25}.
             Note that the inverse_exponent_override dictionary can contain multiple entries for different tensor orders. If the order of the tensor is not specified in the dictionary, the default exponent, 1/2, will be used. (Default: {})
+        factor_matrix_eigenvectors_dtype (torch.dtype): Data type for factor matrix eigenvectors. (Default: torch.float32)
+        corrected_eigenvalues_dtype (torch.dtype): Data type for corrected eigenvalues. (Default: torch.float32)
 
     """
 
@@ -418,6 +426,8 @@ class EigenvalueCorrectedShampooPreconditionerConfig(AmortizedPreconditionerConf
     )
     ignored_basis_change_dims: dict[int, list[int]] = field(default_factory=dict)
     inverse_exponent_override: dict[int, float] = field(default_factory=dict)
+    factor_matrix_eigenvectors_dtype: torch.dtype = torch.float32
+    corrected_eigenvalues_dtype: torch.dtype = torch.float32
 
     def __post_init__(self) -> None:
         super().__post_init__()

@@ -36,7 +36,10 @@ from distributed_shampoo.preconditioner.preconditioner_list import (
 )
 from distributed_shampoo.shampoo_types import (
     AmortizedPreconditionerConfig,
+    EigendecomposedShampooPreconditionerConfig,
+    EigenvalueCorrectedShampooPreconditionerConfig,
     PreconditionerValueError,
+    RootInvShampooPreconditionerConfig,
 )
 from distributed_shampoo.utils.dict_zip_iterator import DictZipIterator
 from distributed_shampoo.utils.optimizer_modules import OptimizerModule
@@ -320,23 +323,23 @@ class RootInvShampooKroneckerFactorsState(BaseShampooKroneckerFactorsState):
 
         Args:
             block_info (BlockInfo): Information about the block, including methods to allocate tensors.
-            factor_matrix_dtype (torch.dtype): Data type for the factor matrices.
+            preconditioner_config (RootInvShampooPreconditionerConfig): Configuration for the preconditioner.
             preconditioned_dims (tuple[int, ...]): Dimensions for which the factor matrices are preconditioned.
-            block_dtype (torch.dtype): Data type for the block.
 
         Returns:
             kronecker_factors_state (RootInvShampooKroneckerFactorsState): An instance of RootInvShampooKroneckerFactorsState with initialized inverse factor matrices.
         """
         block_info: BlockInfo = kwargs["block_info"]
-        factor_matrix_dtype: torch.dtype = kwargs["factor_matrix_dtype"]
+        preconditioner_config: RootInvShampooPreconditionerConfig = kwargs[
+            "preconditioner_config"
+        ]
         preconditioned_dims: tuple[int, ...] = kwargs["preconditioned_dims"]
-        block_dtype: torch.dtype = kwargs["block_dtype"]
 
         return cls(
             **asdict(
                 BaseShampooKroneckerFactorsState.from_block(
                     block_info=block_info,
-                    factor_matrix_dtype=factor_matrix_dtype,
+                    factor_matrix_dtype=preconditioner_config.factor_matrix_dtype,
                     preconditioned_dims=preconditioned_dims,
                 )
             ),
@@ -344,7 +347,7 @@ class RootInvShampooKroneckerFactorsState(BaseShampooKroneckerFactorsState):
             inv_factor_matrices=tuple(
                 block_info.allocate_eye_tensor(
                     n=dim,
-                    dtype=block_dtype,
+                    dtype=preconditioner_config.inv_factor_matrix_dtype,
                     device=block_info.param.device,
                 )
                 for dim in preconditioned_dims
@@ -517,23 +520,23 @@ class EigendecomposedShampooKroneckerFactorsState(BaseShampooKroneckerFactorsSta
 
         Args:
             block_info (BlockInfo): Information about the block, including methods to allocate tensors.
-            factor_matrix_dtype (torch.dtype): Data type for the factor matrices.
+            preconditioner_config (EigendecomposedShampooPreconditionerConfig): Configuration for the preconditioner.
             preconditioned_dims (tuple[int, ...]): Dimensions for which the factor matrices are preconditioned.
-            block_dtype (torch.dtype): Data type for the block.
 
         Returns:
             kronecker_factors_state (EigendecomposedShampooKroneckerFactorsState): An instance of EigendecomposedShampooKroneckerFactorsState.
         """
         block_info: BlockInfo = kwargs["block_info"]
-        factor_matrix_dtype: torch.dtype = kwargs["factor_matrix_dtype"]
+        preconditioner_config: EigendecomposedShampooPreconditionerConfig = kwargs[
+            "preconditioner_config"
+        ]
         preconditioned_dims: tuple[int, ...] = kwargs["preconditioned_dims"]
-        block_dtype: torch.dtype = kwargs["block_dtype"]
 
         return cls(
             **asdict(
                 BaseShampooKroneckerFactorsState.from_block(
                     block_info=block_info,
-                    factor_matrix_dtype=factor_matrix_dtype,
+                    factor_matrix_dtype=preconditioner_config.factor_matrix_dtype,
                     preconditioned_dims=preconditioned_dims,
                 )
             ),
@@ -541,7 +544,7 @@ class EigendecomposedShampooKroneckerFactorsState(BaseShampooKroneckerFactorsSta
             factor_matrices_eigenvectors=tuple(
                 block_info.allocate_eye_tensor(
                     n=dim,
-                    dtype=block_dtype,
+                    dtype=preconditioner_config.factor_matrix_eigenvectors_dtype,
                     device=block_info.param.device,
                 )
                 for dim in preconditioned_dims
@@ -550,7 +553,7 @@ class EigendecomposedShampooKroneckerFactorsState(BaseShampooKroneckerFactorsSta
             factor_matrices_eigenvalues=tuple(
                 block_info.allocate_ones_tensor(
                     size=(dim,),
-                    dtype=block_dtype,
+                    dtype=preconditioner_config.factor_matrix_eigenvalues_dtype,
                     device=block_info.param.device,
                 )
                 for dim in preconditioned_dims
@@ -760,25 +763,25 @@ class EigenvalueCorrectedShampooKroneckerFactorsState(BaseShampooKroneckerFactor
 
         Args:
             block_info (BlockInfo): Information about the block, including methods to allocate tensors.
-            factor_matrix_dtype (torch.dtype): Data type for the factor matrices.
+            preconditioner_config (EigenvalueCorrectedShampooPreconditionerConfig): Configuration for the preconditioner.
             preconditioned_dims (tuple[int, ...]): Dimensions for which the factor matrices are preconditioned.
-            block_dtype (torch.dtype): Data type for the block.
             dims (tuple[int, ...]): Dimensions of the block.
 
         Returns:
             kronecker_factors_state (EigenvalueCorrectedShampooKroneckerFactorsState): An instance of EigenvalueCorrectedShampooKroneckerFactorsState.
         """
         block_info: BlockInfo = kwargs["block_info"]
-        factor_matrix_dtype: torch.dtype = kwargs["factor_matrix_dtype"]
+        preconditioner_config: EigenvalueCorrectedShampooPreconditionerConfig = kwargs[
+            "preconditioner_config"
+        ]
         preconditioned_dims: tuple[int, ...] = kwargs["preconditioned_dims"]
-        block_dtype: torch.dtype = kwargs["block_dtype"]
         dims: tuple[int, ...] = kwargs["dims"]
 
         return EigenvalueCorrectedShampooKroneckerFactorsState(
             **asdict(
                 BaseShampooKroneckerFactorsState.from_block(
                     block_info=block_info,
-                    factor_matrix_dtype=factor_matrix_dtype,
+                    factor_matrix_dtype=preconditioner_config.factor_matrix_dtype,
                     preconditioned_dims=preconditioned_dims,
                 )
             ),
@@ -786,7 +789,7 @@ class EigenvalueCorrectedShampooKroneckerFactorsState(BaseShampooKroneckerFactor
             factor_matrices_eigenvectors=tuple(
                 block_info.allocate_eye_tensor(
                     n=dim,
-                    dtype=block_dtype,
+                    dtype=preconditioner_config.factor_matrix_eigenvectors_dtype,
                     device=block_info.param.device,
                 )
                 for dim in preconditioned_dims
@@ -794,7 +797,7 @@ class EigenvalueCorrectedShampooKroneckerFactorsState(BaseShampooKroneckerFactor
             corrected_eigenvalues=block_info.allocate_zeros_tensor(
                 # Note that the corrected eigenvalues are not affected by the preconditioned_dims.
                 size=tuple(dims),
-                dtype=block_dtype,
+                dtype=preconditioner_config.corrected_eigenvalues_dtype,
                 device=block_info.param.device,
             ),
         )
@@ -1133,9 +1136,8 @@ class BaseShampooPreconditionerList(
             )
             block_state[SHAMPOO] = kronecker_factors_state_type.from_block(
                 block_info=block_info,
-                factor_matrix_dtype=self._preconditioner_config.factor_matrix_dtype,
+                preconditioner_config=self._preconditioner_config,
                 preconditioned_dims=preconditioned_dims,
-                block_dtype=block.dtype,
                 dims=dims,
             )
             kronecker_factors_unwrapped.append(
@@ -1316,17 +1318,30 @@ class BaseShampooPreconditionerList(
         assert (
             sum(preconditioned_dims_selector) == len(preconditioner_list)
         ), f"The number of dimensions to precondition ({sum(preconditioned_dims_selector)}) must match the number of preconditioners ({len(preconditioner_list)})."
+
+        # Extract all dtypes and assert they are unique
+        assert (
+            len(unique_dtypes := {p.dtype for p in preconditioner_list}) <= 1
+        ), f"All preconditioners must have the same dtype, but found: {unique_dtypes}"
+
+        # Use the single dtype if preconditioners exist, otherwise use grad dtype
+        target_dtype = next(iter(unique_dtypes), grad.dtype)
         preconditioner_list_iter = iter(preconditioner_list)
+
         return reduce(
             lambda grad, should_precondition: torch.tensordot(
-                grad, next(preconditioner_list_iter), dims=dims
+                # Use the single target dtype for all operations
+                grad.to(dtype=target_dtype),
+                # Use the actual iterator for the operation
+                next(preconditioner_list_iter),
+                dims=dims,
             )
             if should_precondition
             # Perform a left rotation on grad if not preconditioned.
             else grad.permute(*range(1, grad.ndim), 0),
             preconditioned_dims_selector,
             grad,
-        )
+        ).to(dtype=grad.dtype)
 
     @overload
     @staticmethod
