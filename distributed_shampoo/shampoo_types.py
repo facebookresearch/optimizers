@@ -719,6 +719,7 @@ class HSDPDistributedConfig(FSDPDistributedConfig, DDPDistributedConfig):
             group. (Default: -1)
         communicate_params (bool): Flag for all-gathering updated params across multiple workers.
             If False, all-gathers parameter updates across multiple workers. (Default: False)
+        load_balancing_config (LoadBalancingConfig): Configuration for load balancing. (Default: LoadBalancingConfig(cost_model=AlignedMemoryCostModel()))
 
     """
 
@@ -771,6 +772,7 @@ class HybridShardDistributedConfig(FullyShardDistributedConfig, DDPDistributedCo
             group. (Default: -1)
         communicate_params (bool): Flag for all-gathering updated params across multiple workers.
             If False, all-gathers parameter updates across multiple workers. (Default: False)
+        load_balancing_config (LoadBalancingConfig): Configuration for load balancing. (Default: LoadBalancingConfig(cost_model=AlignedMemoryCostModel()))
 
     """
 
