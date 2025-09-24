@@ -37,9 +37,9 @@ class AdagradPreconditionerList(PreconditionerList):
 
     NOTE: Does not support sparse gradients at this time.
 
-    To enable Adagrad, set beta2 = 1.0.
-    To enable RMSprop, set beta2 = 0.999.
-    To enable Adam, set beta2 = 0.999, use_bias_correction = True.
+    To enable Adagrad, set beta2 = 1.0 and weighting_factor = 1.0.
+    To enable RMSprop, set beta2 = 0.999 and weighting_factor = 1 - beta2.
+    To enable Adam, set beta2 = 0.999, weighting_factor = 1 - beta2, and use_bias_correction = True.
 
     Other variants can also be specified.
 
@@ -48,8 +48,8 @@ class AdagradPreconditionerList(PreconditionerList):
         state (Mapping[Tensor, _StateValueType]): Mapping containing optimizer state.
         block_info_list (tuple[BlockInfo, ...]): List containing corresponding BlockInfo for each block/parameter in block_list.
             Note that this should have the same length as block_list.
-        beta2 (float): Exponential moving average factor for Adam/RMSprop second moment state. If beta2 = 1., will use
-            unweighted sum. (Default: 1.0)
+        beta2 (float): The decay rate of exponential moving average factor for Adam/RMSprop second moment state. (Default: 1.0)
+        weighting_factor (float): The weighting factor for the current squared gradients. (Default: 1.0)
         epsilon (float): Epsilon term for regularizing preconditioner to ensure positive definiteness. (Default: 1e-10)
         use_bias_correction (bool): Flag for using bias correction. (Default: False)
 
@@ -61,6 +61,7 @@ class AdagradPreconditionerList(PreconditionerList):
         state: Mapping[Tensor, _StateValueType],
         block_info_list: tuple[BlockInfo, ...],
         beta2: float = 1.0,
+        weighting_factor: float = 1.0,
         epsilon: float = 1e-10,
         use_bias_correction: bool = True,
     ) -> None:
@@ -68,6 +69,7 @@ class AdagradPreconditionerList(PreconditionerList):
 
         # Instantiate scalar hyperparameters.
         self._beta2 = beta2
+        self._weighting_factor: float = weighting_factor
         self._epsilon = epsilon
         self._use_bias_correction = use_bias_correction
         self._bias_correction2: Tensor = torch.tensor(1.0)
@@ -124,21 +126,15 @@ class AdagradPreconditionerList(PreconditionerList):
         step: Tensor,
         perform_amortized_computation: bool = False,
     ) -> None:
-        if self._beta2 == 1.0:
-            torch._foreach_addcmul_(
-                self._masked_preconditioner_list,
-                masked_grad_list,
-                masked_grad_list,
-                value=1.0,
-            )
-        else:
+        if self._beta2 != 1.0:
             torch._foreach_mul_(self._masked_preconditioner_list, self._beta2)
-            torch._foreach_addcmul_(
-                self._masked_preconditioner_list,
-                masked_grad_list,
-                masked_grad_list,
-                value=1 - self._beta2,
-            )
+
+        torch._foreach_addcmul_(
+            self._masked_preconditioner_list,
+            masked_grad_list,
+            masked_grad_list,
+            value=self._weighting_factor,
+        )
 
         # Update bias correction term based on step list.
         if self._use_bias_correction and self._beta2 < 1.0:

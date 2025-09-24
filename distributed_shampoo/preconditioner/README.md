@@ -36,6 +36,7 @@ preconditioner = RootInvShampooPreconditionerList(
     state=optimizer_state,
     block_info_list=block_info_list,
     beta2=0.999,
+    weighting_factor=1.0 - 0.999,
     epsilon=1e-8,
     use_bias_correction=True
 )
@@ -60,6 +61,7 @@ adagrad_preconditioner = AdagradPreconditionerList(
     state=optimizer_state,
     block_info_list=block_info_list,
     beta2=0.999,  # Use 1.0 for pure AdaGrad
+    weighting_factor=1.0 - 0.999,  # Use 1.0 for pure AdaGrad
     epsilon=1e-8,
     use_bias_correction=True
 )
@@ -109,13 +111,45 @@ The flagship implementation providing three sophisticated variants for second-or
 - **Algorithm**: Computes G^(-1/4) directly using eigendecomposition or Newton methods
 - **Memory**: Most memory-efficient Shampoo variant
 
+# Adagrad-like Shampoo (cumulative sum of gradient outer products)
 ```python
-preconditioner = RootInvShampooPreconditionerList(
+preconditioner_adagrad = RootInvShampooPreconditionerList(
     block_list=blocked_params,
     preconditioner_config=RootInvShampooPreconditionerConfig(),
     state=optimizer_state,
     block_info_list=block_info_list,
-    beta2=0.999,
+    beta2=1.0,
+    weighting_factor=1.0,
+    epsilon=1e-8,
+    use_bias_correction=False
+)
+```
+
+# RMSprop-like Shampoo (exponential moving average of gradient outer products)
+```python
+beta2 = 0.999
+preconditioner_rmsprop = RootInvShampooPreconditionerList(
+    block_list=blocked_params,
+    preconditioner_config=RootInvShampooPreconditionerConfig(),
+    state=optimizer_state,
+    block_info_list=block_info_list,
+    beta2=beta2,
+    weighting_factor=1.0 - beta2,
+    epsilon=1e-8,
+    use_bias_correction=False
+)
+```
+
+# Adam-like Shampoo (EMA with bias correction)
+```python
+beta2 = 0.999
+preconditioner_adam = RootInvShampooPreconditionerList(
+    block_list=blocked_params,
+    preconditioner_config=RootInvShampooPreconditionerConfig(),
+    state=optimizer_state,
+    block_info_list=block_info_list,
+    beta2=beta2,
+    weighting_factor=1.0 - beta2,
     epsilon=1e-8,
     use_bias_correction=True
 )
@@ -145,6 +179,7 @@ adagrad = AdagradPreconditionerList(
     state=optimizer_state,
     block_info_list=block_info_list,
     beta2=1.0,
+    weighting_factor=1.0,
     epsilon=1e-8
 )
 
@@ -154,6 +189,7 @@ rmsprop = AdagradPreconditionerList(
     state=optimizer_state,
     block_info_list=block_info_list,
     beta2=0.999,
+    weighting_factor=1.0 - 0.999,
     epsilon=1e-8
 )
 
@@ -163,6 +199,7 @@ adam_style = AdagradPreconditionerList(
     state=optimizer_state,
     block_info_list=block_info_list,
     beta2=0.999,
+    weighting_factor=1.0 - 0.999,
     epsilon=1e-8,
     use_bias_correction=True
 )
@@ -281,7 +318,7 @@ optimizer = DistributedShampoo(
     precondition_frequency=50,
     use_bias_correction=True,
     use_decoupled_weight_decay=True,
-    grafting_config=RMSpropPreconditionerConfig(beta2=0.95, epsilon=1e-8),
+    grafting_config=RMSpropPreconditionerConfig(beta2=0.95, weighting_factor=1.0 - 0.95, epsilon=1e-8),
     preconditioner_config=RootInvShampooPreconditionerConfig(
         amortized_computation_config=EigenConfig(
             max_iterations=1000,

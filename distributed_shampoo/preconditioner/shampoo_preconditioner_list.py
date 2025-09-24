@@ -1008,14 +1008,18 @@ class BaseShampooPreconditionerList(
 
     NOTE: Does not support sparse gradients at this time.
 
+    To enable Adagrad-like Shampoo gradient outer products accumulations, set beta2 = 1.0 and weighting_factor = 1.0.
+    To enable RMSprop-like Shampoo gradient outer products accumulations, set beta2 = 0.999 and weighting_factor = 1 - beta2.
+    To enable Adam-like Shampoo gradient outer products accumulations, set beta2 = 0.999, weighting_factor = 1 - beta2, and use_bias_correction = True.
+
     Args:
         block_list (tuple[Tensor, ...]): List of (blocks of) parameters.
         state (Mapping[Tensor, _StateValueType]): Mapping containing optimizer state.
         block_info_list (tuple[BlockInfo, ...]): List containing corresponding BlockInfo for each block/parameter in block_list.
             Note that this should have the same length as block_list.
         preconditioner_config (AmortizedPreconditionerConfig): Configuration for preconditioner computation.
-        beta2 (float): Exponential moving average factor for Shampoo factor matrices. If beta2 = 1., will use unweighted sum.
-            (Default: 1.0)
+        beta2 (float): The decay rate of exponential moving average factor for Shampoo factor matrices. (Default: 1.0)
+        weighting_factor (float): The weighting factor for the current Shampoo gradient outer products. (Default: 1.0)
         epsilon (float): Epsilon term for regularizing preconditioner to ensure positive definiteness. (Default: 1e-12)
         use_bias_correction (bool): Flag for using bias correction. (Default: True)
 
@@ -1028,6 +1032,7 @@ class BaseShampooPreconditionerList(
         block_info_list: tuple[BlockInfo, ...],
         preconditioner_config: AmortizedPreconditionerConfig,
         beta2: float = 1.0,
+        weighting_factor: float = 1.0,
         epsilon: float = 1e-12,
         use_bias_correction: bool = True,
     ) -> None:
@@ -1036,6 +1041,7 @@ class BaseShampooPreconditionerList(
         # Initialize parameters.
         self._preconditioner_config = preconditioner_config
         self._beta2 = beta2
+        self._weighting_factor = weighting_factor
         self._epsilon = epsilon
         self._use_bias_correction = use_bias_correction
         self._bias_correction2: Tensor = torch.tensor(1.0)
@@ -1289,21 +1295,14 @@ class BaseShampooPreconditionerList(
                 for k in compress_list(range(order), preconditioned_dims_selector)
             )
 
-            # Scale Kronecker factors as a list if beta2 is not 1.0
             if self._beta2 != 1.0:
-                alpha = 1 - self._beta2
-                # Update Kronecker factors.
                 torch._foreach_mul_(kronecker_factors.factor_matrices, self._beta2)
-                torch._foreach_add_(
-                    kronecker_factors.factor_matrices,
-                    outer_product_list,
-                    alpha=alpha,
-                )
-            else:
-                # Update Kronecker factors without scaling.
-                torch._foreach_add_(
-                    kronecker_factors.factor_matrices, outer_product_list, alpha=1.0
-                )
+
+            torch._foreach_add_(
+                kronecker_factors.factor_matrices,
+                outer_product_list,
+                alpha=self._weighting_factor,
+            )
 
     @staticmethod
     def _precondition_grad(
@@ -1657,14 +1656,12 @@ class EigenvalueCorrectedShampooPreconditionerList(
             # Update corrected eigenvalues (squared gradient in eigenbasis of Shampoo preconditioner).
             if self._beta2 != 1.0:
                 kronecker_factors.corrected_eigenvalues.mul_(self._beta2)
-                kronecker_factors.corrected_eigenvalues.addcmul_(
-                    grad,
-                    grad,
-                    value=1 - self._beta2,
-                )
-            else:
-                # NOTE: The case when self._beta2 == 1.0 is not well tested and might not be stable.
-                kronecker_factors.corrected_eigenvalues.addcmul_(grad, grad)
+
+            # NOTE: The case when self._weighting_factor == 1.0 is not well tested and might not be stable.
+            print(f"{self._weighting_factor=}")
+            kronecker_factors.corrected_eigenvalues.addcmul_(
+                grad, grad, value=self._weighting_factor
+            )
 
     def _compute_preconditioned_gradient(
         self,

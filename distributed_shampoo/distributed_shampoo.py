@@ -604,6 +604,9 @@ class DistributedShampoo(torch.optim.Optimizer):
                         if type(preconditioner_config) is AdaGradPreconditionerConfig
                         else operator.attrgetter("beta2")(preconditioner_config)
                     ),
+                    weighting_factor=1.0
+                    if type(preconditioner_config) is AdaGradPreconditionerConfig
+                    else 1 - operator.attrgetter("beta2")(preconditioner_config),
                     epsilon=preconditioner_config.epsilon,
                     use_bias_correction=type(preconditioner_config)
                     is AdamPreconditionerConfig,
@@ -626,6 +629,9 @@ class DistributedShampoo(torch.optim.Optimizer):
                     state=self.state,
                     block_info_list=state_lists[DISTRIBUTOR].local_block_info_list,
                     beta2=group[BETAS][1],
+                    weighting_factor=1.0
+                    if group[BETAS][1] == 1.0
+                    else 1 - group[BETAS][1],
                     epsilon=group[EPSILON],
                     use_bias_correction=group[USE_BIAS_CORRECTION],
                 )

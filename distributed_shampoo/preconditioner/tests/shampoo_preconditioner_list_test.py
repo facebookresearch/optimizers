@@ -620,7 +620,7 @@ class AbstractTest:
             chosen gradients such that we get a scalar * identity matrix for both Kronecker
             factor matrices for all parameters of interest.
 
-            Specifically, for the beta2 = 1 case, we have 3 parameters and define their gradients
+            Specifically, for the beta2 = 1 and weighting_factor = 1 case, we have 3 parameters and define their gradients
             as the following in order to get the expected preconditioned gradient list:
 
             (1) Tensor of Size 2
@@ -674,6 +674,7 @@ class AbstractTest:
             self._verify_preconditioner_updates(
                 preconditioner_list=self._instantiate_preconditioner_list(
                     beta2=1.0,
+                    weighting_factor=1.0,
                     use_bias_correction=True,
                 ),
                 masked_grad_lists=[masked_grad_list1, masked_grad_list2],
@@ -683,24 +684,25 @@ class AbstractTest:
             )
 
             """
-            For the other two cases (beta2 < 1), note:
+            For the other two cases (beta2 < 1 and weighting_factor = 1 - beta2), note:
 
-                L = beta2 * (1 - beta2) * G1 * G1^T + (1 - beta2) * G2 * G2^T
-                R = beta2 * (1 - beta2) * G1^T * G1 + (1 - beta2) * G2^T * G2
+                L = beta2 * weighting_factor * G1 * G1^T + weighting_factor * G2 * G2^T
+                R = beta2 * weighting_factor * G1^T * G1 + weighting_factor * G2^T * G2
 
             Therefore, in order to retain the identity matrix, we simply need to scale each gradient by:
 
-                G1 -> G1 / sqrt(beta2 * (1 - beta2))
-                G2 -> G2 / sqrt(1 - beta2).
+                G1 -> G1 / sqrt(beta2 * weighting_factor)
+                G2 -> G2 / sqrt(weighting_factor).
 
             """
             beta2 = 0.9
+            weighting_factor = 1 - beta2
 
             beta2_compensated_grad_list1 = torch._foreach_div(
-                masked_grad_list1, math.sqrt(beta2 * (1 - beta2))
+                masked_grad_list1, math.sqrt(beta2 * weighting_factor)
             )
             beta2_compensated_grad_list2 = torch._foreach_div(
-                masked_grad_list2, math.sqrt(1 - beta2)
+                masked_grad_list2, math.sqrt(weighting_factor)
             )
 
             masked_expected_preconditioned_grad_list = [
@@ -712,6 +714,7 @@ class AbstractTest:
             self._verify_preconditioner_updates(
                 preconditioner_list=self._instantiate_preconditioner_list(
                     beta2=beta2,
+                    weighting_factor=weighting_factor,
                     use_bias_correction=False,
                 ),
                 masked_grad_lists=[
@@ -752,6 +755,7 @@ class AbstractTest:
             self._verify_preconditioner_updates(
                 preconditioner_list=self._instantiate_preconditioner_list(
                     beta2=beta2,
+                    weighting_factor=weighting_factor,
                     use_bias_correction=True,
                 ),
                 masked_grad_lists=[
@@ -847,6 +851,7 @@ class AbstractTest:
             self._verify_preconditioner_updates(
                 preconditioner_list=self._instantiate_preconditioner_list(
                     beta2=1.0,
+                    weighting_factor=1.0,
                     use_bias_correction=True,
                     epsilon=epsilon,
                 ),
@@ -915,6 +920,7 @@ class AbstractTest:
             self._verify_preconditioner_updates(
                 preconditioner_list=self._instantiate_preconditioner_list(
                     beta2=1.0,
+                    weighting_factor=1.0,
                 ),
                 masked_grad_lists=[masked_grad_list1, masked_grad_list2],
                 masked_expected_preconditioned_grad_list=tuple(
@@ -926,6 +932,7 @@ class AbstractTest:
             self._verify_preconditioner_updates(
                 preconditioner_list=self._instantiate_preconditioner_list(
                     beta2=1.0,
+                    weighting_factor=1.0,
                     preconditioner_config=replace(
                         self._default_preconditioner_config,
                         inverse_exponent_override={
@@ -1008,6 +1015,7 @@ class AbstractTest:
             self._verify_preconditioner_updates(
                 preconditioner_list=self._instantiate_preconditioner_list(
                     beta2=1.0,
+                    weighting_factor=1.0,
                     use_bias_correction=True,
                     preconditioner_config=preconditioner_config,
                 ),
@@ -1081,7 +1089,7 @@ class EigenvalueCorrectedShampooPreconditionerListTest(
         chosen gradients such that we get a scalar * identity matrix for both Kronecker
         factor matrices for all parameters of interest.
 
-        Specifically, for the beta2 = 1 case, we have 3 parameters and define their gradients
+        Specifically, for the beta2 = 1 and weighting_factor = 1 case, we have 3 parameters and define their gradients
         as the following in order to get the expected preconditioned gradient list:
 
         (1) Tensor of Size 2
@@ -1145,6 +1153,7 @@ class EigenvalueCorrectedShampooPreconditionerListTest(
         self._verify_preconditioner_updates(
             preconditioner_list=self._instantiate_preconditioner_list(
                 beta2=1.0,
+                weighting_factor=1.0,
                 use_bias_correction=True,
             ),
             masked_grad_lists=[masked_grad_list1, masked_grad_list2],
@@ -1152,23 +1161,24 @@ class EigenvalueCorrectedShampooPreconditionerListTest(
         )
 
         """
-        For the other two cases (beta2 < 1), note:
+        For the other two cases (beta2 < 1 and weighting_factor = 1 - beta2), note:
 
-            E = beta2 * (1 - beta2) G1^2 + (1 - beta2) G2^2
+            E = beta2 * weighting_factor G1^2 + weighting_factor G2^2
 
         Therefore, in order to retain the identity matrix, we simply need to scale each gradient by:
 
-            G1 -> G1 / sqrt(beta2 * (1 - beta2))
-            G2 -> G2 / sqrt(1 - beta2).
+            G1 -> G1 / sqrt(beta2 * weighting_factor)
+            G2 -> G2 / sqrt(weighting_factor).
 
         """
         beta2 = 0.9
+        weighting_factor = 1 - beta2
 
         beta2_compensated_grad_list1 = torch._foreach_div(
-            masked_grad_list1, math.sqrt(beta2 * (1 - beta2))
+            masked_grad_list1, math.sqrt(beta2 * weighting_factor)
         )
         beta2_compensated_grad_list2 = torch._foreach_div(
-            masked_grad_list2, math.sqrt(1 - beta2)
+            masked_grad_list2, math.sqrt(weighting_factor)
         )
 
         masked_expected_preconditioned_grad_list = (
@@ -1179,12 +1189,13 @@ class EigenvalueCorrectedShampooPreconditionerListTest(
         )
         # Fix scaling due to EMA.
         torch._foreach_div_(
-            masked_expected_preconditioned_grad_list, math.sqrt(1 - beta2)
+            masked_expected_preconditioned_grad_list, math.sqrt(weighting_factor)
         )
 
         self._verify_preconditioner_updates(
             preconditioner_list=self._instantiate_preconditioner_list(
                 beta2=beta2,
+                weighting_factor=weighting_factor,
                 use_bias_correction=False,
             ),
             masked_grad_lists=[
@@ -1223,6 +1234,7 @@ class EigenvalueCorrectedShampooPreconditionerListTest(
         self._verify_preconditioner_updates(
             preconditioner_list=self._instantiate_preconditioner_list(
                 beta2=beta2,
+                weighting_factor=weighting_factor,
                 use_bias_correction=True,
             ),
             masked_grad_lists=[
@@ -1312,6 +1324,7 @@ class EigenvalueCorrectedShampooPreconditionerListTest(
         self._verify_preconditioner_updates(
             preconditioner_list=self._instantiate_preconditioner_list(
                 beta2=1.0,
+                weighting_factor=1.0,
                 use_bias_correction=True,
                 preconditioner_config=preconditioner_config,
             ),

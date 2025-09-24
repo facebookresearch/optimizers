@@ -83,19 +83,29 @@ class AdagradPreconditionerListTest(AbstractPreconditionerListTest.Interface):
             torch.tensor(1.0),
         )
 
+        # Adagrad setting
         self._verify_preconditioner_updates(
-            preconditioner_list=self._instantiate_preconditioner_list(beta2=1.0),
+            preconditioner_list=self._instantiate_preconditioner_list(
+                beta2=1.0, weighting_factor=1.0
+            ),
             masked_grad_lists=[grad_list],
             masked_expected_preconditioned_grad_list=torch._foreach_sign(grad_list),
         )
+
+        # Adam setting
         self._verify_preconditioner_updates(
-            preconditioner_list=self._instantiate_preconditioner_list(beta2=0.9),
+            preconditioner_list=self._instantiate_preconditioner_list(
+                beta2=0.9, weighting_factor=1.0 - 0.9
+            ),
             masked_grad_lists=[grad_list],
             masked_expected_preconditioned_grad_list=torch._foreach_sign(grad_list),
         )
+
+        # RMSprop setting
         self._verify_preconditioner_updates(
             preconditioner_list=self._instantiate_preconditioner_list(
                 beta2=0.99,
+                weighting_factor=1.0 - 0.99,
                 use_bias_correction=False,
             ),
             masked_grad_lists=[grad_list],
