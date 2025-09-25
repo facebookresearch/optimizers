@@ -33,10 +33,13 @@ class PreconditionerComputationType(enum.Enum):
     RMSPROP = enum.auto()
     ADAM = enum.auto()
     EIGEN_ROOT_INV = enum.auto()
+    EIGENDECOMPOSED_ROOT_INV = enum.auto()
     COUPLED_NEWTON_ROOT_INV = enum.auto()
     COUPLED_HIGHER_ORDER_ROOT_INV = enum.auto()
     EIGH_EIGENVALUE_CORRECTION = enum.auto()
     QR_EIGENVALUE_CORRECTION = enum.auto()
+    SPECTRAL_DESCENT = enum.auto()
+    SIGN_DESCENT = enum.auto()
 
 
 ###### ARGPARSER ######

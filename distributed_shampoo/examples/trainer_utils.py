@@ -26,9 +26,12 @@ from distributed_shampoo import (
     AdaGradPreconditionerConfig,
     AdamPreconditionerConfig,
     DefaultEigenvalueCorrectedShampooConfig,
+    DefaultSignDescentPreconditionerConfig,
     DefaultSOAPConfig,
+    DefaultSpectralDescentPreconditionerConfig,
     DistributedConfig,
     DistributedShampoo,
+    EigendecomposedShampooPreconditionerConfig,
     PreconditionerConfig,
     RMSpropPreconditionerConfig,
     RootInvShampooPreconditionerConfig,
@@ -113,6 +116,11 @@ def instantiate_optimizer(
             )
         elif (
             preconditioner_computation_type
+            == PreconditionerComputationType.EIGENDECOMPOSED_ROOT_INV
+        ):
+            return EigendecomposedShampooPreconditionerConfig()
+        elif (
+            preconditioner_computation_type
             == PreconditionerComputationType.COUPLED_NEWTON_ROOT_INV
         ):
             return RootInvShampooPreconditionerConfig(
@@ -137,6 +145,16 @@ def instantiate_optimizer(
             == PreconditionerComputationType.QR_EIGENVALUE_CORRECTION
         ):
             return DefaultSOAPConfig
+        elif (
+            preconditioner_computation_type
+            == PreconditionerComputationType.SPECTRAL_DESCENT
+        ):
+            return DefaultSpectralDescentPreconditionerConfig
+        elif (
+            preconditioner_computation_type
+            == PreconditionerComputationType.SIGN_DESCENT
+        ):
+            return DefaultSignDescentPreconditionerConfig
         else:
             raise ValueError(f"Invalid {preconditioner_computation_type=}!")
 
