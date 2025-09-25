@@ -111,8 +111,8 @@ The flagship implementation providing three sophisticated variants for second-or
 - **Algorithm**: Computes G^(-1/4) directly using eigendecomposition or Newton methods
 - **Memory**: Most memory-efficient Shampoo variant
 
-# Adagrad-like Shampoo (cumulative sum of gradient outer products)
 ```python
+# Adagrad-like Shampoo (cumulative sum of gradient outer products)
 preconditioner_adagrad = RootInvShampooPreconditionerList(
     block_list=blocked_params,
     preconditioner_config=RootInvShampooPreconditionerConfig(),
@@ -123,10 +123,8 @@ preconditioner_adagrad = RootInvShampooPreconditionerList(
     epsilon=1e-8,
     use_bias_correction=False
 )
-```
 
 # RMSprop-like Shampoo (exponential moving average of gradient outer products)
-```python
 beta2 = 0.999
 preconditioner_rmsprop = RootInvShampooPreconditionerList(
     block_list=blocked_params,
@@ -138,10 +136,8 @@ preconditioner_rmsprop = RootInvShampooPreconditionerList(
     epsilon=1e-8,
     use_bias_correction=False
 )
-```
 
 # Adam-like Shampoo (EMA with bias correction)
-```python
 beta2 = 0.999
 preconditioner_adam = RootInvShampooPreconditionerList(
     block_list=blocked_params,
@@ -241,7 +237,77 @@ sign_preconditioner = SignDescentPreconditionerList(
 #### Spectral Descent Preconditioner
 **File**: [`spectral_descent_preconditioner_list.py`](spectral_descent_preconditioner_list.py)
 
-Advanced spectral analysis-based preconditioning for specialized optimization landscapes.
+Advanced spectral analysis-based preconditioning using matrix orthogonalization for specialized optimization landscapes. This method transforms gradients by computing their orthogonalized versions, which can provide better optimization dynamics for certain problems.
+
+**Key Features**:
+- **Matrix Orthogonalization**: Computes the closest orthogonal matrix to the gradient matrix
+- **2D Parameter Requirement**: Only works with 2D parameters or parameters reshaped to 2D
+- **Multiple Algorithms**: Supports SVD-based and Newton-Schulz iterative orthogonalization
+- **Configurable Scaling**: Dimension-aware scaling functions for improved convergence
+
+**Basic Usage**:
+```python
+# Direct instantiation (advanced usage)
+spectral_preconditioner = SpectralDescentPreconditionerList(
+    block_list=blocked_2d_params,  # Must be 2D tensors
+    preconditioner_config=SpectralDescentPreconditionerConfig()
+)
+
+# Apply spectral descent preconditioning
+preconditioned_grads = spectral_preconditioner.precondition(masked_grad_list=gradients)
+```
+
+**SVD-Based Orthogonalization**:
+```python
+# Exact orthogonalization using SVD
+svd_config = SpectralDescentPreconditionerConfig(
+    orthogonalization_config=SVDOrthogonalizationConfig(
+        scale_by_nuclear_norm=False,  # Don't scale by nuclear norm
+        scale_by_dims_fn=lambda d_in, d_out: 1.0  # No dimension scaling
+    )
+)
+
+# With nuclear norm scaling for better conditioning
+nuclear_norm_config = SpectralDescentPreconditionerConfig(
+    orthogonalization_config=SVDOrthogonalizationConfig(
+        scale_by_nuclear_norm=True,  # Scale by nuclear norm
+        scale_by_dims_fn=lambda d_in, d_out: (d_out / d_in) ** 0.5
+    )
+)
+```
+
+**Newton-Schulz Iterative Orthogonalization**:
+```python
+# Fast iterative semi-orthogonalization
+newton_config = SpectralDescentPreconditionerConfig(
+    orthogonalization_config=NewtonSchulzOrthogonalizationConfig(
+        num_iterations=5,  # Number of iterations
+        coefficients=(3.4445, -4.7750, 2.0315),  # Quintic Newton-Schulz coefficients
+        scale_by_dims_fn=lambda d_in, d_out: max(1, d_out / d_in) ** 0.5
+    )
+)
+
+# Custom scaling for wide matrices
+wide_matrix_config = SpectralDescentPreconditionerConfig(
+    orthogonalization_config=NewtonSchulzOrthogonalizationConfig(
+        num_iterations=3,  # Fewer iterations for speed
+        scale_by_dims_fn=lambda d_in, d_out: min(2.0, d_out / d_in)  # Cap scaling
+    )
+)
+```
+
+**Important Considerations**:
+- **2D Requirement**: All parameters must be 2D matrices. Use `max_preconditioner_dim=math.inf` and `target_parameter_dimensionality=2` to automatically reshape higher-dimensional parameters
+- **Memory Usage**: SVD orthogonalization requires full SVD computation; Newton-Schulz is more memory-efficient
+- **Convergence**: Newton-Schulz provides approximate orthogonalization but converges faster
+- **Scaling Functions**: Dimension-based scaling can significantly impact convergence behavior
+- **Computational Cost**: More expensive than diagonal preconditioning but can provide superior optimization dynamics
+
+**Performance Tips**:
+- Use Newton-Schulz with 3-5 iterations for a good speed/accuracy tradeoff
+- Apply spectral descent only to large 2D parameters (e.g., hidden layer weights)
+- Combine with standard Shampoo or AdaGrad for non-2D parameters
+- Consider dimension-adaptive scaling for networks with varying layer sizes
 
 ## Matrix Functions Library
 
