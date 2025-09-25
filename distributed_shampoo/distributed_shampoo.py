@@ -556,6 +556,8 @@ class DistributedShampoo(torch.optim.Optimizer):
             assert state_lists[
                 DISTRIBUTOR
             ].local_blocked_params, f"Some workers have no parameters to work on. This mostly happens when the value of num_trainers_per_group field in {group[DISTRIBUTED_CONFIG]=} is more than the number of local blocked params on a single device. Please check the num_trainers_per_group setting and consider reducing it."
+            # TODO(irisz): In distributed environment, we want this assert to abort process on all workers instead of
+            # only the workers without local_blocked_params. Otherwise, this assert may surface as a timeout error sometime.
 
             # Compile blocked parameters and block-to-parameter metadata into group lists.
             state_lists[MASKED_BLOCKED_PARAMS] = state_lists[
