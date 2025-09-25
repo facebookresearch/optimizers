@@ -16,7 +16,6 @@ import torch
 
 from distributed_shampoo.examples import loss_metrics
 from distributed_shampoo.examples.loss_metrics import LossMetrics
-from torch import distributed as torch_distributed
 
 
 class TestLossMetrics(unittest.TestCase):
@@ -75,7 +74,7 @@ class TestLossMetrics(unittest.TestCase):
             metrics.flush()
             mock_writer_instance.flush.assert_called_once()
 
-    torch_distributed_module: ModuleType = torch_distributed
+    torch_distributed_module: ModuleType = torch.distributed
 
     @patch.object(torch_distributed_module, "all_reduce")
     def test_global_metrics_distributed_behavior(
