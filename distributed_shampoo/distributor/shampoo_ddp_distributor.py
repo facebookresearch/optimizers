@@ -22,6 +22,7 @@ from distributed_shampoo.shampoo_types import (
     DISTRIBUTED_CONFIG,
     PARAMS,
 )
+from distributed_shampoo.utils.commons import batched
 from distributed_shampoo.utils.shampoo_utils import (
     compress_list,
     distribute_buffer_sizes,
@@ -30,6 +31,7 @@ from distributed_shampoo.utils.shampoo_utils import (
 )
 from torch import Tensor
 from torch.distributed import tensor as dtensor
+from torch.distributed.device_mesh import _mesh_resources
 
 from torch.distributed.tensor import zeros as dtensor_zeros
 
@@ -131,10 +133,15 @@ class DDPDistributor(DistributorInterface):
 
     Args:
         param_group (dict[str, Any]): Parameter group containing parameters.
+        dist_group (dist.ProcessGroup | None): Optional process group for distributed operations. (Default: dist.distributed_c10d.GroupMember.WORLD)
 
     """
 
-    def __init__(self, param_group: dict[str, Any]) -> None:
+    def __init__(
+        self,
+        param_group: dict[str, Any],
+        dist_group: dist.ProcessGroup | None = dist.distributed_c10d.GroupMember.WORLD,
+    ) -> None:
         super().__init__(param_group)
         distributed_config: DDPDistributedConfig = param_group[DISTRIBUTED_CONFIG]
 
@@ -145,7 +152,7 @@ class DDPDistributor(DistributorInterface):
 
         # Check num_trainers_per_group and get global and group sizes.
         # NOTE: If num_trainers_per_group = -1, then we use the global world size.
-        self._global_size: int = dist.get_world_size()
+        self._global_size: int = dist.get_world_size(group=dist_group)
 
         if distributed_config.num_trainers_per_group == -1:
             logger.info(
@@ -161,8 +168,8 @@ class DDPDistributor(DistributorInterface):
         self._communicate_params: bool = distributed_config.communicate_params
 
         # Initialize _dist_group and _group_rank.
-        self._dist_group: dist.ProcessGroup | None = dist.new_subgroups(
-            group_size=self._group_size
+        self._dist_group: dist.ProcessGroup = dist.new_subgroups(
+            group_size=self._group_size, group=dist_group
         )[0]
         group_rank: int = dist.get_rank(group=self._dist_group)
 
@@ -494,19 +501,19 @@ class DDPDistributor(DistributorInterface):
             out (Tensor): Desired DTensor.
 
         """
-        device_mesh_ranks = tuple(
-            range(
-                group_source_rank % self._group_size,
-                self._global_size,
-                self._group_size,
-            )
+        ranks_in_group = dist.get_process_group_ranks(group=self._dist_group)
+        device_mesh_2d = get_device_mesh(
+            device_type=device.type,
+            mesh=tuple(batched(iterable=ranks_in_group, n=self._group_size)),
+            mesh_dim_names=("replicate", "shard"),
         )
+        replicated_submesh = _mesh_resources._get_all_submeshes(
+            device_mesh_2d, "replicate"
+        )[group_source_rank]
 
         return dtensor_zeros(
             size,
             dtype=dtype,
-            device_mesh=get_device_mesh(
-                device_type=device.type, mesh=device_mesh_ranks
-            ),
+            device_mesh=replicated_submesh,
             placements=[dtensor.Replicate()],
         )

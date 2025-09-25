@@ -11,6 +11,7 @@ LICENSE file in the root directory of this source tree.
 
 import abc
 import contextlib
+import os
 import re
 import unittest
 
@@ -832,6 +833,16 @@ class ShampooDDPDistributorCPUTest(AbstractTest.ShampooDDPDistributorDeviceTest)
     @property
     def _device(self) -> torch.device:
         return torch.device("cpu")
+
+    def setUp(self) -> None:
+        # Set TORCH_GLOO_LAZY_INIT to prevent timeout in test_empty_local_blocked_params.
+        os.environ["TORCH_GLOO_LAZY_INIT"] = "1"
+        super().setUp()
+
+    def tearDown(self) -> None:
+        # Clean up the environment variable after the test.
+        del os.environ["TORCH_GLOO_LAZY_INIT"]
+        return super().tearDown()
 
 
 @unittest.skipIf(not torch.cuda.is_available(), "Skip when CUDA is not available")
