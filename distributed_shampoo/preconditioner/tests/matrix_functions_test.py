@@ -317,17 +317,20 @@ class MatrixInverseRootTest(unittest.TestCase):
     ) -> None:
         A = torch.tensor([[1.0, 0.0], [0.0, 4.0]])
         root = Fraction(4)
-        with mock.patch.object(
-            matrix_functions,
-            "_assign_function_args_from_config",
-            return_value=lambda *args, **kwargs: (
-                None,
-                None,
-                NewtonConvergenceFlag.REACHED_MAX_ITERS,
-                None,
-                None,
+        with (
+            mock.patch.object(
+                matrix_functions,
+                "_assign_function_args_from_config",
+                return_value=lambda *args, **kwargs: (
+                    None,
+                    None,
+                    NewtonConvergenceFlag.REACHED_MAX_ITERS,
+                    None,
+                    None,
+                ),
             ),
-        ), self.assertLogs(level="WARNING") as cm:
+            self.assertLogs(level="WARNING") as cm,
+        ):
             matrix_inverse_root(A=A, root=root, root_inv_config=root_inv_config)
             self.assertIn(
                 f"{msg} did not converge and reached maximum number of iterations!",
@@ -939,9 +942,10 @@ class MatrixOrthogonalizationTest(unittest.TestCase):
     def test_orthogonalization_non_square_matrix(
         self, matrix: Tensor, orthogonalization_config: OrthogonalizationConfig
     ) -> None:
-        matrix_orthogonalization(
+        orthogonalized_matrix = matrix_orthogonalization(
             matrix, orthogonalization_config=orthogonalization_config
         )
+        self.assertTrue(orthogonalized_matrix.shape == matrix.shape)
 
     def test_invalid_orthogonalization_config(self) -> None:
         @dataclass

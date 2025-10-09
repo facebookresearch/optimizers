@@ -969,11 +969,15 @@ def matrix_orthogonalization(
 
         # Use transpose optimization for wide matrices.
         # When A is wider than tall (more columns than rows), it's more efficient to transpose the matrix before performing the Newton-Schulz iterations.
-        with ParameterizeEnterExitContext(
-            input_with_enter_exit_context=X,
-            enter_method_caller=Tensor.t_,
-            exit_method_caller=Tensor.t_,
-        ) if A.shape[0] < A.shape[1] else nullcontext():
+        with (
+            ParameterizeEnterExitContext(
+                input_with_enter_exit_context=X,
+                enter_method_caller=torch.t,
+                exit_method_caller=torch.t,
+            )
+            if A.shape[0] < A.shape[1]
+            else nullcontext()
+        ):
             # Compute X <- p(X) = a * X + b * X * X^T * X + c * (X * X^T)^2 * X.
             for _ in range(num_iterations):
                 # A = X^T * X (intermediate matrix for computing orthogonalization)
