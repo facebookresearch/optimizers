@@ -11,7 +11,8 @@ import logging
 import math
 from collections.abc import Callable, Iterator
 from copy import deepcopy
-from dataclasses import asdict
+from dataclasses import asdict, fields, is_dataclass
+from types import LambdaType
 from typing import Any, overload
 
 import torch
@@ -117,7 +118,7 @@ from distributed_shampoo.utils.shampoo_checkpoint_utils import (
 )
 from distributed_shampoo.utils.shampoo_utils import compress_list
 
-from torch.optim.optimizer import ParamsT, StateDict
+from torch.optim.optimizer import Optimizer, ParamsT, StateDict
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -364,6 +365,7 @@ class DistributedShampoo(torch.optim.Optimizer):
                 PRECONDITIONER_CONFIG: preconditioner_config,
             },
         )
+        self.register_state_dict_post_hook(self._post_state_dict_hook)
 
         def param_group_hyperparameter_check(param_group: dict[str, Any]) -> None:
             if not param_group[LR] >= 0.0:
@@ -1253,16 +1255,6 @@ class DistributedShampoo(torch.optim.Optimizer):
 
         return loss
 
-    def state_dict(self) -> StateDict:
-        raise NotImplementedError(
-            "Distributed Shampoo does not support the standard state_dict() method for checkpointing!"
-        )
-
-    def load_state_dict(self, state_dict: StateDict) -> None:
-        raise NotImplementedError(
-            "Distributed Shampoo does not support the standard load_state_dict() method for checkpointing!"
-        )
-
     @staticmethod
     def _construct_param_group_key(
         group: dict[str, Any], param_to_key: dict[torch.Tensor, str]
@@ -1324,6 +1316,9 @@ class DistributedShampoo(torch.optim.Optimizer):
         save_param_groups: bool = True,
         enable_missing_key_check: bool = True,
     ) -> None:
+        # TODO (irisz): we should remove `distributed_state_dict` and `load_distributed_state_dict`
+        # and update cifar10 examples to reflect accordingly.
+
         """Load state dict simplified from TorchRec's KeyedOptimizer.
         Compatible with torch.distributed.checkpoint.
 
@@ -1405,3 +1400,88 @@ class DistributedShampoo(torch.optim.Optimizer):
                     key: deepcopy(value)
                     for key, value in param_groups_to_load[param_group_key].items()
                 }
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        """Override __setstate__ to handle OptimizerModule conversion during state dict loading.
+
+        This method is called by the parent's load_state_dict() method after tensor casting.
+        We need to properly convert nested dictionaries back to OptimizerModule objects
+        using the same logic as update_param_state_dict_object.
+
+        Args:
+            state (dict[str, Any]): The state dictionary containing optimizer state and param_groups.
+        """
+
+        # We handle "state" separately from the rest of the state dict because it contains
+        # OptimizerModule.
+
+        if "state" not in state:
+            super().__setstate__(state)
+            return
+
+        # The current `self.state` should already have OptimizerModule objects from initialization.
+        # `state["state"]` is a nested dictionary of tensors, so we need to use the data from the
+        # nested dictionary to update the OptimizerModule objects.
+        for param_id, param_state_to_load in state["state"].items():
+            if param_id in self.state:
+                update_param_state_dict_object(
+                    current_param_state_dict=self.state[param_id],
+                    param_state_dict_to_load=param_state_to_load,
+                    enable_missing_key_check=False,
+                )
+            else:
+                # If parameter doesn't exist in current state, just assign it directly.
+                logger.warning(
+                    f"Found parameter {param_id} in state dict to load that doesn't "
+                    "exist in current state. Directly assigning it."
+                )
+                self.state[param_id] = param_state_to_load
+
+        del state["state"]
+        super().__setstate__(state)
+
+    @staticmethod
+    def _post_state_dict_hook(optimizer: Optimizer, state_dict: StateDict) -> None:
+        """Process the state dictionary after it's created by state_dict().
+
+        This hook extracts the actual content from each parameter state using the
+        extract_state_dict_content utility function. This ensures that custom dataclass
+        objects in the state are converted to nested dictionaries so that their tensor fields
+        are recognized as tensors during serialization.
+
+        Args:
+            optimizer (Optimizer): The optimizer instance (unused but required by hook signature).
+            state_dict (StateDict): The state dictionary created by state_dict() method
+                containing optimizer state and parameter groups.
+
+        Returns:
+            None: The state_dict is modified in-place.
+        """
+        # for state exist on the ranks
+        state_dict["state"] = {
+            k: extract_state_dict_content(v) for k, v in state_dict["state"].items()
+        }
+
+        # for state that doesn't exist on the rank, we assign empty dict
+        # to make sure all ranks have the same keys in state_dict['state']
+        param_ids = []
+        for group in state_dict["param_groups"]:
+            param_ids.extend(group["params"])
+            for v in group.values():
+                if is_dataclass(v) and any(
+                    isinstance(getattr(v, f.name), LambdaType) for f in fields(v)
+                ):
+                    logger.warning(
+                        f"Found {v=}. Note that lambda function cannot be pickled. "
+                        "torch.save() cannot serialize lambda functions, because it "
+                        "relies on Python's pickle module for serialization, and pickle "
+                        "does not support lambda functions."
+                    )
+
+        state_dict["state"].update(
+            {
+                param_id: {}
+                for param_id in param_ids
+                if param_id not in state_dict["state"]
+            }
+        )
