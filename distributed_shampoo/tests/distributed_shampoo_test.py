@@ -12,8 +12,10 @@ LICENSE file in the root directory of this source tree.
 import abc
 import copy
 import gc
+import logging
 import re
 import unittest
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from itertools import chain
 from typing import Any, cast
@@ -43,7 +45,7 @@ from distributed_shampoo.shampoo_types import (
     SingleDeviceDistributedConfig,
     SpectralDescentPreconditionerConfig,
 )
-from torch import nn
+from torch import nn, Tensor
 from torch.testing._internal.common_utils import (
     instantiate_parametrized_tests,
     parametrize,
@@ -369,24 +371,62 @@ class AbstractTest:
                 preconditioner_config=self._preconditioner_config,
             )
 
-        def test_state_dict(self) -> None:
-            self.assertRaisesRegex(
-                NotImplementedError,
-                re.escape(
-                    "Distributed Shampoo does not support the standard state_dict() method for checkpointing!"
-                ),
-                self._optimizer.state_dict,
+        def test_post_state_dict_hook(self) -> None:
+            """
+            Through testing whether the warning for lambda function is emitted,
+            we can make sure that Shampoo's `post_state_dict_hook` is fired during
+            `state_dict()` call.
+            """
+            osd = self._optimizer.state_dict()
+            self.assertCountEqual(osd.keys(), ["state", "param_groups"])
+
+            @dataclass(kw_only=True)
+            class SignDescentPreconditionerConfigWithLambda(
+                SignDescentPreconditionerConfig
+            ):
+                """
+                Creating a preconditioner config with lambda function to make sure the
+                warning from `_post_state_dict_hook` emit.
+                """
+
+                scale_fn: Callable[[Tensor], float | Tensor] = lambda grad: 1.0
+
+            self._optimizer.param_groups[0]["preconditioner_config"] = (
+                SignDescentPreconditionerConfigWithLambda()
+            )
+            logger = logging.getLogger("distributed_shampoo.distributed_shampoo")
+            with self.assertLogs(logger, level="WARNING") as cm:
+                osd = self._optimizer.state_dict()
+            self.assertIn(
+                "Note that lambda function cannot be pickled. torch.save() cannot serialize lambda functions, "
+                "because it relies on Python's pickle module for serialization, and pickle does not support lambda functions",
+                cm.output[0],
             )
 
-        def test_load_state_dict(self) -> None:
-            self.assertRaisesRegex(
-                NotImplementedError,
-                re.escape(
-                    "Distributed Shampoo does not support the standard load_state_dict() method for checkpointing!"
-                ),
-                self._optimizer.load_state_dict,
-                state_dict={},
-            )
+        def test_setstate_call(self) -> None:
+            """Test that __setstate__ is properly called during load_state_dict operation."""
+
+            class MockDistributedShampoo(DistributedShampoo):
+                def __init__(self, *args: Any, **kwargs: Any) -> None:
+                    super().__init__(*args, **kwargs)
+                    # Flag to track if __setstate__ was called
+                    self._shampoo_setstate_called = False
+
+                def __setstate__(self, state: dict[str, Any]) -> None:
+                    # Mark that __setstate__ was invoked
+                    self._shampoo_setstate_called = True
+                    super().__setstate__(state)
+
+            # Create a mock optimizer instance
+            mocked_shampoo_optimizer = MockDistributedShampoo(self._model.parameters())
+            # Get the current state dictionary
+            optim_state_dict = mocked_shampoo_optimizer.state_dict()
+
+            # Load the state dictionary, which should trigger __setstate__
+            mocked_shampoo_optimizer.load_state_dict(optim_state_dict)
+
+            # Verify that __setstate__ was called during load_state_dict
+            self.assertTrue(mocked_shampoo_optimizer._shampoo_setstate_called, True)
 
         def test_distributed_state_dict(self) -> None:
             state_dict_with_param_groups = self._optimizer.distributed_state_dict(
