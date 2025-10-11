@@ -972,8 +972,8 @@ def matrix_orthogonalization(
         with (
             ParameterizeEnterExitContext(
                 input_with_enter_exit_context=X,
-                enter_method_caller=torch.t,
-                exit_method_caller=torch.t,
+                enter_method_caller=Tensor.t_,
+                exit_method_caller=Tensor.t_,
             )
             if A.shape[0] < A.shape[1]
             else nullcontext()
@@ -985,7 +985,8 @@ def matrix_orthogonalization(
                 # B = b*A + c*A^2 = b*(X^T * X) + c*(X^T * X)^2 (coefficient matrix)
                 B = torch.addmm(A, A, A, beta=b, alpha=c)
                 # X = a*X + X*B = a*X + X*(b*(X^T * X) + c*(X^T * X)^2) (Newton-Schulz iteration)
-                X = torch.addmm(X, X, B, beta=a, alpha=1.0)
+                # NOTE: We have to use copy_ here because ParameterizeEnterExitContext mutates X in-place.
+                X.copy_(torch.addmm(X, X, B, beta=a, alpha=1.0))
 
         return X
 
