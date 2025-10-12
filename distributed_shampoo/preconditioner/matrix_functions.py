@@ -975,9 +975,9 @@ def matrix_orthogonalization(
             # B = X^T * X (intermediate matrix for computing orthogonalization)
             B = X.T @ X
             # B = b*B + c*B^2 = b*(X^T * X) + c*(X^T * X)^2 (coefficient matrix)
-            B.addmm_(B, B, beta=b, alpha=c)
+            B = torch.addmm(B, B, B, beta=b, alpha=c)
             # X = a*X + X*B = a*X + X*(b*(X^T * X) + c*(X^T * X)^2) (Newton-Schulz iteration)
-            X.addmm_(X, B, beta=a, alpha=1.0)
+            X = torch.addmm(X, X, B, beta=a, alpha=1.0)
 
         if transpose:
             X = X.T
