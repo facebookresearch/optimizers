@@ -32,6 +32,9 @@ class FullyShardLosslessDistributor(Distributor):
     On top of FullyShardDistributor, this distributor handles the parameter assignment to exchange the gradients
     and parameter updates across the shards to achieve lossless numerical results comapred to default Shampoo.
 
+    .. note::
+        FullyShardLosslessDistributor is experimental and subject to change.
+
     Args:
         param_group (dict[str, Any]): Parameter group containing parameters.
 

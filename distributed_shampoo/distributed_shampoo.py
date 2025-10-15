@@ -17,6 +17,9 @@ from types import LambdaType
 from typing import Any, overload
 
 import torch
+from distributed_shampoo.distributor._shampoo_fully_shard_lossless_distributor import (
+    FullyShardLosslessDistributor,
+)
 from distributed_shampoo.distributor.shampoo_ddp_distributor import DDPDistributor
 from distributed_shampoo.distributor.shampoo_distributor import (
     Distributor,
@@ -25,9 +28,6 @@ from distributed_shampoo.distributor.shampoo_distributor import (
 from distributed_shampoo.distributor.shampoo_fsdp_distributor import FSDPDistributor
 from distributed_shampoo.distributor.shampoo_fully_shard_distributor import (
     FullyShardDistributor,
-)
-from distributed_shampoo.distributor.shampoo_fully_shard_lossless_distributor import (
-    FullyShardLosslessDistributor,
 )
 from distributed_shampoo.distributor.shampoo_hsdp_distributor import HSDPDistributor
 from distributed_shampoo.distributor.shampoo_hybrid_shard_distributor import (

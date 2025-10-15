@@ -16,13 +16,13 @@ from typing import cast, overload
 
 import torch
 from distributed_shampoo.distributed_shampoo import DistributedShampoo
+from distributed_shampoo.distributor._shampoo_fully_shard_lossless_distributor import (
+    FullyShardLosslessDistributor,
+)
 from distributed_shampoo.distributor.gpu_tests.distributor_test_utils import (
     DistributorOnEmptyParamTest,
 )
 from distributed_shampoo.distributor.shampoo_block_info import BlockInfo
-from distributed_shampoo.distributor.shampoo_fully_shard_lossless_distributor import (
-    FullyShardLosslessDistributor,
-)
 from distributed_shampoo.shampoo_types import (
     AdaGradPreconditionerConfig,
     DefaultSingleDeviceDistributedConfig,
