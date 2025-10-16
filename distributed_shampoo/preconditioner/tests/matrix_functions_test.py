@@ -945,7 +945,7 @@ class MatrixOrthogonalizationTest(unittest.TestCase):
         orthogonalized_matrix = matrix_orthogonalization(
             matrix, orthogonalization_config=orthogonalization_config
         )
-        self.assertTrue(orthogonalized_matrix.shape == matrix.shape)
+        self.assertEqual(orthogonalized_matrix.shape, matrix.shape)
 
     def test_invalid_orthogonalization_config(self) -> None:
         @dataclass
