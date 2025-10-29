@@ -30,7 +30,10 @@ from torch.distributed.checkpoint.state_dict import (
 )
 from torch.distributed.tensor import DTensor
 from torch.testing._internal.common_distributed import skip_if_lt_x_gpu
-from torch.testing._internal.common_utils import instantiate_parametrized_tests
+from torch.testing._internal.common_utils import (
+    instantiate_parametrized_tests,
+    parametrize,
+)
 from torch.testing._internal.distributed._tensor.common_dtensor import (
     DTensorTestBase,
     with_comms,
@@ -43,15 +46,30 @@ PRECONDITIONER_DIM = 4
 
 @instantiate_parametrized_tests
 class DistributedShampooDistributedCheckpointTest(DTensorTestBase):
-    def _compare_optimizer_states(
+    def _compare_optimizer_state_dict(
         self,
         ref_optim_state: dict[str, Any],
         optim_state: dict[str, Any],
         assert_fn: Callable[..., None],
     ) -> None:
+        """
+        Recursively compares two optimizer state dicts, skipping 'param_groups' keys.
+
+        Args:
+            ref_optim_state (dict[str, Any]): The reference optimizer state dict.
+            optim_state (dict[str, Any]): The optimizer state dict to compare.
+            assert_fn (Callable[..., None]): Assertion function to use for comparing values (e.g., self.assertEqual or self.assertNotEqual).
+
+        This function is useful for verifying that optimizer state dicts are equal (or not equal) after checkpoint save/load operations,
+        while ignoring 'param_groups', as 'param_groups' is unchanged.
+        """
+
         def recursive_compare(d1: dict[str, Any], d2: dict[str, Any]) -> None:
             self.assertEqual(d1.keys(), d2.keys())
             for k in d1:
+                if isinstance(k, str) and "param_groups" in k:
+                    # skip param_groups comparison
+                    continue
                 v1 = d1[k]
                 self.assertIn(k, d2.keys())
                 v2 = d2[k]
@@ -68,13 +86,22 @@ class DistributedShampooDistributedCheckpointTest(DTensorTestBase):
     @with_comms
     @skip_if_lt_x_gpu(2)
     @with_temp_dir
-    def test_ddp_shampoo_checkpoint(self) -> None:
+    @parametrize(
+        "flatten_optimizer_state_dict",
+        [
+            True,
+            False,
+        ],
+    )
+    def test_ddp_shampoo_checkpoint(self, flatten_optimizer_state_dict: bool) -> None:
         """
         This test is intended to make sure that Shampoo `state_dict` and `load_state_dict`
-        is compatible with PyTorch's API, including `torch.distributed.checkpoint.get_optimizer_state_dict`,
+        are compatible with PyTorch's API, including `torch.distributed.checkpoint.get_optimizer_state_dict`,
         `torch.distributed.checkpoint.set_optimizer_state_dict`, `torch.distributed.checkpoint.save`,
-        `torch.distributed.checkpoint.load`. `get_optimizer_state_dict` calls `state_dict` and
-        `set_optimizer_state_dict` calls `load_state_dict` in shampoo under the hood.
+        and `torch.distributed.checkpoint.load`. `get_optimizer_state_dict` calls `state_dict` and
+        `set_optimizer_state_dict` calls `load_state_dict` in Shampoo under the hood.
+
+        Note: It tests both scenarios where `flatten_optimizer_state_dict` is True and False.
         """
 
         CHECKPOINT_DIR = attrgetter("temp_dir")(self)
@@ -98,18 +125,22 @@ class DistributedShampooDistributedCheckpointTest(DTensorTestBase):
         optim.step()
 
         # deep copy step 1's optimizer state for comparison later.
-        ref_osd: dict[str, Any] = copy.deepcopy(get_optimizer_state_dict(model, optim))
+        ref_optim_state_dict: dict[str, Any] = copy.deepcopy(
+            get_optimizer_state_dict(
+                model,
+                optim,
+                options=StateDictOptions(
+                    flatten_optimizer_state_dict=flatten_optimizer_state_dict
+                ),
+            )
+        )
 
         # get the current model and optimizer state at step 1
         # `get_model_state_dict` and `get_optimizer_state_dict` call `model.state_dict()`
         # and `optim.state_dict()` under the hood.
         ref_state_dict = {
             "model": get_model_state_dict(model),
-            "optim": get_optimizer_state_dict(
-                model=model,
-                optimizers=optim,
-                options=StateDictOptions(),
-            ),
+            "optim": ref_optim_state_dict,
         }
 
         # save model's state and optimizer's state to disk
@@ -126,16 +157,19 @@ class DistributedShampooDistributedCheckpointTest(DTensorTestBase):
         # get the current model and optimizer state at step 2 for dcp to load into.
         model_state_dict: dict[str, Any] = get_model_state_dict(model)
         optim_state_dict: dict[str, Any] = get_optimizer_state_dict(
-            model, optim, options=StateDictOptions()
+            model,
+            optim,
+            options=StateDictOptions(
+                flatten_optimizer_state_dict=flatten_optimizer_state_dict
+            ),
         )
+
         # compare to make sure optimizer state is different between step 1 and 2.
-        self._compare_optimizer_states(
-            ref_optim_state=ref_osd["state"],
-            optim_state=optim_state_dict["state"],
+        self._compare_optimizer_state_dict(
+            ref_optim_state=ref_optim_state_dict,
+            optim_state=optim_state_dict,
             assert_fn=self.assertNotEqual,
         )
-        # param_groups should be unchanged.
-        self.assertEqual(ref_osd["param_groups"], optim_state_dict["param_groups"])
 
         state_dict = {
             "model": model_state_dict,
@@ -158,14 +192,25 @@ class DistributedShampooDistributedCheckpointTest(DTensorTestBase):
             model=model,
             optimizers=optim,
             optim_state_dict=state_dict["optim"],
+            options=StateDictOptions(
+                flatten_optimizer_state_dict=flatten_optimizer_state_dict
+            ),
         )
-        osd_after_load: dict[str, Any] = get_optimizer_state_dict(model, optim)
+        osd_after_load: dict[str, Any] = get_optimizer_state_dict(
+            model,
+            optim,
+            options=StateDictOptions(
+                flatten_optimizer_state_dict=flatten_optimizer_state_dict
+            ),
+        )
 
         # compare to make sure the current optimizer state is the same as step 1.
-        self._compare_optimizer_states(
-            ref_osd["state"],
-            osd_after_load["state"],
+        self._compare_optimizer_state_dict(
+            ref_optim_state_dict,
+            osd_after_load,
             self.assertEqual,
         )
 
-        # Compare param_groups prior to save and after load
+        # step ahead to make sure training can continue.
+        model(torch.rand(8, PRECONDITIONER_DIM * 2, device=device)).sum().backward()
+        optim.step()
