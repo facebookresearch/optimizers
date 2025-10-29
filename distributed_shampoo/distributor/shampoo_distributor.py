@@ -200,11 +200,14 @@ class DistributorInterface(ABC):
             #     self._param_group[MAX_PRECONDITIONER_DIM],g44
             # )
             logger.info('calling torch.split for params on dim 0')
-            blocks_within_param = torch.split(
-                param,
-                self._param_group[MAX_PRECONDITIONER_DIM],
-                dim = 0
-            )
+            if param.ndim == 0:
+                blocks_within_param = tuple(param)
+            else:
+                blocks_within_param = torch.split(
+                    param,
+                    self._param_group[MAX_PRECONDITIONER_DIM],
+                    dim = 0
+                )
 
             # Generate and extend blocked parameters list.
             blocked_params.extend(
@@ -288,11 +291,14 @@ class DistributorInterface(ABC):
             # )
 
             logger.info('calling torch.split for grads on dim 0')
-            blocks_within_grad = torch.split(
-                grad,
-                self._param_group[MAX_PRECONDITIONER_DIM],
-                dim = 0
-            )
+            if grad.ndim == 0:
+                blocks_within_grad = tuple(grad)
+            else:
+                blocks_within_grad = torch.split(
+                    grad,
+                    self._param_group[MAX_PRECONDITIONER_DIM],
+                    dim = 0
+                )
 
             
             
