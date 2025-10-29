@@ -28,6 +28,10 @@ from distributed_shampoo.utils.shampoo_utils import (
 )
 from torch import distributed as dist, Tensor
 
+import logging 
+logger: logging.Logger = logging.getLogger(__name__)
+
+
 
 ###### DISTRIBUTOR CLASSES ######
 class DistributorInterface(ABC):
@@ -191,9 +195,15 @@ class DistributorInterface(ABC):
 
         for param in params:
             # Obtain blocks for each parameter after merging.
-            blocks_within_param = multi_dim_split(
-                param.view(merge_dims(tensor_shape=param.size())),
+            # blocks_within_param = multi_dim_split(
+            #     param.view(merge_dims(tensor_shape=param.size())),
+            #     self._param_group[MAX_PRECONDITIONER_DIM],g44
+            # )
+            logger.info('calling torch.split for params on dim 0')
+            blocks_within_param = torch.split(
+                param,
                 self._param_group[MAX_PRECONDITIONER_DIM],
+                dim = 0
             )
 
             # Generate and extend blocked parameters list.
@@ -239,13 +249,13 @@ class DistributorInterface(ABC):
 
         local_masked_blocked_grads: list[Tensor] = []
         global_grad_selector = []
-        merge_dims = partial(
-            merge_small_dims,
-            threshold=self._param_group[MAX_PRECONDITIONER_DIM],
-            target_tensor_dimensionality=self._param_group[
-                DISTRIBUTED_CONFIG
-            ].target_parameter_dimensionality,
-        )
+        # merge_dims = partial(
+        #     merge_small_dims,
+        #     threshold=self._param_group[MAX_PRECONDITIONER_DIM],
+        #     target_tensor_dimensionality=self._param_group[
+        #         DISTRIBUTED_CONFIG
+        #     ].target_parameter_dimensionality,
+        # )
 
         for grad, num_blocks, (block_index, next_block_index) in zip(
             self._get_params_or_grads(get_grad=True),
@@ -272,10 +282,22 @@ class DistributorInterface(ABC):
             ), f"Encountered gradient containing NaN/Inf in parameter with shape {attrgetter('shape')(grad)}. Check your model for numerical instability or consider gradient clipping."
 
             # Obtain blocks for each gradient after merging.
-            blocks_within_grad = multi_dim_split(
-                grad.view(merge_dims(tensor_shape=grad.size())),
+            # blocks_within_grad = multi_dim_split(
+            #     grad.view(merge_dims(tensor_shape=grad.size())),
+            #     self._param_group[MAX_PRECONDITIONER_DIM],
+            # )
+
+            logger.info('calling torch.split for grads on dim 0')
+            blocks_within_grad = torch.split(
+                grad,
                 self._param_group[MAX_PRECONDITIONER_DIM],
+                dim = 0
             )
+
+            
+            
+
+            
             # Generate block-to-parameter metadata and extend blocked parameters list.
             local_masked_blocked_grads.extend(
                 compress_list(blocks_within_grad, param_distributor_selector)
