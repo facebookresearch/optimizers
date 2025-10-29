@@ -206,7 +206,7 @@ class DistributorInterface(ABC):
                 blocks_within_param = torch.split(
                     param,
                     self._param_group[MAX_PRECONDITIONER_DIM],
-                    dim = 0
+                    dim = 1
                 )
 
             # Generate and extend blocked parameters list.
@@ -297,7 +297,7 @@ class DistributorInterface(ABC):
                 blocks_within_grad = torch.split(
                     grad,
                     self._param_group[MAX_PRECONDITIONER_DIM],
-                    dim = 0
+                    dim = 1
                 )
 
             
