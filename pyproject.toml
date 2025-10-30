@@ -8,7 +8,7 @@ version = "1.0.0"
 dependencies = [
     "torch>=2.8.0",
 ]
-requires-python = ">=3.12"
+requires-python = ">=3.10"
 authors = [
   {name = "Hao-Jun Michael Shi"},
   {name = "Tsung-Hsien Lee"},
@@ -26,7 +26,7 @@ classifiers = [
     "Intended Audience :: Science/Research",
     "Intended Audience :: Developers",
     "Operating System :: OS Independent",
-    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.10",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 
