@@ -199,14 +199,14 @@ class DistributorInterface(ABC):
             #     param.view(merge_dims(tensor_shape=param.size())),
             #     self._param_group[MAX_PRECONDITIONER_DIM],g44
             # )
-            logger.info('calling torch.split for params on dim 0')
+            logger.info('gzzz, calling torch.split for params on dim -1')
             if param.ndim == 0:
                 blocks_within_param = (param, )
             else:
                 blocks_within_param = torch.split(
                     param,
                     self._param_group[MAX_PRECONDITIONER_DIM],
-                    dim = 1
+                    dim = -1
                 )
 
             # Generate and extend blocked parameters list.
@@ -290,14 +290,14 @@ class DistributorInterface(ABC):
             #     self._param_group[MAX_PRECONDITIONER_DIM],
             # )
 
-            logger.info('calling torch.split for grads on dim 0')
+            logger.info('gzzz, calling torch.split for grads on dim -1')
             if grad.ndim == 0:
                 blocks_within_grad = (grad,)
             else:
                 blocks_within_grad = torch.split(
                     grad,
                     self._param_group[MAX_PRECONDITIONER_DIM],
-                    dim = 1
+                    dim = -1
                 )
 
             
