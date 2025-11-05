@@ -259,6 +259,10 @@ class ShampooPreconditionerConfig(AmortizedPreconditionerConfig):
 class RootInvShampooPreconditionerConfig(ShampooPreconditionerConfig):
     """Configuration for Shampoo preconditioner computation with caching of the root inverse factor matrices.
 
+    Note: When using custom amortized_computation_config, avoid lambda functions as they may cause
+    pickling issues during serialization/deserialization. Use regular named functions
+    instead for better compatibility with distributed training and checkpointing.
+
     Attributes:
         amortized_computation_config (RootInvConfig): Configuration for the inverse-root computation. (Default: DefaultEigenConfig)
         num_tolerated_failed_amortized_computations (int): Number of failed amortized computations to tolerate before raising an error. (Default: 3)
@@ -303,8 +307,12 @@ class RootInvShampooPreconditionerConfig(ShampooPreconditionerConfig):
 
     """
 
+    @staticmethod
+    def _get_default_amortized_computation_config() -> RootInvConfig:
+        return DefaultEigenConfig
+
     amortized_computation_config: RootInvConfig = field(
-        default_factory=lambda: DefaultEigenConfig
+        default_factory=_get_default_amortized_computation_config
     )
     inv_factor_matrix_dtype: torch.dtype = torch.float32
 
@@ -315,6 +323,10 @@ DefaultShampooConfig = RootInvShampooPreconditionerConfig()
 @dataclass(kw_only=True)
 class EigendecomposedShampooPreconditionerConfig(ShampooPreconditionerConfig):
     """Configuration for Shampoo preconditioner computation with caching of the eigendecomposed factor matrices.
+
+    Note: When using custom amortized_computation_config, avoid lambda functions as they may cause
+    pickling issues during serialization/deserialization. Use regular named functions
+    instead for better compatibility with distributed training and checkpointing.
 
     Attributes:
         amortized_computation_config (EigendecompositionConfig): Configuration for the eigendecomposition computation. (Default: DefaultEigendecompositionConfig)
@@ -361,8 +373,12 @@ class EigendecomposedShampooPreconditionerConfig(ShampooPreconditionerConfig):
 
     """
 
+    @staticmethod
+    def _get_default_amortized_computation_config() -> EigendecompositionConfig:
+        return DefaultEigendecompositionConfig
+
     amortized_computation_config: EigendecompositionConfig = field(
-        default_factory=lambda: DefaultEigendecompositionConfig
+        default_factory=_get_default_amortized_computation_config
     )
     factor_matrix_eigenvectors_dtype: torch.dtype = torch.float32
     factor_matrix_eigenvalues_dtype: torch.dtype = torch.float32
@@ -374,6 +390,10 @@ class EigenvalueCorrectedShampooPreconditionerConfig(AmortizedPreconditionerConf
 
     Recall that in eigenvalue-corrected Shampoo, the eigenvectors and eigenvalues of the factor matrices are computed separately and stored in place of the full inverted preconditioner, as opposed to the single inverse-root computation of the factor matrices in Shampoo.
     In eigenvalue-corrected Shampoo, the eigenvectors are updated periodically like the inverted preconditioners in Shampoo, but the eigenvalues are updated every iteration.
+
+    Note: When using custom amortized_computation_config, avoid lambda functions as they may cause
+    pickling issues during serialization/deserialization. Use regular named functions
+    instead for better compatibility with distributed training and checkpointing.
 
     Attributes:
         amortized_computation_config (EigendecompositionConfig): Configuration for the eigenvector computation.
@@ -421,8 +441,12 @@ class EigenvalueCorrectedShampooPreconditionerConfig(AmortizedPreconditionerConf
 
     """
 
+    @staticmethod
+    def _get_default_amortized_computation_config() -> EigendecompositionConfig:
+        return DefaultEigendecompositionConfig
+
     amortized_computation_config: EigendecompositionConfig = field(
-        default_factory=lambda: DefaultEigendecompositionConfig
+        default_factory=_get_default_amortized_computation_config
     )
     ignored_basis_change_dims: dict[int, list[int]] = field(default_factory=dict)
     inverse_exponent_override: dict[int, float] = field(default_factory=dict)
@@ -497,14 +521,23 @@ class SpectralDescentPreconditionerConfig(PreconditionerConfig):
     Which parameters are reshaped to 2D is determined by the max_preconditioner_dim argument in DistributedShampoo.
     If all >2D parameters should be guaranteed to be reshaped to 2D, then max_preconditioner_dim=math.inf and distributed_config.target_parameter_dimensionality=2 has to be used.
 
+
+    Note: When using custom orthogonalization config, avoid lambda functions as they may cause
+    pickling issues during serialization/deserialization. Use regular named functions
+    instead for better compatibility with distributed training and checkpointing.
+
     Attributes:
         orthogonalization_config (OrthogonalizationConfig): Configuration for orthogonalization of the search direction.
             (Default: DefaultNewtonSchulzOrthogonalizationConfig)
 
     """
 
+    @staticmethod
+    def _default_orthogonalization_config() -> OrthogonalizationConfig:
+        return DefaultNewtonSchulzOrthogonalizationConfig
+
     orthogonalization_config: OrthogonalizationConfig = field(
-        default_factory=lambda: DefaultNewtonSchulzOrthogonalizationConfig
+        default_factory=_default_orthogonalization_config
     )
 
 
@@ -595,12 +628,20 @@ class LoadBalancingConfig:
     The `cost_model` defines how the cost of a tensor is computed, and the distributor uses this cost to partition workloads.
     By default, it uses `AlignedMemoryCostModel`, other options include `PolynomialComputationalCostModel`.
 
+    Note: When using custom cost_model, avoid lambda functions as they may cause
+    pickling issues during serialization/deserialization. Use regular named functions
+    instead for better compatibility with distributed training and checkpointing.
+
     Args:
         cost_model (CostModel): The cost model used for load balancing. (Default: DefaultCostModel)
 
     """
 
-    cost_model: CostModel = field(default_factory=lambda: DefaultCostModel)
+    @staticmethod
+    def _get_default_cost_model() -> CostModel:
+        return DefaultCostModel
+
+    cost_model: CostModel = field(default_factory=_get_default_cost_model)
 
 
 @dataclass(init=False)
@@ -659,6 +700,10 @@ class DDPDistributedConfig(DistributedConfig):
 
     Enables distributed computation and optimizer states (like ZeRO-1) via DTensor for Shampoo.
 
+    Note: When using custom load_balancing_config, avoid lambda functions as they may cause
+    pickling issues during serialization/deserialization. Use regular named functions
+    instead for better compatibility with distributed training and checkpointing.
+
     Attributes:
         target_parameter_dimensionality (int | float): The idealized parameter dimensionality for a given algorithm.
             The dimensions of parameters and gradients will be merged (after squeezing dimensions of size 1) while respecting max_preconditioner_dim until the tensor has target_parameter_dimensionality dimensions left.
@@ -679,8 +724,13 @@ class DDPDistributedConfig(DistributedConfig):
     communication_dtype: torch.dtype = torch.float32
     num_trainers_per_group: int = -1
     communicate_params: bool = False
+
+    @staticmethod
+    def _get_default_load_balancing_config() -> LoadBalancingConfig:
+        return LoadBalancingConfig()
+
     load_balancing_config: LoadBalancingConfig = field(
-        default_factory=lambda: LoadBalancingConfig()
+        default_factory=_get_default_load_balancing_config
     )
 
 

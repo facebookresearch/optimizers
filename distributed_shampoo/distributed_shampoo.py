@@ -1466,6 +1466,17 @@ class DistributedShampoo(torch.optim.Optimizer):
         Returns:
             None: The state_dict is modified in-place.
         """
+
+        def _has_lambda_recursively(obj: Any) -> bool:
+            """Recursively check if an object contains lambda functions."""
+            if isinstance(obj, LambdaType):
+                return True
+            if is_dataclass(obj):
+                return any(
+                    _has_lambda_recursively(getattr(obj, f.name)) for f in fields(obj)
+                )
+            return False
+
         # for state exist on the ranks
         state_dict["state"] = {
             k: extract_state_dict_content(v) for k, v in state_dict["state"].items()
@@ -1477,9 +1488,7 @@ class DistributedShampoo(torch.optim.Optimizer):
         for group in state_dict["param_groups"]:
             param_ids.extend(group["params"])
             for v in group.values():
-                if is_dataclass(v) and any(
-                    isinstance(getattr(v, f.name), LambdaType) for f in fields(v)
-                ):
+                if _has_lambda_recursively(v):
                     logger.warning(
                         f"Found {v=}. Note that lambda function cannot be pickled. "
                         "torch.save() cannot serialize lambda functions, because it "

@@ -15,13 +15,15 @@ import logging
 import re
 import unittest
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Any, cast
 
 import torch
 from distributed_shampoo.distributed_shampoo import DistributedShampoo
 from distributed_shampoo.preconditioner.matrix_functions_types import (
+    DefaultNewtonSchulzOrthogonalizationConfig,
     EigenConfig,
+    OrthogonalizationConfig,
     PseudoInverseConfig,
 )
 from distributed_shampoo.shampoo_types import (
@@ -1159,17 +1161,17 @@ class SpectralDescentStateDictTest(AbstractTest.NoPreconditionerStateDictTestBas
         self.assertCountEqual(osd.keys(), ["state", "param_groups"])
 
         @dataclass(kw_only=True)
-        class SpectralDescentPreconditionerConfigWithLambda(
-            SpectralDescentPreconditionerConfig
-        ):
+        class SpectralDescentPreconditionerConfigWithLambda(PreconditionerConfig):
             """
-            Creating a preconditioner config with a dummy lambda function to make sure the
+            Creating a orthogonalization config with a dummy lambda function to make sure the
             warning from `_post_state_dict_hook` emit.
             """
 
-            scale_fn: Callable[[Tensor], float | Tensor] = lambda grad: 1.0
+            orthogonalization_config: OrthogonalizationConfig = field(
+                default_factory=lambda: DefaultNewtonSchulzOrthogonalizationConfig
+            )
 
-        self._optimizer.param_groups[0]["preconditioner_config"] = (
+        self._optimizer.param_groups[0]["orthogonalization_config"] = (
             SpectralDescentPreconditionerConfigWithLambda()
         )
         logger = logging.getLogger("distributed_shampoo.distributed_shampoo")

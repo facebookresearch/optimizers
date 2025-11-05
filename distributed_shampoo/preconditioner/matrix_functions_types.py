@@ -84,6 +84,10 @@ class EigendecompositionConfig(MatrixFunctionConfig):
     Moreover, we have ||B||_F = ||Q^T A Q||_F = ||A||_F.
     Hence, the two relative errors are also equivalent: ||A - A'||_F / ||A||_F = ||B - diag(B)||_F / ||B||_F.
 
+    Note: When using custom rank_deficient_stability_config, avoid lambda functions as they may cause
+    pickling issues during serialization/deserialization. Use regular named functions
+    instead for better compatibility with distributed training and checkpointing.
+
     Attributes:
         rank_deficient_stability_config (RankDeficientStabilityConfig): Configuration for handling/stabilizing rank-deficient matrices. (Default: DefaultPerturbationConfig)
             TODO: generalize this to MatrixFunctionConfig
@@ -92,8 +96,12 @@ class EigendecompositionConfig(MatrixFunctionConfig):
 
     """
 
+    @staticmethod
+    def _get_default_rank_deficient_stability_config() -> RankDeficientStabilityConfig:
+        return DefaultPerturbationConfig
+
     rank_deficient_stability_config: RankDeficientStabilityConfig = field(
-        default_factory=lambda: DefaultPerturbationConfig
+        default_factory=_get_default_rank_deficient_stability_config
     )
     tolerance: float = 0.0
 
@@ -238,13 +246,28 @@ class OrthogonalizationConfig(MatrixFunctionConfig):
 
     If the reduced SVD of the matrix A is given by A = U S V^T, then the orthogonalized/closest orthogonal matrix is U V^T.
 
+    Note: When using custom scale_by_dims_fn, avoid lambda functions as they may cause
+    pickling issues during serialization/deserialization. Use regular named functions
+    instead for better compatibility with distributed training and checkpointing.
+
     Attributes:
         scale_by_dims_fn (Callable[[int, int], float]): Function to scale the orthogonalized matrix by some function of the dimensions of the matrix.
-            (Default: lambda d_in, d_out: 1.0)
+            (Default: _default_scale_by_dims_fn)
 
     """
 
-    scale_by_dims_fn: Callable[[int, int], float] = lambda d_in, d_out: 1.0
+    @staticmethod
+    def _default_scale_by_dims_fn(d_in: int, d_out: int) -> float:
+        """Default scaling function that returns 1.0 (no scaling)."""
+        return 1.0
+
+    @staticmethod
+    def _get_default_scale_by_dims_fn() -> Callable[[int, int], float]:
+        return OrthogonalizationConfig._default_scale_by_dims_fn
+
+    scale_by_dims_fn: Callable[[int, int], float] = field(
+        default_factory=_get_default_scale_by_dims_fn
+    )
 
 
 @dataclass(kw_only=True)
