@@ -20,6 +20,9 @@ import torch
 from distributed_shampoo.distributor._shampoo_fully_shard_lossless_distributor import (
     FullyShardLosslessDistributor,
 )
+from distributed_shampoo.distributor._shampoo_hybrid_shard_lossless_distributor import (
+    HybridShardLosslessDistributor,
+)
 from distributed_shampoo.distributor.shampoo_ddp_distributor import DDPDistributor
 from distributed_shampoo.distributor.shampoo_distributor import (
     Distributor,
@@ -530,8 +533,14 @@ class DistributedShampoo(torch.optim.Optimizer):
                     distributor_cls: type[DistributorInterface] = Distributor
                 case HSDPDistributedConfig():
                     distributor_cls = HSDPDistributor
-                case HybridShardDistributedConfig():
+                case HybridShardDistributedConfig(
+                    param_assignment_strategy=FSDPParamAssignmentStrategy.DEFAULT
+                ):
                     distributor_cls = HybridShardDistributor
+                case HybridShardDistributedConfig(
+                    param_assignment_strategy=FSDPParamAssignmentStrategy.REPLICATE
+                ):
+                    distributor_cls = HybridShardLosslessDistributor
                 case DDPDistributedConfig():
                     distributor_cls = DDPDistributor
                 case FSDPDistributedConfig():

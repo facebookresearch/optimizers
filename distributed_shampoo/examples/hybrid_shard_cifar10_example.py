@@ -139,5 +139,6 @@ if __name__ == "__main__":
         distributed_config=HybridShardDistributedConfig(
             device_mesh=device_mesh,
             num_trainers_per_group=args.num_trainers_per_group,
+            param_assignment_strategy=args.param_assignment_strategy,
         ),
     )

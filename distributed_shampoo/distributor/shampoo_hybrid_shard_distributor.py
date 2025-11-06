@@ -313,8 +313,11 @@ class HybridShardDistributor(DistributorInterface):
                 )
 
     @torch.no_grad()
-    def _construct_local_block_info_list(
-        self, group_source_ranks: tuple[int, ...], group_rank: int
+    def _construct_local_block_info_list_with_params(
+        self,
+        params: Iterable[Tensor],
+        group_source_ranks: tuple[int, ...],
+        group_rank: int,
     ) -> tuple[DTensorBlockInfo, ...]:
         """Construct the local block info list.
 
@@ -322,18 +325,13 @@ class HybridShardDistributor(DistributorInterface):
         including its composable block IDs, functions to allocate tensors, and a method to retrieve tensors.
 
         Args:
+            params (Iterable[Tensor]): A list of parameter tensors.
             group_source_ranks (tuple[int, ...]): A list of assigned ranks for each block.
             group_rank (int): Rank of the current process group.
 
         Returns:
             block_info_list (tuple[DTensorBlockInfo, ...]): A tuple of DTensorBlockInfo objects for each parameter block.
         """
-        # Call `super()` instead of `self` as a performance optimization.
-        # This leads to O(1) instead of O(N) complexity to retrieve the parameters.
-        non_empty_params: Iterable[Tensor] = filter(
-            lambda p: isinstance(p, DTensor) and p.to_local().numel() > 0,
-            super()._get_params_or_grads(),
-        )
 
         # Note that for HybridShard, we want to get the rank within each sharded group for the block id.
         # When using a device mesh, 0 corresponds to the replicated group and 1 corresponds to the sharded group.
@@ -355,7 +353,7 @@ class HybridShardDistributor(DistributorInterface):
                 (param_index, param),
                 (buffer_size_ranks_start, buffer_size_ranks_end),
             ) in zip(
-                enumerate(non_empty_params),
+                enumerate(params),
                 generate_pairwise_indices(self._global_num_blocks_per_param),
                 strict=True,
             )
@@ -365,6 +363,25 @@ class HybridShardDistributor(DistributorInterface):
                 )
             )
             if group_source_rank == group_rank
+        )
+
+    @torch.no_grad()
+    def _construct_local_block_info_list(
+        self,
+        group_source_ranks: tuple[int, ...],
+        group_rank: int,
+    ) -> tuple[DTensorBlockInfo, ...]:
+        """Construct the local block info list."""
+
+        # Call `super()` instead of `self` as a performance optimization.
+        # This leads to O(1) instead of O(N) complexity to retrieve the parameters.
+        return self._construct_local_block_info_list_with_params(
+            filter(
+                lambda p: isinstance(p, DTensor) and p.to_local().numel() > 0,
+                super()._get_params_or_grads(),
+            ),
+            group_source_ranks,
+            group_rank,
         )
 
     @staticmethod
