@@ -16,10 +16,13 @@ from itertools import accumulate, chain, compress, islice, pairwise
 from types import TracebackType
 from typing import Any, TypeVar
 
+import numpy as np
+
 import torch
 from distributed_shampoo.shampoo_types import LoadBalancingConfig
 from distributed_shampoo.utils.load_balancing_utils import AlignedMemoryCostModel
-from torch import Tensor
+from torch import distributed as dist, Tensor
+from torch.distributed.tensor import DTensor
 
 
 @cache
@@ -329,4 +332,78 @@ def distribute_buffer_sizes(
 
     buffer_size_ranks = tuple(zip(buffer_sizes_aligned, param_block_ranks, strict=True))
 
-    return buffer_size_ranks
+    return tuple(buffer_size_ranks)
+
+
+def prepare_update_param_buffers(
+    params: tuple[DTensor, ...], group_size: int
+) -> list[Tensor]:
+    """Allocates a persistent shadow copy of updated parameters."""
+    if any(p.dtype != params[0].dtype for p in params):
+        raise NotImplementedError(
+            "When using round-robin assignment in FSDP Shampoo, parameters of "
+            "different dtypes are not currently supported."
+        )
+
+    param_sizes = [p.to_local().numel() for p in params]
+    buffer_size = sum(param_sizes)
+    buffer = params[0].to_local().new_zeros(buffer_size)
+    buffer_offsets = np.cumsum(param_sizes).tolist()
+
+    def round_up_to_multiple_of(x: int, y: int) -> int:
+        return ((x + y - 1) // y) * y
+
+    pad_len = round_up_to_multiple_of(len(buffer_offsets), group_size) - len(
+        buffer_offsets
+    )
+    # Pad the list with empty tensors to ensure each rank participates in all-to-all.
+    buffer_offsets.extend([buffer_size] * pad_len)
+    # Drop the last element as torch.tensor_split takes indices as split points.
+    buffer_offsets = buffer_offsets[:-1]
+
+    return list(torch.tensor_split(buffer, buffer_offsets))
+
+
+def redistribute_and_update_params(
+    params: tuple[DTensor, ...],
+    local_full_params: list[Tensor],
+    update_param_buffers: list[Tensor],
+    dist_group: torch.distributed.ProcessGroup,
+) -> None:
+    """Redistributes updated parameters to each parameter's rank."""
+    group_size = dist_group.size()
+
+    # Run all-to-all collectives to exchange the updated parameters across
+    # ranks in group. This implementation runs multiple rounds of a2a ops
+    # if the number of parameters is larger than the world size.
+    for a2a_round in range(len(update_param_buffers) // group_size):
+        # Send either a valid full parameter, or a padding zero tensor.
+        send_param = (
+            local_full_params[a2a_round]
+            if a2a_round < len(local_full_params)
+            else params[0].to_local().new_zeros(0)
+        )
+        # Chunk the send_param to exactly group_size slices to distribute to
+        # all ranks. We need to manually pad the result of torch.chunk since
+        # it does not guarantee that the result has the desired chunks.
+        send_list = [t.flatten() for t in torch.chunk(send_param, group_size, dim=0)]
+        if len(send_list) < group_size:
+            # NOTE: Intentionally use `torch.tensor_split` here to do a trivial
+            # split to ensure that the padding is in contiguous memory space as
+            # is required for all-to-all collectives.
+            append_len = group_size - len(send_list)
+            last_t = send_list[-1]
+            split_indices = [send_list[-1].shape[0]] * append_len
+            send_list.extend(torch.tensor_split(last_t, split_indices, dim=0)[1:])
+        assert len(send_list) == group_size
+
+        # Specify receive list as a range of update_param_buffers.
+        recv_list = update_param_buffers[
+            a2a_round * group_size : (a2a_round + 1) * group_size
+        ]
+
+        dist.all_to_all(recv_list, send_list, dist_group)
+
+    torch._foreach_copy_(
+        [p.to_local().flatten() for p in params], update_param_buffers[: len(params)]
+    )

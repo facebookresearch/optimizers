@@ -127,12 +127,20 @@ class ShampooFullyShardLosslessDistributorTest(DTensorTestBase):
     @with_comms
     @skip_if_lt_x_gpu(2)
     @parametrize("model_linear_layers_dims", TEST_MODEL_LAYER_DIMS)
+    @parametrize(
+        "param_assignment_strategy",
+        (
+            FSDPParamAssignmentStrategy.REPLICATE,
+            FSDPParamAssignmentStrategy.ROUND_ROBIN,
+        ),
+    )
     def test_all_ranks_with_no_grads(
         self,
         model_linear_layers_dims: tuple[int, ...],
+        param_assignment_strategy: FSDPParamAssignmentStrategy,
     ) -> None:
         fully_shard_config = FullyShardDistributedConfig(
-            param_assignment_strategy=FSDPParamAssignmentStrategy.REPLICATE
+            param_assignment_strategy=param_assignment_strategy
         )
 
         steps_without_gradients = 2
@@ -156,13 +164,21 @@ class ShampooFullyShardLosslessDistributorTest(DTensorTestBase):
 
     @with_comms
     @skip_if_lt_x_gpu(2)
+    @parametrize(
+        "param_assignment_strategy",
+        (
+            FSDPParamAssignmentStrategy.REPLICATE,
+            FSDPParamAssignmentStrategy.ROUND_ROBIN,
+        ),
+    )
     @parametrize("model_linear_layers_dims", TEST_MODEL_LAYER_DIMS)
     def test_fully_shard_shampoo_against_default_shampoo(
         self,
+        param_assignment_strategy: FSDPParamAssignmentStrategy,
         model_linear_layers_dims: tuple[int, ...],
     ) -> None:
         fully_shard_config = FullyShardDistributedConfig(
-            param_assignment_strategy=FSDPParamAssignmentStrategy.REPLICATE
+            param_assignment_strategy=param_assignment_strategy
         )
         control_model_factory = partial(
             ShampooFullyShardLosslessDistributorTest._construct_model,

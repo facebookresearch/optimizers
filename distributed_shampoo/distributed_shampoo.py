@@ -549,8 +549,13 @@ class DistributedShampoo(torch.optim.Optimizer):
                     param_assignment_strategy=FSDPParamAssignmentStrategy.DEFAULT
                 ):
                     distributor_cls = FullyShardDistributor
-                case FullyShardDistributedConfig(
-                    param_assignment_strategy=FSDPParamAssignmentStrategy.REPLICATE
+                case (
+                    FullyShardDistributedConfig(
+                        param_assignment_strategy=FSDPParamAssignmentStrategy.REPLICATE
+                    )
+                    | FullyShardDistributedConfig(
+                        param_assignment_strategy=FSDPParamAssignmentStrategy.ROUND_ROBIN
+                    )
                 ):
                     distributor_cls = FullyShardLosslessDistributor
                 case _:
