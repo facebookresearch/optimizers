@@ -38,6 +38,7 @@ from distributed_shampoo.tests.shampoo_test_utils import (
 
 from torch import distributed as dist, nn
 from torch.distributed.fsdp import FSDPModule, fully_shard
+from torch.distributed.tensor import distribute_tensor, init_device_mesh, Shard
 from torch.optim.optimizer import ParamsT
 from torch.testing._internal.common_distributed import skip_if_lt_x_gpu
 from torch.testing._internal.common_utils import (
@@ -122,6 +123,44 @@ class ShampooFullyShardLosslessDistributorTest(DTensorTestBase):
             use_decoupled_weight_decay=True,
             grafting_config=AdaGradPreconditionerConfig(epsilon=1e-8),
             distributed_config=distributed_config,
+        )
+
+    @with_comms
+    @skip_if_lt_x_gpu(2)
+    def test_init_assign_full_parameters(self) -> None:
+        """Test that FullyShardLosslessDistributor initializes correctly and blocked params match original tensor size."""
+        # TODO: Figure out a better way to test this because the access of private field.
+        dummy_param = torch.randn(100, 100, device="cuda")
+        original_numel = dummy_param.numel()
+
+        mesh = init_device_mesh("cuda", (self.world_size,))
+        dummy_dtensor_param = distribute_tensor(dummy_param, mesh, [Shard(0)])
+        dummy_param_group = {
+            "params": [dummy_dtensor_param],
+            "distributed_config": FullyShardDistributedConfig(
+                param_assignment_strategy=FSDPParamAssignmentStrategy.REPLICATE
+            ),
+            "max_preconditioner_dim": PRECONDITIONER_DIM,
+        }
+
+        distributor = FullyShardLosslessDistributor(dummy_param_group)
+
+        # Validate that _assigned_full_params is initialized
+        self.assertIsNotNone(distributor._assigned_full_params)
+        self.assertEqual(len(distributor._assigned_full_params), 1)
+        self.assertEqual(distributor._assigned_full_params[0].shape, (100, 100))
+
+        # Validate that _local_masked_blocked_params total elements match the original tensor
+        # Note: _local_masked_blocked_params will be empty initially since there are no gradients yet
+        # So we check _global_blocked_params instead
+        total_blocked_elements = sum(
+            block.numel() for block in distributor._global_blocked_params
+        )
+        self.assertEqual(
+            total_blocked_elements,
+            original_numel,
+            f"Total elements in blocked params ({total_blocked_elements}) "
+            f"should match original tensor ({original_numel})",
         )
 
     @with_comms
