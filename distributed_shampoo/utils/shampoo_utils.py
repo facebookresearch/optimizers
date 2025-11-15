@@ -356,6 +356,17 @@ def prepare_update_param_buffers(
     pad_len = round_up_to_multiple_of(len(buffer_offsets), group_size) - len(
         buffer_offsets
     )
+
+    # The padding logic below handles when a rank has some parameters but fewer than group size.
+    # For example, if group size is 4 and there are 3 parameters, it will pad a 0-sized tensor at the end.
+    # Example:
+    #   Assume we have 3 parameters and group size is 4. param0: 100, param1: 200, param2: 300.
+    #   buffer_offsets = [100, 300, 600, 600] (note that the last element is 600)
+    #   This buffer for communication have 4 chunks.
+    #   - Rank 0: [0, 100)
+    #   - Rank 1: [100, 300)
+    #   - Rank 2: [300, 600)
+    #   - Rank 3: [600, 600) (empty tensor)
     # Pad the list with empty tensors to ensure each rank participates in all-to-all.
     buffer_offsets.extend([buffer_size] * pad_len)
     # Drop the last element as torch.tensor_split takes indices as split points.
