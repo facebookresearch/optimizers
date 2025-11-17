@@ -22,7 +22,11 @@ from distributed_shampoo.shampoo_types import (
     HybridShardDistributedConfig,
     PARAMS,
 )
-from torch import Tensor
+from distributed_shampoo.utils.shampoo_utils import (
+    prepare_update_param_buffers,
+    redistribute_and_update_params,
+)
+from torch import distributed as dist, Tensor
 from torch.distributed import tensor as dtensor
 
 logger: logging.Logger = logging.getLogger(__name__)
@@ -53,13 +57,41 @@ class HybridShardLosslessDistributor(HybridShardDistributor):
             f"Shampoo HybridShardLosslessDistributor {self._param_assignment_strategy=}",
         )
 
-        # For param assignment strategy other than the default, _assigned_full_params is used to store the
-        # full parameters (as opposed to DTensors) for the model parameters assigned to this rank.
+        self._shard_group_size: int = distributed_config.device_mesh.size(1)
+        # Initialize distributed group for communicating across the shard dimension.
+        self._shard_dist_group: dist.ProcessGroup = (
+            distributed_config.device_mesh.get_group(mesh_dim=1)
+        )
+        self._shard_group_rank: int = dist.get_rank(self._shard_dist_group)
+
+        # Stores full parameters (as opposed to DTensors) for the model parameters assigned to this rank.
         # For example, when the strategy is REPLICATE, it stores the full parameters on all ranks.
+        should_assign_param_idx = (
+            lambda i: i % self._shard_group_size == self._shard_group_rank
+            if self._param_assignment_strategy
+            == FSDPParamAssignmentStrategy.ROUND_ROBIN
+            else True
+        )
         with torch.no_grad():
-            self._assigned_full_params: tuple[torch.Tensor, ...] = tuple(
-                p.full_tensor() for p in param_group[PARAMS]
+            self._assigned_params_mask: tuple[bool, ...] = tuple(
+                should_assign_param_idx(idx) for idx in range(len(param_group[PARAMS]))
             )
+
+        # Collects and stores the model parameters assigned to this rank.
+        full_params: list[Tensor] = [p.full_tensor() for p in param_group[PARAMS]]
+        self._assigned_full_params: list[Tensor] = [
+            p
+            for p, assigned in zip(full_params, self._assigned_params_mask)
+            if assigned
+        ]
+
+        # For ROUND_ROBIN strategy, creates a buffer for receiving the updated param shards.
+        self._update_param_buffers: list[Tensor] | None = (
+            prepare_update_param_buffers(param_group[PARAMS], self._shard_group_size)
+            if self._param_assignment_strategy
+            == FSDPParamAssignmentStrategy.ROUND_ROBIN
+            else None
+        )
 
         super().__init__(param_group)
 
@@ -86,10 +118,16 @@ class HybridShardLosslessDistributor(HybridShardDistributor):
         """
         if get_grad:
             # NOTE: getting grads at every optimizer step triggers implicit all-gather.
-            return (
+            full_grads = (
                 None if p.grad is None else p.grad.full_tensor()
                 for p in self._param_group[PARAMS]
-                if p.numel() > 0
+            )
+            return (
+                full_grad
+                for full_grad, assigned in zip(
+                    full_grads, self._assigned_params_mask, strict=True
+                )
+                if assigned and (full_grad is None or full_grad.numel() > 0)
             )
         else:
             return filter(lambda p: p.numel() > 0, self._assigned_full_params)
@@ -111,7 +149,16 @@ class HybridShardLosslessDistributor(HybridShardDistributor):
         # For example, when the strategy is REPLICATE, we need to take each updated full parameter `full_param`,
         # redistribute it according to the device mesh to get the locally assigned slice, and copy the slice to the
         # corresponding local parameter `local_param` in the param group.
-        if self._param_assignment_strategy == FSDPParamAssignmentStrategy.REPLICATE:
+        if self._param_assignment_strategy == FSDPParamAssignmentStrategy.ROUND_ROBIN:
+            redistribute_and_update_params(
+                self._param_group[PARAMS],
+                self._assigned_full_params,
+                self._update_param_buffers,  # type: ignore
+                self._shard_dist_group,
+            )
+
+        # Copy the updated full parameters to the original parameters.
+        elif self._param_assignment_strategy == FSDPParamAssignmentStrategy.REPLICATE:
             local_params = list(
                 filter(lambda p: p.numel() > 0, self._param_group[PARAMS])
             )
@@ -142,7 +189,13 @@ class HybridShardLosslessDistributor(HybridShardDistributor):
         """Construct the local block info list."""
 
         return self._construct_local_block_info_list_with_params(
-            filter(lambda p: p.numel() > 0, self._param_group[PARAMS]),
+            (
+                param
+                for assigned, param in zip(
+                    self._assigned_params_mask, self._param_group[PARAMS], strict=True
+                )
+                if assigned and param.numel() > 0
+            ),
             group_source_ranks,
             group_rank,
         )

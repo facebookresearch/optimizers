@@ -59,9 +59,12 @@ PRECONDITIONER_DIM = 4
 # - The 1st one has parameters that aligns with the Shampoo preconditioner dim after FSDP sharding;
 # - The 2nd one has parameters with shapes not aligned with the preconditioner dim.
 # In these cases, the lossless HSDP Distributor could still guarantee the identicalness with default Shampoo.
+# TODO (irisz): Adding dummy 1, 1  layers at the end since we need at least 1 parameters on each rank.
+# Otherwise, we would run into timeout issue when initializing steps. We should error out in distributed_shampoo
+# when we are not able to initilize step on a rank.
 TEST_MODEL_LAYER_DIMS: tuple[tuple[int, ...], ...] = (
-    (4 * PRECONDITIONER_DIM, 2 * PRECONDITIONER_DIM, 1),
-    (3 * PRECONDITIONER_DIM - 1, PRECONDITIONER_DIM + 1, PRECONDITIONER_DIM - 1),
+    (4 * PRECONDITIONER_DIM, 2 * PRECONDITIONER_DIM, 1, 1, 1),
+    (3 * PRECONDITIONER_DIM - 1, PRECONDITIONER_DIM + 1, PRECONDITIONER_DIM - 1, 1, 1),
 )
 
 
@@ -144,12 +147,20 @@ class ShampooHybridShardLosslessDistributorTest(DTensorTestBase):
     )
     @parametrize("num_trainers_per_group", (-1, 1, 2))
     @parametrize("model_linear_layers_dims", TEST_MODEL_LAYER_DIMS)
+    @parametrize(
+        "param_assignment_strategy",
+        (
+            FSDPParamAssignmentStrategy.REPLICATE,
+            FSDPParamAssignmentStrategy.ROUND_ROBIN,
+        ),
+    )
     def test_hybrid_shard_shampoo_against_default_shampoo(
         self,
         num_trainers_per_group: int,
         communication_dtype: torch.dtype,
         communicate_params: bool,
         model_linear_layers_dims: tuple[int, ...],
+        param_assignment_strategy: FSDPParamAssignmentStrategy,
     ) -> None:
         hybrid_shard_config = HybridShardDistributedConfig(
             device_mesh=init_device_mesh(
@@ -158,7 +169,7 @@ class ShampooHybridShardLosslessDistributorTest(DTensorTestBase):
             communication_dtype=communication_dtype,
             num_trainers_per_group=num_trainers_per_group,
             communicate_params=communicate_params,
-            param_assignment_strategy=FSDPParamAssignmentStrategy.REPLICATE,
+            param_assignment_strategy=param_assignment_strategy,
         )
 
         compare_two_optimizers_models_devices_on_weight_and_loss(
@@ -194,12 +205,20 @@ class ShampooHybridShardLosslessDistributorTest(DTensorTestBase):
     )
     @parametrize("num_trainers_per_group", (-1, 1, 2))
     @parametrize("model_linear_layers_dims", TEST_MODEL_LAYER_DIMS)
+    @parametrize(
+        "param_assignment_strategy",
+        (
+            FSDPParamAssignmentStrategy.REPLICATE,
+            FSDPParamAssignmentStrategy.ROUND_ROBIN,
+        ),
+    )
     def test_hybrid_shard_shampoo_config_against_fully_shard_shampoo_config(
         self,
         num_trainers_per_group: int,
         communication_dtype: torch.dtype,
         communicate_params: bool,
         model_linear_layers_dims: tuple[int, ...],
+        param_assignment_strategy: FSDPParamAssignmentStrategy,
     ) -> None:
         """
         Testing the correctness of hybrid shard shampoo distributor by comparing it with
@@ -209,14 +228,14 @@ class ShampooHybridShardLosslessDistributorTest(DTensorTestBase):
             "cuda", (2, 2), mesh_dim_names=("replicate", "shard")
         )
         fully_shard_config = FullyShardDistributedConfig(
-            param_assignment_strategy=FSDPParamAssignmentStrategy.REPLICATE
+            param_assignment_strategy=param_assignment_strategy
         )
         hybrid_shard_config = HybridShardDistributedConfig(
             device_mesh=mesh_2d,
             communication_dtype=communication_dtype,
             num_trainers_per_group=num_trainers_per_group,
             communicate_params=communicate_params,
-            param_assignment_strategy=FSDPParamAssignmentStrategy.REPLICATE,
+            param_assignment_strategy=param_assignment_strategy,
         )
 
         compare_two_optimizers_models_devices_on_weight_and_loss(
