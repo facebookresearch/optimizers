@@ -253,11 +253,15 @@ class HybridShardDistributor(DistributorInterface):
         # NOTE: Remove this function once PT2 supports all_gather with functional collective
         @torch.compiler.disable
         def all_gather_into_tensor() -> None:
-            dist.all_gather_into_tensor(
-                output_tensor=self._global_dist_buffer,
-                input_tensor=self._local_dist_buffer,
-                group=self._comms_dist_group,
-            )
+            # TODO (irisz): utilize profiler_decorator as a context manager for profiling this all_gather.
+            with torch.profiler.record_function(
+                "HybridShardShampooDistributor::all_gather_into_tensor"
+            ):
+                dist.all_gather_into_tensor(
+                    output_tensor=self._global_dist_buffer,
+                    input_tensor=self._local_dist_buffer,
+                    group=self._comms_dist_group,
+                )
 
         if self._communicate_params:
             assert (
