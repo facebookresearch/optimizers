@@ -8,6 +8,7 @@ LICENSE file in the root directory of this source tree.
 """
 
 import heapq
+import logging
 import math
 import operator
 from collections.abc import Callable, Iterator, Sequence
@@ -23,6 +24,8 @@ from distributed_shampoo.shampoo_types import LoadBalancingConfig
 from distributed_shampoo.utils.load_balancing_utils import AlignedMemoryCostModel
 from torch import distributed as dist, Tensor
 from torch.distributed.tensor import DTensor
+
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 @cache
@@ -387,7 +390,9 @@ def redistribute_and_update_params(
     # Run all-to-all collectives to exchange the updated parameters across
     # ranks in group. This implementation runs multiple rounds of a2a ops
     # if the number of parameters is larger than the world size.
-    for a2a_round in range(len(update_param_buffers) // group_size):
+    a2a_rounds = range(len(update_param_buffers) // group_size)
+    logger.info(f"Running {len(a2a_rounds)} rounds of a2a ops.")
+    for a2a_round in a2a_rounds:
         # Send either a valid full parameter, or a padding zero tensor.
         send_param = (
             local_full_params[a2a_round]
