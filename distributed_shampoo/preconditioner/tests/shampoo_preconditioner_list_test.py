@@ -29,8 +29,10 @@ from distributed_shampoo.preconditioner.matrix_functions_types import (
 from distributed_shampoo.preconditioner.preconditioner_list import PreconditionerList
 from distributed_shampoo.preconditioner.shampoo_preconditioner_list import (
     BaseShampooPreconditionerList,
+    EigendecomposedKLShampooPreconditionerList,
     EigendecomposedShampooPreconditionerList,
     EigenvalueCorrectedShampooPreconditionerList,
+    RootInvKLShampooPreconditionerList,
     RootInvShampooPreconditionerList,
 )
 from distributed_shampoo.preconditioner.tests.preconditioner_list_test_utils import (
@@ -40,9 +42,11 @@ from distributed_shampoo.shampoo_types import (
     AmortizedPreconditionerConfig,
     DefaultShampooConfig,
     DefaultSOAPConfig,
+    EigendecomposedKLShampooPreconditionerConfig,
     EigendecomposedShampooPreconditionerConfig,
     EigenvalueCorrectedShampooPreconditionerConfig,
     PreconditionerValueError,
+    RootInvKLShampooPreconditionerConfig,
     RootInvShampooPreconditionerConfig,
     ShampooPreconditionerConfig,
 )
@@ -1341,4 +1345,139 @@ class EigenvalueCorrectedShampooPreconditionerListTest(
             ),
             masked_grad_lists=[masked_grad_list1, masked_grad_list2],
             masked_expected_preconditioned_grad_list=masked_expected_preconditioned_grad_list,
+        )
+
+
+class RootInvKLShampooPreconditionerListTest(RootInvShampooPreconditionerListTest):
+    @property
+    def _default_preconditioner_config(self) -> RootInvShampooPreconditionerConfig:
+        return replace(
+            RootInvKLShampooPreconditionerConfig(),
+            factor_matrix_dtype=torch.float64,
+        )
+
+    @property
+    def _preconditioner_list_factory(self) -> Callable[..., PreconditionerList]:
+        return RootInvKLShampooPreconditionerList
+
+    @unittest.skip(
+        "RootInvKLShampooPreconditionerList does not support adaptive computation frequency."
+    )
+    def test_adaptive_amortized_computation_frequency(self) -> None: ...
+
+
+class EigendecomposedKLShampooPreconditionerListTest(
+    EigendecomposedShampooPreconditionerListTest
+):
+    @property
+    def _default_preconditioner_config(  # type: ignore[override]
+        self,
+    ) -> EigendecomposedKLShampooPreconditionerConfig:
+        return EigendecomposedKLShampooPreconditionerConfig(
+            amortized_computation_config=QREigendecompositionConfig(),
+            factor_matrix_dtype=torch.float64,
+            factor_matrix_eigenvectors_dtype=torch.float64,
+            factor_matrix_eigenvalues_dtype=torch.float64,
+        )
+
+    @property
+    def _preconditioner_list_factory(self) -> Callable[..., PreconditionerList]:
+        return EigendecomposedKLShampooPreconditionerList
+
+    def test_update_preconditioners_and_precondition_with_epsilon(self) -> None:
+        """
+        We provide examples where we deliberately choose a large epsilon. This is to ensure that
+        the matrix inverse computation behaves as expected. Below we update the preconditioners twice
+        for 4 different blocks and check if the preconditioned gradients are as expected. When
+        performing the inverse computation, epsilon is chosen to be 80 in (L + epsilon * I) and
+        (R + epsilon * I).
+
+        G_{ij}: at the i-th step, the gradient for the j-th block. For example,
+        G12 is the gradient for the second block, at the first step.
+
+        For KL-Shampoo, we will correct the scale of the 2D gradients such that the Kronecker factors
+        match the ones of regular Shampoo with a scale correction s.
+
+        epsilon = 80.0
+        s = epsilon^{1/4}
+
+        Gradients for block 1: (no right preconditioner)
+        (1) 1D Tensor of Size 2
+            G11 = [1, 0]^T
+            G21 = [0, 1]^T
+
+            L = G11 * G11^T + G21 * G21^T = [[1, 0], [0, 1]]
+            P = (L + epsilon * I)^{-1/2} G21 = [[81, 0], [0, 81]]^{-1/2} [0, 1]^T
+            = [0, 1/9]^T.
+
+        Gradients for block 2: (both left and right preconditioner)
+        (2) Tensor of Size 2 x 2
+            G12 = s * [[1, 0], [0, 1]] / sqrt(2)
+            G22 = s * [[1, 0], [0, 1]] / sqrt(2)
+
+            L = G12 * G12^T + G22 * G22^T = [[1, 0], [0, 1]]
+            R = G12^T * G12 + G22^T * G22 = [[1, 0], [0, 1]]
+            P = (L + epsilon * I)^{-1/4} G22 (R + epsilon * I)^{-1/4}
+            = [[1/3, 0], [0, 1/3]] * G22 * [[1/3, 0], [0, 1/3]] = s * I / (9 * sqrt(2))
+
+        Gradients for block 3: (both left and right preconditioner)
+        (3) Tensor of Size 1 x 2
+            G13 = s * [[1, 0]]
+            G23 = s * [[0, 1]]
+
+            L = G13 * G13^T + G23 * G23^T = I
+            R = G13^T * G13 + G23^T * G23 = 2
+            P = (L + epsilon * I)^{-1/4} G22 (R + epsilon * I)^{-1/4}
+            = [[1/3, 0], [0, 1/3]] * G22 * (80 + 2)^{-1/4} =
+            = s * [[0.0, 1.0/3.0 * 82.0 ** (-1/4)]]
+
+        Gradients for block 4: (no preconditioner)
+        (4) Tensor of Size 0
+            G14 = 1
+            G24 = 1
+
+            No preconditioner is applied. Expected gradient is 1.
+
+        """
+
+        epsilon = 80.0
+        scale_correction = epsilon**0.25
+
+        # Blocked gradients at the first step: masked_grad_list1 = (G11, G12, G13, G14)
+        masked_grad_list1 = (
+            torch.tensor([1.0, 0.0]),
+            scale_correction * torch.eye(2) / math.sqrt(2),
+            scale_correction * torch.tensor([[1.0, 0.0]]),
+            torch.tensor(1.0),
+        )
+
+        # Blocked gradients at the second step: masked_grad_list2 = (G21, G22, G23, G24)
+        masked_grad_list2 = (
+            torch.tensor([0.0, 1.0]),
+            scale_correction * torch.eye(2) / math.sqrt(2),
+            scale_correction * torch.tensor([[0.0, 1.0]]),
+            torch.tensor(1.0),
+        )
+
+        # Manually apply the preconditioners to the gradients at the second step (masked_grad_list2) with epsilon.
+        # The result is stored in masked_expected_preconditioned_grad_list.
+        masked_expected_preconditioned_grad_list = (
+            torch.tensor([0.0, 1.0 / 9.0]),
+            scale_correction * torch.eye(2) / (9 * math.sqrt(2)),
+            scale_correction * torch.tensor([[0.0, 1.0 / 3.0 * 82.0 ** (-1 / 4)]]),
+            torch.tensor(1.0),
+        )
+
+        # Apply preconditioner to the last step (masked_grad_list2) with epsilon. The result should be the same as the expected preconditioned grad list.
+        self._verify_preconditioner_updates(
+            preconditioner_list=self._instantiate_preconditioner_list(
+                beta2=1.0,
+                weighting_factor=1.0,
+                use_bias_correction=True,
+                epsilon=epsilon,
+            ),
+            masked_grad_lists=[masked_grad_list1, masked_grad_list2],
+            masked_expected_preconditioned_grad_list=tuple(
+                masked_expected_preconditioned_grad_list
+            ),
         )

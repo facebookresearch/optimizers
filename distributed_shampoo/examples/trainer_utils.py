@@ -31,9 +31,11 @@ from distributed_shampoo import (
     DefaultSpectralDescentPreconditionerConfig,
     DistributedConfig,
     DistributedShampoo,
+    EigendecomposedKLShampooPreconditionerConfig,
     EigendecomposedShampooPreconditionerConfig,
     PreconditionerConfig,
     RMSpropPreconditionerConfig,
+    RootInvKLShampooPreconditionerConfig,
     RootInvShampooPreconditionerConfig,
     SGDPreconditionerConfig,
 )
@@ -119,6 +121,18 @@ def instantiate_optimizer(
             == PreconditionerComputationType.EIGENDECOMPOSED_ROOT_INV
         ):
             return EigendecomposedShampooPreconditionerConfig()
+        elif (
+            preconditioner_computation_type
+            == PreconditionerComputationType.KL_EIGEN_ROOT_INV
+        ):
+            return RootInvKLShampooPreconditionerConfig(
+                amortized_computation_config=EigenConfig()
+            )
+        elif (
+            preconditioner_computation_type
+            == PreconditionerComputationType.KL_EIGENDECOMPOSED_ROOT_INV
+        ):
+            return EigendecomposedKLShampooPreconditionerConfig()
         elif (
             preconditioner_computation_type
             == PreconditionerComputationType.COUPLED_NEWTON_ROOT_INV

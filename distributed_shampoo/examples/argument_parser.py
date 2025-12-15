@@ -34,6 +34,8 @@ class PreconditionerComputationType(enum.Enum):
     ADAM = enum.auto()
     EIGEN_ROOT_INV = enum.auto()
     EIGENDECOMPOSED_ROOT_INV = enum.auto()
+    KL_EIGEN_ROOT_INV = enum.auto()
+    KL_EIGENDECOMPOSED_ROOT_INV = enum.auto()
     COUPLED_NEWTON_ROOT_INV = enum.auto()
     COUPLED_HIGHER_ORDER_ROOT_INV = enum.auto()
     EIGH_EIGENVALUE_CORRECTION = enum.auto()

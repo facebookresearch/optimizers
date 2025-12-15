@@ -1271,6 +1271,25 @@ class BaseShampooPreconditionerList(
         )
 
     @profile_decorator
+    def _compute_outer_product_list(
+        self,
+        grad: Tensor,
+        order: int,
+        preconditioned_dims_selector: tuple[bool, ...],
+        kronecker_factors: _ShampooKroneckerFactorsUnwrappedType,
+    ) -> tuple[Tensor, ...]:
+        # Construct outer product list for updating Kronecker factors.
+        return tuple(
+            torch.tensordot(
+                grad,
+                grad,
+                # Contracts across all dimensions except for k.
+                dims=[[*chain(range(k), range(k + 1, order))]] * 2,  # type: ignore[has-type]
+            )
+            for k in compress_list(range(order), preconditioned_dims_selector)
+        )
+
+    @profile_decorator
     def _update_factor_matrices(self, masked_grad_list: tuple[Tensor, ...]) -> None:
         # NOTE: Unlike AdagradPreconditionerList, we will loop through each gradient individually.
         # We apply foreach operators onto the list of Kronecker factor matrices (as opposed to the
@@ -1286,15 +1305,8 @@ class BaseShampooPreconditionerList(
             if not kronecker_factors.factor_matrices:
                 continue
 
-            # Construct outer product list for updating Kronecker factors.
-            outer_product_list = tuple(
-                torch.tensordot(
-                    grad,
-                    grad,
-                    # Contracts across all dimensions except for k.
-                    dims=[[*chain(range(k), range(k + 1, order))]] * 2,  # type: ignore[has-type]
-                )
-                for k in compress_list(range(order), preconditioned_dims_selector)
+            outer_product_list = self._compute_outer_product_list(
+                grad, order, preconditioned_dims_selector, kronecker_factors
             )
 
             if self._beta2 != 1.0:
@@ -1673,7 +1685,6 @@ class EigenvalueCorrectedShampooPreconditionerList(
                 kronecker_factors.corrected_eigenvalues.mul_(self._beta2)
 
             # NOTE: The case when self._weighting_factor == 1.0 is not well tested and might not be stable.
-            print(f"{self._weighting_factor=}")
             kronecker_factors.corrected_eigenvalues.addcmul_(
                 grad, grad, value=self._weighting_factor
             )
@@ -1707,3 +1718,104 @@ class EigenvalueCorrectedShampooPreconditionerList(
             preconditioner_list=kronecker_factors.factor_matrices_eigenvectors,
             dims=([0], [1]),
         )
+
+
+class RootInvKLShampooPreconditionerList(RootInvShampooPreconditionerList):
+    """Root inverse KL-Shampoo preconditioners for list of parameters."""
+
+    @profile_decorator
+    def _compute_outer_product_list(
+        self,
+        grad: Tensor,
+        order: int,
+        preconditioned_dims_selector: tuple[bool, ...],
+        kronecker_factors: RootInvShampooKroneckerFactorsUnwrapped,
+    ) -> tuple[Tensor, ...]:
+        # Construct outer product list for updating Kronecker factors.
+        outer_product_list = []
+        for idx_of_k, k in enumerate(
+            compress_list(range(order), preconditioned_dims_selector)
+        ):
+            # KL-Shampoo uses the gradient preconditioned (along all dimensions that are contracted) with the inverse root of the factor matrices to compute the outer products.
+            local_preconditioned_dims_selector = list(preconditioned_dims_selector)
+            local_preconditioned_dims_selector[k] = False
+            preconditioned_grad = self._precondition_grad(
+                grad=grad,
+                preconditioned_dims_selector=tuple(local_preconditioned_dims_selector),
+                preconditioner_list=tuple(
+                    inv_factor_matrix
+                    for idx, inv_factor_matrix in enumerate(
+                        kronecker_factors.inv_factor_matrices
+                    )
+                    if idx != idx_of_k
+                ),
+            )
+            outer_product_list.append(
+                torch.tensordot(
+                    preconditioned_grad,
+                    preconditioned_grad,
+                    # Contracts across all dimensions except for k.
+                    dims=[[*chain(range(k), range(k + 1, order))]] * 2,  # type: ignore[has-type]
+                )
+            )
+        return tuple(outer_product_list)
+
+
+class EigendecomposedKLShampooPreconditionerList(
+    EigendecomposedShampooPreconditionerList
+):
+    """Eigendecomposed KL-Shampoo preconditioners for list of parameters."""
+
+    @profile_decorator
+    def _compute_outer_product_list(
+        self,
+        grad: Tensor,
+        order: int,
+        preconditioned_dims_selector: tuple[bool, ...],
+        kronecker_factors: EigendecomposedShampooKroneckerFactorsUnwrapped,
+    ) -> tuple[Tensor, ...]:
+        # TODO: remove assertion when rank_deficient_stability_config is generalized to MatrixFunctionConfig
+        assert isinstance(
+            self._preconditioner_config.amortized_computation_config,
+            EigendecompositionConfig,
+        )
+        rank_deficient_stability_config = self._preconditioner_config.amortized_computation_config.rank_deficient_stability_config
+
+        # Construct outer product list for updating Kronecker factors.
+        outer_product_list = []
+        for idx_of_k, k in enumerate(
+            compress_list(range(order), preconditioned_dims_selector)
+        ):
+            # KL-Shampoo uses the gradient preconditioned (along all dimensions that are contracted) with the inverse root of the factor matrices to compute the outer products.
+            local_preconditioned_dims_selector = list(preconditioned_dims_selector)
+            local_preconditioned_dims_selector[k] = False
+            preconditioned_grad = self._precondition_grad(
+                grad=grad,
+                preconditioned_dims_selector=tuple(local_preconditioned_dims_selector),
+                preconditioner_list=tuple(
+                    matrix_inverse_root_from_eigendecomposition(
+                        L=eigenvalues,
+                        Q=eigenvectors,
+                        root=Fraction(root),
+                        epsilon=self._epsilon,
+                        rank_deficient_stability_config=rank_deficient_stability_config,
+                    )
+                    for idx, (eigenvalues, eigenvectors, root) in enumerate(
+                        zip(
+                            kronecker_factors.factor_matrices_eigenvalues,
+                            kronecker_factors.factor_matrices_eigenvectors,
+                            kronecker_factors.roots,
+                            strict=True,
+                        )
+                    )
+                    if idx != idx_of_k
+                ),
+            )
+            outer_product = torch.tensordot(
+                preconditioned_grad,
+                preconditioned_grad,
+                # Contracts across all dimensions except for k.
+                dims=[[*chain(range(k), range(k + 1, order))]] * 2,  # type: ignore[has-type]
+            )
+            outer_product_list.append(outer_product)
+        return tuple(outer_product_list)

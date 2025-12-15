@@ -34,9 +34,11 @@ from distributed_shampoo.shampoo_types import (
     DefaultSingleDeviceDistributedConfig,
     DefaultSpectralDescentPreconditionerConfig,
     DistributedConfig,
+    EigendecomposedKLShampooPreconditionerConfig,
     EigendecomposedShampooPreconditionerConfig,
     EigenvalueCorrectedShampooPreconditionerConfig,
     PreconditionerConfig,
+    RootInvKLShampooPreconditionerConfig,
     RootInvShampooPreconditionerConfig,
     ShampooPT2CompileConfig,
     SignDescentPreconditionerConfig,
@@ -1094,6 +1096,18 @@ class EigenvalueCorrectedShampooStateDictTest(AbstractTest.StateDictTestBase):
                 }
             ],
         }
+
+
+class RootInvKLShampooStateDictTest(ShampooStateDictTest):
+    @property
+    def _preconditioner_config(self) -> RootInvKLShampooPreconditionerConfig:
+        return RootInvKLShampooPreconditionerConfig()
+
+
+class EigendecomposedKLShampooStateDictTest(EigendecomposedShampooStateDictTest):
+    @property
+    def _preconditioner_config(self) -> EigendecomposedKLShampooPreconditionerConfig:
+        return EigendecomposedKLShampooPreconditionerConfig()
 
 
 class SignDescentStateDictTest(AbstractTest.NoPreconditionerStateDictTestBase):
