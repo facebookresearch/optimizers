@@ -514,6 +514,104 @@ DefaultSOAPConfig = EigenvalueCorrectedShampooPreconditionerConfig(
 
 
 @dataclass(kw_only=True)
+class RootInvKLShampooPreconditionerConfig(RootInvShampooPreconditionerConfig):
+    """Configuration for KL-Shampoo preconditioner computation with caching of the root inverse factor matrices.
+
+    Attributes:
+        amortized_computation_config (RootInvConfig): Configuration for the inverse-root computation. (Default: DefaultEigenConfig)
+        num_tolerated_failed_amortized_computations (int): Number of failed amortized computations to tolerate before raising an error. (Default: 3)
+        factor_matrix_dtype (torch.dtype): Data type for factor matrix. (Default: torch.float32)
+        inverse_exponent_override (dict[int, dict[int, float] | float]): The inverse_exponent_override attribute is a dictionary that allows for customizing the inverse exponent used in the KL-Shampoo preconditioner computation.
+            The keys of the dictionary represent the order of the tensor, and the values are either dictionaries with dimension indices as keys and override values as values, or a single float value for all dimensions. All unspecified dimensions use a default exponent of 1/(2*max(o,1)), where o is the order of the tensor. (Default: {})
+
+            As an example, suppose inverse_exponent_override={2: 0.2, 3: {0: 0.0, 1: 0.25}}. In this case, all 1-D tensors will use the default exponent of 0.5 for preconditioning the first (and only) dimension. All 2-D tensors will be preconditioned with an exponent of 0.2 on all dimensions. All 3-D tensors will have the first dimension be preconditioned with an exponent of 0.5, the second dimension not preconditioned, and the third dimension preconditioned with the default exponent 0.1667.
+            A visualization of this example can be seen below:
+            1-D:
+                            +-------x-------+
+                                    |
+                                    |
+                            (^0.5), the default inverse exponent 1/(2*1) since inverse_exponent_override[1] is not specified
+            2-D:
+                            +-----------+
+                            |           |
+                            |           |
+                            |           |-----(^0.2), as specified by inverse_exponent_override[2]=0.2
+                            |           |
+                            |           |
+                            +-----------+
+                                  |
+                                  |
+                                (^0.2), as specified by inverse_exponent_override[2]=0.2
+            3-D:
+                               +---------------+
+                              /               /|
+                             /               / |
+                            +---------------+  |
+                            |               |  |
+                            |               | -|---(^0.25), as specified by inverse_exponent_override[3][1]=0.25
+                            |               |  +
+                            |               | /
+                            |               |/\
+                            +---------------+  \
+                                    |          (^0.1667), the default inverse exponent 1/(2*3) since inverse_exponent_override[3][2] is not specified
+                                    |
+                            no preconditioning since inverse_exponent_override[3][0]=0.0
+
+
+    """
+
+
+@dataclass(kw_only=True)
+class EigendecomposedKLShampooPreconditionerConfig(
+    EigendecomposedShampooPreconditionerConfig
+):
+    """Configuration for KL-Shampoo preconditioner computation with caching of the eigendecomposed factor matrices.
+
+    Attributes:
+        amortized_computation_config (EigendecompositionConfig): Configuration for the eigendecomposition computation. (Default: DefaultEigendecompositionConfig)
+        num_tolerated_failed_amortized_computations (int): Number of failed amortized computations to tolerate before raising an error. (Default: 3)
+        factor_matrix_dtype (torch.dtype): Data type for factor matrix. (Default: torch.float32)
+        inverse_exponent_override (dict[int, dict[int, float] | float]): The inverse_exponent_override attribute is a dictionary that allows for customizing the inverse exponent used in the KL-Shampoo preconditioner computation.
+            The keys of the dictionary represent the order of the tensor, and the values are either dictionaries with dimension indices as keys and override values as values, or a single float value for all dimensions. All unspecified dimensions use a default exponent of 1/(2*max(o,1)), where o is the order of the tensor. (Default: {})
+
+            As an example, suppose inverse_exponent_override={2: 0.2, 3: {0: 0.0, 1: 0.25}}. In this case, all 1-D tensors will use the default exponent of 0.5 for preconditioning the first (and only) dimension. All 2-D tensors will be preconditioned with an exponent of 0.2 on all dimensions. All 3-D tensors will have the first dimension be preconditioned with an exponent of 0.5, the second dimension not preconditioned, and the third dimension preconditioned with the default exponent 0.1667.
+            A visualization of this example can be seen below:
+            1-D:
+                            +-------x-------+
+                                    |
+                                    |
+                            (^0.5), the default inverse exponent 1/(2*1) since inverse_exponent_override[1] is not specified
+            2-D:
+                            +-----------+
+                            |           |
+                            |           |
+                            |           |-----(^0.2), as specified by inverse_exponent_override[2]=0.2
+                            |           |
+                            |           |
+                            +-----------+
+                                  |
+                                  |
+                                (^0.2), as specified by inverse_exponent_override[2]=0.2
+            3-D:
+                               +---------------+
+                              /               /|
+                             /               / |
+                            +---------------+  |
+                            |               |  |
+                            |               | -|---(^0.25), as specified by inverse_exponent_override[3][1]=0.25
+                            |               |  +
+                            |               | /
+                            |               |/\
+                            +---------------+  \
+                                    |          (^0.1667), the default inverse exponent 1/(2*3) since inverse_exponent_override[3][2] is not specified
+                                    |
+                            no preconditioning since inverse_exponent_override[3][0]=0.0
+
+
+    """
+
+
+@dataclass(kw_only=True)
 class SpectralDescentPreconditionerConfig(PreconditionerConfig):
     """Configuration for spectral descent computation in DistributedShampoo.
 
