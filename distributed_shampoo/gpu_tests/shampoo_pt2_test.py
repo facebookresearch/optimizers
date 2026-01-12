@@ -24,7 +24,6 @@ from distributed_shampoo.tests.shampoo_test_utils import (
     compare_two_optimizers_on_weight_and_loss,
 )
 from torch.optim.optimizer import ParamsT
-
 from torch.testing._internal.common_utils import (
     instantiate_parametrized_tests,
     parametrize,

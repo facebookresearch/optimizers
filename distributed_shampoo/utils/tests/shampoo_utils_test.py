@@ -19,7 +19,6 @@ from distributed_shampoo.shampoo_types import LoadBalancingConfig
 from distributed_shampoo.utils.load_balancing_utils import (
     PolynomialComputationalCostModel,
 )
-
 from distributed_shampoo.utils.shampoo_utils import (
     compress_list,
     distribute_buffer_sizes,
@@ -29,7 +28,6 @@ from distributed_shampoo.utils.shampoo_utils import (
     multi_dim_split,
     ParameterizeEnterExitContext,
 )
-
 from torch.testing._internal.common_utils import (
     instantiate_parametrized_tests,
     parametrize,

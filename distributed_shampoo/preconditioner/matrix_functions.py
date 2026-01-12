@@ -39,7 +39,6 @@ from distributed_shampoo.preconditioner.matrix_functions_types import (
     RootInvConfig,
     SVDOrthogonalizationConfig,
 )
-
 from torch import Tensor
 
 logger: logging.Logger = logging.getLogger(__name__)
@@ -804,9 +803,9 @@ def matrix_eigendecomposition(
         Q = eigenvectors_estimate
 
         # This assertion provides a more clear error message than the internal error message in `torch.mm`, and assertion makes sure that user-side is unable to catch the error.
-        assert (
-            Q.dtype == A.dtype
-        ), f"Q and A must have the same dtype! {Q.dtype=} {A.dtype=}"
+        assert Q.dtype == A.dtype, (
+            f"Q and A must have the same dtype! {Q.dtype=} {A.dtype=}"
+        )
 
         eigenvalues_estimate = Q.T @ A @ Q
         iteration = 0
@@ -873,9 +872,9 @@ def matrix_eigendecomposition(
                 func=eigh_eigenvalue_decomposition, config=eigendecomposition_config
             )(A=A_ridge)
         case QREigendecompositionConfig():
-            assert (
-                eigenvectors_estimate is not None
-            ), "eigenvectors_estimate should not be None when QR algorithm is used."
+            assert eigenvectors_estimate is not None, (
+                "eigenvectors_estimate should not be None when QR algorithm is used."
+            )
             return _assign_function_args_from_config(
                 func=qr_algorithm, config=eigendecomposition_config
             )(A=A_ridge, eigenvectors_estimate=eigenvectors_estimate)

@@ -15,12 +15,10 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import torch
-
 from distributed_shampoo.preconditioner.matrix_functions_types import (
     EighEigendecompositionConfig,
     PseudoInverseConfig,
 )
-
 from distributed_shampoo.shampoo_types import (
     AdaGradPreconditionerConfig,
     AmortizedPreconditionerConfig,

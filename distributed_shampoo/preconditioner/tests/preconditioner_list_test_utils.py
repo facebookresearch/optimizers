@@ -113,11 +113,14 @@ class AbstractPreconditionerListTest:
         def test_compress_preconditioner_list(self) -> None:
             # Note: New PreconditionerList implementations might need to add mocks here
             # to make this test case work properly
-            with mock.patch.object(
-                adagrad_preconditioner_list, "compress_list"
-            ) as mock_adagrad_compress_list, mock.patch.object(
-                shampoo_preconditioner_list, "compress_list"
-            ) as mock_shampoo_compress_list:
+            with (
+                mock.patch.object(
+                    adagrad_preconditioner_list, "compress_list"
+                ) as mock_adagrad_compress_list,
+                mock.patch.object(
+                    shampoo_preconditioner_list, "compress_list"
+                ) as mock_shampoo_compress_list,
+            ):
                 self.assertIsNone(
                     self._preconditioner_list.compress_preconditioner_list(
                         local_grad_selector=(True,) * len(self._block_list)

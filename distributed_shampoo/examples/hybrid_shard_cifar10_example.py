@@ -15,7 +15,6 @@ from functools import partial
 
 import torch
 import torch.distributed as dist
-
 from distributed_shampoo import DistributedConfig, HybridShardDistributedConfig
 from distributed_shampoo.examples.argument_parser import Parser
 from distributed_shampoo.examples.trainer_utils import (
@@ -25,7 +24,6 @@ from distributed_shampoo.examples.trainer_utils import (
     setup_distribution,
     train_model,
 )
-
 from torch import nn
 from torch.distributed._composable.fsdp import fully_shard
 from torch.distributed.device_mesh import DeviceMesh, init_device_mesh

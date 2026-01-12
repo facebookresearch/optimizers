@@ -14,7 +14,6 @@ import contextlib
 import os
 import re
 import unittest
-
 from collections.abc import Callable
 from functools import partial
 from typing import cast
@@ -43,7 +42,6 @@ from distributed_shampoo.tests.shampoo_test_utils import (
     construct_training_problem,
     train_model,
 )
-
 from torch import distributed as dist, nn, tensor
 from torch.distributed.device_mesh import DeviceMesh
 from torch.distributed.tensor import DTensor

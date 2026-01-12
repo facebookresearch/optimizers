@@ -35,7 +35,6 @@ from distributed_shampoo.tests.shampoo_test_utils import (
     construct_training_problem,
     train_model,
 )
-
 from torch import distributed as dist, nn
 from torch.distributed.fsdp import FSDPModule, fully_shard
 from torch.distributed.tensor import distribute_tensor, init_device_mesh, Shard

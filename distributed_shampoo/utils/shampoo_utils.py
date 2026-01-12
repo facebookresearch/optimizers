@@ -18,7 +18,6 @@ from types import TracebackType
 from typing import Any, TypeVar
 
 import numpy as np
-
 import torch
 from distributed_shampoo.shampoo_types import LoadBalancingConfig
 from distributed_shampoo.utils.load_balancing_utils import AlignedMemoryCostModel
@@ -81,9 +80,9 @@ def merge_small_dims(
         return (0,)
 
     if isinstance(target_tensor_dimensionality, float):
-        assert (
-            target_tensor_dimensionality == math.inf
-        ), f"{target_tensor_dimensionality=} has to be an integer or math.inf."
+        assert target_tensor_dimensionality == math.inf, (
+            f"{target_tensor_dimensionality=} has to be an integer or math.inf."
+        )
         return tensor_shape
 
     # Squeeze tensor shape to remove dimension with 1; if all dimensions are 1,
@@ -153,9 +152,9 @@ def multi_dim_split(tensor: Tensor, split_size: int | float) -> tuple[Tensor, ..
 
     """
     if isinstance(split_size, float):
-        assert (
-            split_size == math.inf
-        ), f"{split_size=} has to be an integer or math.inf."
+        assert split_size == math.inf, (
+            f"{split_size=} has to be an integer or math.inf."
+        )
         return (tensor,)
 
     return reduce(
@@ -192,9 +191,9 @@ def compress_list(
         Only elements from complete_list where the corresponding selector is True are included.
 
     """
-    assert (
-        len(complete_list) == len(selector)
-    ), f"Inconsistent lengths between complete_list {len(complete_list)} and selector {len(selector)}!"
+    assert len(complete_list) == len(selector), (
+        f"Inconsistent lengths between complete_list {len(complete_list)} and selector {len(selector)}!"
+    )
     return tuple(compress(complete_list, selector))
 
 

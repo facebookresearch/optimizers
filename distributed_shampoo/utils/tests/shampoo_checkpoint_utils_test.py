@@ -20,7 +20,6 @@ from distributed_shampoo.utils.shampoo_checkpoint_utils import (
     unflatten,
     update_param_state_dict_object,
 )
-
 from torch import Tensor
 
 

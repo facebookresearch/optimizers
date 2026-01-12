@@ -14,7 +14,6 @@ from operator import attrgetter
 from unittest import mock
 
 import torch
-
 from distributed_shampoo.distributor import shampoo_dist_utils
 from distributed_shampoo.distributor.shampoo_dist_utils import get_device_mesh
 from torch.distributed.device_mesh import DeviceMesh

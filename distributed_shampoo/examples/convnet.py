@@ -58,6 +58,8 @@ class ConvNet(nn.Module):
         output_shape = []
         for input_length in input_shape:
             output_length = (input_length - kernel_size + 2 * padding) / stride + 1
-            assert output_length.is_integer(), f"Stride {stride} is not compatible with input shape {input_shape}, kernel size {kernel_size} and padding {padding}!"
+            assert output_length.is_integer(), (
+                f"Stride {stride} is not compatible with input shape {input_shape}, kernel size {kernel_size} and padding {padding}!"
+            )
             output_shape.append(int(output_length))
         return output_shape

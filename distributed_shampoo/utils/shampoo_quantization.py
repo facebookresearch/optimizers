@@ -14,9 +14,7 @@ from operator import methodcaller
 
 import torch
 from distributed_shampoo.distributor.shampoo_block_info import BlockInfo
-
 from distributed_shampoo.utils.optimizer_modules import OptimizerModule
-
 from distributed_shampoo.utils.shampoo_utils import (
     compress_list,
     ParameterizeEnterExitContext,
@@ -155,9 +153,9 @@ class QuantizedTensorList:
             value.dtype == quantized_dtype for value in self.quantized_value_list
         )
         self.quantized_dtype = quantized_dtype
-        assert (
-            computation_dtype in _FLOAT_DTYPES
-        ), f"{computation_dtype=} is not supported! It must be one of {_FLOAT_DTYPES}!"
+        assert computation_dtype in _FLOAT_DTYPES, (
+            f"{computation_dtype=} is not supported! It must be one of {_FLOAT_DTYPES}!"
+        )
         self.computation_dtype = computation_dtype
 
         # All min/max values should be None, or no min/max values are None

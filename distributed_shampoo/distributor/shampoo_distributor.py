@@ -267,9 +267,9 @@ class DistributorInterface(ABC):
                 # Skip multi_dim_split if this blocked grad will not be used locally.
                 continue
 
-            assert (
-                grad is not None and torch.isfinite(grad).all()
-            ), f"Encountered gradient containing NaN/Inf in parameter with shape {attrgetter('shape')(grad)}. Check your model for numerical instability or consider gradient clipping."
+            assert grad is not None and torch.isfinite(grad).all(), (
+                f"Encountered gradient containing NaN/Inf in parameter with shape {attrgetter('shape')(grad)}. Check your model for numerical instability or consider gradient clipping."
+            )
 
             # Obtain blocks for each gradient after merging.
             blocks_within_grad = multi_dim_split(
@@ -327,10 +327,11 @@ class Distributor(DistributorInterface):
             This tuple might be empty if the parameters are not receiving gradients.
 
         """
-        assert (
-            len(masked_blocked_search_directions)
-            == len(self._local_masked_blocked_params)
-        ), f"Expected {len(masked_blocked_search_directions)=} to be equal to {len(self._local_masked_blocked_params)=}."
+        assert len(masked_blocked_search_directions) == len(
+            self._local_masked_blocked_params
+        ), (
+            f"Expected {len(masked_blocked_search_directions)=} to be equal to {len(self._local_masked_blocked_params)=}."
+        )
 
         # torch._foreach only accepts non-empty list
         if masked_blocked_search_directions:

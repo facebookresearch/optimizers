@@ -13,7 +13,6 @@ from types import ModuleType
 from unittest.mock import MagicMock, patch
 
 import torch
-
 from distributed_shampoo.examples import loss_metrics
 from distributed_shampoo.examples.loss_metrics import LossMetrics
 

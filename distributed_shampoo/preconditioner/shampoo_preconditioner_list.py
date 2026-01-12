@@ -1327,14 +1327,14 @@ class BaseShampooPreconditionerList(
     ) -> Tensor:
         # TODO: Need to refactor this function to be more efficient. Ideally eliminate those branches.
         # Might consider einsum?
-        assert (
-            sum(preconditioned_dims_selector) == len(preconditioner_list)
-        ), f"The number of dimensions to precondition ({sum(preconditioned_dims_selector)}) must match the number of preconditioners ({len(preconditioner_list)})."
+        assert sum(preconditioned_dims_selector) == len(preconditioner_list), (
+            f"The number of dimensions to precondition ({sum(preconditioned_dims_selector)}) must match the number of preconditioners ({len(preconditioner_list)})."
+        )
 
         # Extract all dtypes and assert they are unique
-        assert (
-            len(unique_dtypes := {p.dtype for p in preconditioner_list}) <= 1
-        ), f"All preconditioners must have the same dtype, but found: {unique_dtypes}"
+        assert len(unique_dtypes := {p.dtype for p in preconditioner_list}) <= 1, (
+            f"All preconditioners must have the same dtype, but found: {unique_dtypes}"
+        )
 
         # Use the single dtype if preconditioners exist, otherwise use grad dtype
         target_dtype = next(iter(unique_dtypes), grad.dtype)
@@ -1519,9 +1519,9 @@ class ClassicShampooPreconditionerList(
             return inverse_exponent_override_on_order.get(
                 dimension, 1 / (2 * max(order, 1))
             )
-        assert isinstance(
-            inverse_exponent_override_on_order, float
-        ), f"Expected inverse_exponent_override_on_order to be a float or a dict, but got {type(inverse_exponent_override_on_order)} instead."
+        assert isinstance(inverse_exponent_override_on_order, float), (
+            f"Expected inverse_exponent_override_on_order to be a float or a dict, but got {type(inverse_exponent_override_on_order)} instead."
+        )
         return inverse_exponent_override_on_order
 
     def _create_preconditioned_dims_selector(

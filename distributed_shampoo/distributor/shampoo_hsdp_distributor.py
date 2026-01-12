@@ -241,10 +241,11 @@ class HSDPDistributor(DistributorInterface):
             )
 
         if self._communicate_params:
-            assert (
-                len(self._local_masked_blocked_params)
-                == len(masked_blocked_search_directions)
-            ), f"Expected {len(self._local_masked_blocked_params)=} to be equal to {len(masked_blocked_search_directions)=}."
+            assert len(self._local_masked_blocked_params) == len(
+                masked_blocked_search_directions
+            ), (
+                f"Expected {len(self._local_masked_blocked_params)=} to be equal to {len(masked_blocked_search_directions)=}."
+            )
 
             # torch._foreach only accepts non-empty list
             if masked_blocked_search_directions:
@@ -269,10 +270,11 @@ class HSDPDistributor(DistributorInterface):
                 )
 
         else:
-            assert (
-                len(self._local_masked_dist_blocked_buffers)
-                == len(masked_blocked_search_directions)
-            ), f"Expected {len(self._local_masked_dist_blocked_buffers)=} to be equal to {len(masked_blocked_search_directions)=}."
+            assert len(self._local_masked_dist_blocked_buffers) == len(
+                masked_blocked_search_directions
+            ), (
+                f"Expected {len(self._local_masked_dist_blocked_buffers)=} to be equal to {len(masked_blocked_search_directions)=}."
+            )
 
             # torch._foreach only accepts non-empty list
             if masked_blocked_search_directions:
@@ -423,9 +425,9 @@ class HSDPDistributor(DistributorInterface):
         for rank, local_dist_buffer in enumerate(local_dist_buffers):
             required_buffer_sizes = [s for s, r in buffer_size_ranks if r == rank]
             remainder_size = local_dist_buffer.size(0) - sum(required_buffer_sizes)
-            assert (
-                remainder_size >= 0
-            ), f"Local distributed buffer size {local_dist_buffer.size(0)} is "
+            assert remainder_size >= 0, (
+                f"Local distributed buffer size {local_dist_buffer.size(0)} is "
+            )
             f"not larger than or equal to the sum of buffer sizes {sum(required_buffer_sizes)}!"
             split_tensors = torch.split(
                 local_dist_buffer, required_buffer_sizes + [remainder_size]
@@ -544,7 +546,9 @@ class HSDPDistributor(DistributorInterface):
 
             assert (
                 flattened_grad is not None and torch.isfinite(flattened_grad).all()
-            ), f"Encountered gradient containing NaN/Inf in parameter with shape {flattened_grad.shape}. Check your model for numerical instability or consider gradient clipping."
+            ), (
+                f"Encountered gradient containing NaN/Inf in parameter with shape {flattened_grad.shape}. Check your model for numerical instability or consider gradient clipping."
+            )
 
             # Split flattened gradients into valid tensor blocks of the gradient.
             split_grads = HSDPDistributor._split_tensor_block_recovery(

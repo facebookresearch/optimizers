@@ -13,7 +13,6 @@ from operator import attrgetter
 from typing import Type
 
 import torch
-
 from distributed_shampoo import FSDPParamAssignmentStrategy
 
 

@@ -20,7 +20,6 @@ from types import ModuleType
 from unittest import mock
 
 import torch
-
 from distributed_shampoo.preconditioner import matrix_functions
 from distributed_shampoo.preconditioner.matrix_functions import (
     _check_2d_tensor,

@@ -14,7 +14,6 @@ from dataclasses import dataclass, field, make_dataclass
 from inspect import signature
 
 import torch
-
 from distributed_shampoo.preconditioner.matrix_functions_types import (
     DefaultEigenConfig,
     DefaultEigendecompositionConfig,
@@ -26,7 +25,6 @@ from distributed_shampoo.preconditioner.matrix_functions_types import (
     QREigendecompositionConfig,
     RootInvConfig,
 )
-
 from distributed_shampoo.utils.abstract_dataclass import AbstractDataclass
 from distributed_shampoo.utils.load_balancing_utils import CostModel, DefaultCostModel
 from torch import Tensor

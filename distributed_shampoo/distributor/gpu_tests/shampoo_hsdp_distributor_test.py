@@ -39,7 +39,6 @@ from distributed_shampoo.tests.shampoo_test_utils import (
     construct_training_problem,
     train_model,
 )
-
 from torch import distributed as dist, nn
 from torch.distributed.checkpoint._nested_dict import flatten_state_dict
 from torch.distributed.device_mesh import init_device_mesh
@@ -103,7 +102,9 @@ class ShampooHSDPDistributorTest(FSDPTest):
             assert (
                 sum(param.numel() for param in model.parameters())
                 == sum(a * b for a, b in pairwise(model_linear_layers_dims)) // 2
-            ), f"{sum(param.numel() for param in model.parameters())=}, {sum(a * b for a, b in pairwise(model_linear_layers_dims)) // 2=}"
+            ), (
+                f"{sum(param.numel() for param in model.parameters())=}, {sum(a * b for a, b in pairwise(model_linear_layers_dims)) // 2=}"
+            )
             distributed_config.param_to_metadata = compile_fsdp_parameter_metadata(
                 model
             )

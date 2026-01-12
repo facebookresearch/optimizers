@@ -14,7 +14,6 @@ from typing import Any, Literal, overload
 import torch
 from distributed_shampoo.distributor.shampoo_block_info import BlockInfo
 from distributed_shampoo.distributor.shampoo_distributor import Distributor
-
 from distributed_shampoo.shampoo_types import (
     DISTRIBUTED_CONFIG,
     FSDPParamAssignmentStrategy,

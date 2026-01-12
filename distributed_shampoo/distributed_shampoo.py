@@ -60,7 +60,6 @@ from distributed_shampoo.preconditioner.sign_descent_preconditioner_list import 
 from distributed_shampoo.preconditioner.spectral_descent_preconditioner_list import (
     SpectralDescentPreconditionerList,
 )
-
 from distributed_shampoo.shampoo_types import (
     AdaGradPreconditionerConfig,
     AdamPreconditionerConfig,
@@ -117,7 +116,6 @@ from distributed_shampoo.shampoo_types import (
     USE_PIN_MEMORY,
     WEIGHT_DECAY,
 )
-
 from distributed_shampoo.utils.shampoo_checkpoint_utils import (
     extract_state_dict_content,
     flatten,
@@ -125,7 +123,6 @@ from distributed_shampoo.utils.shampoo_checkpoint_utils import (
     update_param_state_dict_object,
 )
 from distributed_shampoo.utils.shampoo_utils import compress_list
-
 from torch.optim.optimizer import Optimizer, ParamsT, StateDict
 
 logger: logging.Logger = logging.getLogger(__name__)
@@ -578,9 +575,9 @@ class DistributedShampoo(torch.optim.Optimizer):
             # If the number of trainers is more than the number of blocks,
             # some workers might not get any parameters which cause wasting resources because
             # those trainers are working on nothing.
-            assert state_lists[
-                DISTRIBUTOR
-            ].local_blocked_params, f"Some workers have no parameters to work on. This mostly happens when the value of num_trainers_per_group field in {group[DISTRIBUTED_CONFIG]=} is more than the number of local blocked params on a single device. Please check the num_trainers_per_group setting and consider reducing it."
+            assert state_lists[DISTRIBUTOR].local_blocked_params, (
+                f"Some workers have no parameters to work on. This mostly happens when the value of num_trainers_per_group field in {group[DISTRIBUTED_CONFIG]=} is more than the number of local blocked params on a single device. Please check the num_trainers_per_group setting and consider reducing it."
+            )
             # TODO(irisz): In distributed environment, we want this assert to abort process on all workers instead of
             # only the workers without local_blocked_params. Otherwise, this assert may surface as a timeout error sometime.
 
@@ -598,9 +595,10 @@ class DistributedShampoo(torch.optim.Optimizer):
             for block_info in state_lists[DISTRIBUTOR].local_block_info_list:
                 param_state = self.state[block_info.param]
                 assert (
-                    (block_index := block_info.composable_block_ids[1])
-                    not in param_state
-                ), "There should not exist any optimizer state yet. Maybe verify that _instantiate_distributor was called before all other instantiation functions."
+                    block_index := block_info.composable_block_ids[1]
+                ) not in param_state, (
+                    "There should not exist any optimizer state yet. Maybe verify that _instantiate_distributor was called before all other instantiation functions."
+                )
                 param_state[block_index] = {}
 
     @torch.no_grad()
@@ -672,9 +670,9 @@ class DistributedShampoo(torch.optim.Optimizer):
                     preconditioner_config=preconditioner_config,
                 )
             case SpectralDescentPreconditionerConfig():
-                assert (
-                    group[DISTRIBUTED_CONFIG].target_parameter_dimensionality == 2
-                ), f"{group[DISTRIBUTED_CONFIG].target_parameter_dimensionality=} must be 2 when using SpectralDescentPreconditionerConfig."
+                assert group[DISTRIBUTED_CONFIG].target_parameter_dimensionality == 2, (
+                    f"{group[DISTRIBUTED_CONFIG].target_parameter_dimensionality=} must be 2 when using SpectralDescentPreconditionerConfig."
+                )
                 return SpectralDescentPreconditionerList(
                     block_list=state_lists[DISTRIBUTOR].local_blocked_params,
                     preconditioner_config=preconditioner_config,
@@ -687,9 +685,9 @@ class DistributedShampoo(torch.optim.Optimizer):
         for state_lists, group in zip(
             self._per_group_state_lists, self.param_groups, strict=True
         ):
-            assert (
-                group[PRECONDITIONER_CONFIG] is not None
-            ), f"{group[PRECONDITIONER_CONFIG]=} is None. Please check the instantiation of DistributedShampoo."
+            assert group[PRECONDITIONER_CONFIG] is not None, (
+                f"{group[PRECONDITIONER_CONFIG]=} is None. Please check the instantiation of DistributedShampoo."
+            )
             state_lists[SHAMPOO_PRECONDITIONER_LIST] = (
                 self._preconditioner_config_to_list_cls(
                     state_lists=state_lists,
@@ -716,9 +714,9 @@ class DistributedShampoo(torch.optim.Optimizer):
         for state_lists, group in zip(
             self._per_group_state_lists, self.param_groups, strict=True
         ):
-            assert (
-                len(state_lists[DISTRIBUTOR].local_block_info_list) > 0
-            ), "There is no params in your param_group. Please check the instantiation of DistributedShampoo "
+            assert len(state_lists[DISTRIBUTOR].local_block_info_list) > 0, (
+                "There is no params in your param_group. Please check the instantiation of DistributedShampoo "
+            )
             'with param_group containing no params. For example, DistributedShampoo(params=[{"params": []}])'
             # NOTE: We instantiate a single step tensor on CPU for each group in order
             #       to track the number of steps taken by all parameters within the group.

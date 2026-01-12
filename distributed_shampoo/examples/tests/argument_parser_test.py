@@ -16,7 +16,6 @@ from unittest.mock import patch
 
 import torch
 from distributed_shampoo import FSDPParamAssignmentStrategy
-
 from distributed_shampoo.examples.argument_parser import (
     OptimizerType,
     Parser,

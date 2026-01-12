@@ -12,7 +12,6 @@ import re
 import unittest
 
 import torch
-
 from distributed_shampoo.distributor.shampoo_hsdp_distributor import HSDPDistributor
 from torch import Tensor
 from torch.testing._internal.common_utils import (

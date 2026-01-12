@@ -145,7 +145,9 @@ class FSDPDistributor(Distributor):
 
             assert (
                 flattened_grad is not None and torch.isfinite(flattened_grad).all()
-            ), f"Encountered gradient containing NaN/Inf in parameter with shape {flattened_grad.shape}. Check your model for numerical instability or consider gradient clipping."
+            ), (
+                f"Encountered gradient containing NaN/Inf in parameter with shape {flattened_grad.shape}. Check your model for numerical instability or consider gradient clipping."
+            )
 
             # Split flattened gradients into valid tensor blocks of the gradient.
             split_grads = FSDPDistributor._split_tensor_block_recovery(

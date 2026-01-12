@@ -18,10 +18,8 @@ from pathlib import Path
 from typing import overload
 
 import numpy as np
-
 import torch
 import torch.distributed as dist
-
 from distributed_shampoo import (
     AdaGradPreconditionerConfig,
     AdamPreconditionerConfig,
@@ -45,13 +43,11 @@ from distributed_shampoo.examples.argument_parser import (
 )
 from distributed_shampoo.examples.convnet import ConvNet
 from distributed_shampoo.examples.loss_metrics import LossMetrics
-
 from distributed_shampoo.preconditioner.matrix_functions_types import (
     CoupledHigherOrderConfig,
     CoupledNewtonConfig,
     EigenConfig,
 )
-
 from torch import nn
 from torch.distributed import checkpoint as dist_checkpoint
 from torch.distributed.fsdp import FSDPModule, fully_shard

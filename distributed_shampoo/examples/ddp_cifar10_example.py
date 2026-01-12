@@ -15,10 +15,8 @@ from functools import partial
 from typing import Any
 
 import torch
-
 import torch.distributed as dist
 import torch.distributed.checkpoint as dist_checkpoint
-
 from distributed_shampoo import DDPDistributedConfig, DistributedShampoo
 from distributed_shampoo.examples.argument_parser import Parser
 from distributed_shampoo.examples.trainer_utils import (

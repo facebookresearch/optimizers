@@ -16,7 +16,6 @@ from unittest import mock
 
 import torch
 from distributed_shampoo.distributor.shampoo_block_info import BlockInfo
-
 from distributed_shampoo.utils import shampoo_quantization
 from distributed_shampoo.utils.shampoo_quantization import (
     _FLOAT_DTYPES,

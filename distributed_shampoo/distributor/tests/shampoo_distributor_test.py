@@ -13,7 +13,6 @@ import unittest
 from typing import cast
 
 import torch
-
 from distributed_shampoo.distributed_shampoo import DistributedShampoo
 from distributed_shampoo.distributor.shampoo_block_info import BlockInfo
 from distributed_shampoo.distributor.shampoo_distributor import Distributor

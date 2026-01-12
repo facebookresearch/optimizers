@@ -15,9 +15,7 @@ from collections.abc import Callable
 from functools import partial
 
 import torch
-
 import torch.distributed as dist
-
 from distributed_shampoo import DistributedConfig, HSDPDistributedConfig
 from distributed_shampoo.distributor.shampoo_fsdp_utils import (
     compile_fsdp_parameter_metadata,

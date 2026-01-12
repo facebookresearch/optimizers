@@ -14,7 +14,6 @@ import re
 import unittest
 
 import torch
-
 from distributed_shampoo.distributor.shampoo_fsdp_distributor import FSDPDistributor
 from torch import Tensor
 from torch.testing._internal.common_utils import (
