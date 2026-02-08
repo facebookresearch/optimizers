@@ -398,6 +398,50 @@ class EigendecomposedShampooPreconditionerConfig(ClassicShampooPreconditionerCon
 
 
 @dataclass(kw_only=True)
+class PerFactorEigenvalueCorrectedShampooPreconditionerConfig(
+    EigendecomposedShampooPreconditionerConfig
+):
+    """Configuration for per-factor eigenvalue-corrected Shampoo preconditioner.
+
+    Like EigendecomposedShampoo, stores eigenvectors and eigenvalues per factor matrix.
+    However, eigenvalues are computed directly as diag(Q^T M Q) instead of from
+    eigendecomposition, where Q are the cached eigenvectors and M is the
+    already-accumulated factor matrix.
+
+    Eigenvectors are updated via amortized eigendecomposition (same as EigendecomposedShampoo).
+    Eigenvalues are recomputed every iteration as diag(Q^T M Q).
+
+    Attributes:
+        amortized_computation_config (EigendecompositionConfig): Configuration for the eigendecomposition computation. (Default: DefaultEigendecompositionConfig)
+        num_tolerated_failed_amortized_computations (int): Number of failed amortized computations to tolerate before raising an error. (Default: 3)
+        factor_matrix_dtype (torch.dtype): Data type for factor matrix. (Default: torch.float32)
+        inverse_exponent_override (dict[int, dict[int, float] | float]): Customizes the inverse exponent. (Default: {})
+        factor_matrix_eigenvectors_dtype (torch.dtype): Data type for factor matrix eigenvectors. (Default: torch.float32)
+        factor_matrix_eigenvalues_dtype (torch.dtype): Data type for factor matrix eigenvalues. (Default: torch.float32)
+
+    """
+
+
+@dataclass(kw_only=True)
+class PerFactorEigenvalueCorrectedKLShampooPreconditionerConfig(
+    PerFactorEigenvalueCorrectedShampooPreconditionerConfig
+):
+    """Configuration for per-factor eigenvalue-corrected KL-Shampoo preconditioner.
+
+    Combines per-factor eigenvalue correction with KL-Shampoo outer product computation.
+
+    Attributes:
+        amortized_computation_config (EigendecompositionConfig): Configuration for the eigendecomposition computation. (Default: DefaultEigendecompositionConfig)
+        num_tolerated_failed_amortized_computations (int): Number of failed amortized computations to tolerate before raising an error. (Default: 3)
+        factor_matrix_dtype (torch.dtype): Data type for factor matrix. (Default: torch.float32)
+        inverse_exponent_override (dict[int, dict[int, float] | float]): Customizes the inverse exponent. (Default: {})
+        factor_matrix_eigenvectors_dtype (torch.dtype): Data type for factor matrix eigenvectors. (Default: torch.float32)
+        factor_matrix_eigenvalues_dtype (torch.dtype): Data type for factor matrix eigenvalues. (Default: torch.float32)
+
+    """
+
+
+@dataclass(kw_only=True)
 class EigenvalueCorrectedShampooPreconditionerConfig(BaseShampooPreconditionerConfig):
     """Configuration for eigenvalue-corrected Shampoo/SOAP preconditioner computation.
 

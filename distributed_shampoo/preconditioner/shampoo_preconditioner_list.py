@@ -1678,6 +1678,55 @@ class EigendecomposedShampooPreconditionerList(
         )
 
 
+class PerFactorEigenvalueCorrectedShampooPreconditionerList(
+    EigendecomposedShampooPreconditionerList
+):
+    """Per-factor eigenvalue-corrected Shampoo preconditioners for list of parameters.
+
+    Inherits from EigendecomposedShampooPreconditionerList and overrides update_preconditioners()
+    to compute eigenvalues directly from diag(Q^T M Q), where Q are the cached eigenvectors
+    and M is the (already EMA-accumulated) factor matrix.
+    """
+
+    @profile_decorator
+    def update_preconditioners(
+        self,
+        masked_grad_list: tuple[Tensor, ...],
+        step: Tensor,
+        perform_amortized_computation: bool,
+    ) -> None:
+        """Updates the preconditioners with per-factor eigenvalue correction.
+
+        First calls the parent update_preconditioners() to update factor matrices and eigenvectors.
+        Then computes eigenvalues directly as diag(Q^T M Q) for each factor matrix.
+
+        Args:
+            masked_grad_list (tuple[Tensor, ...]): A list of gradients with their corresponding masks.
+            step (Tensor): The current step.
+            perform_amortized_computation (bool): Whether to perform an amortized computation.
+
+        Returns:
+            None
+        """
+        super().update_preconditioners(
+            masked_grad_list=masked_grad_list,
+            step=step,
+            perform_amortized_computation=perform_amortized_computation,
+        )
+
+        for kronecker_factors in self._masked_kronecker_factors_unwrapped:
+            for factor_matrix, eigenvectors, eigenvalues in zip(
+                kronecker_factors.factor_matrices,
+                kronecker_factors.factor_matrices_eigenvectors,
+                kronecker_factors.factor_matrices_eigenvalues,
+                strict=True,
+            ):
+                eigenvalues.copy_(
+                    (factor_matrix @ eigenvectors * eigenvectors).sum(dim=0)
+                    / self._bias_correction2
+                )
+
+
 class EigenvalueCorrectedShampooPreconditionerList(
     BaseShampooPreconditionerList[
         EigenvalueCorrectedShampooKroneckerFactorsState,
@@ -1820,6 +1869,25 @@ class EigendecomposedKLShampooPreconditionerList(
     EigendecomposedShampooPreconditionerList
 ):
     """Eigendecomposed KL-Shampoo preconditioners for list of parameters."""
+
+    def _transform_grad_for_outer_product(
+        self,
+        grad: Tensor,
+        idx_of_k: int,
+        k: int,
+        order: int,
+        preconditioned_dims_selector: tuple[bool, ...],
+        kronecker_factors: EigendecomposedShampooKroneckerFactorsUnwrapped,
+    ) -> Tensor:
+        return self._kl_transform_grad_for_outer_product(
+            grad, idx_of_k, k, order, preconditioned_dims_selector, kronecker_factors,
+        )
+
+
+class PerFactorEigenvalueCorrectedKLShampooPreconditionerList(
+    PerFactorEigenvalueCorrectedShampooPreconditionerList
+):
+    """Per-factor eigenvalue-corrected KL-Shampoo preconditioners for list of parameters."""
 
     def _transform_grad_for_outer_product(
         self,
