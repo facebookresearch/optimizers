@@ -1,0 +1,20 @@
+_target_: distributed_shampoo.DistributedShampoo
+_partial_: true
+
+lr: 0.001
+betas: [0.9, 1.0]
+epsilon: 1e-12
+momentum: 0.0
+dampening: 0.0
+weight_decay: 0.0
+max_preconditioner_dim: 1024
+precondition_frequency: 100
+start_preconditioning_step: -1
+use_nesterov: false
+use_bias_correction: true
+use_decoupled_weight_decay: true
+
+grafting_config:
+  _target_: distributed_shampoo.AdamPreconditionerConfig
+  beta2: 0.999
+  epsilon: 1e-8

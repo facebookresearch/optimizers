@@ -394,7 +394,7 @@ optimizer = DistributedShampoo(
     ),
 )
 ```
-Please see [`ddp_cifar10_example.py`](https://github.com/facebookresearch/optimizers/blob/main/distributed_shampoo/examples/ddp_cifar10_example.py) as an example.
+Please see [`cifar10_example.py`](https://github.com/facebookresearch/optimizers/blob/main/distributed_shampoo/examples/cifar10_example.py) as an example (use `parallelism=ddp`).
 
 ### FSDP1 (FullyShardedDataParallel)
 
@@ -450,7 +450,7 @@ optimizer = DistributedShampoo(
     ),
 )
 ```
-Please see [`fsdp_cifar10_example.py`](https://github.com/facebookresearch/optimizers/blob/main/distributed_shampoo/examples/fsdp_cifar10_example.py) as an example.
+Please see [`cifar10_example.py`](https://github.com/facebookresearch/optimizers/blob/main/distributed_shampoo/examples/cifar10_example.py) as an example (use `parallelism=fsdp`).
 
 #### HSDP1 Training Support
 
@@ -510,7 +510,7 @@ optimizer = DistributedShampoo(
     ),
 )
 ```
-Please see [`hsdp_cifar10_example.py`](https://github.com/facebookresearch/optimizers/blob/main/distributed_shampoo/examples/hsdp_cifar10_example.py) as an example.
+Please see [`cifar10_example.py`](https://github.com/facebookresearch/optimizers/blob/main/distributed_shampoo/examples/cifar10_example.py) as an example (use `parallelism=hsdp dp_replicate_degree=2`).
 
 ### FSDP2 (fully_shard)
 
@@ -563,7 +563,7 @@ optimizer = DistributedShampoo(
 )
 ```
 
-Please see [`fully_shard_cifar10_example.py`](https://github.com/facebookresearch/optimizers/blob/main/distributed_shampoo/examples/fully_shard_cifar10_example.py) as an example.
+Please see [`cifar10_example.py`](https://github.com/facebookresearch/optimizers/blob/main/distributed_shampoo/examples/cifar10_example.py) as an example (use `parallelism=fully_shard`).
 
 #### HSDP2 Training Support
 
@@ -620,7 +620,7 @@ optimizer = DistributedShampoo(
     distributed_config=HybridShardDistributedConfig(device_mesh=device_mesh),
 )
 ```
-Please see [`hybrid_shard_cifar10_example.py`](https://github.com/facebookresearch/optimizers/blob/main/distributed_shampoo/examples/hybrid_shard_cifar10_example.py) as an example.
+Please see [`cifar10_example.py`](https://github.com/facebookresearch/optimizers/blob/main/distributed_shampoo/examples/cifar10_example.py) as an example (use `parallelism=hybrid_shard dp_replicate_degree=2`).
 
 ## Checkpointing Support
 
@@ -652,7 +652,7 @@ model.load_state_dict(state_dict["model"])
 optimizer.load_distributed_state_dict(state_dict["optim"], key_to_param=model.named_parameters())
 ```
 
-You can also refer to [`ddp_cifar10_example.py`](https://github.com/facebookresearch/optimizers/blob/main/distributed_shampoo/examples/ddp_cifar10_example.py) as an example.
+You can also refer to [`cifar10_example.py`](https://github.com/facebookresearch/optimizers/blob/main/distributed_shampoo/examples/cifar10_example.py) as an example (use `parallelism=ddp`).
 
 ## Hyperparameter Tuning
 
