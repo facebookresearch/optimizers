@@ -47,6 +47,8 @@ from distributed_shampoo.shampoo_types import (
     EigendecomposedKLShampooPreconditionerConfig,
     EigendecomposedShampooPreconditionerConfig,
     EigenvalueCorrectedShampooPreconditionerConfig,
+    PerFactorEigenvalueCorrectedKLShampooPreconditionerConfig,
+    PerFactorEigenvalueCorrectedShampooPreconditionerConfig,
     FSDPDistributedConfig,
     FSDPParamAssignmentStrategy,
     FullyShardDistributedConfig,
@@ -92,6 +94,8 @@ __all__ = [
     "RootInvKLShampooPreconditionerConfig",  # Based on `RootInvShampooPreconditionerConfig`.
     "EigendecomposedShampooPreconditionerConfig",  # Based on `ClassicShampooPreconditionerConfig`.
     "EigendecomposedKLShampooPreconditionerConfig",  # Based on `EigendecomposedShampooPreconditionerConfig`.
+    "PerFactorEigenvalueCorrectedShampooPreconditionerConfig",  # Based on `EigendecomposedShampooPreconditionerConfig`.
+    "PerFactorEigenvalueCorrectedKLShampooPreconditionerConfig",  # Based on `PerFactorEigenvalueCorrectedShampooPreconditionerConfig`.
     "EigenvalueCorrectedShampooPreconditionerConfig",  # Based on `BaseShampooPreconditionerConfig`.
     "DefaultEigenvalueCorrectedShampooConfig",  # Default `EigenvalueCorrectedShampooPreconditionerConfig` using `EighEigendecompositionConfig`.
     "DefaultSOAPConfig",  # Default `EigenvalueCorrectedShampooPreconditionerConfig` using `QREigendecompositionConfig`.
