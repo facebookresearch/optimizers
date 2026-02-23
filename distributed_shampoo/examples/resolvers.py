@@ -5,11 +5,20 @@ All rights reserved.
 This source code is licensed under the BSD-style license found in the
 LICENSE file in the root directory of this source tree.
 
+"""
+
+"""
+Copyright (c) Meta Platforms, Inc. and affiliates.
+All rights reserved.
+
+This source code is licensed under the BSD-style license found in the
+LICENSE file in the root directory of this source tree.
+
 Hydra resolvers for complex types in YAML configs.
 """
 
 import torch
-from distributed_shampoo.shampoo_types import FSDPParamAssignmentStrategy
+from distributed_shampoo import FSDPParamAssignmentStrategy, WeightDecayType
 from omegaconf import OmegaConf
 
 
@@ -37,6 +46,17 @@ def _fsdp_param_strategy_resolver(strategy_str: str) -> FSDPParamAssignmentStrat
         raise ValueError(f"Unknown strategy: {strategy_str}. Valid options: {valid}")
 
 
+def _weight_decay_type_resolver(type_str: str) -> WeightDecayType:
+    """Resolve a string to WeightDecayType."""
+    try:
+        return WeightDecayType[type_str]
+    except KeyError:
+        valid = [t.name for t in WeightDecayType]
+        raise ValueError(
+            f"Unknown weight decay type: {type_str}. Valid options: {valid}"
+        )
+
+
 def register_resolvers() -> None:
     """Register all custom Hydra resolvers. Call once at startup."""
     if not OmegaConf.has_resolver("torch_dtype"):
@@ -44,4 +64,8 @@ def register_resolvers() -> None:
     if not OmegaConf.has_resolver("fsdp_param_strategy"):
         OmegaConf.register_new_resolver(
             "fsdp_param_strategy", _fsdp_param_strategy_resolver
+        )
+    if not OmegaConf.has_resolver("weight_decay_type"):
+        OmegaConf.register_new_resolver(
+            "weight_decay_type", _weight_decay_type_resolver
         )

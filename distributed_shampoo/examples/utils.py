@@ -5,6 +5,15 @@ All rights reserved.
 This source code is licensed under the BSD-style license found in the
 LICENSE file in the root directory of this source tree.
 
+"""
+
+"""
+Copyright (c) Meta Platforms, Inc. and affiliates.
+All rights reserved.
+
+This source code is licensed under the BSD-style license found in the
+LICENSE file in the root directory of this source tree.
+
 Utility functions for CIFAR-10 training examples.
 """
 
@@ -26,13 +35,37 @@ from distributed_shampoo.examples.loss_metrics import LossMetrics
 from distributed_shampoo.examples.parallelism import ParallelismStrategy
 from omegaconf import DictConfig
 from torch import nn
-from torch.distributed import checkpoint as dist_checkpoint
+from torch.distributed import checkpoint as dcp
 from torch.distributed.device_mesh import init_device_mesh
 from torchvision import datasets, transforms
 
 logger: logging.Logger = logging.getLogger(__name__)
 
 CIFAR_10_DATASET_FILENAME = "cifar-10-python.tar.gz"
+
+
+class PerRankLoggingFormatter(logging.Formatter):
+    """Formatter that adds rank to the log message."""
+
+    def __init__(self) -> None:
+        if dist.is_initialized():
+            fmt = f"[RANK {dist.get_rank()}] %(levelname)s - %(name)s - %(message)s"
+        else:
+            fmt = None
+        super().__init__(fmt=fmt)
+
+
+def setup_per_rank_logging(verbose: bool) -> None:
+    """Configure per-rank logging with rank prefix and optional debug level."""
+    root_logger = logging.getLogger()
+    for handler in root_logger.handlers[:]:
+        root_logger.removeHandler(handler)
+    handler = logging.StreamHandler()
+    handler.setFormatter(PerRankLoggingFormatter())
+    root_logger.addHandler(handler)
+
+    if verbose:
+        root_logger.setLevel(logging.DEBUG)
 
 
 def setup_environment() -> None:
@@ -66,11 +99,25 @@ def setup_distribution(
     return device
 
 
-def get_model_and_loss_fn(device: torch.device) -> tuple[nn.Module, nn.Module]:
-    return ConvNet(height=32, width=32).to(device), nn.CrossEntropyLoss()
+def get_model_and_loss_fn(
+    device: torch.device,
+    out_channels: int = 64,
+    disable_linear_bias: bool = False,
+) -> tuple[nn.Module, nn.Module]:
+    return (
+        ConvNet(
+            height=32,
+            width=32,
+            out_channels=out_channels,
+            disable_bias=disable_linear_bias,
+        ).to(device),
+        nn.CrossEntropyLoss(),
+    )
 
 
-def create_device_mesh(dp_replicate_degree: int, world_size: int):
+def create_device_mesh(
+    dp_replicate_degree: int, world_size: int
+) -> torch.distributed.device_mesh.DeviceMesh:
     mesh_shape = (dp_replicate_degree, world_size // dp_replicate_degree)
     mesh_dim_names = ("dp_replicate", "dp_shard")
     return init_device_mesh("cuda", mesh_shape, mesh_dim_names=mesh_dim_names)
@@ -98,7 +145,8 @@ def instantiate_optimizer(
 def get_data_loader_and_sampler(
     data_path: Path | str, world_size: int, rank: int, batch_size: int
 ) -> tuple[
-    torch.utils.data.DataLoader, torch.utils.data.distributed.DistributedSampler
+    torch.utils.data.DataLoader,
+    torch.utils.data.distributed.DistributedSampler[torch.utils.data.Dataset],
 ]:
     transform = transforms.Compose(
         [
@@ -146,21 +194,26 @@ def load_checkpoint(
     if not os.path.exists(metadata_path):
         return
 
-    state_dict = {
+    # Since we store the optimizer in eval mode, we need to load it while it is in eval mode.
+    optimizer.eval()
+
+    state_dict: dict[str, Any] = {
         "model": model.state_dict(),
-        "optim": optimizer.distributed_state_dict(
-            key_to_param=model.named_parameters()
-        ),
+        "optim": optimizer.state_dict(),
     }
-    dist_checkpoint.load_state_dict(
+    dcp.load(
         state_dict=state_dict,
-        storage_reader=dist_checkpoint.FileSystemReader(checkpoint_dir),
+        checkpoint_id=checkpoint_dir,
     )
 
     model.load_state_dict(state_dict["model"])
-    optimizer.load_distributed_state_dict(
-        state_dict["optim"], key_to_param=model.named_parameters()
-    )
+    optimizer.load_state_dict(state_dict["optim"])
+
+    # Ensure optimizer is in train mode after loading checkpoint.
+    # This is necessary for iterate averaging (GPA/Schedule-Free) to
+    # properly resume training with the Y (training) sequence.
+    optimizer.train()
+
     logger.info(f"Loaded checkpoint from {checkpoint_dir}")
 
 
@@ -185,6 +238,11 @@ def train_model(
         metrics_dir=metrics_dir,
     )
 
+    # Ensure optimizer is in train mode for iterate averaging (GPA/Schedule-Free).
+    # This is a no-op for optimizers without iterate averaging.
+    if isinstance(optimizer, DistributedShampoo):
+        optimizer.train()
+
     for epoch in range(epochs):
         logger.info(f"Epoch: {epoch}")
         if isinstance(sampler, torch.utils.data.distributed.DistributedSampler):
@@ -193,7 +251,8 @@ def train_model(
         for inputs, labels in data_loader:
             inputs, labels = inputs.to(device), labels.to(device)
             optimizer.zero_grad()
-            loss = loss_fn(model(inputs), labels)
+            output = model(inputs)
+            loss = loss_fn(output, labels)
             loss.backward()
             optimizer.step()
 
@@ -203,17 +262,23 @@ def train_model(
             if local_rank == 0:
                 metrics.log_global_metrics()
 
+    # checkpoint optimizer and model using distributed checkpointing solution
     if checkpoint_dir is not None and isinstance(optimizer, DistributedShampoo):
+        # Switch optimizer to eval mode before saving checkpoint.
+        # This ensures the averaged parameters (X sequence) are saved.
+        optimizer.eval()
+
         state_dict = {
             "model": model.state_dict(),
-            "optim": optimizer.distributed_state_dict(
-                key_to_param=model.named_parameters()
-            ),
+            "optim": optimizer.state_dict(),
         }
-        dist_checkpoint.save_state_dict(
+        dcp.save(
             state_dict=state_dict,
-            storage_writer=dist_checkpoint.FileSystemWriter(checkpoint_dir),
+            checkpoint_id=checkpoint_dir,
         )
+
+        # Switch optimizer back to train mode after saving checkpoint.
+        optimizer.train()
 
     metrics.flush()
     return (

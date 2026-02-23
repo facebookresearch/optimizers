@@ -34,28 +34,32 @@ from torch.nn.parameter import Parameter
 
 # Keys for optimizer state (always checkpointed)
 FILTERED_GRAD = "filtered_grad"
-MOMENTUM = "momentum"
+LR_SUM = "lr_sum"
 STEP = "step"
+TRAIN_MODE = "train_mode"
+WEIGHT_BUFFER = "weight_buffer"
 
 # Keys for parameter groups (checkpointed if specified)
 BETA3 = "beta3"
 BETAS = "betas"
-DAMPENING = "dampening"
 DISTRIBUTED_CONFIG = "distributed_config"
 EPSILON = "epsilon"
+EVAL_INTERP_COEFF = "eval_interp_coeff"
 GRAFTING_CONFIG = "grafting_config"
+ITERATE_AVERAGING_CONFIG = "iterate_averaging_config"
 LR = "lr"
 MAX_PRECONDITIONER_DIM = "max_preconditioner_dim"
 PARAMS = "params"  # While this is stored in groups by default, we do not checkpoint this quantity.
+PEAK_LR = "peak_lr"
 PRECONDITION_FREQUENCY = "precondition_frequency"
 PRECONDITIONER_CONFIG = "preconditioner_config"
 START_PRECONDITIONING_STEP = "start_preconditioning_step"
+TRAIN_INTERP_COEFF = "train_interp_coeff"
 USE_EIGENVALUE_CORRECTION = "use_eigenvalue_correction"
 USE_BIAS_CORRECTION = "use_bias_correction"
-USE_DECOUPLED_WEIGHT_DECAY = "use_decoupled_weight_decay"
-USE_NESTEROV = "use_nesterov"
 USE_PIN_MEMORY = "use_pin_memory"
 WEIGHT_DECAY = "weight_decay"
+WEIGHT_DECAY_TYPE = "weight_decay_type"
 
 # Keys for lists of blocked states and metadata (never checkpointed)
 DISTRIBUTOR = "distributor"
@@ -64,10 +68,10 @@ GRAFTING_PRECONDITIONER_LIST = "grafting_preconditioner_list"
 MASKED_BLOCKED_GRADS = "masked_blocked_grads"
 MASKED_BLOCKED_PARAMS = "masked_blocked_params"
 MASKED_FILTERED_GRAD_LIST = "masked_filtered_grad_list"
-MASKED_MOMENTUM_LIST = "masked_momentum_list"
-MOMENTUM_LIST = "momentum_list"
+MASKED_WEIGHT_BUFFER_LIST = "masked_weight_buffer_list"
 PREVIOUS_GRAD_SELECTOR = "previous_grad_selector"
 SHAMPOO_PRECONDITIONER_LIST = "shampoo_preconditioner_list"
+WEIGHT_BUFFER_LIST = "weight_buffer_list"
 
 
 ###### ERROR CLASSES ######
@@ -672,6 +676,175 @@ class SignDescentPreconditionerConfig(PreconditionerConfig):
 DefaultSignDescentPreconditionerConfig = SignDescentPreconditionerConfig()
 
 
+@dataclass(init=False)
+class IterateAveragingConfig(AbstractDataclass):
+    """Configuration for primal or iterate averaging in Shampoo.
+
+    Iterate averaging methods like Generalized Primal Averaging (GPA) and Schedule-Free
+    provide an alternative to traditional momentum that can achieve equivalent or better
+    convergence properties.
+
+    Migration from Previous Momentum Parameters:
+        The previous `momentum`, `dampening`, and `use_nesterov` parameters have been replaced
+        by iterate averaging configs. Below are the equivalences:
+
+        **SGD Heavy-Ball Momentum (momentum=β, dampening=0, use_nesterov=False):**
+            Use GeneralizedPrimalAveragingConfig with:
+            - eval_interp_coeff = β (the momentum value)
+            - train_interp_coeff = 1.0
+            - Adjust learning rate: lr_new = lr_old / (1 - β)
+
+        **SGD Nesterov Momentum (momentum=β, dampening=0, use_nesterov=True):**
+            Use GeneralizedPrimalAveragingConfig with:
+            - eval_interp_coeff = β (the momentum value)
+            - train_interp_coeff = β (the momentum value)
+            - Adjust learning rate: lr_new = lr_old / (1 - β)
+
+        **Dampening (dampening ≠ 0):**
+            The previous dampening parameter does not have a direct equivalent in the
+            iterate averaging framework. If dampening was used, the behavior cannot be
+            exactly replicated. In practice, dampening was rarely used (default was 0.0),
+            and the primal averaging formulation provides better theoretical properties.
+
+        **LaProp:**
+            The previous momentum implementation (sometimes called LaProp in the codebase)
+            is mathematically equivalent to the heavy-ball/primal averaging formulation
+            when dampening=0. Use the heavy-ball configuration above.
+
+    """
+
+
+@dataclass(kw_only=True)
+class GeneralizedPrimalAveragingConfig(IterateAveragingConfig):
+    """Configuration for generalized primal averaging in Shampoo.
+
+    Generalized Primal Averaging (GPA) maintains two sequences of iterates:
+    - The evaluation sequence (x): Used for model evaluation/inference
+    - The training sequence (y): Used for gradient computation
+
+    See https://arxiv.org/pdf/2512.17131 for more details.
+
+    Equivalence to SGD Momentum:
+        GPA can reproduce SGD momentum behavior with appropriate coefficient settings:
+
+        Example 1: SGD with Heavy-Ball Momentum (momentum=0.9)
+            ```python
+            # Original SGD:
+            # optimizer = SGD(params, lr=0.01, momentum=0.9)
+
+            # Equivalent Shampoo with GPA:
+            optimizer = DistributedShampoo(
+                params,
+                lr=0.1,  # = 0.01 / (1 - 0.9)
+                betas=(0.0, 1.0),
+                preconditioner_config=SGDPreconditionerConfig(),
+                iterate_averaging_config=GeneralizedPrimalAveragingConfig(
+                    eval_interp_coeff=0.9,  # = momentum
+                    train_interp_coeff=1.0,
+                ),
+            )
+            ```
+
+        Example 2: SGD with Nesterov Momentum (momentum=0.9, nesterov=True)
+            ```python
+            # Original SGD:
+            # optimizer = SGD(params, lr=0.01, momentum=0.9, nesterov=True)
+
+            # Equivalent Shampoo with GPA:
+            optimizer = DistributedShampoo(
+                params,
+                lr=0.1,  # = 0.01 / (1 - 0.9)
+                betas=(0.0, 1.0),
+                preconditioner_config=SGDPreconditionerConfig(),
+                iterate_averaging_config=GeneralizedPrimalAveragingConfig(
+                    eval_interp_coeff=0.9,  # = momentum
+                    train_interp_coeff=0.9,  # = momentum (same as eval for Nesterov)
+                ),
+            )
+            ```
+
+    Attributes:
+        eval_interp_coeff (float): Interpolation coefficient for the model evaluation sequence (called mu_x).
+            Controls the momentum-like behavior of the evaluation iterates.
+            Set to the momentum value (β) for SGD momentum equivalence.
+            Must be in the interval [0, 1). (Default: 0.9)
+        train_interp_coeff (float): Interpolation coefficient for the gradient computation sequence (called mu_y).
+            Set to 1.0 for heavy-ball momentum, or to β for Nesterov momentum.
+            Must be in the interval (0, 1]. (Default: 0.8)
+
+    """
+
+    eval_interp_coeff: float = 0.9
+    train_interp_coeff: float = 0.8
+
+    def __post_init__(self) -> None:
+        if not 0.0 <= self.eval_interp_coeff < 1.0:
+            raise ValueError(
+                f"Invalid {self.eval_interp_coeff=}. Must be within [0.0, 1.0)."
+            )
+        if not 0.0 < self.train_interp_coeff <= 1.0:
+            raise ValueError(
+                f"Invalid {self.train_interp_coeff=}. Must be within (0.0, 1.0]."
+            )
+
+
+@dataclass(kw_only=True)
+class ScheduleFreeConfig(IterateAveragingConfig):
+    """Configuration for schedule-free optimization in Shampoo.
+
+    Schedule-Free is an iterate averaging method that eliminates the need for learning rate
+    schedules by automatically adapting the effective learning rate during training.
+
+    See https://arxiv.org/abs/2405.15682 for more details.
+
+    Note:
+        Schedule-Free is not designed to replicate traditional momentum behavior.
+        If you need momentum-equivalent behavior, use GeneralizedPrimalAveragingConfig instead.
+        Schedule-Free is intended for cases where you want to avoid manually tuning
+        learning rate schedules.
+
+    Attributes:
+        train_interp_coeff (float): Interpolation coefficient for the gradient computation sequence (called mu_y).
+            Controls the interpolation between the current iterate and the averaged iterate.
+            Must be in the interval (0, 1]. (Default: 0.8)
+        eval_coeff_lr_power (int): Learning rate power for the evaluation sequence. This heuristic is described
+            in Equation (23) in https://arxiv.org/pdf/2405.15682. (Default: 2)
+
+    """
+
+    train_interp_coeff: float = 0.8
+    eval_coeff_lr_power: int = 2
+
+    def __post_init__(self) -> None:
+        if not 0.0 < self.train_interp_coeff <= 1.0:
+            raise ValueError(
+                f"Invalid {self.train_interp_coeff=}. Must be within (0.0, 1.0]."
+            )
+
+
+@enum.unique
+class WeightDecayType(enum.Enum):
+    """Weight decay strategies for Shampoo.
+
+    L2: Applies weight decay by adding a multiple of the weights to the gradient before preconditioning.
+
+    DECOUPLED: Applies weight decay by adding a multiple of the weights independent of the preconditioned gradient.
+
+    CORRECTED: Applies weight decay by adding a multiple of the weights scaled by the learning rate divided by the maximum learning rate,
+        independent of the preconditioned gradient. This was shown to yield nice stability properties for Adam, i.e., a steady-state
+        ||g|| / ||w|| ratio for normalized layers in Defazio (2025). This needs to be further studied for AdaGrad-style methods.
+
+    INDEPENDENT: Applies weight decay by adding a multiple of the weights divided by the maximum learning rate,
+        independent of the preconditioned gradient. This is a variant of decoupled weight decay that scales by 1 / peak_lr.
+
+    """
+
+    L2 = "L2"
+    DECOUPLED = "DECOUPLED"
+    CORRECTED = "CORRECTED"
+    INDEPENDENT = "INDEPENDENT"
+
+
 @dataclass
 class FSDPParameterMetadata:
     """FSDP Metadata for a parameter.
@@ -702,11 +875,11 @@ class FSDPParamAssignmentStrategy(enum.Enum):
         Shampoo further blocks the parameters for preconditioning, which would likely affect the numerical accuracy
         of the preconditioner. However, this strategy is the most efficient in terms of memory usage.
 
-    REPLICATE: parameters are all-gathered (replicated) across all ranks in shard dimension.
+    REPLICATE: Parameters are all-gathered (replicated) across all ranks in shard dimension.
         This strategy should produce identical results as the default Shampoo implementation, but at the cost of
         significantly increased memory usage and communication.
 
-    ROUND_ROBIN: whole parameters are assigned to ranks in a round-robin fashion.
+    ROUND_ROBIN: Parameters are assigned to ranks in a round-robin fashion.
         This strategy balances the memory and compute overhead across all ranks, by assigning the whole model
         parameters to the ranks in the shard dimension (and it should be used when there are more parameters than shards).
 
@@ -959,3 +1132,18 @@ class ShampooPT2CompileConfig(
 
     def __init__(self, **kwargs: object) -> None:
         super().__init__(**kwargs)
+
+
+@dataclass(kw_only=True)
+class ShampooRuntimeConfig:
+    """
+    Runtime configuration for Shampoo. Only non-checkpointed options here.
+
+    Attributes:
+        eager_nan_check (bool): Flag for checking for NaNs in Shampoo step() eagerly. If enabled, it triggers host-device syncs for each iteration (Default: False)
+    """
+
+    eager_nan_check: bool = False
+
+
+DefaultShampooRuntimeConfig = ShampooRuntimeConfig()

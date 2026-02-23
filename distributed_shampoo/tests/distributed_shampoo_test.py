@@ -37,13 +37,17 @@ from distributed_shampoo.shampoo_types import (
     EigendecomposedKLShampooPreconditionerConfig,
     EigendecomposedShampooPreconditionerConfig,
     EigenvalueCorrectedShampooPreconditionerConfig,
+    GeneralizedPrimalAveragingConfig,
+    IterateAveragingConfig,
     PreconditionerConfig,
     RootInvKLShampooPreconditionerConfig,
     RootInvShampooPreconditionerConfig,
+    ScheduleFreeConfig,
     ShampooPT2CompileConfig,
     SignDescentPreconditionerConfig,
     SingleDeviceDistributedConfig,
     SpectralDescentPreconditionerConfig,
+    WeightDecayType,
 )
 from torch import nn, Tensor
 from torch.testing._internal.common_utils import (
@@ -107,14 +111,6 @@ class DistributedShampooInitTest(unittest.TestCase):
             (
                 {"epsilon": 0.0},
                 "Invalid param_group[EPSILON]=0.0. Must be > 0.0.",
-            ),
-            (
-                {"momentum": 3.14},
-                "Invalid param_group[MOMENTUM]=3.14. Must be [0.0, 1.0).",
-            ),
-            (
-                {"dampening": -0.1},
-                "Invalid param_group[DAMPENING]=-0.1. Must be [0.0, 1.0).",
             ),
             (
                 {"weight_decay": -0.1},
@@ -184,12 +180,6 @@ class DistributedShampooInitTest(unittest.TestCase):
     @parametrize(
         "noop_hyperparameter_setting, expected_warning_msgs",
         [
-            (
-                {"momentum": 0.0, "use_nesterov": True},
-                [
-                    "Nesterov flag is enabled but momentum parameter is zero! Continuing without using momentum or Nesterov acceleration..."
-                ],
-            ),
             (
                 {
                     "betas": (0.9, 0.999),
@@ -270,7 +260,6 @@ class DistributedShampooTest(unittest.TestCase):
             lr=0.01,
             betas=(0.9, 1.0),
             epsilon=1e-12,
-            momentum=0.0,
             weight_decay=0.0,
             max_preconditioner_dim=5,
             precondition_frequency=1,
@@ -340,12 +329,14 @@ class AbstractTest:
             self._model = nn.Sequential(
                 nn.Linear(5, 10, bias=False),
             )
+            # Initialize weights to zeros to ensure deterministic state dict values.
+            with torch.no_grad():
+                cast(torch.Tensor, self._model[0].weight).zero_()
             self._optimizer = DistributedShampoo(
                 self._model.parameters(),
                 lr=0.01,
                 betas=(0.9, 1.0),
                 epsilon=1e-12,
-                momentum=0.9,
                 weight_decay=0.0,
                 max_preconditioner_dim=5,
                 precondition_frequency=1,
@@ -442,15 +433,6 @@ class AbstractTest:
                                     [0.0, 0.0, 0.0, 0.0, 0.0],
                                 ]
                             ),
-                            "momentum": torch.tensor(
-                                [
-                                    [0.0, 0.0, 0.0, 0.0, 0.0],
-                                    [0.0, 0.0, 0.0, 0.0, 0.0],
-                                    [0.0, 0.0, 0.0, 0.0, 0.0],
-                                    [0.0, 0.0, 0.0, 0.0, 0.0],
-                                    [0.0, 0.0, 0.0, 0.0, 0.0],
-                                ]
-                            ),
                             "filtered_grad": torch.tensor(
                                 [
                                     [0.0, 0.0, 0.0, 0.0, 0.0],
@@ -463,15 +445,6 @@ class AbstractTest:
                         },
                         "block_1": {
                             "adagrad": torch.tensor(
-                                [
-                                    [0.0, 0.0, 0.0, 0.0, 0.0],
-                                    [0.0, 0.0, 0.0, 0.0, 0.0],
-                                    [0.0, 0.0, 0.0, 0.0, 0.0],
-                                    [0.0, 0.0, 0.0, 0.0, 0.0],
-                                    [0.0, 0.0, 0.0, 0.0, 0.0],
-                                ]
-                            ),
-                            "momentum": torch.tensor(
                                 [
                                     [0.0, 0.0, 0.0, 0.0, 0.0],
                                     [0.0, 0.0, 0.0, 0.0, 0.0],
@@ -499,15 +472,14 @@ class AbstractTest:
                         "betas": (0.9, 1.0),
                         "beta3": 0.9,
                         "epsilon": 1e-12,
-                        "momentum": 0.9,
-                        "dampening": 0.0,
                         "weight_decay": 0.0,
+                        "peak_lr": 0.01,
+                        "weight_decay_type": WeightDecayType.DECOUPLED,
                         "max_preconditioner_dim": 5,
                         "precondition_frequency": 1,
                         "start_preconditioning_step": 1,
-                        "use_nesterov": False,
                         "use_bias_correction": True,
-                        "use_decoupled_weight_decay": True,
+                        "iterate_averaging_config": None,
                         "grafting_config": AdaGradPreconditionerConfig(epsilon=0.001),
                         "use_pin_memory": False,
                         "distributed_config": SingleDeviceDistributedConfig(
@@ -552,7 +524,6 @@ class ShampooStateDictTest(AbstractTest.StateDictTestBase):
                                     ]
                                 ),
                             },
-                            "factor_matrix_indices": {},
                             "inv_factor_matrices": {
                                 0: torch.tensor(
                                     [
@@ -575,15 +546,6 @@ class ShampooStateDictTest(AbstractTest.StateDictTestBase):
                             },
                         },
                         "adagrad": torch.tensor(
-                            [
-                                [0.0, 0.0, 0.0, 0.0, 0.0],
-                                [0.0, 0.0, 0.0, 0.0, 0.0],
-                                [0.0, 0.0, 0.0, 0.0, 0.0],
-                                [0.0, 0.0, 0.0, 0.0, 0.0],
-                                [0.0, 0.0, 0.0, 0.0, 0.0],
-                            ]
-                        ),
-                        "momentum": torch.tensor(
                             [
                                 [0.0, 0.0, 0.0, 0.0, 0.0],
                                 [0.0, 0.0, 0.0, 0.0, 0.0],
@@ -624,7 +586,6 @@ class ShampooStateDictTest(AbstractTest.StateDictTestBase):
                                     ]
                                 ),
                             },
-                            "factor_matrix_indices": {},
                             "inv_factor_matrices": {
                                 0: torch.tensor(
                                     [
@@ -655,15 +616,6 @@ class ShampooStateDictTest(AbstractTest.StateDictTestBase):
                                 [0.0, 0.0, 0.0, 0.0, 0.0],
                             ]
                         ),
-                        "momentum": torch.tensor(
-                            [
-                                [0.0, 0.0, 0.0, 0.0, 0.0],
-                                [0.0, 0.0, 0.0, 0.0, 0.0],
-                                [0.0, 0.0, 0.0, 0.0, 0.0],
-                                [0.0, 0.0, 0.0, 0.0, 0.0],
-                                [0.0, 0.0, 0.0, 0.0, 0.0],
-                            ]
-                        ),
                         "filtered_grad": torch.tensor(
                             [
                                 [0.0, 0.0, 0.0, 0.0, 0.0],
@@ -683,15 +635,14 @@ class ShampooStateDictTest(AbstractTest.StateDictTestBase):
                     "betas": (0.9, 1.0),
                     "beta3": 0.9,
                     "epsilon": 1e-12,
-                    "momentum": 0.9,
-                    "dampening": 0.0,
                     "weight_decay": 0.0,
+                    "peak_lr": 0.01,
+                    "weight_decay_type": WeightDecayType.DECOUPLED,
                     "max_preconditioner_dim": 5,
                     "precondition_frequency": 1,
                     "start_preconditioning_step": 1,
-                    "use_nesterov": False,
                     "use_bias_correction": True,
-                    "use_decoupled_weight_decay": True,
+                    "iterate_averaging_config": None,
                     "grafting_config": AdaGradPreconditionerConfig(epsilon=0.001),
                     "use_pin_memory": False,
                     "distributed_config": SingleDeviceDistributedConfig(
@@ -736,7 +687,6 @@ class EigendecomposedShampooStateDictTest(AbstractTest.StateDictTestBase):
                                     ]
                                 ),
                             },
-                            "factor_matrix_indices": {},
                             "factor_matrices_eigenvectors": {
                                 0: torch.tensor(
                                     [
@@ -763,15 +713,6 @@ class EigendecomposedShampooStateDictTest(AbstractTest.StateDictTestBase):
                             },
                         },
                         "adagrad": torch.tensor(
-                            [
-                                [0.0, 0.0, 0.0, 0.0, 0.0],
-                                [0.0, 0.0, 0.0, 0.0, 0.0],
-                                [0.0, 0.0, 0.0, 0.0, 0.0],
-                                [0.0, 0.0, 0.0, 0.0, 0.0],
-                                [0.0, 0.0, 0.0, 0.0, 0.0],
-                            ]
-                        ),
-                        "momentum": torch.tensor(
                             [
                                 [0.0, 0.0, 0.0, 0.0, 0.0],
                                 [0.0, 0.0, 0.0, 0.0, 0.0],
@@ -812,7 +753,6 @@ class EigendecomposedShampooStateDictTest(AbstractTest.StateDictTestBase):
                                     ]
                                 ),
                             },
-                            "factor_matrix_indices": {},
                             "factor_matrices_eigenvectors": {
                                 0: torch.tensor(
                                     [
@@ -847,15 +787,6 @@ class EigendecomposedShampooStateDictTest(AbstractTest.StateDictTestBase):
                                 [0.0, 0.0, 0.0, 0.0, 0.0],
                             ]
                         ),
-                        "momentum": torch.tensor(
-                            [
-                                [0.0, 0.0, 0.0, 0.0, 0.0],
-                                [0.0, 0.0, 0.0, 0.0, 0.0],
-                                [0.0, 0.0, 0.0, 0.0, 0.0],
-                                [0.0, 0.0, 0.0, 0.0, 0.0],
-                                [0.0, 0.0, 0.0, 0.0, 0.0],
-                            ]
-                        ),
                         "filtered_grad": torch.tensor(
                             [
                                 [0.0, 0.0, 0.0, 0.0, 0.0],
@@ -875,15 +806,14 @@ class EigendecomposedShampooStateDictTest(AbstractTest.StateDictTestBase):
                     "betas": (0.9, 1.0),
                     "beta3": 0.9,
                     "epsilon": 1e-12,
-                    "momentum": 0.9,
-                    "dampening": 0.0,
                     "weight_decay": 0.0,
+                    "peak_lr": 0.01,
+                    "weight_decay_type": WeightDecayType.DECOUPLED,
                     "max_preconditioner_dim": 5,
                     "precondition_frequency": 1,
                     "start_preconditioning_step": 1,
-                    "use_nesterov": False,
                     "use_bias_correction": True,
-                    "use_decoupled_weight_decay": True,
+                    "iterate_averaging_config": None,
                     "grafting_config": AdaGradPreconditionerConfig(epsilon=0.001),
                     "use_pin_memory": False,
                     "distributed_config": SingleDeviceDistributedConfig(
@@ -928,7 +858,6 @@ class EigenvalueCorrectedShampooStateDictTest(AbstractTest.StateDictTestBase):
                                     ]
                                 ),
                             },
-                            "factor_matrix_indices": {},
                             "factor_matrices_eigenvectors": {
                                 0: torch.tensor(
                                     [
@@ -960,15 +889,6 @@ class EigenvalueCorrectedShampooStateDictTest(AbstractTest.StateDictTestBase):
                             ),
                         },
                         "adagrad": torch.tensor(
-                            [
-                                [0.0, 0.0, 0.0, 0.0, 0.0],
-                                [0.0, 0.0, 0.0, 0.0, 0.0],
-                                [0.0, 0.0, 0.0, 0.0, 0.0],
-                                [0.0, 0.0, 0.0, 0.0, 0.0],
-                                [0.0, 0.0, 0.0, 0.0, 0.0],
-                            ]
-                        ),
-                        "momentum": torch.tensor(
                             [
                                 [0.0, 0.0, 0.0, 0.0, 0.0],
                                 [0.0, 0.0, 0.0, 0.0, 0.0],
@@ -1009,7 +929,6 @@ class EigenvalueCorrectedShampooStateDictTest(AbstractTest.StateDictTestBase):
                                     ]
                                 ),
                             },
-                            "factor_matrix_indices": {},
                             "factor_matrices_eigenvectors": {
                                 0: torch.tensor(
                                     [
@@ -1049,15 +968,6 @@ class EigenvalueCorrectedShampooStateDictTest(AbstractTest.StateDictTestBase):
                                 [0.0, 0.0, 0.0, 0.0, 0.0],
                             ]
                         ),
-                        "momentum": torch.tensor(
-                            [
-                                [0.0, 0.0, 0.0, 0.0, 0.0],
-                                [0.0, 0.0, 0.0, 0.0, 0.0],
-                                [0.0, 0.0, 0.0, 0.0, 0.0],
-                                [0.0, 0.0, 0.0, 0.0, 0.0],
-                                [0.0, 0.0, 0.0, 0.0, 0.0],
-                            ]
-                        ),
                         "filtered_grad": torch.tensor(
                             [
                                 [0.0, 0.0, 0.0, 0.0, 0.0],
@@ -1077,15 +987,14 @@ class EigenvalueCorrectedShampooStateDictTest(AbstractTest.StateDictTestBase):
                     "betas": (0.9, 1.0),
                     "beta3": 0.9,
                     "epsilon": 1e-12,
-                    "momentum": 0.9,
-                    "dampening": 0.0,
                     "weight_decay": 0.0,
+                    "peak_lr": 0.01,
+                    "weight_decay_type": WeightDecayType.DECOUPLED,
                     "max_preconditioner_dim": 5,
                     "precondition_frequency": 1,
                     "start_preconditioning_step": 1,
-                    "use_nesterov": False,
                     "use_bias_correction": True,
-                    "use_decoupled_weight_decay": True,
+                    "iterate_averaging_config": None,
                     "grafting_config": AdaGradPreconditionerConfig(epsilon=0.001),
                     "use_pin_memory": False,
                     "distributed_config": SingleDeviceDistributedConfig(
@@ -1186,6 +1095,510 @@ class SpectralDescentStateDictTest(AbstractTest.NoPreconditionerStateDictTestBas
         )
 
 
+class AbstractIterateAveragingTest:
+    """Abstract base classes for testing iterate averaging configurations (GPA and Schedule-Free)."""
+
+    class IterateAveragingStateDictTestBase(abc.ABC, unittest.TestCase):
+        """Base class for testing state dict with iterate averaging enabled.
+
+        When iterate averaging is enabled, the optimizer stores a weight_buffer
+        for each parameter block that contains the "z" sequence.
+        """
+
+        @property
+        @abc.abstractmethod
+        def _iterate_averaging_config(self) -> IterateAveragingConfig: ...
+
+        @property
+        def _preconditioner_config(self) -> RootInvShampooPreconditionerConfig:
+            return DefaultShampooConfig
+
+        def setUp(self) -> None:
+            self._model = nn.Sequential(
+                nn.Linear(5, 10, bias=False),
+            )
+            # Initialize weights to zeros to ensure deterministic state dict values.
+            with torch.no_grad():
+                cast(torch.Tensor, self._model[0].weight).zero_()
+            self._optimizer = DistributedShampoo(
+                self._model.parameters(),
+                lr=0.01,
+                betas=(0.9, 1.0),
+                epsilon=1e-12,
+                weight_decay=0.0,
+                max_preconditioner_dim=5,
+                precondition_frequency=1,
+                start_preconditioning_step=-1,
+                iterate_averaging_config=self._iterate_averaging_config,
+                distributed_config=replace(
+                    DefaultSingleDeviceDistributedConfig,
+                    target_parameter_dimensionality=2,
+                ),
+                grafting_config=AdaGradPreconditionerConfig(
+                    epsilon=0.001,
+                ),
+                preconditioner_config=self._preconditioner_config,
+            )
+
+        @property
+        def _ref_state_dict(self) -> dict[str, Any]:
+            return {
+                "state": {
+                    0: {
+                        "block_0": {
+                            "shampoo": {
+                                "factor_matrices": {
+                                    0: torch.tensor(
+                                        [
+                                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                                        ]
+                                    ),
+                                    1: torch.tensor(
+                                        [
+                                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                                        ]
+                                    ),
+                                },
+                                "inv_factor_matrices": {
+                                    0: torch.tensor(
+                                        [
+                                            [1.0, 0.0, 0.0, 0.0, 0.0],
+                                            [0.0, 1.0, 0.0, 0.0, 0.0],
+                                            [0.0, 0.0, 1.0, 0.0, 0.0],
+                                            [0.0, 0.0, 0.0, 1.0, 0.0],
+                                            [0.0, 0.0, 0.0, 0.0, 1.0],
+                                        ]
+                                    ),
+                                    1: torch.tensor(
+                                        [
+                                            [1.0, 0.0, 0.0, 0.0, 0.0],
+                                            [0.0, 1.0, 0.0, 0.0, 0.0],
+                                            [0.0, 0.0, 1.0, 0.0, 0.0],
+                                            [0.0, 0.0, 0.0, 1.0, 0.0],
+                                            [0.0, 0.0, 0.0, 0.0, 1.0],
+                                        ]
+                                    ),
+                                },
+                            },
+                            "adagrad": torch.tensor(
+                                [
+                                    [0.0, 0.0, 0.0, 0.0, 0.0],
+                                    [0.0, 0.0, 0.0, 0.0, 0.0],
+                                    [0.0, 0.0, 0.0, 0.0, 0.0],
+                                    [0.0, 0.0, 0.0, 0.0, 0.0],
+                                    [0.0, 0.0, 0.0, 0.0, 0.0],
+                                ]
+                            ),
+                            "filtered_grad": torch.tensor(
+                                [
+                                    [0.0, 0.0, 0.0, 0.0, 0.0],
+                                    [0.0, 0.0, 0.0, 0.0, 0.0],
+                                    [0.0, 0.0, 0.0, 0.0, 0.0],
+                                    [0.0, 0.0, 0.0, 0.0, 0.0],
+                                    [0.0, 0.0, 0.0, 0.0, 0.0],
+                                ]
+                            ),
+                            "weight_buffer": torch.tensor(
+                                [
+                                    [0.0, 0.0, 0.0, 0.0, 0.0],
+                                    [0.0, 0.0, 0.0, 0.0, 0.0],
+                                    [0.0, 0.0, 0.0, 0.0, 0.0],
+                                    [0.0, 0.0, 0.0, 0.0, 0.0],
+                                    [0.0, 0.0, 0.0, 0.0, 0.0],
+                                ]
+                            ),
+                        },
+                        "block_1": {
+                            "shampoo": {
+                                "factor_matrices": {
+                                    0: torch.tensor(
+                                        [
+                                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                                        ]
+                                    ),
+                                    1: torch.tensor(
+                                        [
+                                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                                            [0.0, 0.0, 0.0, 0.0, 0.0],
+                                        ]
+                                    ),
+                                },
+                                "inv_factor_matrices": {
+                                    0: torch.tensor(
+                                        [
+                                            [1.0, 0.0, 0.0, 0.0, 0.0],
+                                            [0.0, 1.0, 0.0, 0.0, 0.0],
+                                            [0.0, 0.0, 1.0, 0.0, 0.0],
+                                            [0.0, 0.0, 0.0, 1.0, 0.0],
+                                            [0.0, 0.0, 0.0, 0.0, 1.0],
+                                        ]
+                                    ),
+                                    1: torch.tensor(
+                                        [
+                                            [1.0, 0.0, 0.0, 0.0, 0.0],
+                                            [0.0, 1.0, 0.0, 0.0, 0.0],
+                                            [0.0, 0.0, 1.0, 0.0, 0.0],
+                                            [0.0, 0.0, 0.0, 1.0, 0.0],
+                                            [0.0, 0.0, 0.0, 0.0, 1.0],
+                                        ]
+                                    ),
+                                },
+                            },
+                            "adagrad": torch.tensor(
+                                [
+                                    [0.0, 0.0, 0.0, 0.0, 0.0],
+                                    [0.0, 0.0, 0.0, 0.0, 0.0],
+                                    [0.0, 0.0, 0.0, 0.0, 0.0],
+                                    [0.0, 0.0, 0.0, 0.0, 0.0],
+                                    [0.0, 0.0, 0.0, 0.0, 0.0],
+                                ]
+                            ),
+                            "filtered_grad": torch.tensor(
+                                [
+                                    [0.0, 0.0, 0.0, 0.0, 0.0],
+                                    [0.0, 0.0, 0.0, 0.0, 0.0],
+                                    [0.0, 0.0, 0.0, 0.0, 0.0],
+                                    [0.0, 0.0, 0.0, 0.0, 0.0],
+                                    [0.0, 0.0, 0.0, 0.0, 0.0],
+                                ]
+                            ),
+                            "weight_buffer": torch.tensor(
+                                [
+                                    [0.0, 0.0, 0.0, 0.0, 0.0],
+                                    [0.0, 0.0, 0.0, 0.0, 0.0],
+                                    [0.0, 0.0, 0.0, 0.0, 0.0],
+                                    [0.0, 0.0, 0.0, 0.0, 0.0],
+                                    [0.0, 0.0, 0.0, 0.0, 0.0],
+                                ]
+                            ),
+                        },
+                        "step": torch.tensor(0),
+                        "train_mode": torch.tensor(True),
+                        "lr_sum": torch.tensor(0.0),
+                    }
+                },
+                "param_groups": [
+                    {
+                        "lr": 0.01,
+                        "betas": (0.9, 1.0),
+                        "beta3": 0.9,
+                        "epsilon": 1e-12,
+                        "weight_decay": 0.0,
+                        "peak_lr": 0.01,
+                        "weight_decay_type": WeightDecayType.DECOUPLED,
+                        "max_preconditioner_dim": 5,
+                        "precondition_frequency": 1,
+                        "start_preconditioning_step": 1,
+                        "use_bias_correction": True,
+                        "iterate_averaging_config": self._iterate_averaging_config,
+                        "grafting_config": AdaGradPreconditionerConfig(epsilon=0.001),
+                        "use_pin_memory": False,
+                        "distributed_config": SingleDeviceDistributedConfig(
+                            target_parameter_dimensionality=2
+                        ),
+                        "preconditioner_config": self._preconditioner_config,
+                        "params": [0],
+                    }
+                ],
+            }
+
+        def test_state_dict(self) -> None:
+            """Test that the state dict contains weight_buffer when iterate averaging is enabled."""
+            state_dict = self._optimizer.state_dict()
+            ref_state_dict = self._ref_state_dict
+            self.assertEqual(state_dict.keys(), {"state", "param_groups"})
+
+            torch.testing.assert_close(
+                state_dict["state"],
+                ref_state_dict["state"],
+            )
+            self.assertEqual(
+                state_dict["param_groups"],
+                ref_state_dict["param_groups"],
+            )
+
+        def test_load_state_dict(self) -> None:
+            """Test that load_state_dict() correctly restores weight_buffer."""
+            ref_state_dict = self._ref_state_dict
+            self._optimizer.load_state_dict(
+                state_dict=ref_state_dict,
+            )
+
+            state_dict = self._optimizer.state_dict()
+
+            self.assertEqual(state_dict.keys(), ref_state_dict.keys())
+            torch.testing.assert_close(state_dict["state"], ref_state_dict["state"])
+            self.assertEqual(
+                state_dict["param_groups"],
+                ref_state_dict["param_groups"],
+            )
+
+        def test_weight_buffer_in_state(self) -> None:
+            """Test that weight_buffer is present in each block's state."""
+            state_dict = self._optimizer.state_dict()
+            for block_key in ["block_0", "block_1"]:
+                self.assertIn(
+                    "weight_buffer",
+                    state_dict["state"][0][block_key],
+                    f"weight_buffer should be present in {block_key} when iterate averaging is enabled",
+                )
+
+
+class GPAShampooStateDictTest(
+    AbstractIterateAveragingTest.IterateAveragingStateDictTestBase
+):
+    """Test state dict with Generalized Primal Averaging (GPA) enabled.
+
+    See https://arxiv.org/pdf/2512.17131 for details on GPA.
+    """
+
+    @property
+    def _iterate_averaging_config(self) -> GeneralizedPrimalAveragingConfig:
+        return GeneralizedPrimalAveragingConfig(
+            eval_interp_coeff=0.5,
+            train_interp_coeff=0.9,
+        )
+
+
+class ScheduleFreeShampooStateDictTest(
+    AbstractIterateAveragingTest.IterateAveragingStateDictTestBase
+):
+    """Test state dict with Schedule-Free enabled.
+
+    See https://arxiv.org/abs/2405.15682 for details on Schedule-Free.
+    """
+
+    @property
+    def _iterate_averaging_config(self) -> ScheduleFreeConfig:
+        return ScheduleFreeConfig(
+            train_interp_coeff=0.9,
+        )
+
+
+@instantiate_parametrized_tests
+class DistributedShampooTrainEvalModeTest(unittest.TestCase):
+    """Test train/eval mode switching with iterate averaging configurations."""
+
+    @parametrize(
+        "iterate_averaging_config",
+        (
+            GeneralizedPrimalAveragingConfig(),
+            ScheduleFreeConfig(),
+        ),
+    )
+    def test_train_eval_mode_switching(
+        self,
+        iterate_averaging_config: IterateAveragingConfig,
+    ) -> None:
+        """
+        Test that train() and eval() mode switching works correctly with iterate averaging.
+        This verifies that the mode switching updates the train_mode flag appropriately.
+        """
+        model = nn.Sequential(
+            nn.Linear(5, 10, bias=False),
+        )
+        optimizer = DistributedShampoo(
+            model.parameters(),
+            lr=0.01,
+            betas=(0.9, 1.0),
+            epsilon=1e-12,
+            weight_decay=0.0,
+            max_preconditioner_dim=5,
+            precondition_frequency=1,
+            start_preconditioning_step=-1,
+            iterate_averaging_config=iterate_averaging_config,
+            distributed_config=DefaultSingleDeviceDistributedConfig,
+            grafting_config=None,
+        )
+
+        # Take a few optimizer steps
+        for _ in range(3):
+            optimizer.zero_grad()
+            layer_weight: torch.Tensor = cast(torch.Tensor, model[0].weight)
+            layer_weight.grad = torch.rand_like(layer_weight)
+            optimizer.step()
+
+        # Get the full state dictionary.
+        initial_state = optimizer.state_dict()["state"]
+
+        # Find all parameters that contain train_mode keys.
+        # We expect exactly 1 parameter (the first in each group) to have train_mode stored.
+        train_mode_param_keys = []
+        all_train_mode_keys: dict[str, list[str]] = {}
+        for param_key, param_state in initial_state.items():
+            keys_with_train_mode = [
+                key for key in param_state.keys() if "train_mode" in key
+            ]
+            if keys_with_train_mode:
+                train_mode_param_keys.append(param_key)
+                all_train_mode_keys[param_key] = keys_with_train_mode
+
+        # There should be exactly 1 parameter with train_mode keys (one per param group).
+        self.assertEqual(
+            len(train_mode_param_keys),
+            1,
+            msg=f"Expected exactly 1 parameter with train_mode keys, got {len(train_mode_param_keys)}",
+        )
+
+        train_mode_param_key = train_mode_param_keys[0]
+        train_mode_keys = all_train_mode_keys[train_mode_param_key]
+
+        # Verify initial training mode (should be True after training)
+        for key in train_mode_keys:
+            self.assertTrue(
+                initial_state[train_mode_param_key][key].item(),
+                msg="Expected train_mode to be True after training",
+            )
+
+        # Switch to eval mode
+        optimizer.eval()
+
+        # Verify eval mode
+        eval_state = optimizer.state_dict()["state"]
+        for key in train_mode_keys:
+            self.assertFalse(
+                eval_state[train_mode_param_key][key].item(),
+                msg="Expected train_mode to be False after eval()",
+            )
+
+        # Switch back to train mode
+        optimizer.train()
+
+        # Verify train mode again
+        train_state = optimizer.state_dict()["state"]
+        for key in train_mode_keys:
+            self.assertTrue(
+                train_state[train_mode_param_key][key].item(),
+                msg="Expected train_mode to be True after train()",
+            )
+
+    @parametrize(
+        "iterate_averaging_config",
+        (
+            GeneralizedPrimalAveragingConfig(),
+            ScheduleFreeConfig(),
+        ),
+    )
+    @parametrize(
+        "save_in_eval,load_in_eval",
+        (
+            (False, False),  # Save in train, load in train → stay in train.
+            (True, False),  # Save in eval, load in train → stay in train.
+            (False, True),  # Save in train, load in eval → stay in eval.
+            (True, True),  # Save in eval, load in eval → stay in eval.
+        ),
+    )
+    def test_load_state_dict_preserves_mode(
+        self,
+        iterate_averaging_config: IterateAveragingConfig,
+        save_in_eval: bool,
+        load_in_eval: bool,
+    ) -> None:
+        """Test that load_state_dict() preserves the caller's train/eval mode."""
+        model = nn.Sequential(nn.Linear(5, 10, bias=False))
+        optimizer = DistributedShampoo(
+            model.parameters(),
+            lr=0.01,
+            betas=(0.9, 1.0),
+            epsilon=1e-12,
+            weight_decay=0.0,
+            max_preconditioner_dim=5,
+            precondition_frequency=1,
+            start_preconditioning_step=-1,
+            iterate_averaging_config=iterate_averaging_config,
+            distributed_config=DefaultSingleDeviceDistributedConfig,
+            grafting_config=None,
+        )
+
+        # Take a few optimizer steps to populate state.
+        for _ in range(3):
+            optimizer.zero_grad()
+            layer_weight: torch.Tensor = cast(torch.Tensor, model[0].weight)
+            layer_weight.grad = torch.rand_like(layer_weight)
+            optimizer.step()
+
+        # Save checkpoint in the specified mode.
+        if save_in_eval:
+            optimizer.eval()
+        state_dict = optimizer.state_dict()
+
+        # Switch to the load mode.
+        if load_in_eval:
+            optimizer.eval()
+        else:
+            optimizer.train()
+
+        # Load the checkpoint.
+        optimizer.load_state_dict(state_dict)
+
+        # Verify the optimizer preserved the load mode (not the save mode).
+        expected_train_mode = not load_in_eval
+        state = optimizer.state_dict()["state"]
+        for param_state in state.values():
+            for key in param_state:
+                if "train_mode" in key:
+                    self.assertEqual(
+                        param_state[key].item(),
+                        expected_train_mode,
+                        msg=f"Expected train_mode to be {expected_train_mode} "
+                        f"(save_in_eval={save_in_eval}, load_in_eval={load_in_eval})",
+                    )
+
+    def test_train_eval_mode_without_iterate_averaging(self) -> None:
+        """
+        Test that train() and eval() are no-ops when iterate_averaging_config is None.
+        This verifies that calling these methods doesn't raise a KeyError.
+        """
+        model = nn.Sequential(
+            nn.Linear(5, 10, bias=False),
+        )
+        optimizer = DistributedShampoo(
+            model.parameters(),
+            lr=0.01,
+            betas=(0.9, 1.0),
+            epsilon=1e-12,
+            weight_decay=0.0,
+            max_preconditioner_dim=5,
+            precondition_frequency=1,
+            start_preconditioning_step=-1,
+            iterate_averaging_config=None,  # No iterate averaging
+            distributed_config=DefaultSingleDeviceDistributedConfig,
+            grafting_config=None,
+        )
+
+        # Take a few optimizer steps
+        for _ in range(3):
+            optimizer.zero_grad()
+            layer_weight: torch.Tensor = cast(torch.Tensor, model[0].weight)
+            layer_weight.grad = torch.rand_like(layer_weight)
+            optimizer.step()
+
+        # Calling train() and eval() should not raise any errors
+        optimizer.train()
+        optimizer.eval()
+        optimizer.train()
+
+        # Verify state_dict works without iterate averaging
+        state_dict = optimizer.state_dict()
+        self.assertIn("state", state_dict)
+        self.assertIn("param_groups", state_dict)
+
+
 class DistributedShampooNoneGradTest(unittest.TestCase):
     def setUp(self) -> None:
         self._model = nn.Sequential(
@@ -1196,7 +1609,6 @@ class DistributedShampooNoneGradTest(unittest.TestCase):
             lr=0.01,
             betas=(0.9, 1.0),
             epsilon=1e-12,
-            momentum=0.0,
             weight_decay=0.0,
             max_preconditioner_dim=5,
             precondition_frequency=1,
@@ -1220,7 +1632,7 @@ class DistributedShampooNoneGradTest(unittest.TestCase):
 
     def test_step_with_none_grads(self) -> None:
         layer_weight: torch.Tensor = cast(torch.Tensor, self._model[0].weight)
-        expected_msg = "PT2 will recompile because the gradient selction of model parameters have changed from the previous step. Possible reasons include some gradients are None. If this is not intended, please check the data and/or model."
+        expected_msg = "PT2 will recompile because the gradient selection of model parameters have changed from the previous step. Possible reasons include some gradients are None. If this is not intended, please check the data and/or model."
         ending_msg = "Changed gradient selector indices: [0, 1]"
         with self.assertLogs(level="WARNING") as cm:
             self._optimizer.zero_grad()

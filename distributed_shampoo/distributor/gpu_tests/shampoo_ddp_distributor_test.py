@@ -10,14 +10,11 @@ LICENSE file in the root directory of this source tree.
 #!/usr/bin/env python3
 
 import abc
-import contextlib
 import os
-import re
 import unittest
 from collections.abc import Callable
 from functools import partial
-from typing import cast
-from unittest import mock
+from typing import Any, cast, Dict
 
 import torch
 from distributed_shampoo.distributed_shampoo import DistributedShampoo
@@ -34,8 +31,12 @@ from distributed_shampoo.shampoo_types import (
     DefaultSingleDeviceDistributedConfig,
     DefaultSOAPConfig,
     EigendecomposedShampooPreconditionerConfig,
+    GeneralizedPrimalAveragingConfig,
+    IterateAveragingConfig,
     PreconditionerConfig,
+    ScheduleFreeConfig,
     SingleDeviceDistributedConfig,
+    WeightDecayType,
 )
 from distributed_shampoo.tests.shampoo_test_utils import (
     compare_two_optimizers_on_weight_and_loss,
@@ -43,6 +44,7 @@ from distributed_shampoo.tests.shampoo_test_utils import (
     train_model,
 )
 from torch import distributed as dist, nn, tensor
+from torch.distributed.checkpoint.state_dict import get_optimizer_state_dict
 from torch.distributed.device_mesh import DeviceMesh
 from torch.distributed.tensor import DTensor
 from torch.distributed.tensor.placement_types import Replicate
@@ -90,21 +92,22 @@ class AbstractTest:
         def _shampoo_optim_factory(
             distributed_config: DDPDistributedConfig | SingleDeviceDistributedConfig,
             preconditioner_config: PreconditionerConfig = DefaultShampooConfig,
+            iterate_averaging_config: IterateAveragingConfig | None = None,
         ) -> Callable[[ParamsT], torch.optim.Optimizer]:
             return partial(
                 DistributedShampoo,
                 lr=0.001,
                 betas=(0.9, 1.0),
                 epsilon=1e-8,
-                momentum=0.9,
                 weight_decay=0.0,
                 max_preconditioner_dim=PRECONDITIONER_DIM,
                 precondition_frequency=1,
                 start_preconditioning_step=2,
-                use_decoupled_weight_decay=True,
+                weight_decay_type=WeightDecayType.DECOUPLED,
                 grafting_config=AdaGradPreconditionerConfig(epsilon=1e-8),
                 distributed_config=distributed_config,
                 preconditioner_config=preconditioner_config,
+                iterate_averaging_config=iterate_averaging_config,
             )
 
         @parametrize(
@@ -138,6 +141,14 @@ class AbstractTest:
             ),
         )
         @parametrize("num_trainers_per_group", (-1, 1, 2))
+        @parametrize(
+            "iterate_averaging_config",
+            (
+                None,
+                GeneralizedPrimalAveragingConfig(),
+                ScheduleFreeConfig(),
+            ),
+        )
         def test_losses(
             self,
             num_trainers_per_group: int,
@@ -146,6 +157,7 @@ class AbstractTest:
             rtol: float,
             atol: float,
             preconditioner_config: PreconditionerConfig,
+            iterate_averaging_config: IterateAveragingConfig | None,
         ) -> None:
             self._init_distributed()
 
@@ -153,6 +165,7 @@ class AbstractTest:
                 control_optim_factory=self._shampoo_optim_factory(
                     distributed_config=DefaultSingleDeviceDistributedConfig,
                     preconditioner_config=preconditioner_config,
+                    iterate_averaging_config=iterate_averaging_config,
                 ),
                 experimental_optim_factory=self._shampoo_optim_factory(
                     distributed_config=DDPDistributedConfig(
@@ -161,6 +174,7 @@ class AbstractTest:
                         communicate_params=communicate_params,
                     ),
                     preconditioner_config=preconditioner_config,
+                    iterate_averaging_config=iterate_averaging_config,
                 ),
                 model_linear_layers_dims=(
                     PRECONDITIONER_DIM * 4,
@@ -174,7 +188,75 @@ class AbstractTest:
                 atol=atol,
             )
 
-        def test_distributed_state_dict(self) -> None:
+        @parametrize(
+            "preconditioner_config",
+            (
+                DefaultShampooConfig,
+                EigendecomposedShampooPreconditionerConfig(),
+                DefaultEigenvalueCorrectedShampooConfig,
+                DefaultSOAPConfig,
+            ),
+        )
+        @parametrize(
+            "communication_dtype, communicate_params, rtol, atol",
+            (
+                # Expecting CommunicationDType.DEFAULT would have bitwise identical results (by setting rtol=atol=0.0).
+                (torch.float32, False, 0.0, 0.0),
+                (torch.float32, True, 0.0, 0.0),
+                # Using FP16 for distributed parameters prohibitively lowers precision.
+                (
+                    torch.float16,
+                    False,
+                    # FP16 requires 2x tolerances than the original float16 tolerances.
+                    *[2 * tol for tol in default_tolerances(torch.bfloat16)],
+                ),
+                (
+                    torch.bfloat16,
+                    False,
+                    # BF16 requires 2x tolerances than the original bfloat16 tolerances.
+                    *[2 * tol for tol in default_tolerances(torch.bfloat16)],
+                ),
+            ),
+        )
+        def test_can_run_with_empty_local_params(
+            self,
+            communication_dtype: torch.dtype,
+            communicate_params: bool,
+            rtol: float,
+            atol: float,
+            preconditioner_config: PreconditionerConfig,
+        ) -> None:
+            """
+            A variant of test_losses() that tests the case where ranks can have empty local blocked parameters.
+            """
+            self._init_distributed()
+
+            compare_two_optimizers_on_weight_and_loss(
+                control_optim_factory=self._shampoo_optim_factory(
+                    distributed_config=DefaultSingleDeviceDistributedConfig,
+                    preconditioner_config=preconditioner_config,
+                ),
+                experimental_optim_factory=self._shampoo_optim_factory(
+                    distributed_config=DDPDistributedConfig(
+                        communication_dtype=communication_dtype,
+                        num_trainers_per_group=-1,
+                        communicate_params=communicate_params,
+                    ),
+                    preconditioner_config=preconditioner_config,
+                ),
+                # Setting model_linear_layers_dims to (PRECONDITIONER_DIM, 1) creates an model with one linear layer with PRECONDITIONER_DIMx1 weight.
+                # Because Shampoo's max_preconditioner_dim = PRECONDITIONER_DIM, there will be only one block.
+                # In the case of two trainers per group, there will be one trainer has no params to work on.
+                model_linear_layers_dims=(PRECONDITIONER_DIM, 1),
+                model_dead_layers_dims=None,
+                enable_learnable_scalar=False,
+                device=self._device,
+                fill=0.01,
+                rtol=rtol,
+                atol=atol,
+            )
+
+        def test_state_dict(self) -> None:
             self._init_distributed()
 
             num_steps = 3
@@ -198,370 +280,394 @@ class AbstractTest:
             )
 
             assert isinstance(optimizer, DistributedShampoo)
-            # Retrieve the distributed state dictionary of the first layer (i.e., the only layer) from the optimizer.
-            distributed_state_dict = optimizer.distributed_state_dict(
-                key_to_param=model.named_parameters(), save_param_groups=False
-            )["state"]["linear_layers.0.weight"]
 
-            # Define the expected distributed state dictionary for each rank.
-            rank_to_expected_distributed_state_dict = {
+            mesh_0 = DeviceMesh(
+                self._device.type,
+                [
+                    0,
+                ],
+            )
+            mesh_1 = DeviceMesh(
+                self._device.type,
+                [
+                    1,
+                ],
+            )
+
+            # Define the expected state dictionary for each rank.
+            # The state_dict is keyed by parameter index (0 and 1).
+            # Parameter 0 has block_0 (1x1 tensors), Parameter 1 has block_1 (3x3 tensors).
+            rank_to_expected_state_dict: Dict[int, Dict[int, Dict[str, Any]]] = {
                 0: {
-                    '["block_1", "shampoo", "factor_matrices", 0]': DTensor.from_local(
-                        local_tensor=tensor(
-                            [
-                                [
-                                    7.3598799644969404e-05,
-                                    7.3598806920927018e-05,
-                                    7.3598806920927018e-05,
-                                ],
-                                [
-                                    7.3598806920927018e-05,
-                                    7.3598814196884632e-05,
-                                    7.3598806920927018e-05,
-                                ],
-                                [
-                                    7.3598806920927018e-05,
-                                    7.3598806920927018e-05,
-                                    7.3598806920927018e-05,
-                                ],
-                            ]
-                        ),
-                        device_mesh=DeviceMesh(str(self._device), [0]),
-                        placements=(Replicate(),),
-                    ),
-                    '["block_1", "shampoo", "factor_matrices", 1]': DTensor.from_local(
-                        local_tensor=tensor(
-                            [
-                                [
-                                    6.2865015934221447e-05,
-                                    -4.1212708310922608e-05,
-                                    -4.5267632231116295e-05,
-                                ],
-                                [
-                                    -4.1212708310922608e-05,
-                                    3.7400783185148612e-05,
-                                    2.0580342606990598e-05,
-                                ],
-                                [
-                                    -4.5267632231116295e-05,
-                                    2.0580342606990598e-05,
-                                    1.2053063255734742e-04,
-                                ],
-                            ]
-                        ),
-                        device_mesh=DeviceMesh(str(self._device), [0]),
-                        placements=(Replicate(),),
-                    ),
-                    '["block_1", "shampoo", "inv_factor_matrices", 0]': DTensor.from_local(
-                        local_tensor=tensor(
-                            [
-                                [
-                                    69.3880081176757812,
-                                    -30.5801677703857422,
-                                    -30.6043815612792969,
-                                ],
-                                [
-                                    -30.5801677703857422,
-                                    69.3745880126953125,
-                                    -30.5909557342529297,
-                                ],
-                                [
-                                    -30.6043853759765625,
-                                    -30.5909519195556641,
-                                    69.3988037109375000,
-                                ],
-                            ]
-                        ),
-                        device_mesh=DeviceMesh(str(self._device), [0]),
-                        placements=(Replicate(),),
-                    ),
-                    '["block_1", "shampoo", "inv_factor_matrices", 1]': DTensor.from_local(
-                        local_tensor=tensor(
-                            [
-                                [
-                                    14.4575786590576172,
-                                    4.7331795692443848,
-                                    1.7240729331970215,
-                                ],
-                                [
-                                    4.7331795692443848,
-                                    16.3652210235595703,
-                                    0.1419535577297211,
-                                ],
-                                [
-                                    1.7240731716156006,
-                                    0.1419535428285599,
-                                    9.9801998138427734,
-                                ],
-                            ]
-                        ),
-                        device_mesh=DeviceMesh(str(self._device), [0]),
-                        placements=(Replicate(),),
-                    ),
-                    '["block_1", "adagrad"]': DTensor.from_local(
-                        local_tensor=tensor(
-                            [
-                                [
-                                    2.0955003492417745e-05,
-                                    1.2466928637877572e-05,
-                                    4.0176873881136999e-05,
-                                ],
-                                [
-                                    2.0955008949385956e-05,
-                                    1.2466928637877572e-05,
-                                    4.0176877519115806e-05,
-                                ],
-                                [
-                                    2.0955005311407149e-05,
-                                    1.2466928637877572e-05,
-                                    4.0176873881136999e-05,
-                                ],
-                            ]
-                        ),
-                        device_mesh=DeviceMesh(str(self._device), [0]),
-                        placements=(Replicate(),),
-                    ),
-                    '["block_1", "momentum"]': DTensor.from_local(
-                        local_tensor=tensor(
-                            [
-                                [
-                                    0.3861412107944489,
-                                    -0.7968538999557495,
-                                    2.0522127151489258,
-                                ],
-                                [
-                                    0.3861400783061981,
-                                    -0.7968541383743286,
-                                    2.0522124767303467,
-                                ],
-                                [
-                                    0.3861398994922638,
-                                    -0.7968545556068420,
-                                    2.0522127151489258,
-                                ],
-                            ]
-                        ),
-                        device_mesh=DeviceMesh(str(self._device), [0]),
-                        placements=(Replicate(),),
-                    ),
-                    '["block_1", "filtered_grad"]': DTensor.from_local(
-                        local_tensor=tensor(
-                            [
-                                [
-                                    -0.0004798756854143,
-                                    0.0001531048619654,
-                                    0.0008914597565308,
-                                ],
-                                [
-                                    -0.0004798757436220,
-                                    0.0001531048910692,
-                                    0.0008914598147385,
-                                ],
-                                [
-                                    -0.0004798757145181,
-                                    0.0001531048765173,
-                                    0.0008914597565308,
-                                ],
-                            ]
-                        ),
-                        device_mesh=DeviceMesh(str(self._device), [0]),
-                        placements=(Replicate(),),
-                    ),
+                    0: {
+                        "block_0": {
+                            "shampoo": {
+                                "factor_matrices": {
+                                    0: DTensor.from_local(
+                                        local_tensor=tensor([[0.0016058803303167224]]),
+                                        device_mesh=mesh_0,
+                                        placements=(Replicate(),),
+                                    ),
+                                },
+                                "inv_factor_matrices": {
+                                    0: DTensor.from_local(
+                                        local_tensor=tensor([[24.9541072845459]]),
+                                        device_mesh=mesh_0,
+                                        placements=(Replicate(),),
+                                    ),
+                                },
+                            },
+                            "adagrad": DTensor.from_local(
+                                local_tensor=tensor([0.0016058803303167224]),
+                                device_mesh=mesh_0,
+                                placements=(Replicate(),),
+                            ),
+                            "filtered_grad": DTensor.from_local(
+                                local_tensor=tensor([0.0037594244349747896]),
+                                device_mesh=mesh_0,
+                                placements=(Replicate(),),
+                            ),
+                        },
+                        "step": tensor(3),
+                    },
+                    1: {
+                        "block_1": {
+                            "shampoo": {
+                                "factor_matrices": {
+                                    0: DTensor.from_local(
+                                        local_tensor=tensor(
+                                            [
+                                                [
+                                                    6.645893154200166e-05,
+                                                    6.645893154200166e-05,
+                                                    6.645893154200166e-05,
+                                                ],
+                                                [
+                                                    6.645893154200166e-05,
+                                                    6.645893154200166e-05,
+                                                    6.645893154200166e-05,
+                                                ],
+                                                [
+                                                    6.645893154200166e-05,
+                                                    6.645893154200166e-05,
+                                                    6.645893154200166e-05,
+                                                ],
+                                            ]
+                                        ),
+                                        device_mesh=mesh_0,
+                                        placements=(Replicate(),),
+                                    ),
+                                    1: DTensor.from_local(
+                                        local_tensor=tensor(
+                                            [
+                                                [
+                                                    4.689853813033551e-05,
+                                                    -3.546147490851581e-05,
+                                                    -3.7919791793683544e-05,
+                                                ],
+                                                [
+                                                    -3.546147490851581e-05,
+                                                    3.5329150705365464e-05,
+                                                    1.7933603885467164e-05,
+                                                ],
+                                                [
+                                                    -3.7919791793683544e-05,
+                                                    1.7933603885467164e-05,
+                                                    0.0001171490948763676,
+                                                ],
+                                            ]
+                                        ),
+                                        device_mesh=mesh_0,
+                                        placements=(Replicate(),),
+                                    ),
+                                },
+                                "inv_factor_matrices": {
+                                    0: DTensor.from_local(
+                                        local_tensor=tensor(
+                                            [
+                                                [
+                                                    69.4718017578125,
+                                                    -30.528188705444336,
+                                                    -30.52819061279297,
+                                                ],
+                                                [
+                                                    -30.528188705444336,
+                                                    69.45362091064453,
+                                                    -30.510019302368164,
+                                                ],
+                                                [
+                                                    -30.52819061279297,
+                                                    -30.510019302368164,
+                                                    69.45362854003906,
+                                                ],
+                                            ]
+                                        ),
+                                        device_mesh=mesh_0,
+                                        placements=(Replicate(),),
+                                    ),
+                                    1: DTensor.from_local(
+                                        local_tensor=tensor(
+                                            [
+                                                [
+                                                    16.394943237304688,
+                                                    5.6407470703125,
+                                                    1.8611559867858887,
+                                                ],
+                                                [
+                                                    5.6407470703125,
+                                                    16.996492385864258,
+                                                    0.27824175357818604,
+                                                ],
+                                                [
+                                                    1.8611557483673096,
+                                                    0.27824151515960693,
+                                                    10.019035339355469,
+                                                ],
+                                            ]
+                                        ),
+                                        device_mesh=mesh_0,
+                                        placements=(Replicate(),),
+                                    ),
+                                },
+                            },
+                            "adagrad": DTensor.from_local(
+                                local_tensor=tensor(
+                                    [
+                                        [
+                                            1.563284604344517e-05,
+                                            1.1776383871620055e-05,
+                                            3.904970071744174e-05,
+                                        ],
+                                        [
+                                            1.563284604344517e-05,
+                                            1.1776383871620055e-05,
+                                            3.904970071744174e-05,
+                                        ],
+                                        [
+                                            1.563284604344517e-05,
+                                            1.1776383871620055e-05,
+                                            3.904970071744174e-05,
+                                        ],
+                                    ]
+                                ),
+                                device_mesh=mesh_0,
+                                placements=(Replicate(),),
+                            ),
+                            "filtered_grad": DTensor.from_local(
+                                local_tensor=tensor(
+                                    [
+                                        [
+                                            -0.0003921023744624108,
+                                            0.00012148835230618715,
+                                            0.0008510660263709724,
+                                        ],
+                                        [
+                                            -0.0003921023744624108,
+                                            0.00012148835230618715,
+                                            0.0008510660263709724,
+                                        ],
+                                        [
+                                            -0.0003921023744624108,
+                                            0.00012148835230618715,
+                                            0.0008510660263709724,
+                                        ],
+                                    ]
+                                ),
+                                device_mesh=mesh_0,
+                                placements=(Replicate(),),
+                            ),
+                        },
+                    },
                 },
                 1: {
-                    '["block_0", "shampoo", "factor_matrices", 0]': DTensor.from_local(
-                        local_tensor=tensor(
-                            [
-                                [
-                                    0.0001128265430452,
-                                    0.0001128265430452,
-                                    0.0001128265430452,
-                                ],
-                                [
-                                    0.0001128265430452,
-                                    0.0001128265430452,
-                                    0.0001128265430452,
-                                ],
-                                [
-                                    0.0001128265430452,
-                                    0.0001128265430452,
-                                    0.0001128265430452,
-                                ],
-                            ]
-                        ),
-                        device_mesh=DeviceMesh(str(self._device), [1]),
-                        placements=(Replicate(),),
-                    ),
-                    '["block_0", "shampoo", "factor_matrices", 1]': DTensor.from_local(
-                        local_tensor=tensor(
-                            [
-                                [
-                                    1.3368048530537635e-04,
-                                    1.3935216702520847e-04,
-                                    -1.0508949344512075e-05,
-                                ],
-                                [
-                                    1.3935216702520847e-04,
-                                    1.8916006956715137e-04,
-                                    6.3602856243960559e-06,
-                                ],
-                                [
-                                    -1.0508949344512075e-05,
-                                    6.3602856243960559e-06,
-                                    1.5639088815078139e-05,
-                                ],
-                            ]
-                        ),
-                        device_mesh=DeviceMesh(str(self._device), [1]),
-                        placements=(Replicate(),),
-                    ),
-                    '["block_0", "shampoo", "inv_factor_matrices", 0]': DTensor.from_local(
-                        local_tensor=tensor(
-                            [
-                                [
-                                    69.1099548339843750,
-                                    -30.8445358276367188,
-                                    -30.8929176330566406,
-                                ],
-                                [
-                                    -30.8445396423339844,
-                                    69.0552749633789062,
-                                    -30.8382663726806641,
-                                ],
-                                [
-                                    -30.8929176330566406,
-                                    -30.8382663726806641,
-                                    69.1036682128906250,
-                                ],
-                            ]
-                        ),
-                        device_mesh=DeviceMesh(str(self._device), [1]),
-                        placements=(Replicate(),),
-                    ),
-                    '["block_0", "shampoo", "inv_factor_matrices", 1]': DTensor.from_local(
-                        local_tensor=tensor(
-                            [
-                                [
-                                    13.0387792587280273,
-                                    -4.4621400833129883,
-                                    2.8714332580566406,
-                                ],
-                                [
-                                    -4.4621400833129883,
-                                    11.2216405868530273,
-                                    -2.2768990993499756,
-                                ],
-                                [
-                                    2.8714334964752197,
-                                    -2.2769000530242920,
-                                    17.8002052307128906,
-                                ],
-                            ]
-                        ),
-                        device_mesh=DeviceMesh(str(self._device), [1]),
-                        placements=(Replicate(),),
-                    ),
-                    '["block_0", "adagrad"]': DTensor.from_local(
-                        local_tensor=tensor(
-                            [
-                                [
-                                    4.4560158130479977e-05,
-                                    6.3053361373022199e-05,
-                                    5.2130294534435961e-06,
-                                ],
-                                [
-                                    4.4560158130479977e-05,
-                                    6.3053361373022199e-05,
-                                    5.2130299081909470e-06,
-                                ],
-                                [
-                                    4.4560158130479977e-05,
-                                    6.3053361373022199e-05,
-                                    5.2130294534435961e-06,
-                                ],
-                            ]
-                        ),
-                        device_mesh=DeviceMesh(str(self._device), [1]),
-                        placements=(Replicate(),),
-                    ),
-                    '["block_0", "momentum"]': DTensor.from_local(
-                        local_tensor=tensor(
-                            [
-                                [
-                                    1.8189388513565063,
-                                    1.9332338571548462,
-                                    -0.6552859544754028,
-                                ],
-                                [
-                                    1.8189374208450317,
-                                    1.9332300424575806,
-                                    -0.6552855968475342,
-                                ],
-                                [
-                                    1.8189386129379272,
-                                    1.9332307577133179,
-                                    -0.6552851200103760,
-                                ],
-                            ]
-                        ),
-                        device_mesh=DeviceMesh(str(self._device), [1]),
-                        placements=(Replicate(),),
-                    ),
-                    '["block_0", "filtered_grad"]': DTensor.from_local(
-                        local_tensor=tensor(
-                            [
-                                [
-                                    0.0008461118559353,
-                                    0.0009362435666844,
-                                    0.0001043296360876,
-                                ],
-                                [
-                                    0.0008461119141430,
-                                    0.0009362435666844,
-                                    0.0001043296579155,
-                                ],
-                                [
-                                    0.0008461119141430,
-                                    0.0009362435666844,
-                                    0.0001043296433636,
-                                ],
-                            ]
-                        ),
-                        device_mesh=DeviceMesh(str(self._device), [1]),
-                        placements=(Replicate(),),
-                    ),
+                    1: {
+                        "block_0": {
+                            "shampoo": {
+                                "factor_matrices": {
+                                    0: DTensor.from_local(
+                                        local_tensor=tensor(
+                                            [
+                                                [
+                                                    0.00011197220010217279,
+                                                    0.00011197220010217279,
+                                                    0.00011197220010217279,
+                                                ],
+                                                [
+                                                    0.00011197220010217279,
+                                                    0.00011197220010217279,
+                                                    0.00011197220010217279,
+                                                ],
+                                                [
+                                                    0.00011197220010217279,
+                                                    0.00011197220010217279,
+                                                    0.00011197220010217279,
+                                                ],
+                                            ]
+                                        ),
+                                        device_mesh=mesh_1,
+                                        placements=(Replicate(),),
+                                    ),
+                                    1: DTensor.from_local(
+                                        local_tensor=tensor(
+                                            [
+                                                [
+                                                    0.000132521876366809,
+                                                    0.00013956104521639645,
+                                                    -1.1767312571464572e-05,
+                                                ],
+                                                [
+                                                    0.00013956104521639645,
+                                                    0.0001891223801067099,
+                                                    6.5871563492692076e-06,
+                                                ],
+                                                [
+                                                    -1.1767312571464572e-05,
+                                                    6.5871563492692076e-06,
+                                                    1.4272330190578941e-05,
+                                                ],
+                                            ]
+                                        ),
+                                        device_mesh=mesh_1,
+                                        placements=(Replicate(),),
+                                    ),
+                                },
+                                "inv_factor_matrices": {
+                                    0: DTensor.from_local(
+                                        local_tensor=tensor(
+                                            [
+                                                [
+                                                    69.12242889404297,
+                                                    -30.855859756469727,
+                                                    -30.88007926940918,
+                                                ],
+                                                [
+                                                    -30.855863571166992,
+                                                    69.09217071533203,
+                                                    -30.84980583190918,
+                                                ],
+                                                [
+                                                    -30.88007926940918,
+                                                    -30.849802017211914,
+                                                    69.11640167236328,
+                                                ],
+                                            ]
+                                        ),
+                                        device_mesh=mesh_1,
+                                        placements=(Replicate(),),
+                                    ),
+                                    1: DTensor.from_local(
+                                        local_tensor=tensor(
+                                            [
+                                                [
+                                                    13.893352508544922,
+                                                    -5.123697280883789,
+                                                    4.147429466247559,
+                                                ],
+                                                [
+                                                    -5.123697280883789,
+                                                    11.735774993896484,
+                                                    -3.2658231258392334,
+                                                ],
+                                                [
+                                                    4.147429466247559,
+                                                    -3.2658231258392334,
+                                                    19.706111907958984,
+                                                ],
+                                            ]
+                                        ),
+                                        device_mesh=mesh_1,
+                                        placements=(Replicate(),),
+                                    ),
+                                },
+                            },
+                            "adagrad": DTensor.from_local(
+                                local_tensor=tensor(
+                                    [
+                                        [
+                                            4.417396485223435e-05,
+                                            6.304078851826489e-05,
+                                            4.757443548442097e-06,
+                                        ],
+                                        [
+                                            4.417396485223435e-05,
+                                            6.304078851826489e-05,
+                                            4.7574430936947465e-06,
+                                        ],
+                                        [
+                                            4.417396485223435e-05,
+                                            6.304078851826489e-05,
+                                            4.757443548442097e-06,
+                                        ],
+                                    ]
+                                ),
+                                device_mesh=mesh_1,
+                                placements=(Replicate(),),
+                            ),
+                            "filtered_grad": DTensor.from_local(
+                                local_tensor=tensor(
+                                    [
+                                        [
+                                            0.000822467845864594,
+                                            0.0009405062301084399,
+                                            7.864914368838072e-05,
+                                        ],
+                                        [
+                                            0.000822467845864594,
+                                            0.0009405062301084399,
+                                            7.86491364124231e-05,
+                                        ],
+                                        [
+                                            0.000822467845864594,
+                                            0.0009405062301084399,
+                                            7.864914368838072e-05,
+                                        ],
+                                    ]
+                                ),
+                                device_mesh=mesh_1,
+                                placements=(Replicate(),),
+                            ),
+                        },
+                    },
+                    0: {"step": tensor(3)},
                 },
             }
 
-            # Because DTensor does not support comparison, the verification has to be performed in two stages:
-            # 1. Comparing the key sets are identical.
-            # 2. Comparing the values are identical by converting it into local tensor.
-
-            # Assert that the keys in the state dictionary match the expected keys for the current rank.
-            self.assertEqual(
-                distributed_state_dict.keys(),
-                rank_to_expected_distributed_state_dict[dist.get_rank()].keys(),
-                msg=f"{distributed_state_dict.keys() - rank_to_expected_distributed_state_dict[dist.get_rank()].keys()=} {rank_to_expected_distributed_state_dict[dist.get_rank()].keys() - distributed_state_dict.keys()=}",
-            )
+            expected_state_dict = rank_to_expected_state_dict[dist.get_rank()]
 
             # Helper function to get the local tensor from a DTensor or return the tensor itself.
             def local_tensor_getter(t: torch.Tensor | DTensor) -> torch.Tensor:
                 return t.to_local() if isinstance(t, DTensor) else t
 
-            # Compare each value in the state dictionary with the expected values.
-            for key, actual_val in distributed_state_dict.items():
-                expected_val = rank_to_expected_distributed_state_dict[dist.get_rank()][
-                    key
-                ]
-                with self.subTest(
-                    key=key, actual_val=actual_val, expected_val=expected_val
-                ):
-                    torch.testing.assert_close(
-                        local_tensor_getter(actual_val),
-                        local_tensor_getter(expected_val),
-                        atol=1e-5,
-                        rtol=2e-3,
+            # Recursively compare nested state dictionaries.
+            def assert_state_dict_close(
+                actual: dict[Any, Any],
+                expected: dict[Any, Any],
+                path: str = "",
+            ) -> None:
+                for key in expected:
+                    current_path = f"{path}.{key}" if path else str(key)
+                    self.assertIn(
+                        key, actual, f"Key {current_path} not found in actual"
                     )
+                    actual_val = actual[key]
+                    expected_val = expected[key]
+
+                    if isinstance(expected_val, dict):
+                        self.assertIsInstance(
+                            actual_val, dict, f"Expected dict at {current_path}"
+                        )
+                        assert_state_dict_close(actual_val, expected_val, current_path)
+                    elif isinstance(expected_val, (torch.Tensor, DTensor)):
+                        with self.subTest(path=current_path):
+                            torch.testing.assert_close(
+                                local_tensor_getter(actual_val),
+                                local_tensor_getter(expected_val),
+                                atol=1e-4,
+                                rtol=2e-1,
+                            )
+
+            state_dict = optimizer.state_dict()["state"]
+            assert_state_dict_close(state_dict, expected_state_dict)
 
         @parametrize("communicate_params", (False, True))
         def test_all_ranks_with_no_grads(self, communicate_params: bool) -> None:
@@ -619,51 +725,15 @@ class AbstractTest:
 
             assert isinstance(optimizer, DistributedShampoo)
             # For each rank, no matter getting gradients or not, the step should be updated.
+            osd_with_fqn = get_optimizer_state_dict(model, optimizer)
             self.assertEqual(
-                optimizer.distributed_state_dict(key_to_param=model.named_parameters())[
-                    "state"
-                ]["linear_layers.0.weight"]['["step"]'].item(),
+                cast(Dict[str, Any], osd_with_fqn["state"])["linear_layers.0.weight"][
+                    "step"
+                ],
                 num_steps,
             )
 
-        # This mock is used to catch the number of calls to Shampoo's step(), which happened after __init__().
-        # If there is no blocked params, __init__() will raise and step() should not be called.
-        # Otherwise, step() will be called.
-        @mock.patch.object(DistributedShampoo, "step")
-        def test_empty_local_blocked_params(self, mock_step: mock.Mock) -> None:
-            self._init_distributed()
-
-            # The test setting is only rank 0 has params, so all other ranks have no parameters to work on.
-            has_blocked_params = dist.get_rank() == 0
-            with (
-                contextlib.nullcontext()
-                if has_blocked_params
-                else self.assertRaisesRegex(
-                    AssertionError,
-                    re.escape("Some workers have no parameters to work on."),
-                )
-            ):
-                train_model(
-                    optim_factory=AbstractTest.ShampooDDPDistributorDeviceTest._shampoo_optim_factory(
-                        distributed_config=DDPDistributedConfig()
-                    ),
-                    # Setting model_linear_layers_dims to (PRECONDITIONER_DIM, 1) creates an model with one linear layer with PRECONDITIONER_DIMx1 weight.
-                    # Because Shampoo's max_preconditioner_dim = PRECONDITIONER_DIM, there will be only one block.
-                    # In the case of two trainers per group, there will be one trainer has no params to work on.
-                    model_factory=partial(
-                        construct_training_problem,
-                        model_linear_layers_dims=(PRECONDITIONER_DIM, 1),
-                        model_dead_layers_dims=None,
-                        enable_learnable_scalar=False,
-                        device=self._device,
-                    ),
-                )
-
-            if has_blocked_params:
-                mock_step.assert_called()
-            else:
-                mock_step.assert_not_called()
-
+    @instantiate_parametrized_tests
     class DDPDistributorOnEmptyParamDeviceTest(
         DynamoDistributedMultiProcTestCase,
         DistributorOnEmptyParamTest.Interface,
@@ -710,7 +780,6 @@ class AbstractTest:
                     lr=0.001,
                     betas=(0.9, 1.0),
                     epsilon=1e-8,
-                    momentum=0.0,
                     weight_decay=0.0,
                     precondition_frequency=1,
                     start_preconditioning_step=-1,
@@ -736,13 +805,12 @@ class AbstractTest:
 
             return model, distributor
 
-        @property
-        def _expected_masked_blocked_params(self) -> tuple[torch.Tensor, ...]:
-            return ()
-
-        def test_update_params(self) -> None:
+        @parametrize("use_masked_tensors", [True, False])
+        def test_update_params(self, use_masked_tensors: bool) -> None:
             self._init_distributed()
-            DistributorOnEmptyParamTest.Interface.test_update_params(self)
+            DistributorOnEmptyParamTest.Interface._test_update_params_impl(
+                self, use_masked_tensors
+            )
 
         @property
         def _expected_local_grad_selector(self) -> tuple[bool, ...]:

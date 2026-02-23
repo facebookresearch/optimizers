@@ -20,15 +20,23 @@ class ConvNet(nn.Module):
     Args:
         height (int): Height of image.
         width (int): Width of image.
+        out_channels (int, optional): Number of output channels. Defaults to 64.
+        disable_bias (bool, optional): Disable bias in the linear layer. Defaults to False.
 
     """
 
-    def __init__(self, height: int, width: int) -> None:
+    def __init__(
+        self,
+        height: int,
+        width: int,
+        out_channels: int = 64,
+        disable_bias: bool = False,
+    ) -> None:
         super().__init__()
-        OUT_CHANNELS, KERNEL_SIZE, STRIDE, PADDING = 64, 3, 1, 1
+        KERNEL_SIZE, STRIDE, PADDING = 3, 1, 1
         self.conv = nn.Conv2d(
             in_channels=3,
-            out_channels=OUT_CHANNELS,
+            out_channels=out_channels,
             kernel_size=KERNEL_SIZE,
             stride=STRIDE,
             padding=PADDING,
@@ -44,8 +52,9 @@ class ConvNet(nn.Module):
                     padding=PADDING,
                 )
             )
-            * OUT_CHANNELS,
+            * out_channels,
             out_features=10,
+            bias=(not disable_bias),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:

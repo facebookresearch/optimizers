@@ -39,7 +39,7 @@ Key distinctives of this implementation include:
 - Learning rate grafting [3]. Our version of grafting only grafts the second moment/diagonal preconditioner. Momentum/first moment updates are performed separate from grafting.
 - Supports both normal and AdamW (decoupled) weight decay.
 - Incorporates exponential moving averaging (with or without bias correction) to the estimate the first moment (akin to Adam).
-- Incorporates momentum and Nesterov acceleration.
+- Incorporates iterate averaging methods (Generalized Primal Averaging and Schedule-Free) that provide momentum-equivalent behavior with improved theoretical properties [13,14].
 - Offers multiple approaches for computing the root inverse, including:
     - Using symmetric eigendecomposition (used by default).
     - Using the QR algorithm to compute an approximate eigendecomposition.
@@ -73,7 +73,7 @@ A few notes on hyperparameters:
 
 - Here, `betas` refer to the hyperparameters used for the exponential moving average of the gradients and Shampoo preconditioners, while `grafting_beta2` corresponds to the `beta2` used specifically for exponential moving averaging of the grafted method. This is similar for `epsilon` and `grafting_epsilon`. As a first choice, we recommend setting `betas` equal to the previous `betas` and additionally setting `grafting_beta2` equal to `betas[1]`, and set `epsilon = 1e-12` and `grafting_epsilon` equal to the previous `epsilon`.
 
-- We also distinguish between `beta1` and `momentum`. `beta1` corresponds to the EMA of the gradients (or gradient filtering), while `momentum` corresponds to the SGD momentum formula applied to the search direction.
+- We also distinguish between `beta1` and iterate averaging. `beta1` (via `betas[0]`) corresponds to the EMA of the gradients (or gradient filtering), while iterate averaging (via `iterate_averaging_config`) provides momentum-like behavior through primal averaging. See [Example 7](#example-7-iterate-averaging-gpa-and-schedule-free) for details on configuring iterate averaging to achieve SGD momentum equivalence.
 
 - We allow for decoupled and coupled weight decay. If one sets `use_decoupled_weight_decay=True`, then you are enabling AdamW-style weight decay, while `use_decoupled_weight_decay=False` corresponds to the normal L2-regularization style weight decay.
 
@@ -98,20 +98,27 @@ optimizer = SGD(
 we would instead use:
 ```python
 import torch
-from distributed_shampoo import DistributedShampoo, SGDPreconditionerConfig
+from distributed_shampoo import (
+    DistributedShampoo,
+    GeneralizedPrimalAveragingConfig,
+    SGDPreconditionerConfig,
+)
 
 model = instantiate_model()
 
 optimizer = DistributedShampoo(
     model.parameters(),
-    lr=0.001,
+    lr=0.1,  # = 0.01 / (1 - 0.9) to account for primal averaging formulation
     betas=(0., 0.999),
     epsilon=1e-12,
-    momentum=0.9,
     weight_decay=1e-05,
     max_preconditioner_dim=8192,
     precondition_frequency=100,
     grafting_config=SGDPreconditionerConfig(),
+    iterate_averaging_config=GeneralizedPrimalAveragingConfig(
+        eval_interp_coeff=0.9,   # = momentum
+        train_interp_coeff=1.0,  # 1.0 for heavy-ball momentum
+    ),
 )
 ```
 
@@ -329,6 +336,89 @@ optimizer = DistributedShampoo(
 
 `SpectralDescentPreconditionerConfig` can also be used to implement other variations of spectral descent.
 
+### Example 7: Iterate Averaging (GPA and Schedule-Free)
+
+Distributed Shampoo supports iterate averaging methods including Generalized Primal Averaging (GPA) and Schedule-Free optimization. These methods provide an alternative to traditional momentum with improved theoretical properties.
+
+#### Generalized Primal Averaging (GPA)
+
+GPA maintains two sequences of iterates and can reproduce momentum behavior:
+
+```python
+from distributed_shampoo import (
+    DistributedShampoo,
+    GeneralizedPrimalAveragingConfig,
+    SGDPreconditionerConfig,
+)
+
+model = instantiate_model()
+
+# Example: Shampoo with GPA equivalent to SGD momentum=0.9
+optimizer = DistributedShampoo(
+    model.parameters(),
+    lr=0.1,  # = original_lr / (1 - momentum) = 0.01 / (1 - 0.9)
+    betas=(0.0, 1.0),
+    epsilon=1e-12,
+    max_preconditioner_dim=8192,
+    precondition_frequency=100,
+    preconditioner_config=SGDPreconditionerConfig(),
+    iterate_averaging_config=GeneralizedPrimalAveragingConfig(
+        eval_interp_coeff=0.9,   # = momentum
+        train_interp_coeff=1.0,  # 1.0 for heavy-ball, momentum for Nesterov
+    ),
+)
+```
+
+#### Schedule-Free Optimization
+
+Schedule-Free eliminates the need for learning rate schedules:
+
+```python
+from distributed_shampoo import (
+    DistributedShampoo,
+    ScheduleFreeConfig,
+    AdamPreconditionerConfig,
+)
+
+model = instantiate_model()
+
+optimizer = DistributedShampoo(
+    model.parameters(),
+    lr=0.001,
+    betas=(0.9, 0.999),
+    epsilon=1e-12,
+    max_preconditioner_dim=8192,
+    precondition_frequency=100,
+    grafting_config=AdamPreconditionerConfig(
+        beta2=0.999,
+        epsilon=1e-08,
+    ),
+    iterate_averaging_config=ScheduleFreeConfig(
+        train_interp_coeff=0.9,
+    ),
+)
+
+# Important: Call train() before training and eval() before evaluation
+optimizer.train()
+# ... training loop ...
+optimizer.eval()
+# ... evaluation ...
+```
+
+#### Migration from Previous Momentum Parameters
+
+The previous `momentum`, `dampening`, and `use_nesterov` parameters have been replaced by iterate averaging configs. Here are the equivalences:
+
+| Previous Configuration | New Configuration |
+|------------------------|-------------------|
+| `momentum=β, dampening=0, use_nesterov=False` | `GeneralizedPrimalAveragingConfig(eval_interp_coeff=β, train_interp_coeff=1.0)` with `lr = lr / (1-β)` |
+| `momentum=β, dampening=0, use_nesterov=True` | `GeneralizedPrimalAveragingConfig(eval_interp_coeff=β, train_interp_coeff=β)` with `lr = lr / (1-β)` |
+| `momentum=β, dampening=d` (d≠0) | No direct equivalent. Dampening is not supported in iterate averaging. |
+
+**Note on LaProp:** The previous momentum implementation (sometimes called LaProp) is mathematically equivalent to the heavy-ball/primal averaging formulation when `dampening=0`. Use the heavy-ball configuration above.
+
+**Note on LaPropW:** The original LaPropW from the paper includes additional weight decay handling that may differ slightly from the iterate averaging formulation. For most practical purposes, the heavy-ball configuration provides equivalent behavior.
+
 ## Distributed Training Support
 
 Our implementation offers specialized compatibility and performance optimizations for different distributed training paradigms, including Distributed Data Parallel (DDP) and Fully Sharded Data Parallel (including FSDP and per-parameter FSDP, a.k.a. FSDP2) training. Note that Distributed Shampoo will work out of the box for DDP training, but not for FSDP training.
@@ -394,7 +484,7 @@ optimizer = DistributedShampoo(
     ),
 )
 ```
-Please see [`cifar10_example.py`](https://github.com/facebookresearch/optimizers/blob/main/distributed_shampoo/examples/cifar10_example.py) as an example (use `parallelism=ddp`).
+Please see [`ddp_cifar10_example.py`](https://github.com/facebookresearch/optimizers/blob/main/distributed_shampoo/examples/ddp_cifar10_example.py) as an example.
 
 ### FSDP1 (FullyShardedDataParallel)
 
@@ -450,7 +540,7 @@ optimizer = DistributedShampoo(
     ),
 )
 ```
-Please see [`cifar10_example.py`](https://github.com/facebookresearch/optimizers/blob/main/distributed_shampoo/examples/cifar10_example.py) as an example (use `parallelism=fsdp`).
+Please see [`fsdp_cifar10_example.py`](https://github.com/facebookresearch/optimizers/blob/main/distributed_shampoo/examples/fsdp_cifar10_example.py) as an example.
 
 #### HSDP1 Training Support
 
@@ -479,7 +569,7 @@ dist.init_process_group(
     rank=WORLD_RANK,
     world_size=WORLD_SIZE,
 )
-device = torch.device("cuda:{}".format(LOCAL_RANK)
+device = torch.device("cuda:{}".format(LOCAL_RANK))
 
 # Instantiate device mesh for HSDP Shampoo.
 # Assuming 8 GPUs, a 2 x 4 mesh will be initialized.
@@ -510,7 +600,7 @@ optimizer = DistributedShampoo(
     ),
 )
 ```
-Please see [`cifar10_example.py`](https://github.com/facebookresearch/optimizers/blob/main/distributed_shampoo/examples/cifar10_example.py) as an example (use `parallelism=hsdp dp_replicate_degree=2`).
+Please see [`hsdp_cifar10_example.py`](https://github.com/facebookresearch/optimizers/blob/main/distributed_shampoo/examples/hsdp_cifar10_example.py) as an example.
 
 ### FSDP2 (fully_shard)
 
@@ -563,7 +653,7 @@ optimizer = DistributedShampoo(
 )
 ```
 
-Please see [`cifar10_example.py`](https://github.com/facebookresearch/optimizers/blob/main/distributed_shampoo/examples/cifar10_example.py) as an example (use `parallelism=fully_shard`).
+Please see [`fully_shard_cifar10_example.py`](https://github.com/facebookresearch/optimizers/blob/main/distributed_shampoo/examples/fully_shard_cifar10_example.py) as an example.
 
 #### HSDP2 Training Support
 
@@ -620,39 +710,39 @@ optimizer = DistributedShampoo(
     distributed_config=HybridShardDistributedConfig(device_mesh=device_mesh),
 )
 ```
-Please see [`cifar10_example.py`](https://github.com/facebookresearch/optimizers/blob/main/distributed_shampoo/examples/cifar10_example.py) as an example (use `parallelism=hybrid_shard dp_replicate_degree=2`).
+Please see [`hybrid_shard_cifar10_example.py`](https://github.com/facebookresearch/optimizers/blob/main/distributed_shampoo/examples/hybrid_shard_cifar10_example.py) as an example.
 
 ## Checkpointing Support
 
-To checkpoint Distributed Shampoo, we have to use the `torch.distributed.checkpoint` solution with `DTensor`. *Note that we do not currently support the standard PyTorch checkpointing solution because it cannot handle storing process groups or `DTensor` by default.* We have therefore disabled `state_dict` and `load_state_dict` and instead rely on `distributed_state_dict` and `load_distributed_state_dict` instead.
+Distributed Shampoo supports PyTorch standard state dict API via `state_dict()` and `load_state_dict()`. For saving and loading checkpoints, it is compatible with both:
+- Standard PyTorch serialization: torch.save() / torch.load()
+- Distributed checkpointing: dcp.save() / dcp.load()
 
-Distributed checkpointing requires a fully-qualified name (FQN) mapping for each parameter, unlike the identifier used in `torch.optim.Optimizer`. The easiest way to handle this requirement is to use the model's `named_parameters()` function and pass this as the `key_to_param` argument of `distributed_state_dict` and `load_distributed_state_dict`.
-
-Given a `CHECKPOINT_DIR`, to store the checkpoint:
+Given a `CHECKPOINT_DIR`, to store the checkpoint with PyTorch's `torch.distributed.checkpoint`:
 ```python
-import torch.distributed.checkpoint as dist_checkpoint
+import torch.distributed.checkpoint as dcp
 
 state_dict = {
     "model": model.state_dict(),
-    "optim": optimizer.distributed_state_dict(key_to_param=model.named_parameters()),
+    "optim": optimizer.state_dict(),
 }
-dist_checkpoint.save_state_dict(
+dcp.save(
     state_dict=state_dict,
-    storage_writer=dist_checkpoint.FileSystemWriter(CHECKPOINT_DIR),
+    checkpoint_id=CHECKPOINT_DIR,
 )
 ```
 
 To load the checkpoint:
 ```python
-dist_checkpoint.load_state_dict(
+dcp.load(
     state_dict=state_dict,
-    storage_reader=dist_checkpoint.FileSystemReader(CHECKPOINT_DIR),
+    checkpoint_id=CHECKPOINT_DIR,
 )
 model.load_state_dict(state_dict["model"])
-optimizer.load_distributed_state_dict(state_dict["optim"], key_to_param=model.named_parameters())
+optimizer.load_state_dict(state_dict["optim"])
 ```
 
-You can also refer to [`cifar10_example.py`](https://github.com/facebookresearch/optimizers/blob/main/distributed_shampoo/examples/cifar10_example.py) as an example (use `parallelism=ddp`).
+You can also refer to [`ddp_cifar10_example.py`](https://github.com/facebookresearch/optimizers/blob/main/distributed_shampoo/examples/ddp_cifar10_example.py) as an example.
 
 ## Hyperparameter Tuning
 
@@ -682,7 +772,6 @@ With the inclusion of learning rate grafting, we can extract a good learning rat
         nn.parameters(),
         lr=0.01,
         betas=(0., 0.999),
-        momentum=0.9,
         weight_decay=0.01,
         max_preconditioner_dim=4096,
         grafting_config=SGDPreconditionerConfig(),
@@ -703,7 +792,6 @@ With the inclusion of learning rate grafting, we can extract a good learning rat
         nn.parameters(),
         lr=0.01,
         betas=(0., 0.999),
-        momentum=0.9,
         weight_decay=0.01,
         precondition_frequency=100,
         grafting_config=SGDPreconditionerConfig(),
@@ -722,7 +810,6 @@ With the inclusion of learning rate grafting, we can extract a good learning rat
         nn.parameters(),
         lr=0.01,
         betas=(0., 0.999),
-        momentum=0.9,
         weight_decay=0.01,
         start_preconditioning_step=300,
         grafting_config=SGDPreconditionerConfig(),
@@ -732,10 +819,9 @@ With the inclusion of learning rate grafting, we can extract a good learning rat
 4. To tune for better model quality, one can tune:
 
     * **Learning Rate** (`lr`): One can change the learning rate schedule, and potentially use a larger learning rate.
-    * **Nesterov Momentum** (`momentum`, `use_nesterov`): In some cases, we have found using Nesterov momentum to substantially improve model quality. To use this, we recommend setting `momentum` to 0.5 or 0.9 and setting `use_nesterov` to True. The learning rate needs to be re-tuned with respect to this hyperparameter.
     * **Epsilon Regularization** (`epsilon`): One should typically search for a value in $\{10^{−12},10^{−11},...,10^{−2},10^{−1}\}$.
     * **Exponential Moving Average Parameters** (`betas`): One can tune the `betas = (beta1, beta2)` parameters as is typical for Adam(W).
-    * **Preconditioner Data Type** (`preconditioner_dtype`): For certain models, it is necessary to use higher precision to accumulate the Shampoo factor matrices and compute its eigendecomposition to obtain high enough numerical accuracy. In those cases, one can specify this as `torch.float64`. (Note that this will use more memory.)
+    * **Preconditioner Data Type** (`factor_matrix_dtype`): For certain models, it is necessary to use higher precision to accumulate the Shampoo factor matrices and compute its eigendecomposition to obtain high enough numerical accuracy. In those cases, one can specify this as `torch.float64`. (Note that this will use more memory.)
     * **MTML Task Weights**: Task weights may need to be re-tuned as Distributed Shampoo will better exploit certain imbalances between different task losses.
 
 5. If enabling DDP Shampoo, you can tune for performance:
@@ -744,7 +830,7 @@ With the inclusion of learning rate grafting, we can extract a good learning rat
     * **Quantized Communications** (`communication_dtype`): One can enable quantized communications by setting the `communication_dtype`. We have found that using `torch.float16` works well in practice (with `communicate_params = False`).
     * **Communicate Updated Parameters** (`communicate_params`): If one does not enable quantized communications, one can possibly obtain better performance by communicating the updated parameters by setting this to `True`.
 
-## Commmon Questions
+## Common Questions
 
 ### Encountering `NaN/Inf` numerical error:
 
@@ -786,3 +872,5 @@ If you use PyTorch Distributed Shampoo in your work, please use the following Bi
 10. [Old Optimizer, New Norm: An Anthology](https://arxiv.org/abs/2409.20325). Jeremy Bernstein, Laker Newhouse. Tech report, 2024.
 11. [Muon: An optimizer for hidden layers in neural networks](https://kellerjordan.github.io/posts/muon/). Keller Jordan, Yuchen Jin, Vlado Boza, Jiacheng You, Franz Cesista, Laker Newhouse, Jeremy Bernstein. Blog post, 2024.
 12. [Understanding and Improving Shampoo and SOAP via Kullback-Leibler Minimization](https://arxiv.org/abs/2509.03378). Wu Lin, Scott C. Lowe, Felix Dangel, Runa Eschenhagen, Zikun Xu, Roger B. Grosse. Tech report, 2025.
+13. [The Road Less Scheduled](https://arxiv.org/abs/2405.15682). Aaron Defazio, Xingyu Alice Yang, Harsh Mehta, Konstantin Mishchenko, Ahmed Khaled, Ashok Cutkosky. NeurIPS, 2025.
+14. [Smoothing DiLoCo with Primal Averaging for Faster Training of LLMs](https://arxiv.org/abs/2512.17131). Aaron Defazio, Konstantin Mishchenko, Parameswaran Raman, Hao-Jun Michael Shi, Lin Xiao. Tech report, 2025.

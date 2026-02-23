@@ -12,6 +12,7 @@ LICENSE file in the root directory of this source tree.
 import unittest
 from collections.abc import Callable
 from functools import partial
+from itertools import filterfalse
 from typing import cast, overload
 
 import torch
@@ -29,8 +30,10 @@ from distributed_shampoo.shampoo_types import (
     DefaultSingleDeviceDistributedConfig,
     FSDPParamAssignmentStrategy,
     FullyShardDistributedConfig,
+    GeneralizedPrimalAveragingConfig,
     HybridShardDistributedConfig,
     SingleDeviceDistributedConfig,
+    WeightDecayType,
 )
 from distributed_shampoo.tests.shampoo_test_utils import (
     compare_two_optimizers_models_devices_on_weight_and_loss,
@@ -57,13 +60,17 @@ PRECONDITIONER_DIM = 4
 # Model layer dimensions were chosen semi-arbitrarily to cover different scenarios:
 # - The 1st one has parameters that aligns with the Shampoo preconditioner dim after FSDP sharding;
 # - The 2nd one has parameters with shapes not aligned with the preconditioner dim.
+# - The 3rd one creates only one parameter block globally, leaving some HSDP ranks with no parameters.
 # In these cases, the lossless HSDP Distributor could still guarantee the identicalness with default Shampoo.
-# TODO (irisz): Adding dummy 1, 1  layers at the end since we need at least 1 parameters on each rank.
-# Otherwise, we would run into timeout issue when initializing steps. We should error out in distributed_shampoo
-# when we are not able to initilize step on a rank.
 TEST_MODEL_LAYER_DIMS: tuple[tuple[int, ...], ...] = (
     (4 * PRECONDITIONER_DIM, 2 * PRECONDITIONER_DIM, 1, 1, 1),
     (3 * PRECONDITIONER_DIM - 1, PRECONDITIONER_DIM + 1, PRECONDITIONER_DIM - 1, 1, 1),
+    (PRECONDITIONER_DIM, 1),
+)
+
+DEAD_MODEL_LAYER_DIMS: tuple[tuple[int, ...], ...] = (
+    (PRECONDITIONER_DIM, 1),
+    (),  # empty dims tuple will create a layer with no parameters, equivalent to None
 )
 
 
@@ -78,6 +85,7 @@ class ShampooHybridShardLosslessDistributorTest(DTensorTestBase):
     @staticmethod
     def _construct_model(
         model_linear_layers_dims: tuple[int, ...],
+        model_dead_layers_dims: tuple[int, ...],
         post_model_decoration: Callable[[nn.Module], nn.Module] = lambda x: x,
     ) -> tuple[nn.Module, nn.Module, torch.Tensor, torch.Tensor]: ...
 
@@ -85,6 +93,7 @@ class ShampooHybridShardLosslessDistributorTest(DTensorTestBase):
     @staticmethod
     def _construct_model(
         model_linear_layers_dims: tuple[int, ...],
+        model_dead_layers_dims: tuple[int, ...],
         post_model_decoration: Callable[
             [nn.Module], FSDPModule
         ] = lambda x: fully_shard(x),
@@ -93,12 +102,11 @@ class ShampooHybridShardLosslessDistributorTest(DTensorTestBase):
     @staticmethod
     def _construct_model(
         model_linear_layers_dims: tuple[int, ...],
+        model_dead_layers_dims: tuple[int, ...],
         post_model_decoration: Callable[
             [nn.Module], nn.Module | FSDPModule
         ] = lambda x: x,
     ) -> tuple[nn.Module | FSDPModule, nn.Module, torch.Tensor, torch.Tensor]:
-        # model dead layers won't parpicipate in the training and thus don't have grads.
-        model_dead_layers_dims = (PRECONDITIONER_DIM, 1)
         # Using partial here to prevent Pyre complain on incompatible parameter type.
         return partial(
             construct_training_problem, post_model_decoration=post_model_decoration
@@ -123,14 +131,14 @@ class ShampooHybridShardLosslessDistributorTest(DTensorTestBase):
             lr=0.001,
             betas=(0.9, 1.0),
             epsilon=1e-8,
-            momentum=0.0,
             weight_decay=0.0,
             max_preconditioner_dim=PRECONDITIONER_DIM,
             precondition_frequency=1,
             start_preconditioning_step=start_preconditioning_step,
-            use_decoupled_weight_decay=True,
+            weight_decay_type=WeightDecayType.DECOUPLED,
             grafting_config=AdaGradPreconditionerConfig(epsilon=1e-8),
             distributed_config=distributed_config,
+            iterate_averaging_config=GeneralizedPrimalAveragingConfig(),
         )
 
     @with_comms
@@ -146,6 +154,7 @@ class ShampooHybridShardLosslessDistributorTest(DTensorTestBase):
     )
     @parametrize("num_trainers_per_group", (-1, 1, 2))
     @parametrize("model_linear_layers_dims", TEST_MODEL_LAYER_DIMS)
+    @parametrize("model_dead_layers_dims", DEAD_MODEL_LAYER_DIMS)
     @parametrize(
         "param_assignment_strategy",
         (
@@ -159,6 +168,7 @@ class ShampooHybridShardLosslessDistributorTest(DTensorTestBase):
         communication_dtype: torch.dtype,
         communicate_params: bool,
         model_linear_layers_dims: tuple[int, ...],
+        model_dead_layers_dims: tuple[int, ...],
         param_assignment_strategy: FSDPParamAssignmentStrategy,
     ) -> None:
         hybrid_shard_config = HybridShardDistributedConfig(
@@ -178,6 +188,7 @@ class ShampooHybridShardLosslessDistributorTest(DTensorTestBase):
             control_model_factory=partial(
                 ShampooHybridShardLosslessDistributorTest._construct_model,
                 model_linear_layers_dims=model_linear_layers_dims,
+                model_dead_layers_dims=model_dead_layers_dims,
             ),
             experimental_optim_factory=ShampooHybridShardLosslessDistributorTest._shampoo_optim_factory(
                 distributed_config=hybrid_shard_config,
@@ -185,6 +196,7 @@ class ShampooHybridShardLosslessDistributorTest(DTensorTestBase):
             experimental_model_factory=partial(
                 ShampooHybridShardLosslessDistributorTest._construct_model,
                 model_linear_layers_dims=model_linear_layers_dims,
+                model_dead_layers_dims=model_dead_layers_dims,
                 post_model_decoration=partial(
                     fully_shard, mesh=hybrid_shard_config.device_mesh
                 ),
@@ -244,6 +256,7 @@ class ShampooHybridShardLosslessDistributorTest(DTensorTestBase):
             control_model_factory=partial(
                 ShampooHybridShardLosslessDistributorTest._construct_model,
                 model_linear_layers_dims=model_linear_layers_dims,
+                model_dead_layers_dims=(),
                 post_model_decoration=partial(fully_shard),
             ),
             experimental_optim_factory=ShampooHybridShardLosslessDistributorTest._shampoo_optim_factory(
@@ -252,6 +265,7 @@ class ShampooHybridShardLosslessDistributorTest(DTensorTestBase):
             experimental_model_factory=partial(
                 ShampooHybridShardLosslessDistributorTest._construct_model,
                 model_linear_layers_dims=model_linear_layers_dims,
+                model_dead_layers_dims=(),
                 post_model_decoration=partial(fully_shard, mesh=mesh_2d),
             ),
         )
@@ -260,10 +274,12 @@ class ShampooHybridShardLosslessDistributorTest(DTensorTestBase):
     @skip_if_lt_x_gpu(4)
     @parametrize("communicate_params", (False, True))
     @parametrize("model_linear_layers_dims", TEST_MODEL_LAYER_DIMS)
+    @parametrize("model_dead_layers_dims", DEAD_MODEL_LAYER_DIMS)
     def test_all_ranks_with_no_grads(
         self,
         communicate_params: bool,
         model_linear_layers_dims: tuple[int, ...],
+        model_dead_layers_dims: tuple[int, ...],
     ) -> None:
         hybrid_shard_config = HybridShardDistributedConfig(
             device_mesh=init_device_mesh(
@@ -284,6 +300,7 @@ class ShampooHybridShardLosslessDistributorTest(DTensorTestBase):
                 model_factory=partial(
                     ShampooHybridShardLosslessDistributorTest._construct_model,
                     model_linear_layers_dims=model_linear_layers_dims,
+                    model_dead_layers_dims=model_dead_layers_dims,
                     post_model_decoration=partial(
                         fully_shard, mesh=hybrid_shard_config.device_mesh
                     ),
@@ -294,8 +311,59 @@ class ShampooHybridShardLosslessDistributorTest(DTensorTestBase):
         # Verify that the backward() method was called the expected number of times and the training loop completed successfully.
         self.assertEqual(mock_backward.call_count, steps_without_gradients)
 
+    @with_comms
+    @skip_if_lt_x_gpu(4)
+    def test_hybrid_shard_lossless_shampoo_block_index(self) -> None:
+        mesh_2d = init_device_mesh(
+            "cuda", (2, 2), mesh_dim_names=("replicate", "shard")
+        )
+        model, _, _, _, optimizer = train_model(
+            optim_factory=ShampooHybridShardLosslessDistributorTest._shampoo_optim_factory(
+                distributed_config=HybridShardDistributedConfig(
+                    device_mesh=mesh_2d,
+                    param_assignment_strategy=FSDPParamAssignmentStrategy.REPLICATE,
+                )
+            ),
+            model_factory=partial(
+                ShampooHybridShardLosslessDistributorTest._construct_model,
+                model_linear_layers_dims=TEST_MODEL_LAYER_DIMS[0],
+                model_dead_layers_dims=DEAD_MODEL_LAYER_DIMS[0],
+                post_model_decoration=partial(fully_shard, mesh=mesh_2d),
+            ),
+        )
+        assert isinstance(model, nn.Module)
+        assert isinstance(optimizer, DistributedShampoo)
+        osd_state = optimizer.state_dict()["state"]
+        # We don't care about the parameter index, and we just want to get
+        # the keys of each inner state of the parameter.
+        flatten_keys = [
+            key for inner_dict in osd_state.values() for key in inner_dict.keys()
+        ]
+
+        # Note: lossless distributors do NOT include the rank prefix in block IDs.
+        def expected_key_criterion(key: str) -> bool:
+            return "block_" in key
+
+        # Verify the only keys that are not the fqn of a block are "step",
+        # "train_mode", and "lr_sum".
+        block_keys, non_block_keys = (
+            list(filter(expected_key_criterion, flatten_keys)),
+            list(filterfalse(expected_key_criterion, flatten_keys)),
+        )
+        filtered_flatten_keys = [
+            key for key in flatten_keys if key not in {"step", "train_mode", "lr_sum"}
+        ]
+
+        self.assertEqual(
+            non_block_keys,
+            ["step", "train_mode", "lr_sum"],
+            msg=f"find unexpected non-block key in {non_block_keys=}.",
+        )
+        self.assertEqual(block_keys, filtered_flatten_keys)
+
 
 @unittest.skipIf(not torch.cuda.is_available(), "Skip when CUDA is not available")
+@instantiate_parametrized_tests
 class HybridShardLosslessDistributorOnEmptyParamTest(
     DTensorTestBase, DistributorOnEmptyParamTest.Interface
 ):
@@ -336,7 +404,6 @@ class HybridShardLosslessDistributorOnEmptyParamTest(
                 lr=0.001,
                 betas=(0.9, 1.0),
                 epsilon=1e-8,
-                momentum=0.0,
                 weight_decay=0.0,
                 precondition_frequency=1,
                 start_preconditioning_step=-1,
@@ -362,13 +429,12 @@ class HybridShardLosslessDistributorOnEmptyParamTest(
 
         return model, distributor
 
-    @property
-    def _expected_masked_blocked_params(self) -> tuple[torch.Tensor, ...]:
-        return ()
-
     @with_comms
-    def test_update_params(self) -> None:  # type: ignore[override]
-        DistributorOnEmptyParamTest.Interface.test_update_params(self)
+    @parametrize("use_masked_tensors", [True, False])
+    def test_update_params(self, use_masked_tensors: bool) -> None:
+        DistributorOnEmptyParamTest.Interface._test_update_params_impl(
+            self, use_masked_tensors
+        )
 
     @property
     def _expected_local_grad_selector(self) -> tuple[bool, ...]:
@@ -413,64 +479,15 @@ class HybridShardLosslessDistributorOnEmptyParamTest(
         )
 
         # Define expected DTensorBlockInfo objects for each rank
-        return {
-            0: (  # For rank 0
-                DTensorBlockInfo(
-                    param=first_dead_layer_weight,
-                    composable_block_ids=(0, "rank_0-block_0"),
-                ),
-                DTensorBlockInfo(
-                    param=first_dead_layer_weight,
-                    composable_block_ids=(0, "rank_0-block_1"),
-                ),
-                DTensorBlockInfo(
-                    param=first_dead_layer_weight,
-                    composable_block_ids=(0, "rank_0-block_2"),
-                ),
-            ),
-            1: (  # For rank 1
-                DTensorBlockInfo(
-                    param=first_dead_layer_weight,
-                    composable_block_ids=(0, "rank_1-block_0"),
-                ),
-                DTensorBlockInfo(
-                    param=first_dead_layer_weight,
-                    composable_block_ids=(0, "rank_1-block_1"),
-                ),
-                DTensorBlockInfo(
-                    param=first_dead_layer_weight,
-                    composable_block_ids=(0, "rank_1-block_2"),
-                ),
-            ),
-            2: (  # For rank 2
-                DTensorBlockInfo(
-                    param=first_dead_layer_weight,
-                    composable_block_ids=(0, "rank_0-block_0"),
-                ),
-                DTensorBlockInfo(
-                    param=first_dead_layer_weight,
-                    composable_block_ids=(0, "rank_0-block_1"),
-                ),
-                DTensorBlockInfo(
-                    param=first_dead_layer_weight,
-                    composable_block_ids=(0, "rank_0-block_2"),
-                ),
-            ),
-            3: (  # For rank 3
-                DTensorBlockInfo(
-                    param=first_dead_layer_weight,
-                    composable_block_ids=(0, "rank_1-block_0"),
-                ),
-                DTensorBlockInfo(
-                    param=first_dead_layer_weight,
-                    composable_block_ids=(0, "rank_1-block_1"),
-                ),
-                DTensorBlockInfo(
-                    param=first_dead_layer_weight,
-                    composable_block_ids=(0, "rank_1-block_2"),
-                ),
-            ),
-        }[dist.get_rank()]
+        # Note: lossless distributors pass rank=None to _construct_composable_block_ids,
+        # so the block IDs do NOT include the rank prefix.
+        return tuple(
+            DTensorBlockInfo(
+                param=first_dead_layer_weight,
+                composable_block_ids=(0, f"block_{i}"),
+            )
+            for i in range(3)
+        )
 
     @with_comms
     def test_local_block_info_list(self) -> None:  # type: ignore[override]

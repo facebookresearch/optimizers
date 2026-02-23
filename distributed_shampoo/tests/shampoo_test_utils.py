@@ -136,7 +136,7 @@ def construct_training_problem(
 
     loss = nn.MSELoss()
 
-    target = torch.tensor([0.0] * model_linear_layers_dims[-1]).to(device=device)
+    target = torch.tensor([[0.0] * model_linear_layers_dims[-1]]).to(device=device)
 
     return post_model_decoration(model), loss, data, target
 
@@ -208,6 +208,11 @@ def train_model(
         train_dataset, batch_size=1, shuffle=False
     )
 
+    # Set optimizer to train mode if it supports train/eval modes (e.g., GPA-AdamW).
+    train_mode = getattr(optimizer, "train", None)
+    if callable(train_mode):
+        train_mode()
+
     # Train for the specified number of steps
     for _, (step_data,) in enumerate(train_loader):
         optimizer.zero_grad()
@@ -215,7 +220,7 @@ def train_model(
         objective.backward()
         optimizer.step()
 
-    return model, loss, validation_data, target, optimizer
+    return model, loss, validation_data.unsqueeze(0), target, optimizer
 
 
 def compare_two_optimizers_models_devices_on_weight_and_loss(

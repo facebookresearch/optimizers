@@ -15,12 +15,16 @@ from typing import Any
 import torch
 import torch.distributed as dist
 from distributed_shampoo.distributor.shampoo_block_info import DTensorBlockInfo
-from distributed_shampoo.distributor.shampoo_dist_utils import get_device_mesh
+from distributed_shampoo.distributor.shampoo_dist_utils import (
+    get_device_mesh,
+    shampoo_comm_profiler,
+)
 from distributed_shampoo.distributor.shampoo_distributor import DistributorInterface
 from distributed_shampoo.shampoo_types import (
     DDPDistributedConfig,
     DISTRIBUTED_CONFIG,
     PARAMS,
+    ShampooRuntimeConfig,
 )
 from distributed_shampoo.utils.commons import batched
 from distributed_shampoo.utils.shampoo_utils import (
@@ -31,7 +35,6 @@ from distributed_shampoo.utils.shampoo_utils import (
 )
 from torch import Tensor
 from torch.distributed import tensor as dtensor
-from torch.distributed.device_mesh import _mesh_resources
 from torch.distributed.tensor import zeros as dtensor_zeros
 
 logger: logging.Logger = logging.getLogger(__name__)
@@ -132,6 +135,7 @@ class DDPDistributor(DistributorInterface):
 
     Args:
         param_group (dict[str, Any]): Parameter group containing parameters.
+        runtime_config (ShampooRuntimeConfig): Runtime configurations for the distributor, e.g., debugging, pt2 compile options.
         dist_group (dist.ProcessGroup | None): Optional process group for distributed operations. (Default: dist.distributed_c10d.GroupMember.WORLD)
 
     """
@@ -139,9 +143,10 @@ class DDPDistributor(DistributorInterface):
     def __init__(
         self,
         param_group: dict[str, Any],
+        runtime_config: ShampooRuntimeConfig | None = None,
         dist_group: dist.ProcessGroup | None = dist.distributed_c10d.GroupMember.WORLD,
     ) -> None:
-        super().__init__(param_group)
+        super().__init__(param_group, runtime_config)
         distributed_config: DDPDistributedConfig = param_group[DISTRIBUTED_CONFIG]
 
         # Construct global masked blocked parameters (which is DDP-specific).
@@ -216,78 +221,92 @@ class DDPDistributor(DistributorInterface):
     @torch.no_grad()
     def update_params(
         self,
-        masked_blocked_search_directions: tuple[Tensor, ...],
+        blocked_search_directions: tuple[Tensor, ...],
+        use_masked_tensors: bool = True,
     ) -> None:
         """Update params stored inside this distributor according to the input search directions argument.
 
         Args:
-            masked_blocked_search_directions (tuple[Tensor, ...]): Search directions for each local blocked parameter.
-            This tuple might be empty if the parameters are not receiving gradients.
+            blocked_search_directions (tuple[Tensor, ...]): Search directions for each local blocked parameter.
+                This tuple might be empty if the parameters are not receiving gradients.
+            use_masked_tensors (bool): If True (default), operates on masked blocked params.
+                If False, operates on all local blocked params regardless of gradient masking.
 
         """
 
-        # NOTE: Remove this function once PT2 supports all_gather with functional collective
+        # NOTE: Remove @torch.compiler.disable once PT2 supports all_gather with functional collective
         @torch.compiler.disable
         def all_gather_into_tensor() -> None:
-            dist.all_gather_into_tensor(
-                output_tensor=self._global_dist_buffer,
-                input_tensor=self._local_dist_buffer,
-                group=self._dist_group,
-            )
+            with shampoo_comm_profiler(
+                f"{self.__class__.__name__}::all_gather_into_tensor"
+            ):
+                dist.all_gather_into_tensor(
+                    output_tensor=self._global_dist_buffer,
+                    input_tensor=self._local_dist_buffer,
+                    group=self._dist_group,
+                )
+
+        # Select target params and buffers based on flag
+        if use_masked_tensors:
+            local_params = self._local_masked_blocked_params
+            local_buffers = self._local_masked_dist_blocked_buffers
+            global_params = self._global_masked_blocked_params
+            global_buffers = self._global_masked_dist_blocked_buffers
+        else:
+            local_params = self._local_blocked_params
+            local_buffers = self._local_dist_blocked_buffers
+            global_params = self._global_blocked_params
+            global_buffers = self._global_dist_blocked_buffers
 
         if self._communicate_params:
-            assert len(self._local_masked_blocked_params) == len(
-                masked_blocked_search_directions
-            ), (
-                f"Expected {len(self._local_masked_blocked_params)=} to be equal to {len(masked_blocked_search_directions)=}."
+            assert len(local_params) == len(blocked_search_directions), (
+                f"Expected {len(local_params)=} to be equal to {len(blocked_search_directions)=}."
             )
 
             # torch._foreach only accepts non-empty list
-            if masked_blocked_search_directions:
+            if blocked_search_directions:
                 # Perform your update to your local masked parameters and copy into buffers.
                 torch._foreach_add_(
-                    self._local_masked_blocked_params,
-                    masked_blocked_search_directions,
+                    local_params,
+                    blocked_search_directions,
                 )
                 torch._foreach_copy_(
-                    self._local_masked_dist_blocked_buffers,
-                    self._local_masked_blocked_params,
+                    local_buffers,
+                    local_params,
                 )
 
             all_gather_into_tensor()
 
             # torch._foreach only accepts non-empty list
-            if self._global_masked_blocked_params:
+            if global_params:
                 # Copy updated blocked params in global_masked_dist_blocked_buffers into global_masked_blocked_params.
                 torch._foreach_copy_(
-                    self._global_masked_blocked_params,
-                    self._global_masked_dist_blocked_buffers,
+                    global_params,
+                    global_buffers,
                 )
 
         else:
-            assert len(self._local_masked_dist_blocked_buffers) == len(
-                masked_blocked_search_directions
-            ), (
-                f"Expected {len(self._local_masked_dist_blocked_buffers)=} to be equal to {len(masked_blocked_search_directions)=}."
+            assert len(local_buffers) == len(blocked_search_directions), (
+                f"Expected {len(local_buffers)=} to be equal to {len(blocked_search_directions)=}."
             )
 
             # torch._foreach only accepts non-empty list
-            if masked_blocked_search_directions:
+            if blocked_search_directions:
                 # Search directions multiplied by alpha are distributed.
                 # Copy the local search directions to the communication buffer.
                 torch._foreach_copy_(
-                    self._local_masked_dist_blocked_buffers,
-                    masked_blocked_search_directions,
+                    local_buffers,
+                    blocked_search_directions,
                 )
 
             all_gather_into_tensor()
 
             # torch._foreach only accepts non-empty list
-            if self._global_masked_blocked_params:
+            if global_params:
                 # Add search directions in global_masked_dist_blocked_buffers to global_masked_blocked_params.
                 torch._foreach_add_(
-                    self._global_masked_blocked_params,
-                    self._global_masked_dist_blocked_buffers,
+                    global_params,
+                    global_buffers,
                 )
 
     @torch.no_grad()
@@ -508,13 +527,13 @@ class DDPDistributor(DistributorInterface):
             mesh=tuple(batched(iterable=ranks_in_group, n=self._group_size)),
             mesh_dim_names=("replicate", "shard"),
         )
-        replicated_submesh = _mesh_resources._get_all_submeshes(
-            device_mesh_2d, "replicate"
+        replicate_submesh = device_mesh_2d._get_all_submeshes(
+            mesh_dim_name="replicate"
         )[group_source_rank]
 
         return dtensor_zeros(
             size,
             dtype=dtype,
-            device_mesh=replicated_submesh,
+            device_mesh=replicate_submesh,
             placements=[dtensor.Replicate()],
         )

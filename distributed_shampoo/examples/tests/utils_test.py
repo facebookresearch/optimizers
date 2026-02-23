@@ -9,6 +9,7 @@ LICENSE file in the root directory of this source tree.
 
 #!/usr/bin/env python3
 
+import logging
 import os
 import random
 import unittest
@@ -17,15 +18,16 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 import torch
-from distributed_shampoo.examples import utils
 from distributed_shampoo.examples.utils import (
     get_distributed_env,
     get_model_and_loss_fn,
     instantiate_optimizer,
     load_checkpoint,
+    PerRankLoggingFormatter,
     set_seed,
     setup_distribution,
     setup_environment,
+    setup_per_rank_logging,
 )
 from omegaconf import OmegaConf
 from torch import nn
@@ -82,6 +84,17 @@ class SetSeedTest(unittest.TestCase):
         set_seed(123)
         self.assertTrue(torch.are_deterministic_algorithms_enabled())
 
+    def test_set_seed_different_seeds_produce_different_results(self) -> None:
+        """Test that different seeds produce different random results."""
+        set_seed(42)
+        tensor1 = torch.randn(5, 5)
+
+        set_seed(999)
+        tensor2 = torch.randn(5, 5)
+
+        with self.assertRaises(AssertionError):
+            torch.testing.assert_close(tensor1, tensor2)
+
 
 class GetModelAndLossFnTest(unittest.TestCase):
     def test_returns_model_and_loss_fn(self) -> None:
@@ -97,9 +110,22 @@ class GetModelAndLossFnTest(unittest.TestCase):
         device = torch.device("cpu")
         model, _ = get_model_and_loss_fn(device)
 
-        # Check all parameters are on the correct device
         for param in model.parameters():
             self.assertEqual(param.device, device)
+
+    def test_model_with_custom_out_channels(self) -> None:
+        """Test that get_model_and_loss_fn accepts custom out_channels."""
+        device = torch.device("cpu")
+        model, _ = get_model_and_loss_fn(device, out_channels=32)
+
+        self.assertIsInstance(model, nn.Module)
+
+    def test_model_with_disable_linear_bias(self) -> None:
+        """Test that get_model_and_loss_fn accepts disable_linear_bias."""
+        device = torch.device("cpu")
+        model, _ = get_model_and_loss_fn(device, disable_linear_bias=True)
+
+        self.assertIsInstance(model, nn.Module)
 
 
 class InstantiateOptimizerTest(unittest.TestCase):
@@ -156,23 +182,6 @@ class LoadCheckpointTest(unittest.TestCase):
         # Should not raise - just returns early
         load_checkpoint("/some/path", model, optimizer)
 
-    utils_module: ModuleType = utils
-
-    @patch.object(utils_module, "os")
-    def test_load_checkpoint_returns_early_if_metadata_not_exists(
-        self, mock_os: MagicMock
-    ) -> None:
-        """Test that load_checkpoint returns early if metadata file doesn't exist."""
-        mock_os.path.exists.return_value = False
-
-        _ = nn.Linear(10, 5)
-        # Create a mock that passes isinstance check for DistributedShampoo
-        mock_optimizer = MagicMock(spec=["distributed_state_dict"])
-        mock_optimizer.__class__.__name__ = "DistributedShampoo"
-
-        # Should not raise - just returns early when metadata doesn't exist
-        # We patch at module level so this won't actually check the path
-
 
 class SetupDistributionTest(unittest.TestCase):
     torch_distributed_module: ModuleType = torch.distributed
@@ -205,3 +214,53 @@ class SetupDistributionTest(unittest.TestCase):
         mock_set_device.assert_called_once_with(1)
         self.assertEqual(device.type, "cuda")
         self.assertEqual(device.index, 1)
+
+
+class PerRankLoggingFormatterTest(unittest.TestCase):
+    @patch("distributed_shampoo.examples.utils.dist")
+    def test_formatter_with_distributed_initialized(self, mock_dist: MagicMock) -> None:
+        """Test formatter includes rank when distributed is initialized."""
+        mock_dist.is_initialized.return_value = True
+        mock_dist.get_rank.return_value = 3
+
+        formatter = PerRankLoggingFormatter()
+        self.assertIsNotNone(formatter._fmt)
+        self.assertIn("RANK 3", formatter._fmt)
+
+    @patch("distributed_shampoo.examples.utils.dist")
+    def test_formatter_without_distributed_initialized(
+        self, mock_dist: MagicMock
+    ) -> None:
+        """Test formatter has default format when distributed is not initialized."""
+        mock_dist.is_initialized.return_value = False
+
+        formatter = PerRankLoggingFormatter()
+        # When fmt=None is passed to Formatter.__init__, it defaults to '%(message)s'
+        self.assertIsNotNone(formatter._fmt)
+        self.assertNotIn("RANK", formatter._fmt)
+
+
+class SetupPerRankLoggingTest(unittest.TestCase):
+    @patch("distributed_shampoo.examples.utils.dist")
+    def test_setup_per_rank_logging_configures_root_logger(
+        self, mock_dist: MagicMock
+    ) -> None:
+        """Test that setup_per_rank_logging configures the root logger."""
+        mock_dist.is_initialized.return_value = False
+
+        setup_per_rank_logging(verbose=False)
+
+        root_logger = logging.getLogger()
+        self.assertTrue(len(root_logger.handlers) > 0)
+
+    @patch("distributed_shampoo.examples.utils.dist")
+    def test_setup_per_rank_logging_verbose_sets_debug(
+        self, mock_dist: MagicMock
+    ) -> None:
+        """Test that verbose=True sets the root logger to DEBUG level."""
+        mock_dist.is_initialized.return_value = False
+
+        setup_per_rank_logging(verbose=True)
+
+        root_logger = logging.getLogger()
+        self.assertEqual(root_logger.level, logging.DEBUG)

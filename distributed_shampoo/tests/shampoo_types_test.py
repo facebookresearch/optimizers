@@ -25,9 +25,12 @@ from distributed_shampoo.shampoo_types import (
     DistributedConfig,
     EigenvalueCorrectedShampooPreconditionerConfig,
     FSDPDistributedConfig,
+    GeneralizedPrimalAveragingConfig,
     HSDPDistributedConfig,
     HybridShardDistributedConfig,
+    IterateAveragingConfig,
     RMSpropPreconditionerConfig,
+    ScheduleFreeConfig,
     ShampooPreconditionerConfig,
     SignDescentPreconditionerConfig,
 )
@@ -292,6 +295,59 @@ class SignDescentPreconditionerConfigSubclassesTest(unittest.TestCase):
         grad = torch.tensor([[1.0, -2.0], [3.0, -4.0]])
         # Expected result is 10.0 because L1 norm = |1.0| + |-2.0| + |3.0| + |-4.0| = 1 + 2 + 3 + 4 = 10.0
         self.assertEqual(config.scale_fn(grad), 10.0)
+
+
+@instantiate_parametrized_tests
+class IterateAveragingConfigSubclassesTest(unittest.TestCase):
+    subclasses_types: list[type[IterateAveragingConfig]] = list(
+        get_all_non_abstract_subclasses(IterateAveragingConfig)  # type: ignore[type-abstract]
+    )
+
+    @parametrize("train_interp_coeff", (-0.1, 0.0, 1.5))
+    @parametrize("cls", subclasses_types)
+    def test_illegal_train_interp_coeff(
+        self, cls: type[IterateAveragingConfig], train_interp_coeff: float
+    ) -> None:
+        self.assertRaisesRegex(
+            ValueError,
+            re.escape(
+                f"Invalid self.train_interp_coeff={train_interp_coeff}. Must be within (0.0, 1.0]."
+            ),
+            cls,
+            train_interp_coeff=train_interp_coeff,
+        )
+
+
+@instantiate_parametrized_tests
+class GeneralizedPrimalAveragingConfigTest(unittest.TestCase):
+    @parametrize("eval_interp_coeff", (-0.1, 1.0, 1.5))
+    def test_illegal_eval_interp_coeff(self, eval_interp_coeff: float) -> None:
+        self.assertRaisesRegex(
+            ValueError,
+            re.escape(
+                f"Invalid self.eval_interp_coeff={eval_interp_coeff}. Must be within [0.0, 1.0)."
+            ),
+            GeneralizedPrimalAveragingConfig,
+            eval_interp_coeff=eval_interp_coeff,
+        )
+
+    def test_valid_config(self) -> None:
+        # Test that valid configurations do not raise exceptions.
+        # Boundary values for eval_interp_coeff: 0.0 (inclusive) and just below 1.0.
+        # Boundary values for train_interp_coeff: just above 0.0 (exclusive) and 1.0 (inclusive).
+        GeneralizedPrimalAveragingConfig(eval_interp_coeff=0.0, train_interp_coeff=0.01)
+        GeneralizedPrimalAveragingConfig(eval_interp_coeff=0.5, train_interp_coeff=0.5)
+        GeneralizedPrimalAveragingConfig(eval_interp_coeff=0.99, train_interp_coeff=1.0)
+
+
+@instantiate_parametrized_tests
+class ScheduleFreeConfigTest(unittest.TestCase):
+    def test_valid_config(self) -> None:
+        # Test that valid configurations do not raise exceptions.
+        # Boundary values: just above 0.0 (exclusive) and 1.0 (inclusive).
+        ScheduleFreeConfig(train_interp_coeff=0.01)
+        ScheduleFreeConfig(train_interp_coeff=0.5)
+        ScheduleFreeConfig(train_interp_coeff=1.0)
 
 
 @instantiate_parametrized_tests

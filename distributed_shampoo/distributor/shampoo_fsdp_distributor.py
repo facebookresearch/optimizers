@@ -12,6 +12,8 @@ from math import prod
 from typing import Any
 
 import torch
+import torch.distributed as dist
+from distributed_shampoo.distributor.shampoo_block_info import BlockInfo
 from distributed_shampoo.distributor.shampoo_distributor import Distributor
 from distributed_shampoo.shampoo_types import (
     DISTRIBUTED_CONFIG,
@@ -19,6 +21,7 @@ from distributed_shampoo.shampoo_types import (
     FSDPParameterMetadata,
     MAX_PRECONDITIONER_DIM,
     PARAMS,
+    ShampooRuntimeConfig,
 )
 from distributed_shampoo.utils.shampoo_utils import (
     compress_list,
@@ -39,10 +42,15 @@ class FSDPDistributor(Distributor):
 
     Args:
         param_group (dict[str, Any]): Parameter group containing parameters.
+        runtime_config (ShampooRuntimeConfig): Runtime configurations for the distributor, e.g., debugging, pt2 compile options.
 
     """
 
-    def __init__(self, param_group: dict[str, Any]) -> None:
+    def __init__(
+        self,
+        param_group: dict[str, Any],
+        runtime_config: ShampooRuntimeConfig | None = None,
+    ) -> None:
         distributed_config: FSDPDistributedConfig = param_group[DISTRIBUTED_CONFIG]
         self._param_to_metadata: dict[Parameter, FSDPParameterMetadata] = (
             distributed_config.param_to_metadata
@@ -50,7 +58,7 @@ class FSDPDistributor(Distributor):
         self._global_num_splits_per_param: tuple[int, ...] = ()
         self._global_num_blocks_per_split_param: tuple[int, ...] = ()
 
-        super().__init__(param_group)
+        super().__init__(param_group, runtime_config)
 
     def _merge_and_block_parameters(self) -> None:
         """Split, merge, and block parameters."""
@@ -143,11 +151,12 @@ class FSDPDistributor(Distributor):
                 # Skip split_tensor_block_recovery and multi_dim_split if this blocked grad will not be used locally.
                 continue
 
-            assert (
-                flattened_grad is not None and torch.isfinite(flattened_grad).all()
-            ), (
-                f"Encountered gradient containing NaN/Inf in parameter with shape {flattened_grad.shape}. Check your model for numerical instability or consider gradient clipping."
-            )
+            assert flattened_grad is not None
+
+            if self._runtime_config.eager_nan_check:
+                assert torch.isfinite(flattened_grad).all(), (
+                    f"Encountered gradient containing NaN/Inf in parameter with shape {flattened_grad.shape}. Check your model for numerical instability or consider gradient clipping."
+                )
 
             # Split flattened gradients into valid tensor blocks of the gradient.
             split_grads = FSDPDistributor._split_tensor_block_recovery(
@@ -377,4 +386,18 @@ class FSDPDistributor(Distributor):
             dimension=0,
             block_start_idx=start_idx,
             block_end_idx=end_idx,
+        )
+
+    @torch.no_grad()
+    def _construct_local_block_info_list(self) -> tuple[BlockInfo, ...]:
+        """Construct the local block info list with rank information.
+
+        This method overrides the parent class to include rank information in the block IDs,
+        which is necessary for FSDP to properly identify blocks across different ranks.
+
+        Returns:
+            block_info_list (tuple[BlockInfo, ...]): A tuple of BlockInfo objects for each parameter block.
+        """
+        return self._construct_local_block_info_list_with_params(
+            params=self._get_params_or_grads(), rank=dist.get_rank()
         )

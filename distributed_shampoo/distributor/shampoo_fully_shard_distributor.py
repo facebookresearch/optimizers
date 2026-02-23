@@ -14,7 +14,7 @@ import torch
 from distributed_shampoo.distributor.shampoo_block_info import BlockInfo
 from distributed_shampoo.distributor.shampoo_distributor import Distributor
 from distributed_shampoo.shampoo_types import PARAMS
-from torch import Tensor
+from torch import distributed as dist, Tensor
 from torch.distributed.tensor import DTensor
 
 
@@ -75,5 +75,6 @@ class FullyShardDistributor(Distributor):
             params=filter(
                 lambda p: isinstance(p, DTensor) and p.to_local().numel() > 0,
                 super()._get_params_or_grads(),
-            )
+            ),
+            rank=dist.get_rank(),
         )

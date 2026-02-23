@@ -19,6 +19,7 @@ from distributed_shampoo.shampoo_types import (
     AdaGradPreconditionerConfig,
     PreconditionerConfig,
     ShampooPT2CompileConfig,
+    WeightDecayType,
 )
 from distributed_shampoo.tests.shampoo_test_utils import (
     compare_two_optimizers_on_weight_and_loss,
@@ -47,13 +48,11 @@ class DistributedShampooPytorchCompileTest(unittest.TestCase):
             lr=0.01,
             betas=betas,
             epsilon=1e-10,
-            momentum=0.9,
-            dampening=0.9,
             weight_decay=weight_decay,
             max_preconditioner_dim=10,
             precondition_frequency=precondition_frequency,
             start_preconditioning_step=start_preconditioning_step,
-            use_decoupled_weight_decay=True,
+            weight_decay_type=WeightDecayType.DECOUPLED,
             shampoo_pt2_compile_config=shampoo_pt2_compile_config,
             grafting_config=grafting_config,
         )

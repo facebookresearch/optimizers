@@ -16,6 +16,7 @@ import torch
 from distributed_shampoo.distributed_shampoo import DistributedShampoo
 from distributed_shampoo.distributor.shampoo_block_info import BlockInfo
 from distributed_shampoo.distributor.shampoo_distributor import Distributor
+from distributed_shampoo.shampoo_types import DISTRIBUTOR, ShampooRuntimeConfig
 from distributed_shampoo.tests.shampoo_test_utils import construct_training_problem
 from torch import nn
 
@@ -60,7 +61,7 @@ class DistributorTest(unittest.TestCase):
             ).reshape(PRECONDITIONER_DIM, PRECONDITIONER_DIM),
         )
         self._distributor.update_params(
-            masked_blocked_search_directions=masked_blocked_search_directions
+            blocked_search_directions=masked_blocked_search_directions
         )
 
         expected_masked_blocked_params = (
@@ -158,6 +159,41 @@ class DistributorTest(unittest.TestCase):
             actual_local_masked_block_grads, expected_local_masked_block_grads
         )
 
+    def test_enable_eager_nan_check(self) -> None:
+        self._distributor = DistributedShampoo(
+            self._model.parameters(),
+            max_preconditioner_dim=PRECONDITIONER_DIM,
+            shampoo_runtime_config=ShampooRuntimeConfig(eager_nan_check=True),
+        )._per_group_state_lists[0][DISTRIBUTOR]
+
+        cast(torch.Tensor, self._model.scalar).grad = torch.tensor(1.0)
+        linear_layers: nn.ModuleList = cast(nn.ModuleList, self._model.linear_layers)
+        layer_weight: torch.Tensor = cast(torch.Tensor, linear_layers[0].weight)
+        layer_weight.grad = torch.ones_like(layer_weight)
+        linear_layers[0].bias.grad = None
+
+        with unittest.mock.patch.object(torch, "isfinite") as mock_isfinite:
+            self._distributor.merge_and_block_gradients()
+
+        self.assertEqual(mock_isfinite.call_count, 2)
+
+    def test_disable_eager_nan_check(self) -> None:
+        self._distributor = DistributedShampoo(
+            self._model.parameters(),
+            max_preconditioner_dim=PRECONDITIONER_DIM,
+        )._per_group_state_lists[0][DISTRIBUTOR]
+
+        cast(torch.Tensor, self._model.scalar).grad = torch.tensor(1.0)
+        linear_layers: nn.ModuleList = cast(nn.ModuleList, self._model.linear_layers)
+        layer_weight: torch.Tensor = cast(torch.Tensor, linear_layers[0].weight)
+        layer_weight.grad = torch.ones_like(layer_weight)
+        linear_layers[0].bias.grad = None
+
+        with unittest.mock.patch.object(torch, "isfinite") as mock_isfinite:
+            self._distributor.merge_and_block_gradients()
+
+        self.assertEqual(mock_isfinite.call_count, 0)
+
 
 class DistributorOnEmptyParamTest(unittest.TestCase):
     def setUp(self) -> None:
@@ -207,7 +243,7 @@ class DistributorOnEmptyParamTest(unittest.TestCase):
 
         # Update parameters using the search directions
         self._distributor.update_params(
-            masked_blocked_search_directions=masked_blocked_search_directions
+            blocked_search_directions=masked_blocked_search_directions
         )
 
         # Define expected masked blocked parameters

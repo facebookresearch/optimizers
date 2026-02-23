@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-
 """
 Copyright (c) Meta Platforms, Inc. and affiliates.
 All rights reserved.
@@ -8,6 +6,8 @@ This source code is licensed under the BSD-style license found in the
 LICENSE file in the root directory of this source tree.
 
 """
+
+#!/usr/bin/env python3
 
 """CIFAR-10 training example.
 
@@ -63,6 +63,7 @@ from distributed_shampoo.examples.utils import (
     set_seed,
     setup_distribution,
     setup_environment,
+    setup_per_rank_logging,
     train_model,
 )
 from omegaconf import DictConfig
@@ -82,10 +83,15 @@ def main(cfg: DictConfig) -> None:
 
     if parallelism.requires_distributed:
         device = setup_distribution(cfg.backend, rank, world_size, local_rank)
+        setup_per_rank_logging(cfg.verbose)
     else:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    model, loss_fn = get_model_and_loss_fn(device)
+    model, loss_fn = get_model_and_loss_fn(
+        device,
+        out_channels=cfg.out_channels,
+        disable_linear_bias=cfg.disable_linear_bias,
+    )
 
     device_mesh = None
     if parallelism.requires_device_mesh:

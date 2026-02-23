@@ -7,9 +7,28 @@ LICENSE file in the root directory of this source tree.
 
 """
 
+from contextlib import contextmanager
 from functools import cache
+from typing import Generator
 
+from torch.autograd import profiler
 from torch.distributed.device_mesh import DeviceMesh
+
+
+@contextmanager
+def shampoo_comm_profiler(name: str) -> Generator[None, None, None]:
+    """Context manager that profiles communication operations in Shampoo distributors.
+
+    Args:
+        name (str): The name to use for profiling (e.g., "ClassName::method_name").
+
+    Example:
+        with shampoo_comm_profiler("HybridShardShampooDistributor::all_gather_into_tensor"):
+            dist.all_gather_into_tensor(...)
+
+    """
+    with profiler.record_function(name):
+        yield
 
 
 @cache

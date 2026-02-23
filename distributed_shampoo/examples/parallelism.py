@@ -5,6 +5,15 @@ All rights reserved.
 This source code is licensed under the BSD-style license found in the
 LICENSE file in the root directory of this source tree.
 
+"""
+
+"""
+Copyright (c) Meta Platforms, Inc. and affiliates.
+All rights reserved.
+
+This source code is licensed under the BSD-style license found in the
+LICENSE file in the root directory of this source tree.
+
 Parallelism strategies for distributed training.
 """
 
@@ -60,9 +69,9 @@ class SingleGPUStrategy(ParallelismStrategy):
     def wrap_model(
         self,
         model: nn.Module,
-        _local_rank: int,
-        _backend: str,
-        _device_mesh: DeviceMesh | None = None,
+        local_rank: int,
+        backend: str,
+        device_mesh: DeviceMesh | None = None,
     ) -> WrappedModel:
         return WrappedModel(model=model)
 
@@ -82,7 +91,7 @@ class DDPStrategy(ParallelismStrategy):
         model: nn.Module,
         local_rank: int,
         backend: str,
-        _device_mesh: DeviceMesh | None = None,
+        device_mesh: DeviceMesh | None = None,
     ) -> WrappedModel:
         if backend == "nccl":
             wrapped = DDP(model, device_ids=[local_rank], output_device=local_rank)
@@ -106,9 +115,9 @@ class FSDPStrategy(ParallelismStrategy):
     def wrap_model(
         self,
         model: nn.Module,
-        _local_rank: int,
-        _backend: str,
-        _device_mesh: DeviceMesh | None = None,
+        local_rank: int,
+        backend: str,
+        device_mesh: DeviceMesh | None = None,
     ) -> WrappedModel:
         wrapped = FSDP(model, use_orig_params=True)
         config = None
@@ -136,8 +145,8 @@ class HSDPStrategy(ParallelismStrategy):
     def wrap_model(
         self,
         model: nn.Module,
-        _local_rank: int,
-        _backend: str,
+        local_rank: int,
+        backend: str,
         device_mesh: DeviceMesh | None = None,
     ) -> WrappedModel:
         assert device_mesh is not None
@@ -169,9 +178,9 @@ class FullyShardStrategy(ParallelismStrategy):
     def wrap_model(
         self,
         model: nn.Module,
-        _local_rank: int,
-        _backend: str,
-        _device_mesh: DeviceMesh | None = None,
+        local_rank: int,
+        backend: str,
+        device_mesh: DeviceMesh | None = None,
     ) -> WrappedModel:
         config = self.distributed_config() if self.distributed_config else None
         return WrappedModel(model=fully_shard(model), distributed_config=config)
@@ -194,8 +203,8 @@ class HybridShardStrategy(ParallelismStrategy):
     def wrap_model(
         self,
         model: nn.Module,
-        _local_rank: int,
-        _backend: str,
+        local_rank: int,
+        backend: str,
         device_mesh: DeviceMesh | None = None,
     ) -> WrappedModel:
         assert device_mesh is not None

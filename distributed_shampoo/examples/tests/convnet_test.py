@@ -13,49 +13,69 @@ import unittest
 
 import torch
 from distributed_shampoo.examples.convnet import ConvNet
+from torch.testing._internal.common_utils import (
+    instantiate_parametrized_tests,
+    parametrize,
+)
 
 
+@instantiate_parametrized_tests
 class ConvNetTest(unittest.TestCase):
-    def test_forward_pass_cifar10_size(self) -> None:
-        """Test forward pass with CIFAR-10 input size (32x32)."""
-        model = ConvNet(height=32, width=32)
-        input_tensor = torch.randn(4, 3, 32, 32)
-        output = model(input_tensor)
-        self.assertEqual(output.shape, (4, 10))
+    @parametrize("batch_size", [1, 2, 4, 8])
+    @parametrize(
+        "height, width",
+        [
+            (28, 28),  # MNIST-like
+            (32, 32),  # CIFAR-10-like
+            (64, 64),  # Larger image
+            (16, 16),  # Smaller image
+            (48, 32),  # Rectangular image
+        ],
+    )
+    def test_forward_pass_different_sizes(
+        self, batch_size: int, height: int, width: int
+    ) -> None:
+        """Test forward pass with different input sizes - indirectly validates _infer_conv_output_shape."""
+        model = ConvNet(height=height, width=width)
+        input_tensor = torch.randn(batch_size, 3, height, width)
 
-    def test_forward_pass_mnist_size(self) -> None:
-        """Test forward pass with MNIST-like input size (28x28)."""
-        model = ConvNet(height=28, width=28)
-        input_tensor = torch.randn(2, 3, 28, 28)
+        # If _infer_conv_output_shape calculated sizes correctly, this should work
         output = model(input_tensor)
-        self.assertEqual(output.shape, (2, 10))
+        self.assertEqual(output.shape, (batch_size, 10))
 
-    def test_forward_pass_larger_image(self) -> None:
-        """Test forward pass with larger image (64x64)."""
-        model = ConvNet(height=64, width=64)
-        input_tensor = torch.randn(1, 3, 64, 64)
-        output = model(input_tensor)
-        self.assertEqual(output.shape, (1, 10))
-
-    def test_forward_pass_rectangular_image(self) -> None:
-        """Test forward pass with rectangular image (48x32)."""
-        model = ConvNet(height=48, width=32)
-        input_tensor = torch.randn(2, 3, 48, 32)
-        output = model(input_tensor)
-        self.assertEqual(output.shape, (2, 10))
-
-    def test_forward_pass_mismatched_input_size(self) -> None:
+    @parametrize(
+        "model_height, model_width, input_height, input_width",
+        [
+            (32, 32, 28, 28),  # Model expects 32x32, input is 28x28
+            (28, 28, 32, 32),  # Model expects 28x28, input is 32x32
+            (64, 64, 32, 32),  # Model expects 64x64, input is 32x32
+        ],
+    )
+    def test_forward_pass_mismatched_input_size(
+        self, model_height: int, model_width: int, input_height: int, input_width: int
+    ) -> None:
         """Test that forward pass fails with mismatched input size."""
-        model = ConvNet(height=32, width=32)
-        # Input with different size than model expects
-        input_tensor = torch.randn(2, 3, 28, 28)
+        # Create model expecting specific input size
+        model = ConvNet(height=model_height, width=model_width)
+
+        # Try to pass different input size - this should fail because the linear layer
+        # was sized for the expected conv output, not the actual conv output
+        input_tensor = torch.randn(2, 3, input_height, input_width)
 
         with self.assertRaises(RuntimeError):
             model(input_tensor)
 
-    def test_model_parameters(self) -> None:
-        """Test that model parameters have correct shapes."""
-        height, width = 32, 32
+    @parametrize(
+        "height, width",
+        [
+            (16, 16),
+            (32, 32),
+            (48, 24),
+            (64, 64),
+        ],
+    )
+    def test_model_parameters(self, height: int, width: int) -> None:
+        """Test that model parameters can be accessed and have correct shapes."""
         model = ConvNet(height=height, width=width)
 
         parameters = list(model.parameters())
@@ -75,16 +95,17 @@ class ConvNetTest(unittest.TestCase):
         self.assertEqual(linear_weight.shape, (10, expected_linear_input_size))
         self.assertEqual(linear_bias.shape, (10,))
 
-    def test_model_with_small_dimensions(self) -> None:
-        """Test model with small edge case dimensions (16x16)."""
-        model = ConvNet(height=16, width=16)
-        input_tensor = torch.randn(1, 3, 16, 16)
-        output = model(input_tensor)
-        self.assertEqual(output.shape, (1, 10))
-
-    def test_model_with_very_small_dimensions(self) -> None:
-        """Test model with very small dimensions (5x5)."""
-        model = ConvNet(height=5, width=5)
-        input_tensor = torch.randn(1, 3, 5, 5)
+    @parametrize(
+        "height, width",
+        [
+            (3, 3),  # Very small image
+            (5, 5),  # Small image
+            (7, 9),  # Small rectangular image
+        ],
+    )
+    def test_model_with_edge_case_dimensions(self, height: int, width: int) -> None:
+        """Test model with edge case dimensions."""
+        model = ConvNet(height=height, width=width)
+        input_tensor = torch.randn(1, 3, height, width)
         output = model(input_tensor)
         self.assertEqual(output.shape, (1, 10))

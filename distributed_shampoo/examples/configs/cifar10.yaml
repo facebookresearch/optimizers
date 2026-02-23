@@ -15,3 +15,7 @@ metrics_dir: null
 
 dp_replicate_degree: 2
 backend: nccl
+
+out_channels: 64
+disable_linear_bias: false
+verbose: false

@@ -61,13 +61,13 @@ class OptimizerModulesTest(unittest.TestCase):
 
     def test_state_dict_without_non_tensor_objects(self) -> None:
         test_module = self.init_optimizer_module()
+        print(f"test_module: {test_module.state_dict()=}")
 
         self.assertEqual(
             test_module.state_dict(store_non_tensors=False),
             {
                 "attribute": torch.tensor(42),
                 "list_of_values": {0: {}, 1: torch.tensor(1.0)},
-                "tuple_of_values": {},
                 "dictionary_of_values": {"tensor": torch.tensor(2.0)},
                 "other_module": {},
             },
@@ -101,7 +101,6 @@ class OptimizerModulesTest(unittest.TestCase):
         state_dict = {
             "attribute": torch.tensor(24),
             "list_of_values": {0: {}, 1: torch.tensor(3.0)},
-            "tuple_of_values": {},
             "dictionary_of_values": {"tensor": torch.tensor(4.0)},
             "other_module": {},
         }

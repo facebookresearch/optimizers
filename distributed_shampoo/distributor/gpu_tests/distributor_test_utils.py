@@ -29,7 +29,6 @@ class DistributorOnEmptyParamTest:
 
         Subclasses must implement the following abstract methods:
         - _construct_model_and_distributor(): Creates the model and distributor to test
-        - _expected_masked_blocked_params(): Returns expected masked blocked parameters for test_update_params()
         - _expected_local_grad_selector(): Returns expected gradient selector values for test_local_grad_selector()
         - _expected_local_blocked_params(): Returns expected local blocked parameters for test_local_blocked_params()
         - _expected_local_block_info_list(): Returns expected block info list for test_local_block_info_list()
@@ -44,32 +43,51 @@ class DistributorOnEmptyParamTest:
             self,
         ) -> tuple[nn.Module, DistributorInterface]: ...
 
-        @property
-        @abc.abstractmethod
-        def _expected_masked_blocked_params(self) -> tuple[torch.Tensor, ...]:
-            """Returns expected masked blocked parameters used in test_update_params"""
+        def _test_update_params_impl(self, use_masked_tensors: bool) -> None:
+            """Implementation of test_update_params - called by concrete test classes.
 
-        def test_update_params(self) -> None:
+            This test verifies that:
+            - use_masked_tensors=True: Updates only masked blocked params (those with gradients)
+            - use_masked_tensors=False: Updates all local blocked params
+
+            Concrete test classes must implement test_update_params with appropriate
+            distributed test decorators (e.g., @with_comms, @skip_if_lt_x_gpu) and
+            @parametrize("use_masked_tensors", [True, False]), then call this method.
+            """
             _, distributor = self._construct_model_and_distributor()
 
             # Merge and block gradients to prepare for parameter updates
             distributor.merge_and_block_gradients()
 
-            # Get the current masked blocked parameters
-            actual_masked_blocked_params = distributor.local_masked_blocked_params
+            # Get appropriate target params based on use_masked_tensors flag
+            target_params = (
+                distributor.local_masked_blocked_params
+                if use_masked_tensors
+                else distributor.local_blocked_params
+            )
 
-            # Create empty search directions (no updates)
-            masked_blocked_search_directions = ()
+            # Store original values for comparison
+            original_values = tuple(p.clone() for p in target_params)
 
-            # Apply the empty updates to parameters
+            # Create search directions matching target params length (all ones)
+            blocked_search_directions = tuple(torch.ones_like(p) for p in target_params)
+
+            # Apply the updates to parameters
             distributor.update_params(
-                masked_blocked_search_directions=masked_blocked_search_directions
+                blocked_search_directions=blocked_search_directions,
+                use_masked_tensors=use_masked_tensors,
             )
 
-            # Verify that actual and expected parameters match
-            torch.testing.assert_close(
-                actual_masked_blocked_params, self._expected_masked_blocked_params
+            # Compute expected values (original + 1.0)
+            # Handle empty case: torch._foreach_add requires at least one tensor
+            expected_params = (
+                tuple(torch._foreach_add(original_values, 1.0))
+                if len(original_values) > 0
+                else ()
             )
+
+            # Verify that parameters were updated correctly
+            torch.testing.assert_close(target_params, expected_params)
 
         @property
         @abc.abstractmethod

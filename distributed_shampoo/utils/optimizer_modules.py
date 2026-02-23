@@ -64,6 +64,10 @@ class OptimizerModule:
 
         """
 
+        def remove_empty_entry(d: dict[str, Any], key: str) -> None:
+            if not d[key]:
+                del d[key]
+
         def save_to_state_dict(
             states: Iterable[tuple[str, _StateType]], destination: StateDict
         ) -> None:
@@ -97,6 +101,7 @@ class OptimizerModule:
                         states=value.items(),
                         destination=destination[key],
                     )
+                    remove_empty_entry(destination, key)
                 elif isinstance(value, (list, tuple, set)):
                     destination[key] = {}
                     save_to_state_dict(
@@ -104,6 +109,7 @@ class OptimizerModule:
                         states=enumerate(value),  # type: ignore[arg-type]
                         destination=destination[key],
                     )
+                    remove_empty_entry(destination, key)
                 elif store_non_tensors:
                     destination[key] = value
 

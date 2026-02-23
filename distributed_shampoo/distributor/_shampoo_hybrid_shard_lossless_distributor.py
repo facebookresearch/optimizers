@@ -21,8 +21,10 @@ from distributed_shampoo.shampoo_types import (
     FSDPParamAssignmentStrategy,
     HybridShardDistributedConfig,
     PARAMS,
+    ShampooRuntimeConfig,
 )
 from distributed_shampoo.utils.shampoo_utils import (
+    compress_list,
     prepare_update_param_buffers,
     redistribute_and_update_params,
 )
@@ -36,7 +38,7 @@ class HybridShardLosslessDistributor(HybridShardDistributor):
     """HybridShard Lossless Distributor class.
 
     On top of the HybridShardDistributor, this distributor handles the parameter assignment to exchange the gradients
-    and parameter updates across the shards to achieve lossless numerical results comapred to default Shampoo.
+    and parameter updates across the shards to achieve lossless numerical results compared to default Shampoo.
 
     .. note::
         FullyShardLosslessDistributor is experimental and subject to change.
@@ -46,7 +48,11 @@ class HybridShardLosslessDistributor(HybridShardDistributor):
 
     """
 
-    def __init__(self, param_group: dict[str, Any]) -> None:
+    def __init__(
+        self,
+        param_group: dict[str, Any],
+        runtime_config: ShampooRuntimeConfig | None = None,
+    ) -> None:
         distributed_config: HybridShardDistributedConfig = param_group[
             DISTRIBUTED_CONFIG
         ]
@@ -78,7 +84,12 @@ class HybridShardLosslessDistributor(HybridShardDistributor):
             )
 
         # Collects and stores the model parameters assigned to this rank.
-        full_params: list[Tensor] = [p.full_tensor() for p in param_group[PARAMS]]
+        with torch.no_grad():
+            full_params: list[Tensor] = [p.full_tensor() for p in param_group[PARAMS]]
+
+        # TODO (irisz): eagerly initialize the _assigned_full_params cannot handle dead layers parameters correctly,
+        # as we do not have gradient information during initialization. We need a way to handle dead layers parameters
+        # before doing performance optimization on the full_tensor call above (e.g. change full_tensor call to all_to_all).
         self._assigned_full_params: list[Tensor] = [
             p
             for p, assigned in zip(full_params, self._assigned_params_mask)
@@ -93,7 +104,21 @@ class HybridShardLosslessDistributor(HybridShardDistributor):
             else None
         )
 
-        super().__init__(param_group)
+        super().__init__(param_group, runtime_config)
+
+        if logger.isEnabledFor(logging.DEBUG):
+            # logging local blocked info list for easier debugging
+            local_block_id_list = tuple(
+                block_info.composable_block_ids
+                for block_info in self._local_block_info_list
+            )
+            logger.debug(
+                f"Local blocked params[size={len(local_block_id_list)}]: {local_block_id_list}"
+            )
+
+    def _get_composable_block_id_rank(self) -> int | None:
+        """For lossless shampoo distributor, it's unnecessary to include rank in block id."""
+        return None
 
     @overload
     @torch.no_grad()
@@ -135,15 +160,19 @@ class HybridShardLosslessDistributor(HybridShardDistributor):
     @torch.no_grad()
     def update_params(
         self,
-        masked_blocked_search_directions: tuple[Tensor, ...],
+        blocked_search_directions: tuple[Tensor, ...],
+        use_masked_tensors: bool = True,
     ) -> None:
         """Update params stored inside this distributor according to the input search directions argument.
 
         Args:
-            masked_blocked_search_directions (tuple[Tensor, ...]): Search directions for each local blocked parameter.
+            blocked_search_directions (tuple[Tensor, ...]): Search directions for each local blocked parameter.
+                This tuple might be empty if the parameters are not receiving gradients.
+            use_masked_tensors (bool): If True (default), operates on masked blocked params.
+                If False, operates on all local blocked params regardless of gradient masking.
 
         """
-        super().update_params(masked_blocked_search_directions)
+        super().update_params(blocked_search_directions, use_masked_tensors)
 
         # Copy the updated full parameters to the original parameters in the param group.
         # For example, when the strategy is REPLICATE, we need to take each updated full parameter `full_param`,
@@ -199,3 +228,37 @@ class HybridShardLosslessDistributor(HybridShardDistributor):
             group_source_ranks,
             group_rank,
         )
+
+    @torch.no_grad()
+    def refresh_assigned_full_params(self) -> None:
+        """Refresh the cached full parameter tensors from current model parameters.
+
+        This method should be called after loading a checkpoint to ensure the
+        distributor's cached tensors reflect the updated model parameter values.
+        Without calling this, the optimizer may use stale parameter values.
+
+        This method refreshes:
+        1. _assigned_full_params - the cached full tensor copies
+        2. _global_blocked_params and _local_blocked_params - views of the full tensors
+        3. _global_masked_blocked_params - HybridShardDistributor's reference to global blocked params
+        """
+        with torch.no_grad():
+            full_params: list[Tensor] = [
+                p.full_tensor() for p in self._param_group[PARAMS]
+            ]
+        self._assigned_full_params = [
+            p
+            for p, assigned in zip(full_params, self._assigned_params_mask)
+            if assigned
+        ]
+        # Also re-block the parameters since _global_blocked_params are views of the old
+        # _assigned_full_params tensors
+        self._merge_and_block_parameters()
+        # Update _local_blocked_params which is set via compress_list in HybridShardDistributor.__init__
+        self._local_blocked_params = compress_list(
+            self._global_blocked_params, self._distributor_selector
+        )
+        self._local_masked_blocked_params = self._local_blocked_params
+        # Update _global_masked_blocked_params which is set in HybridShardDistributor.__init__
+        # This is used by HybridShardDistributor.update_params() for all-gather communication
+        self._global_masked_blocked_params = self._global_blocked_params

@@ -49,18 +49,22 @@ from distributed_shampoo.shampoo_types import (
     FSDPDistributedConfig,
     FSDPParamAssignmentStrategy,
     FullyShardDistributedConfig,
+    GeneralizedPrimalAveragingConfig,
     HSDPDistributedConfig,
     HybridShardDistributedConfig,
+    IterateAveragingConfig,
     PreconditionerConfig,
     RMSpropPreconditionerConfig,
     RootInvKLShampooPreconditionerConfig,
     RootInvShampooPreconditionerConfig,
+    ScheduleFreeConfig,
     SGDPreconditionerConfig,
     ShampooPreconditionerConfig,
     ShampooPT2CompileConfig,
     SignDescentPreconditionerConfig,
     SingleDeviceDistributedConfig,
     SpectralDescentPreconditionerConfig,
+    WeightDecayType,
 )
 
 
@@ -118,6 +122,12 @@ __all__ = [
     "SVDOrthogonalizationConfig",  # Based on `OrthogonalizationConfig`.
     "NewtonSchulzOrthogonalizationConfig",  # Based on `OrthogonalizationConfig`.
     "DefaultNewtonSchulzOrthogonalizationConfig",  # Default `OrthogonalizationConfig` using `NewtonSchulzOrthogonalizationConfig`.
+    # Iterate averaging configs.
+    "IterateAveragingConfig",  # Abstract base class.
+    "GeneralizedPrimalAveragingConfig",  # Based on `IterateAveragingConfig`.
+    "ScheduleFreeConfig",  # Based on `IterateAveragingConfig`.
+    # Weight decay type.
+    "WeightDecayType",
     # Other utilities.
     "compile_fsdp_parameter_metadata",  # For `FSDPDistributedConfig` and `HSDPDistributedConfig`.
 ]

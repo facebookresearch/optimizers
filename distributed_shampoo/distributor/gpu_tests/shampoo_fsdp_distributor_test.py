@@ -25,13 +25,14 @@ from distributed_shampoo.distributor.shampoo_fsdp_distributor import FSDPDistrib
 from distributed_shampoo.distributor.shampoo_fsdp_utils import (
     compile_fsdp_parameter_metadata,
 )
-from distributed_shampoo.preconditioner.shampoo_preconditioner_list import SHAMPOO
 from distributed_shampoo.shampoo_types import (
     AdaGradPreconditionerConfig,
     DefaultSingleDeviceDistributedConfig,
     FSDPDistributedConfig,
+    GeneralizedPrimalAveragingConfig,
     HSDPDistributedConfig,
     SingleDeviceDistributedConfig,
+    WeightDecayType,
 )
 from distributed_shampoo.tests.shampoo_test_utils import (
     compare_two_optimizers_models_devices_on_weight_and_loss,
@@ -39,7 +40,6 @@ from distributed_shampoo.tests.shampoo_test_utils import (
     train_model,
 )
 from torch import distributed as dist, nn
-from torch.distributed.checkpoint._nested_dict import flatten_state_dict
 from torch.distributed.device_mesh import init_device_mesh
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP1, ShardingStrategy
 from torch.optim.optimizer import ParamsT
@@ -119,14 +119,14 @@ class ShampooFSDPDistributorTest(FSDPTest):
             lr=0.001,
             betas=(0.9, 1.0),
             epsilon=1e-8,
-            momentum=0.0,
             weight_decay=0.0,
             max_preconditioner_dim=PRECONDITIONER_DIM,
             precondition_frequency=1,
             start_preconditioning_step=2,
-            use_decoupled_weight_decay=True,
+            weight_decay_type=WeightDecayType.DECOUPLED,
             grafting_config=AdaGradPreconditionerConfig(epsilon=1e-8),
             distributed_config=distributed_config,
+            iterate_averaging_config=GeneralizedPrimalAveragingConfig(),
         )
 
     @skip_if_lt_x_gpu(2)
@@ -184,26 +184,35 @@ class ShampooFSDPDistributorTest(FSDPTest):
             ),
             DistributedShampoo,
         )
-        state_dict = optimizer.distributed_state_dict(
-            key_to_param=model.named_parameters()
-        )
-        flattened_state_dict = flatten_state_dict(state_dict["state"])[0]
+
+        osd_state = optimizer.state_dict()["state"]
+        # We don't care about the parameter index, and we just want to get
+        # the keys of each inner state of the parameter.
+        flatten_keys = [
+            key for inner_dict in osd_state.values() for key in inner_dict.keys()
+        ]
+
         rank: int = dist.get_rank()
 
         def expected_key_criterion(key: str) -> bool:
             return f"rank_{rank}-block_" in key
 
-        keys_with_shampoo = filter(
-            lambda key: SHAMPOO in key, flattened_state_dict.keys()
+        # Verify the only keys that are not the fqn of a block are "step",
+        # "train_mode", and "lr_sum".
+        block_keys, non_block_keys = (
+            list(filter(expected_key_criterion, flatten_keys)),
+            list(filterfalse(expected_key_criterion, flatten_keys)),
         )
-        keys_with_expected_key, keys_without_expected_key = (
-            list(filter(expected_key_criterion, keys_with_shampoo)),
-            list(filterfalse(expected_key_criterion, keys_with_shampoo)),
+        filtered_flatten_keys = [
+            key for key in flatten_keys if key not in {"step", "train_mode", "lr_sum"}
+        ]
+
+        self.assertEqual(
+            non_block_keys,
+            ["step", "train_mode", "lr_sum"],
+            msg=f"find unexpected non-block key in {non_block_keys=}.",
         )
-        self.assertFalse(
-            keys_without_expected_key, msg=f"{keys_without_expected_key=} is not empty."
-        )
-        self.assertTrue(keys_with_expected_key)
+        self.assertEqual(block_keys, filtered_flatten_keys)
 
     @skip_if_lt_x_gpu(2)
     @parametrize("communicate_params", (True, False))
@@ -246,6 +255,7 @@ class ShampooFSDPDistributorTest(FSDPTest):
 
 
 @unittest.skipIf(not torch.cuda.is_available(), "Skip when CUDA is not available")
+@instantiate_parametrized_tests
 class FSDPDistributorOnEmptyParamTest(FSDPTest, DistributorOnEmptyParamTest.Interface):
     @property
     def world_size(self) -> int:
@@ -274,7 +284,6 @@ class FSDPDistributorOnEmptyParamTest(FSDPTest, DistributorOnEmptyParamTest.Inte
                 lr=0.001,
                 betas=(0.9, 1.0),
                 epsilon=1e-8,
-                momentum=0.0,
                 weight_decay=0.0,
                 precondition_frequency=1,
                 start_preconditioning_step=-1,
@@ -300,9 +309,12 @@ class FSDPDistributorOnEmptyParamTest(FSDPTest, DistributorOnEmptyParamTest.Inte
 
         return model, distributor
 
-    @property
-    def _expected_masked_blocked_params(self) -> tuple[torch.Tensor, ...]:
-        return ()
+    @skip_if_lt_x_gpu(2)
+    @parametrize("use_masked_tensors", [True, False])
+    def test_update_params(self, use_masked_tensors: bool) -> None:
+        DistributorOnEmptyParamTest.Interface._test_update_params_impl(
+            self, use_masked_tensors
+        )
 
     @property
     def _expected_local_grad_selector(self) -> tuple[bool, ...]:

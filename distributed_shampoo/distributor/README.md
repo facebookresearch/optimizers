@@ -43,7 +43,7 @@ distributor = Distributor(param_group=param_group)
 # Training step
 local_masked_blocked_grads = distributor.merge_and_block_gradients()
 # ... compute search directions with preconditioner ...
-distributor.update_params(masked_blocked_search_directions=search_directions)
+distributor.update_params(blocked_search_directions=search_directions)
 ```
 
 ### Distributed Data Parallel (DDP)
@@ -64,7 +64,7 @@ ddp_distributor = DDPDistributor(param_group=param_group)
 
 # Training step
 local_masked_blocked_grads = ddp_distributor.merge_and_block_gradients()
-ddp_distributor.update_params(masked_blocked_search_directions=search_directions)
+ddp_distributor.update_params(blocked_search_directions=search_directions)
 ```
 
 ### Fully Sharded Data Parallel (FSDP1)
@@ -168,7 +168,7 @@ class DistributorInterface(ABC):
     @abstractmethod
     def update_params(
         self,
-        masked_blocked_search_directions: tuple[Tensor, ...],
+        blocked_search_directions: tuple[Tensor, ...],
     ) -> None:
         """Update parameters with computed search directions."""
 

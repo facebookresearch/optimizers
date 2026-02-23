@@ -12,12 +12,13 @@ LICENSE file in the root directory of this source tree.
 import unittest
 
 import torch
+from distributed_shampoo import FSDPParamAssignmentStrategy, WeightDecayType
 from distributed_shampoo.examples.resolvers import (
     _fsdp_param_strategy_resolver,
     _torch_dtype_resolver,
+    _weight_decay_type_resolver,
     register_resolvers,
 )
-from distributed_shampoo.shampoo_types import FSDPParamAssignmentStrategy
 from omegaconf import OmegaConf
 
 
@@ -74,6 +75,24 @@ class FSDPParamStrategyResolverTest(unittest.TestCase):
         self.assertIn("Unknown strategy", str(context.exception))
 
 
+class WeightDecayTypeResolverTest(unittest.TestCase):
+    def test_decoupled_resolution(self) -> None:
+        """Test that DECOUPLED weight decay type is resolved correctly."""
+        result = _weight_decay_type_resolver("DECOUPLED")
+        self.assertEqual(result, WeightDecayType.DECOUPLED)
+
+    def test_l2_resolution(self) -> None:
+        """Test that L2 weight decay type is resolved correctly."""
+        result = _weight_decay_type_resolver("L2")
+        self.assertEqual(result, WeightDecayType.L2)
+
+    def test_invalid_weight_decay_type_raises_error(self) -> None:
+        """Test that invalid weight decay type strings raise ValueError."""
+        with self.assertRaises(ValueError) as context:
+            _weight_decay_type_resolver("INVALID_TYPE")
+        self.assertIn("Unknown weight decay type", str(context.exception))
+
+
 class RegisterResolversTest(unittest.TestCase):
     def test_register_resolvers_idempotent(self) -> None:
         """Test that register_resolvers can be called multiple times safely."""
@@ -84,6 +103,7 @@ class RegisterResolversTest(unittest.TestCase):
         # Verify resolvers are registered
         self.assertTrue(OmegaConf.has_resolver("torch_dtype"))
         self.assertTrue(OmegaConf.has_resolver("fsdp_param_strategy"))
+        self.assertTrue(OmegaConf.has_resolver("weight_decay_type"))
 
     def test_torch_dtype_resolver_via_omegaconf(self) -> None:
         """Test torch_dtype resolver works via OmegaConf interpolation."""
@@ -96,3 +116,9 @@ class RegisterResolversTest(unittest.TestCase):
         register_resolvers()
         cfg = OmegaConf.create({"strategy": "${fsdp_param_strategy:DEFAULT}"})
         self.assertEqual(cfg.strategy, FSDPParamAssignmentStrategy.DEFAULT)
+
+    def test_weight_decay_type_resolver_via_omegaconf(self) -> None:
+        """Test weight_decay_type resolver works via OmegaConf interpolation."""
+        register_resolvers()
+        cfg = OmegaConf.create({"wdt": "${weight_decay_type:DECOUPLED}"})
+        self.assertEqual(cfg.wdt, WeightDecayType.DECOUPLED)

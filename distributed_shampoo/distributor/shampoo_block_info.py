@@ -17,7 +17,7 @@ from torch import Tensor
 
 @dataclass
 class BlockInfo:
-    """Utilies and metadata for each parameter block.
+    """Utilities and metadata for each parameter block.
 
     Attributes:
         param (Tensor): The original parameter that contains the block.
@@ -67,7 +67,7 @@ class BlockInfo:
 
 @dataclass
 class DTensorBlockInfo(BlockInfo):
-    """Utilies and metadata for each parameter block specific using DTensor.
+    """Utilities and metadata for each parameter block specific using DTensor.
 
     Attributes:
         param (Tensor): The original parameter that contains the block.

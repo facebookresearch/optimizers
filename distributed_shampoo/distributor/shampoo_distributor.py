@@ -19,6 +19,7 @@ from distributed_shampoo.shampoo_types import (
     DISTRIBUTED_CONFIG,
     MAX_PRECONDITIONER_DIM,
     PARAMS,
+    ShampooRuntimeConfig,
 )
 from distributed_shampoo.utils.shampoo_utils import (
     compress_list,
@@ -26,7 +27,7 @@ from distributed_shampoo.utils.shampoo_utils import (
     merge_small_dims,
     multi_dim_split,
 )
-from torch import distributed as dist, Tensor
+from torch import Tensor
 
 
 ###### DISTRIBUTOR CLASSES ######
@@ -37,11 +38,19 @@ class DistributorInterface(ABC):
 
     Args:
         param_group (dict[str, Any]): Parameter group containing parameters.
+        runtime_config (ShampooRuntimeConfig): Runtime configurations for the distributor, e.g., debugging, pt2 compile options.
 
     """
 
-    def __init__(self, param_group: dict[str, Any]) -> None:
+    def __init__(
+        self,
+        param_group: dict[str, Any],
+        runtime_config: ShampooRuntimeConfig | None = None,
+    ) -> None:
         self._param_group = param_group
+        self._runtime_config: ShampooRuntimeConfig = (
+            runtime_config if runtime_config is not None else ShampooRuntimeConfig()
+        )
         # Merge and block parameters creates self._global_blocked_params and self._global_num_blocks_per_param
         # Global blocked params are all the blocked parameters after merging and blocking.
         # Global num blocks per param stores the number of blocks for each global parameter.
@@ -70,7 +79,8 @@ class DistributorInterface(ABC):
     @torch.no_grad()
     def update_params(
         self,
-        masked_blocked_search_directions: tuple[Tensor, ...],
+        blocked_search_directions: tuple[Tensor, ...],
+        use_masked_tensors: bool = True,
     ) -> None: ...
 
     @property
@@ -267,9 +277,12 @@ class DistributorInterface(ABC):
                 # Skip multi_dim_split if this blocked grad will not be used locally.
                 continue
 
-            assert grad is not None and torch.isfinite(grad).all(), (
-                f"Encountered gradient containing NaN/Inf in parameter with shape {attrgetter('shape')(grad)}. Check your model for numerical instability or consider gradient clipping."
-            )
+            assert grad is not None
+
+            if self._runtime_config.eager_nan_check:
+                assert torch.isfinite(grad).all(), (
+                    f"Encountered gradient containing NaN/Inf in parameter with shape {attrgetter('shape')(grad)}. Check your model for numerical instability or consider gradient clipping."
+                )
 
             # Obtain blocks for each gradient after merging.
             blocks_within_grad = multi_dim_split(
@@ -296,11 +309,16 @@ class Distributor(DistributorInterface):
 
     Args:
         param_group (dict[str, Any]): Parameter group containing parameters.
+        runtime_config (ShampooRuntimeConfig): Runtime configurations for the distributor, e.g., debugging, pt2 compile options.
 
     """
 
-    def __init__(self, param_group: dict[str, Any]) -> None:
-        super().__init__(param_group)
+    def __init__(
+        self,
+        param_group: dict[str, Any],
+        runtime_config: ShampooRuntimeConfig | None = None,
+    ) -> None:
+        super().__init__(param_group, runtime_config)
 
         # Initialize selectors and local blocked (masked) parameters.
         self._local_grad_selector: tuple[bool, ...] = (True,) * len(
@@ -318,31 +336,38 @@ class Distributor(DistributorInterface):
     @torch.no_grad()
     def update_params(
         self,
-        masked_blocked_search_directions: tuple[Tensor, ...],
+        blocked_search_directions: tuple[Tensor, ...],
+        use_masked_tensors: bool = True,
     ) -> None:
         """Update params stored inside this distributor according to the input search directions argument.
 
         Args:
-            masked_blocked_search_directions (tuple[Tensor, ...]): Search directions for each local blocked parameter.
-            This tuple might be empty if the parameters are not receiving gradients.
+            blocked_search_directions (tuple[Tensor, ...]): Search directions for each local blocked parameter.
+                This tuple might be empty if the parameters are not receiving gradients.
+            use_masked_tensors (bool): If True (default), operates on masked blocked params.
+                If False, operates on all local blocked params regardless of gradient masking.
 
         """
-        assert len(masked_blocked_search_directions) == len(
+        target_params = (
             self._local_masked_blocked_params
-        ), (
-            f"Expected {len(masked_blocked_search_directions)=} to be equal to {len(self._local_masked_blocked_params)=}."
+            if use_masked_tensors
+            else self._local_blocked_params
+        )
+
+        assert len(blocked_search_directions) == len(target_params), (
+            f"Expected {len(blocked_search_directions)=} to be equal to {len(target_params)=}."
         )
 
         # torch._foreach only accepts non-empty list
-        if masked_blocked_search_directions:
+        if blocked_search_directions:
             torch._foreach_add_(
-                self._local_masked_blocked_params,
-                masked_blocked_search_directions,
+                target_params,
+                blocked_search_directions,
             )
 
     @torch.no_grad()
     def _construct_local_block_info_list_with_params(
-        self, params: Iterable[Tensor]
+        self, params: Iterable[Tensor], rank: int | None = None
     ) -> tuple[BlockInfo, ...]:
         return tuple(
             BlockInfo(
@@ -350,7 +375,7 @@ class Distributor(DistributorInterface):
                 composable_block_ids=self._construct_composable_block_ids(
                     param_index=param_index,
                     block_index=block_index,
-                    rank=dist.get_rank() if dist.is_initialized() else None,
+                    rank=rank,
                 ),
             )
             # Block index that is accumulated across all parameters within a parameter group.

@@ -12,6 +12,7 @@ LICENSE file in the root directory of this source tree.
 import unittest
 from collections.abc import Callable
 from functools import partial
+from itertools import filterfalse
 from typing import cast, overload
 
 import torch
@@ -27,8 +28,10 @@ from distributed_shampoo.shampoo_types import (
     AdaGradPreconditionerConfig,
     DefaultSingleDeviceDistributedConfig,
     FullyShardDistributedConfig,
+    GeneralizedPrimalAveragingConfig,
     HybridShardDistributedConfig,
     SingleDeviceDistributedConfig,
+    WeightDecayType,
 )
 from distributed_shampoo.tests.shampoo_test_utils import (
     compare_two_optimizers_models_devices_on_weight_and_loss,
@@ -121,14 +124,14 @@ class ShampooFullyShardDistributorTest(DTensorTestBase):
             lr=0.001,
             betas=(0.9, 1.0),
             epsilon=1e-8,
-            momentum=0.0,
             weight_decay=0.0,
             max_preconditioner_dim=PRECONDITIONER_DIM,
             precondition_frequency=1,
             start_preconditioning_step=2,
-            use_decoupled_weight_decay=True,
+            weight_decay_type=WeightDecayType.DECOUPLED,
             grafting_config=AdaGradPreconditionerConfig(epsilon=1e-8),
             distributed_config=distributed_config,
+            iterate_averaging_config=GeneralizedPrimalAveragingConfig(),
         )
 
     @with_comms
@@ -206,8 +209,52 @@ class ShampooFullyShardDistributorTest(DTensorTestBase):
             atol=0.0,
         )
 
+    @with_comms
+    @skip_if_lt_x_gpu(2)
+    def test_fully_shard_shampoo_block_index(self) -> None:
+        model, _, _, _, optimizer = train_model(
+            optim_factory=ShampooFullyShardDistributorTest._shampoo_optim_factory(
+                distributed_config=FullyShardDistributedConfig()
+            ),
+            model_factory=partial(
+                ShampooFullyShardDistributorTest._construct_model,
+                post_model_decoration=partial(fully_shard),
+            ),
+        )
+        assert isinstance(model, nn.Module)
+        assert isinstance(optimizer, DistributedShampoo)
+        osd_state = optimizer.state_dict()["state"]
+        # We don't care about the parameter index, and we just want to get
+        # the keys of each inner state of the parameter.
+        flatten_keys = [
+            key for inner_dict in osd_state.values() for key in inner_dict.keys()
+        ]
+
+        rank: int = dist.get_rank()
+
+        def expected_key_criterion(key: str) -> bool:
+            return f"rank_{rank}-block_" in key
+
+        # Verify the only keys that are not the fqn of a block are "step",
+        # "train_mode", and "lr_sum".
+        block_keys, non_block_keys = (
+            list(filter(expected_key_criterion, flatten_keys)),
+            list(filterfalse(expected_key_criterion, flatten_keys)),
+        )
+        filtered_flatten_keys = [
+            key for key in flatten_keys if key not in {"step", "train_mode", "lr_sum"}
+        ]
+
+        self.assertEqual(
+            non_block_keys,
+            ["step", "train_mode", "lr_sum"],
+            msg=f"find unexpected non-block key in {non_block_keys=}.",
+        )
+        self.assertEqual(block_keys, filtered_flatten_keys)
+
 
 @unittest.skipIf(not torch.cuda.is_available(), "Skip when CUDA is not available")
+@instantiate_parametrized_tests
 class FullyShardDistributorOnEmptyParamTest(
     DTensorTestBase, DistributorOnEmptyParamTest.Interface
 ):
@@ -240,7 +287,6 @@ class FullyShardDistributorOnEmptyParamTest(
                 lr=0.001,
                 betas=(0.9, 1.0),
                 epsilon=1e-8,
-                momentum=0.0,
                 weight_decay=0.0,
                 precondition_frequency=1,
                 start_preconditioning_step=-1,
@@ -266,13 +312,12 @@ class FullyShardDistributorOnEmptyParamTest(
 
         return model, distributor
 
-    @property
-    def _expected_masked_blocked_params(self) -> tuple[torch.Tensor, ...]:
-        return ()
-
     @with_comms
-    def test_update_params(self) -> None:  # type: ignore[override]
-        DistributorOnEmptyParamTest.Interface.test_update_params(self)
+    @parametrize("use_masked_tensors", [True, False])
+    def test_update_params(self, use_masked_tensors: bool) -> None:
+        DistributorOnEmptyParamTest.Interface._test_update_params_impl(
+            self, use_masked_tensors
+        )
 
     @property
     def _expected_local_grad_selector(self) -> tuple[bool, ...]:
