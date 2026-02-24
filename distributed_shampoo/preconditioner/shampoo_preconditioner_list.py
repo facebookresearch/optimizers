@@ -18,6 +18,7 @@ from operator import attrgetter
 from pathlib import Path
 from typing import (
     Any,
+    ClassVar,
     Generic,
     get_args,
     NoReturn,
@@ -568,6 +569,7 @@ class EigendecomposedShampooKroneckerFactorsState(BaseShampooKroneckerFactorsSta
             block_info (BlockInfo): Information about the block, including methods to allocate tensors.
             preconditioner_config (EigendecomposedShampooPreconditionerConfig): Configuration for the preconditioner.
             preconditioned_dims (tuple[int, ...]): Dimensions for which the factor matrices are preconditioned.
+            eigenvalue_allocator (Callable): Allocator function for eigenvalue tensors (e.g., allocate_ones_tensor or allocate_zeros_tensor).
 
         Returns:
             kronecker_factors_state (EigendecomposedShampooKroneckerFactorsState): An instance of EigendecomposedShampooKroneckerFactorsState.
@@ -577,6 +579,7 @@ class EigendecomposedShampooKroneckerFactorsState(BaseShampooKroneckerFactorsSta
             "preconditioner_config"
         ]
         preconditioned_dims: tuple[int, ...] = kwargs["preconditioned_dims"]
+        eigenvalue_allocator: Callable[..., Tensor] = kwargs["eigenvalue_allocator"]
 
         return cls(
             **asdict(
@@ -595,9 +598,9 @@ class EigendecomposedShampooKroneckerFactorsState(BaseShampooKroneckerFactorsSta
                 )
                 for dim in preconditioned_dims
             ),
-            # Initialize factor_matrices_eigenvalues all ones.
+            # Initialize factor_matrices_eigenvalues using the provided allocator.
             factor_matrices_eigenvalues=tuple(
-                block_info.allocate_ones_tensor(
+                eigenvalue_allocator(
                     size=(dim,),
                     dtype=preconditioner_config.factor_matrix_eigenvalues_dtype,
                     device=block_info.param.device,
@@ -622,12 +625,13 @@ class EigendecompositionBasedShampooKroneckerFactorsUnwrapped(
     """Base class for Shampoo variants using eigendecomposition.
 
     This class provides shared eigendecomposition logic for variants that compute
-    eigenvectors of factor matrices. Subclasses control eigenvalue behavior via
-    field presence: if a subclass has `factor_matrices_eigenvalues`, eigenvalues
-    from eigendecomposition will be included in amortized computation results.
+    eigenvectors of factor matrices. Subclasses control whether eigenvalues from
+    eigendecomposition are included in amortized computation results via the
+    `_include_eigenvalues_in_amortized_computation` class variable.
     """
 
     factor_matrices_eigenvectors: tuple[Tensor, ...]
+    _include_eigenvalues_in_amortized_computation: ClassVar[bool] = False
 
     @torch.compiler.disable
     def _amortized_computation(
@@ -671,9 +675,7 @@ class EigendecompositionBasedShampooKroneckerFactorsUnwrapped(
                 ),
             }
 
-            # TODO: Consider replacing hasattr dispatch with a class variable
-            # (e.g., _include_eigenvalues) to avoid fragile reliance on field presence.
-            if hasattr(self, "factor_matrices_eigenvalues"):
+            if self._include_eigenvalues_in_amortized_computation:
                 result["factor_matrices_eigenvalues"] = computed_eigenvalues.to(
                     dtype=kronecker_factors_iter_dict[
                         "factor_matrices_eigenvalues"
@@ -683,7 +685,7 @@ class EigendecompositionBasedShampooKroneckerFactorsUnwrapped(
             return result, None
         except Exception as exception:
             result = {"factor_matrices_eigenvectors": factor_matrix_eigenvectors}
-            if hasattr(self, "factor_matrices_eigenvalues"):
+            if self._include_eigenvalues_in_amortized_computation:
                 result["factor_matrices_eigenvalues"] = kronecker_factors_iter_dict[
                     "factor_matrices_eigenvalues"
                 ]
@@ -727,6 +729,7 @@ class EigendecomposedShampooKroneckerFactorsUnwrapped(
     """
 
     factor_matrices_eigenvalues: tuple[Tensor, ...]
+    _include_eigenvalues_in_amortized_computation: ClassVar[bool] = True
 
     @classmethod
     def from_kronecker_factors_state(
@@ -1090,6 +1093,10 @@ class BaseShampooPreconditionerList(
             preconditioned_dims_selector_list=preconditioned_dims_selector_list,
         )
 
+    def _get_eigenvalue_allocator(self, block_info: BlockInfo) -> Callable[..., Tensor]:
+        """Returns the allocator for factor matrix eigenvalue initialization."""
+        return block_info.allocate_ones_tensor
+
     @abstractmethod
     def _create_preconditioned_dims_selector(
         self, dims: torch.Size
@@ -1149,6 +1156,7 @@ class BaseShampooPreconditionerList(
                 preconditioner_config=self._preconditioner_config,
                 preconditioned_dims=preconditioned_dims,
                 dims=dims,
+                eigenvalue_allocator=self._get_eigenvalue_allocator(block_info),
             )
             kronecker_factors_unwrapped.append(
                 kronecker_factors_state_unwrapped_type.from_kronecker_factors_state(
@@ -1296,6 +1304,17 @@ class BaseShampooPreconditionerList(
         """
         return grad
 
+    def _post_outer_product_hook(
+        self,
+        outer_product_list: tuple[Tensor, ...],
+        kronecker_factors: _ShampooKroneckerFactorsUnwrappedType,
+    ) -> None:
+        """Hook called after each block's factor matrix update with the per-step outer products.
+
+        Override this method in subclasses to use outer products (e.g., eigenvalue EMA).
+        """
+        pass
+
     @profile_decorator
     def _update_factor_matrices(self, masked_grad_list: tuple[Tensor, ...]) -> None:
         # NOTE: Unlike AdagradPreconditionerList, we will loop through each gradient individually.
@@ -1339,6 +1358,8 @@ class BaseShampooPreconditionerList(
                 outer_product_list,
                 alpha=self._weighting_factor,
             )
+
+            self._post_outer_product_hook(outer_product_list, kronecker_factors)
 
     @staticmethod
     def _precondition_grad(
@@ -1598,6 +1619,15 @@ class EigendecomposedShampooPreconditionerList(
 ):
     """Eigendecomposed Shampoo preconditioners for list of parameters."""
 
+    def _prepare_eigenvalues_for_preconditioning(
+        self, eigenvalues: Tensor
+    ) -> Tensor:
+        """Prepares eigenvalues before passing to matrix_inverse_root_from_eigendecomposition.
+
+        Override in subclasses that store raw (non-bias-corrected) eigenvalues.
+        """
+        return eigenvalues
+
     def _compute_preconditioned_gradient(
         self,
         grad: Tensor,
@@ -1616,7 +1646,7 @@ class EigendecomposedShampooPreconditionerList(
             preconditioned_dims_selector=preconditioned_dims_selector,
             preconditioner_list=tuple(
                 matrix_inverse_root_from_eigendecomposition(
-                    L=eigenvalues,
+                    L=self._prepare_eigenvalues_for_preconditioning(eigenvalues),
                     Q=eigenvectors,
                     root=Fraction(root),
                     epsilon=self._epsilon,
@@ -1659,7 +1689,7 @@ class EigendecomposedShampooPreconditionerList(
             preconditioned_dims_selector=tuple(local_preconditioned_dims_selector),
             preconditioner_list=tuple(
                 matrix_inverse_root_from_eigendecomposition(
-                    L=eigenvalues,
+                    L=self._prepare_eigenvalues_for_preconditioning(eigenvalues),
                     Q=eigenvectors,
                     root=Fraction(root),
                     epsilon=self._epsilon,
@@ -1683,48 +1713,58 @@ class PerFactorEigenvalueCorrectedShampooPreconditionerList(
 ):
     """Per-factor eigenvalue-corrected Shampoo preconditioners for list of parameters.
 
-    Inherits from EigendecomposedShampooPreconditionerList and overrides update_preconditioners()
-    to compute eigenvalues directly from diag(Q^T M Q), where Q are the cached eigenvectors
-    and M is the (already EMA-accumulated) factor matrix.
+    Maintains an EMA of diag(Q^T O_t Q) for each factor matrix, where Q are the cached
+    eigenvectors and O_t is the per-step outer product. This uses the same beta2 and
+    weighting_factor as the factor matrix EMA, providing smooth eigenvalue tracking
+    across eigenvector updates.
     """
 
-    @profile_decorator
-    def update_preconditioners(
+    def _get_eigenvalue_allocator(self, block_info: BlockInfo) -> Callable[..., Tensor]:
+        """Returns zero-init allocator for eigenvalue EMA (accumulates from zero with bias correction)."""
+        return block_info.allocate_zeros_tensor
+
+    def _initialize_state_lists(
         self,
-        masked_grad_list: tuple[Tensor, ...],
-        step: Tensor,
-        perform_amortized_computation: bool,
+        block_list: tuple[Tensor, ...],
+        kronecker_factors_unwrapped: list[EigendecomposedShampooKroneckerFactorsUnwrapped],
+        preconditioned_dims_list: tuple[tuple[int, ...], ...],
+        preconditioned_dims_selector_list: tuple[tuple[bool, ...], ...],
     ) -> None:
-        """Updates the preconditioners with per-factor eigenvalue correction.
+        super()._initialize_state_lists(
+            block_list=block_list,
+            kronecker_factors_unwrapped=kronecker_factors_unwrapped,
+            preconditioned_dims_list=preconditioned_dims_list,
+            preconditioned_dims_selector_list=preconditioned_dims_selector_list,
+        )
+        # Prevent amortized computation from overwriting EMA'd eigenvalues.
+        for kf in self._local_kronecker_factors_unwrapped:
+            kf._include_eigenvalues_in_amortized_computation = False  # type: ignore[misc]
 
-        First calls the parent update_preconditioners() to update factor matrices and eigenvectors.
-        Then computes eigenvalues directly as diag(Q^T M Q) for each factor matrix.
-
-        Args:
-            masked_grad_list (tuple[Tensor, ...]): A list of gradients with their corresponding masks.
-            step (Tensor): The current step.
-            perform_amortized_computation (bool): Whether to perform an amortized computation.
-
-        Returns:
-            None
-        """
-        super().update_preconditioners(
-            masked_grad_list=masked_grad_list,
-            step=step,
-            perform_amortized_computation=perform_amortized_computation,
+    def _post_outer_product_hook(
+        self,
+        outer_product_list: tuple[Tensor, ...],
+        kronecker_factors: EigendecomposedShampooKroneckerFactorsUnwrapped,
+    ) -> None:
+        """Updates the eigenvalue EMA: E_t = beta2 * E_{t-1} + w * diag(Q^T O_t Q)."""
+        projected = tuple(
+            (op.to(dtype=Q.dtype) @ Q * Q).sum(dim=0)
+            for op, Q in zip(
+                outer_product_list,
+                kronecker_factors.factor_matrices_eigenvectors,
+                strict=True,
+            )
+        )
+        if self._beta2 != 1.0:
+            torch._foreach_mul_(kronecker_factors.factor_matrices_eigenvalues, self._beta2)
+        torch._foreach_add_(
+            kronecker_factors.factor_matrices_eigenvalues, projected, alpha=self._weighting_factor
         )
 
-        for kronecker_factors in self._masked_kronecker_factors_unwrapped:
-            for factor_matrix, eigenvectors, eigenvalues in zip(
-                kronecker_factors.factor_matrices,
-                kronecker_factors.factor_matrices_eigenvectors,
-                kronecker_factors.factor_matrices_eigenvalues,
-                strict=True,
-            ):
-                eigenvalues.copy_(
-                    (factor_matrix @ eigenvectors * eigenvectors).sum(dim=0)
-                    / self._bias_correction2
-                )
+    def _prepare_eigenvalues_for_preconditioning(
+        self, eigenvalues: Tensor
+    ) -> Tensor:
+        """Applies bias correction to raw EMA eigenvalues."""
+        return eigenvalues / self._bias_correction2
 
 
 class EigenvalueCorrectedShampooPreconditionerList(
@@ -1898,6 +1938,9 @@ class PerFactorEigenvalueCorrectedKLShampooPreconditionerList(
         preconditioned_dims_selector: tuple[bool, ...],
         kronecker_factors: EigendecomposedShampooKroneckerFactorsUnwrapped,
     ) -> Tensor:
+        # Skip KL when eigenvalues are uninitialized (all zero).
+        if not kronecker_factors.factor_matrices_eigenvalues[0].any():
+            return grad
         return self._kl_transform_grad_for_outer_product(
             grad, idx_of_k, k, order, preconditioned_dims_selector, kronecker_factors,
         )

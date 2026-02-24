@@ -404,12 +404,12 @@ class PerFactorEigenvalueCorrectedShampooPreconditionerConfig(
     """Configuration for per-factor eigenvalue-corrected Shampoo preconditioner.
 
     Like EigendecomposedShampoo, stores eigenvectors and eigenvalues per factor matrix.
-    However, eigenvalues are computed directly as diag(Q^T M Q) instead of from
-    eigendecomposition, where Q are the cached eigenvectors and M is the
-    already-accumulated factor matrix.
+    However, eigenvalues are maintained as a direct EMA of diag(Q^T O_t Q), where Q are
+    the cached eigenvectors and O_t is the per-step outer product. This uses the same
+    beta2 and weighting_factor as the factor matrix EMA.
 
     Eigenvectors are updated via amortized eigendecomposition (same as EigendecomposedShampoo).
-    Eigenvalues are recomputed every iteration as diag(Q^T M Q).
+    Eigenvalues are updated every iteration via EMA: E_t = beta2 * E_{t-1} + w * diag(Q^T O_t Q).
 
     Attributes:
         amortized_computation_config (EigendecompositionConfig): Configuration for the eigendecomposition computation. (Default: DefaultEigendecompositionConfig)
@@ -462,7 +462,8 @@ class PerFactorEigenvalueCorrectedKLShampooPreconditionerConfig(
 ):
     """Configuration for per-factor eigenvalue-corrected KL-Shampoo preconditioner.
 
-    Combines per-factor eigenvalue correction with KL-Shampoo outer product computation.
+    Combines per-factor eigenvalue correction (EMA of diag(Q^T O_t Q)) with
+    KL-Shampoo outer product computation.
 
     Attributes:
         amortized_computation_config (EigendecompositionConfig): Configuration for the eigendecomposition computation. (Default: DefaultEigendecompositionConfig)
