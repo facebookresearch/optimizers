@@ -17,10 +17,11 @@ Developers:
 - Shintaro Iwasaki (Meta Platforms, Inc.)
 - Ke Sang (Meta Platforms, Inc.)
 - Wang Zhou (Meta Platforms, Inc.)
+- Iris Zhang (Meta Platforms, Inc.)
 
 with contributions and support from:
 
-Ganesh Ajjanagadde (Meta), Rohan Anil (Google), Adnan Aziz (Meta), Pavan Balaji (Meta), Shuo Chang (Meta), Weiwei Chu (Meta), Assaf Eisenman (Meta), Will Feng (Meta), Zhuobo Feng (Meta), Jose Gallego-Posada (Mila / Meta Platforms, Inc.), Avirup Ghosh (Meta), Yizi Gu (Meta), Vineet Gupta (Google), Yuchen Hao (Meta), Brian Hirsh (Meta), Yusuo Hu (Meta), Yuxi Hu (Meta), Minhui Huang (Meta), Guna Lakshminarayanan (Meta), Michael Lazos (Meta), Zhijing Li (Meta), Ming Liang (Meta), Wanchao Liang (Meta), Ying Liu (Meta), Wenguang Mao (Meta), Dheevatsa Mudigere (NVIDIA), Maxim Naumov (Meta), Jongsoo Park (Meta), Mike Rabbat (Meta), Kaushik Rangadurai (Meta), Dennis van der Staay (Meta), Fei Tian (Meta), Rohan Varma (Meta), Sanjay Vishwakarma (Meta), Xunnan (Shawn) Xu (Meta), Jiyan Yang (Meta), Chunxing Yin (Meta), Gavin Zhang (Meta), Haoran Zhang (Meta), Haoyu Zhang (Meta), Iris Zhang (Meta), Chuanhao Zhuge (Meta), and Will Zou (Meta).
+Ganesh Ajjanagadde (Meta), Rohan Anil (Google), Adnan Aziz (Meta), Pavan Balaji (Meta), Shuo Chang (Meta), Weiwei Chu (Meta), Assaf Eisenman (Meta), Will Feng (Meta), Zhuobo Feng (Meta), Jose Gallego-Posada (Mila / Meta Platforms, Inc.), Avirup Ghosh (Meta), Yizi Gu (Meta), Vineet Gupta (Google), Yuchen Hao (Meta), Brian Hirsh (Meta), Yusuo Hu (Meta), Yuxi Hu (Meta), Minhui Huang (Meta), Guna Lakshminarayanan (Meta), Michael Lazos (Meta), Zhijing Li (Meta), Ming Liang (Meta), Wanchao Liang (Meta), Ying Liu (Meta), Wenguang Mao (Meta), Dheevatsa Mudigere (NVIDIA), Maxim Naumov (Meta), Jongsoo Park (Meta), Mike Rabbat (Meta), Kaushik Rangadurai (Meta), Dennis van der Staay (Meta), Fei Tian (Meta), Rohan Varma (Meta), Sanjay Vishwakarma (Meta), Xunnan (Shawn) Xu (Meta), Jiyan Yang (Meta), Chunxing Yin (Meta), Gavin Zhang (Meta), Haoran Zhang (Meta), Haoyu Zhang (Meta), Chuanhao Zhuge (Meta), and Will Zou (Meta).
 
 ## 🏆 Competition Winner 🏆
 
@@ -743,6 +744,14 @@ optimizer.load_state_dict(state_dict["optim"])
 ```
 
 You can also refer to [`ddp_cifar10_example.py`](https://github.com/facebookresearch/optimizers/blob/main/distributed_shampoo/examples/ddp_cifar10_example.py) as an example.
+
+PyTorch Distributed Checkpoint will save your sharded checkpoint in a folder named `step-{STEP}`. To convert the sharded checkpoints from DCP format to `torch.save` format (`.pt` file), you can use the following offline conversion command provided by PyTorch:
+
+```bash
+python -m torch.distributed.checkpoint.format_utils dcp_to_torch {YOUR_DCP_CHECKPOINT_PATH}/step-{STEP} {YOUR_TORCH_SAVE_FILE_NAME}.pt
+```
+
+For more information, please refer to [Distributed Checkpoint - torch.distributed.checkpoint](https://docs.pytorch.org/docs/stable/distributed.checkpoint.html).
 
 ## Hyperparameter Tuning
 
