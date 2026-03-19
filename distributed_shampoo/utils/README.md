@@ -378,34 +378,11 @@ bias_part = layer.combined_weight[:, -1]     # (256,)
 - Drop-in replacement for `nn.Linear`
 - Separates weight and bias during forward pass
 
-## Checkpoint Management
+## State Dict Management
 
-### Checkpoint Utilities ([`shampoo_checkpoint_utils.py`](shampoo_checkpoint_utils.py))
+### State Dict Utilities ([`shampoo_state_dict_utils.py`](shampoo_state_dict_utils.py))
 
 Robust checkpointing support for complex nested state dictionaries with proper handling of `OptimizerModule` objects.
-
-#### Flattening and Unflattening
-
-```python
-# Flatten nested dictionary for storage
-nested_state = {
-    "model": {
-        "layer1": {"weight": tensor1, "bias": tensor2},
-        "layer2": {"weight": tensor3}
-    },
-    "optimizer": {
-        "step": torch.tensor(100),
-        "param_groups": [{"lr": 0.001}]
-    }
-}
-
-flattened = flatten(nested_state)
-# Keys become JSON-encoded paths: '["model", "layer1", "weight"]'
-
-# Restore original structure
-restored = unflatten(flattened)
-assert restored == nested_state
-```
 
 #### State Dictionary Management
 

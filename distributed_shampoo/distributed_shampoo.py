@@ -123,7 +123,7 @@ from distributed_shampoo.shampoo_types import (
     WEIGHT_DECAY_TYPE,
     WeightDecayType,
 )
-from distributed_shampoo.utils.shampoo_checkpoint_utils import (
+from distributed_shampoo.utils.shampoo_state_dict_utils import (
     extract_state_dict_content,
     update_param_state_dict_object,
 )
@@ -643,21 +643,42 @@ class DistributedShampoo(torch.optim.Optimizer):
                 | RMSpropPreconditionerConfig()
                 | AdamPreconditionerConfig()
             ):
+                # Order of cases matters: check more specific (derived) classes first,
+                # base classes last. Otherwise, a base class pattern will match derived
+                # class instances due to structural pattern matching behavior.
+                match preconditioner_config:
+                    case RMSpropPreconditionerConfig(
+                        beta2=_beta2,
+                        drop_weighting_factor_on_gsquare=True,
+                    ):
+                        # Also matches AdamPreconditionerConfig with flag=True due to inheritance
+                        beta2 = _beta2
+                        weighting_factor: float = 1.0
+                        use_bias_correction: bool = False
+                    case AdamPreconditionerConfig(beta2=_beta2):
+                        beta2 = _beta2
+                        weighting_factor = 1 - beta2
+                        use_bias_correction = True
+                    case RMSpropPreconditionerConfig(beta2=_beta2):
+                        beta2 = _beta2
+                        weighting_factor = 1 - beta2
+                        use_bias_correction = False
+                    case AdaGradPreconditionerConfig():
+                        beta2: float = 1.0
+                        weighting_factor: float = 1.0
+                        use_bias_correction: bool = False
+                    case _:
+                        raise AssertionError(
+                            f"Unexpected preconditioner config: {preconditioner_config}"
+                        )
                 return AdagradPreconditionerList(
                     block_list=state_lists[DISTRIBUTOR].local_blocked_params,
                     state=self.state,
                     block_info_list=state_lists[DISTRIBUTOR].local_block_info_list,
-                    beta2=(
-                        1.0
-                        if type(preconditioner_config) is AdaGradPreconditionerConfig
-                        else operator.attrgetter("beta2")(preconditioner_config)
-                    ),
-                    weighting_factor=1.0
-                    if type(preconditioner_config) is AdaGradPreconditionerConfig
-                    else 1 - operator.attrgetter("beta2")(preconditioner_config),
+                    beta2=beta2,
+                    weighting_factor=weighting_factor,
                     epsilon=preconditioner_config.epsilon,
-                    use_bias_correction=type(preconditioner_config)
-                    is AdamPreconditionerConfig,
+                    use_bias_correction=use_bias_correction,
                 )
             case (
                 RootInvShampooPreconditionerConfig()
@@ -675,15 +696,17 @@ class DistributedShampoo(torch.optim.Optimizer):
                     RootInvKLShampooPreconditionerConfig: RootInvKLShampooPreconditionerList,
                     EigendecomposedKLShampooPreconditionerConfig: EigendecomposedKLShampooPreconditionerList,
                 }
+                beta2 = group[BETAS][1]
                 return preconditioner_config_to_list_cls[type(preconditioner_config)](
                     block_list=state_lists[DISTRIBUTOR].local_blocked_params,
                     preconditioner_config=preconditioner_config,
                     state=self.state,
                     block_info_list=state_lists[DISTRIBUTOR].local_block_info_list,
-                    beta2=group[BETAS][1],
+                    beta2=beta2,
                     weighting_factor=1.0
-                    if group[BETAS][1] == 1.0
-                    else 1 - group[BETAS][1],
+                    if preconditioner_config.drop_weighting_factor_on_gsquare
+                    or beta2 == 1.0
+                    else 1 - beta2,
                     epsilon=group[EPSILON],
                     use_bias_correction=group[USE_BIAS_CORRECTION],
                 )

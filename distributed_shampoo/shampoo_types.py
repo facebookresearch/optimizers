@@ -115,10 +115,13 @@ class RMSpropPreconditionerConfig(AdaGradPreconditionerConfig):
         beta2 (float): Exponential moving average factor for second moment. (Default: 0.99)
         epsilon (float): Epsilon term for regularizing square-root of the second moment to ensure positive definiteness.
             (Default: 1e-10)
+        drop_weighting_factor_on_gsquare (bool): drop the (1 - beta2) weighting factor when computing the updates of the
+            preconditioners, i.e. V(t) = beta2 * V(t-1) + G^2. This also disables bias correction (no beta2 bias correction). (default: False)
 
     """
 
     beta2: float = 0.99
+    drop_weighting_factor_on_gsquare: bool = False
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -175,6 +178,9 @@ class ShampooPreconditionerConfig(AmortizedPreconditionerConfig):
         amortized_computation_config (MatrixFunctionConfig): Configuration for the amortized computation, e.g., inverse-root computation or eigendecomposition.
         num_tolerated_failed_amortized_computations (int): Number of failed amortized computations to tolerate before raising an error. (Default: 3)
         factor_matrix_dtype (torch.dtype): Data type for factor matrix. (Default: torch.float32)
+        drop_weighting_factor_on_gsquare (bool): If True, drop the (1 - beta2) weighting factor when computing
+            the updates of the preconditioners, i.e., V(t) = beta2 * V(t-1) + G^2 instead of
+            V(t) = beta2 * V(t-1) + (1 - beta2) * G^2. This keeps _bias_correction2 at 1.0 (no beta2 bias correction). (Default: False)
         inverse_exponent_override (dict[int, dict[int, float] | float]): The inverse_exponent_override attribute is a dictionary that allows for customizing the inverse exponent used in the Shampoo preconditioner computation.
             The keys of the dictionary represent the order of the tensor, and the values are either dictionaries with dimension indices as keys and override values as values, or a single float value for all dimensions. All unspecified dimensions use a default exponent of 1/(2*max(o,1)), where o is the order of the tensor. (Default: {})
 
@@ -214,6 +220,7 @@ class ShampooPreconditionerConfig(AmortizedPreconditionerConfig):
 
     """
 
+    drop_weighting_factor_on_gsquare: bool = False
     inverse_exponent_override: dict[int, dict[int, float] | float] = field(
         default_factory=dict
     )
@@ -438,6 +445,9 @@ class EigenvalueCorrectedShampooPreconditionerConfig(AmortizedPreconditionerConf
         inverse_exponent_override (dict[int, float]): The inverse_exponent_override attribute is a dictionary that allows for customizing the inverse exponent used in eigenvalue correction.
             The keys of the dictionary represent the order of the tensor, and the values are the exponent override values. For example, if we want to use a custom inverse exponent for 3-D tensors, we can set inverse_exponent_override as inverse_exponent_override={3: 0.25}.
             Note that the inverse_exponent_override dictionary can contain multiple entries for different tensor orders. If the order of the tensor is not specified in the dictionary, the default exponent, 1/2, will be used. (Default: {})
+        drop_weighting_factor_on_gsquare (bool): If True, drop the (1 - beta2) weighting factor when computing
+            the updates of the preconditioners, i.e., V(t) = beta2 * V(t-1) + G^2 instead of
+            V(t) = beta2 * V(t-1) + (1 - beta2) * G^2. This keeps _bias_correction2 at 1.0 (no beta2 bias correction). (Default: False)
         factor_matrix_eigenvectors_dtype (torch.dtype): Data type for factor matrix eigenvectors. (Default: torch.float32)
         corrected_eigenvalues_dtype (torch.dtype): Data type for corrected eigenvalues. (Default: torch.float32)
 
@@ -452,6 +462,7 @@ class EigenvalueCorrectedShampooPreconditionerConfig(AmortizedPreconditionerConf
     )
     ignored_basis_change_dims: dict[int, list[int]] = field(default_factory=dict)
     inverse_exponent_override: dict[int, float] = field(default_factory=dict)
+    drop_weighting_factor_on_gsquare: bool = False
     factor_matrix_eigenvectors_dtype: torch.dtype = torch.float32
     corrected_eigenvalues_dtype: torch.dtype = torch.float32
 

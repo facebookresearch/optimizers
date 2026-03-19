@@ -14,10 +14,8 @@ import unittest
 
 import torch
 from distributed_shampoo.utils.optimizer_modules import OptimizerModule
-from distributed_shampoo.utils.shampoo_checkpoint_utils import (
+from distributed_shampoo.utils.shampoo_state_dict_utils import (
     extract_state_dict_content,
-    flatten,
-    unflatten,
     update_param_state_dict_object,
 )
 from torch import Tensor
@@ -65,52 +63,6 @@ class ExtractStateDictContentTest(unittest.TestCase):
                     },
                 },
             },
-        )
-
-
-class FlattenAndUnflattenTest(unittest.TestCase):
-    def setUp(self) -> None:
-        self._extracted_state_dict = {
-            "123": {
-                123: {
-                    0.1: {
-                        True: {
-                            None: torch.tensor(0.0),
-                        },
-                        False: {
-                            "foo": torch.tensor(0.1),
-                        },
-                    },
-                },
-            },
-            "foo": torch.tensor(0),
-            "bar": {
-                "_field": torch.tensor(1.0),
-                "_thl": {
-                    0: torch.tensor(2.0),
-                    1: torch.tensor(3.0),
-                },
-            },
-        }
-        self._flattened_state_dict = {
-            '["123", 123, 0.1, true, null]': torch.tensor(0.0),
-            '["123", 123, 0.1, false, "foo"]': torch.tensor(0.1),
-            '["foo"]': torch.tensor(0),
-            '["bar", "_field"]': torch.tensor(1.0),
-            '["bar", "_thl", 0]': torch.tensor(2.0),
-            '["bar", "_thl", 1]': torch.tensor(3.0),
-        }
-
-    def test_flatten(self) -> None:
-        self.assertEqual(
-            flatten(self._extracted_state_dict),
-            self._flattened_state_dict,
-        )
-
-    def test_unflatten(self) -> None:
-        self.assertEqual(
-            unflatten(self._flattened_state_dict),
-            self._extracted_state_dict,
         )
 
 
