@@ -98,7 +98,7 @@ def construct_training_problem(
         device (torch.device | None): The device to use. (Default: None)
         bias (bool): Whether to use bias in the linear (non-dead) layers. (Default: False)
         fill (float | tuple[float, ...]): The value(s) to fill the model parameters. If a tuple, each element should correspond to one layer. (Default: 0.0)
-        post_model_decoration (Callable[[nn.Module], nn.Module | FSDPModule]): A function to apply additional modifications to the model, useful for FullyShardedDataParallelFully and FSDPModule. (Default: identity function)
+        post_model_decoration (Callable[[nn.Module], nn.Module | FSDPModule]): A function to apply additional modifications to the model, useful for FullyShardedDataParallel and FSDPModule. (Default: identity function)
 
 
     Returns:
@@ -271,12 +271,12 @@ def compare_two_optimizers_models_devices_on_weight_and_loss(
             trained_weights (list[torch.Tensor]): A list of trained model parameters.
             final_loss (torch.Tensor): The final loss value after training.
         """
-        # Using partial here to prevent Pyre complain on incompatible parameter type.
+        # Using partial here to prevent Pyre complaints on incompatible parameter type.
         model, loss, validation_data, target, _ = partial(
             train_model, model_factory=model_factory
         )(optim_factory=optim_factory, num_steps=total_steps)
 
-        # We only care model_linear_layers_dim params, not model_dead_layer params.
+        # We only care about model_linear_layers_dim params, not model_dead_layer params.
         assert isinstance(model, nn.Module)
         linear_layers = model.get_submodule("linear_layers")
         match model:
@@ -285,7 +285,7 @@ def compare_two_optimizers_models_devices_on_weight_and_loss(
                 # parameters from DTensors.
                 trained_weights = []
                 for param in linear_layers.parameters():
-                    # Need this assertion to get pass type-checking test.
+                    # Need this assertion to pass the type-checking test.
                     assert isinstance(param, DTensor)
                     trained_weights.append(param.full_tensor().view(-1).detach().cpu())
             case FullyShardedDataParallel():

@@ -17,10 +17,9 @@ from itertools import accumulate, chain, compress, islice, pairwise
 from types import TracebackType
 from typing import Any, TypeVar
 
-import numpy as np
 import torch
 from distributed_shampoo.shampoo_types import LoadBalancingConfig
-from distributed_shampoo.utils.load_balancing_utils import AlignedMemoryCostModel
+from distributed_shampoo.utils.load_balancing_utils import DefaultCostModel
 from torch import distributed as dist, Tensor
 from torch.distributed.tensor import DTensor
 
@@ -239,7 +238,7 @@ class ParameterizeEnterExitContext:
     """ParameterizeEnterExitContext is used for automatically invoking the enter and exit methods on the input within this context.
 
     Args:
-        input_with_enter_exit_context (ParameterizeEnterExitContextType): Input whose state will be changed while entering and exiting the context by enter_method_caller and exit_method_caller and exit_method_caller respectively.
+        input_with_enter_exit_context (ParameterizeEnterExitContextType): Input whose state will be changed while entering and exiting the context by enter_method_caller and exit_method_caller respectively.
         enter_method_caller (Callable[[ParameterizeEnterExitContextType], Any]): Method caller for entering the context.
         exit_method_caller (Callable[[ParameterizeEnterExitContextType], Any]): Method caller for exiting the context.
 
@@ -291,15 +290,14 @@ def distribute_buffer_sizes(
     Args:
         blocked_params (tuple[Tensor, ...]): A list of blocked parameters.
         group_size (int): Number of groups to distribute across.
-        load_balance_config (LoadBalanceConfig): Memory or compute load balance config.
+        load_balancing_config (LoadBalancingConfig): Memory or compute load balancing config.
 
     Returns:
         buffer_size_ranks (tuple[tuple[int, int], ...]): A list of tuples containing the
             buffer size for each block and its assigned rank.
     """
     buffer_sizes_aligned = tuple(
-        int(AlignedMemoryCostModel().cost(blocked_param))
-        for blocked_param in blocked_params
+        int(DefaultCostModel.cost(blocked_param)) for blocked_param in blocked_params
     )
 
     param_block_costs = tuple(
@@ -334,7 +332,7 @@ def distribute_buffer_sizes(
 
     buffer_size_ranks = tuple(zip(buffer_sizes_aligned, param_block_ranks, strict=True))
 
-    return tuple(buffer_size_ranks)
+    return buffer_size_ranks
 
 
 def prepare_update_param_buffers(
@@ -350,7 +348,7 @@ def prepare_update_param_buffers(
     param_sizes = [p.to_local().numel() for p in params]
     buffer_size = sum(param_sizes)
     buffer = params[0].to_local().new_zeros(buffer_size)
-    buffer_offsets = np.cumsum(param_sizes).tolist()
+    buffer_offsets = list(accumulate(param_sizes))
 
     def round_up_to_multiple_of(x: int, y: int) -> int:
         return ((x + y - 1) // y) * y

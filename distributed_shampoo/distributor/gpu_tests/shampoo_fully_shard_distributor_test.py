@@ -102,7 +102,7 @@ class ShampooFullyShardDistributorTest(DTensorTestBase):
         #      into two [4] chunks.
 
         model_linear_layers_dims = (4 * PRECONDITIONER_DIM, 2 * PRECONDITIONER_DIM, 1)
-        # model dead layers won't parpicipate in the training and thus don't have grads.
+        # model dead layers won't participate in the training and thus don't have grads.
         model_dead_layers_dims = (PRECONDITIONER_DIM, 1)
         # Using partial here to prevent Pyre complain on incompatible parameter type.
         return partial(

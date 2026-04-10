@@ -62,7 +62,7 @@ from distributed_shampoo.preconditioner.spectral_descent_preconditioner_list imp
 from distributed_shampoo.shampoo_types import (
     AdaGradPreconditionerConfig,
     AdamPreconditionerConfig,
-    AmortizedPreconditionerConfig,
+    BaseShampooPreconditionerConfig,
     BETA3,
     BETAS,
     DDPDistributedConfig,
@@ -89,7 +89,9 @@ from distributed_shampoo.shampoo_types import (
     ITERATE_AVERAGING_CONFIG,
     IterateAveragingConfig,
     LR,
+    LR_CPU_PINNED,
     LR_SUM,
+    LR_TENSOR,
     MASKED_BLOCKED_GRADS,
     MASKED_BLOCKED_PARAMS,
     MASKED_FILTERED_GRAD_LIST,
@@ -189,7 +191,7 @@ class DistributedShampoo(torch.optim.Optimizer):
         - DDPDistributedConfig: Supports multi-GPU distributed data-parallel training via torch.distributed. Assigns optimizer states
             and computation for each block in a greedy fashion to different workers. Leverages DTensor in order to distribute the
             per-block optimizer states from Shampoo. An AllGather communication is performed in order to synchronize the parameter
-            updates to applied to all parameter blocks.
+            updates applied to all parameter blocks.
 
             Distributed Training Specific Fields:
                 - communication_dtype: We can specify the communication dtype used for the AllGather communication in order to
@@ -322,8 +324,8 @@ class DistributedShampoo(torch.optim.Optimizer):
                     independent of the preconditioned gradient. This is a variant of decoupled weight decay that scales by 1 / peak_lr.
         max_preconditioner_dim (int | float): Maximum preconditioner dimension. (Default: 1024)
         precondition_frequency (int): Frequency of updating all components of the preconditioner.
-            If this field is an instance ShampooPreconditionerConfig, this is the update frequency of the root inverse of the preconditioner.
-            If this field is an instance EigenvalueCorrectedShampooPreconditionerConfig, this is the update frequency of the eigenbasis of preconditioner.
+            If this field is an instance of ClassicShampooPreconditionerConfig, this is the update frequency of the root inverse of the preconditioner.
+            If this field is an instance of EigenvalueCorrectedShampooPreconditionerConfig, this is the update frequency of the eigenbasis of preconditioner.
             (Default: 1)
         start_preconditioning_step (int): Iteration to start computing inverse preconditioner. If -1, uses
             the same value as precondition_frequency. (Default: -1)
@@ -339,8 +341,8 @@ class DistributedShampoo(torch.optim.Optimizer):
         distributed_config (DistributedConfig): Configuration for applying Shampoo to different distributed training frameworks, such as distributed-data parallel (DDP) training.
             (Default: DefaultSingleDeviceDistributedConfig)
         preconditioner_config (PreconditionerConfig): Configuration for preconditioner computation.
-            If this field is an instance ShampooPreconditionerConfig, Shampoo uses the root inverse of the preconditioner.
-            If this field is an instance EigenvalueCorrectedShampooPreconditionerConfig Shampoo uses corrected the eigenvalues/running Adam in the eigenbasis of preconditioner.
+            If this field is an instance of ClassicShampooPreconditionerConfig, Shampoo uses the root inverse of the preconditioner.
+            If this field is an instance of EigenvalueCorrectedShampooPreconditionerConfig, Shampoo uses the corrected eigenvalues/running Adam in the eigenbasis of preconditioner.
             (Default: DefaultShampooConfig)
 
     """
@@ -411,7 +413,7 @@ class DistributedShampoo(torch.optim.Optimizer):
             if (
                 isinstance(
                     param_group[PRECONDITIONER_CONFIG],
-                    AmortizedPreconditionerConfig,
+                    BaseShampooPreconditionerConfig,
                 )
                 and isinstance(
                     param_group[PRECONDITIONER_CONFIG].amortized_computation_config,
@@ -535,6 +537,7 @@ class DistributedShampoo(torch.optim.Optimizer):
         self._instantiate_shampoo_preconditioner_list()
         self._instantiate_grafting()
         self._instantiate_steps()
+        self._instantiate_lr_tensors()
         self._instantiate_filtered_grads()
         self._instantiate_iterate_averaging()
         self._instantiate_per_group_step(
@@ -768,6 +771,20 @@ class DistributedShampoo(torch.optim.Optimizer):
             # In order to ensure that the step counter is checkpointed correctly, we store it
             # as a tensor (which is replicated across all devices) under the first parameter's state.
             self.state[group[PARAMS][0]][STEP] = state_lists[STEP]
+
+    @torch.no_grad()
+    def _instantiate_lr_tensors(self) -> None:
+        """Pre-allocate persistent lr tensors to avoid per-step pinned memory allocation."""
+        for state_lists, group in zip(
+            self._per_group_state_lists, self.param_groups, strict=True
+        ):
+            device = group[PARAMS][0].device
+            # Pre-allocate a pinned CPU staging tensor and a GPU lr tensor.
+            # This avoids cudaHostAlloc + H2D copy every step.
+            state_lists[LR_TENSOR] = torch.empty((), dtype=torch.float, device=device)
+            state_lists[LR_CPU_PINNED] = torch.empty(
+                (), dtype=torch.float, pin_memory=group[USE_PIN_MEMORY]
+            )
 
     @torch.no_grad()
     def _instantiate_filtered_grads(self) -> None:
@@ -1381,16 +1398,16 @@ class DistributedShampoo(torch.optim.Optimizer):
 
             # Iterate group step counter and define Python scalar step.
             step = state_lists[STEP].add_(1)
-            # NOTE: Wrap scalar of group[LR] into a 0D tensor to avoid PT2 recompilation;
-            # Send 0D tensor to GPU in `non_blocking` to avoid QPS regression. Remove the gpu
-            # tensor impl once PT2 supports cpu 0D tensor properly.
-            lr = torch.tensor(
-                group[LR], dtype=torch.float, pin_memory=group[USE_PIN_MEMORY]
-            ).to(
-                # NOTE: Assume all parameter groups consistently exist on the same rank.
-                group[PARAMS][0].device,
-                non_blocking=True,
-            )
+            step_val = step.item()
+            # NOTE: Reuse pre-allocated lr tensors to avoid per-step pinned
+            # memory allocation (cudaHostAlloc). Fill the pinned CPU tensor and
+            # copy to the persistent GPU tensor with non_blocking to overlap H2D.
+            # Using a persistent tensor also avoids PT2 recompilation: since lr
+            # is the same tensor object every step, PT2 treats it as a dynamic
+            # input rather than specializing on each new tensor/value.
+            state_lists[LR_CPU_PINNED].fill_(group[LR])
+            lr = state_lists[LR_TENSOR]
+            lr.copy_(state_lists[LR_CPU_PINNED], non_blocking=True)
             beta1 = group[BETAS][0]
             beta3 = group[BETA3]
             weight_decay = group[WEIGHT_DECAY]
@@ -1398,14 +1415,13 @@ class DistributedShampoo(torch.optim.Optimizer):
             weight_decay_type = group[WEIGHT_DECAY_TYPE]
             grafting_config_not_none = group[GRAFTING_CONFIG] is not None
             perform_amortized_computation = (
-                step.item() % group[PRECONDITION_FREQUENCY] == 0
-                and step.item() > group[START_PRECONDITIONING_STEP]
-                or step.item() == group[START_PRECONDITIONING_STEP]
-            )
+                step_val % group[PRECONDITION_FREQUENCY] == 0
+                and step_val > group[START_PRECONDITIONING_STEP]
+            ) or step_val == group[START_PRECONDITIONING_STEP]
             use_bias_correction = group[USE_BIAS_CORRECTION]
             # Check if we apply the grafting method or not.
             use_grafting_method = (
-                step.item() < group[START_PRECONDITIONING_STEP]
+                step_val < group[START_PRECONDITIONING_STEP]
                 and grafting_config_not_none
             )
             # Set train and eval interpolation coefficients if enabled.

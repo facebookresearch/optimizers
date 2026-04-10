@@ -47,7 +47,7 @@ class HybridShardDistributor(DistributorInterface):
     The constructor internally sets up `DeviceMesh` objects as necessary for distributing memory
     and computation, so torch.distributed must be initialized in advance.
 
-    Unlike FullyShardDistributor, HybridShardDistributor requires the user to pass in a device mesh specifiying the model level parallelism used for Hybrid Shard.
+    Unlike FullyShardDistributor, HybridShardDistributor requires the user to pass in a device mesh specifying the model level parallelism used for Hybrid Shard.
     For example, suppose we have 48 GPUs and the Hybrid Shard group size is 8. Then:
 
     Hybrid Shard Device Mesh with (Replicate, Shard) = (6, 8); note that the Replicate and Shard here is referring to the model level parallelism:
@@ -71,7 +71,7 @@ class HybridShardDistributor(DistributorInterface):
     For example, suppose that the num_trainers_per_group = 3. We want to form a (2, 3)-submesh on
     the ranks [3, 11, 19, 27, 35, 43] (and similar).
 
-    HybridShardDistributor 2D Sub-Mesh Example with (Replicate, Shard) = (2, 3); note that the Replicate and Shard here is referring to the optimizer level computating parallelism:
+    HybridShardDistributor 2D Sub-Mesh Example with (Replicate, Shard) = (2, 3); note that the Replicate and Shard here is referring to the optimizer level computing parallelism:
 
         submesh = [[ 3, 11, 19]
                    [27, 35, 43]]
@@ -104,7 +104,7 @@ class HybridShardDistributor(DistributorInterface):
                 "HybridShardDistributor needs torch.distributed to be initialized!"
             )
 
-        # Construct global masked blocked parameters (which is DDP-specific).
+        # Construct global masked blocked parameters.
         self._global_masked_blocked_params: tuple[Tensor, ...] = (
             self._global_blocked_params
         )
@@ -307,11 +307,6 @@ class HybridShardDistributor(DistributorInterface):
 
             # torch._foreach only accepts non-empty list
             if global_params:
-                # Add search directions in global_masked_dist_blocked_buffers to global_masked_blocked_params.
-                torch._foreach_add_(
-                    self._global_masked_blocked_params,
-                    self._global_masked_dist_blocked_buffers,
-                )
                 # Copy updated blocked params in global_masked_dist_blocked_buffers into global_masked_blocked_params.
                 torch._foreach_copy_(
                     global_params,
@@ -462,8 +457,8 @@ class HybridShardDistributor(DistributorInterface):
             remainder_size = local_dist_buffer.size(0) - sum(required_buffer_sizes)
             assert remainder_size >= 0, (
                 f"Local distributed buffer size {local_dist_buffer.size(0)} is "
+                f"not larger than or equal to the sum of buffer sizes {sum(required_buffer_sizes)}!"
             )
-            f"not larger than or equal to the sum of buffer sizes {sum(required_buffer_sizes)}!"
             split_tensors = torch.split(
                 local_dist_buffer, required_buffer_sizes + [remainder_size]
             )
@@ -563,7 +558,7 @@ class HybridShardDistributor(DistributorInterface):
                 self._local_blocked_params, self._local_grad_selector
             )
 
-            # Re-compress DDP-specific tensor lists using the updated selector.
+            # Re-compress tensor lists using the updated selector.
             self._global_masked_blocked_params = compress_list(
                 self._global_blocked_params, self._global_grad_selector
             )

@@ -575,7 +575,7 @@ class BaseOptimizerConfig(AbstractDataclass):
         pass
 
 @dataclass
-class ShampooPreconditionerConfig(BaseOptimizerConfig):
+class ClassicShampooPreconditionerConfig(BaseOptimizerConfig):
     """Concrete Shampoo configuration."""
     max_preconditioner_dim: int = 8192
     precondition_frequency: int = 100

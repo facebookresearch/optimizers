@@ -104,7 +104,7 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
         #      +----------------+      +------+         +----------------+      +------+
         #
         #      Each FSDP group has the complete model. (GPU0, GPU2) and (GPU1, GPU3) are
-        #      2 FDSP groups.
+        #      2 FSDP groups.
         #
         #      For the first linear layer, each GPU has a [4, 16] parameter. The blocked
         #      parameters are of size [4, 4] and each GPU has four local blocks. In comparison,
@@ -113,7 +113,7 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
         #      into two [4] chunks.
 
         model_linear_layers_dims = (4 * PRECONDITIONER_DIM, 2 * PRECONDITIONER_DIM, 1)
-        # model dead layers won't parpicipate in the training and thus don't have grads.
+        # model dead layers won't participate in the training and thus don't have grads.
         model_dead_layers_dims = (PRECONDITIONER_DIM, 1)
         # Using partial here to prevent Pyre complain on incompatible parameter type.
         return partial(

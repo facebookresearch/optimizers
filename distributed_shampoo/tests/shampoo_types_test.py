@@ -21,7 +21,8 @@ from distributed_shampoo.preconditioner.matrix_functions_types import (
 )
 from distributed_shampoo.shampoo_types import (
     AdaGradPreconditionerConfig,
-    AmortizedPreconditionerConfig,
+    BaseShampooPreconditionerConfig,
+    ClassicShampooPreconditionerConfig,
     DistributedConfig,
     EigenvalueCorrectedShampooPreconditionerConfig,
     FSDPDistributedConfig,
@@ -31,7 +32,6 @@ from distributed_shampoo.shampoo_types import (
     IterateAveragingConfig,
     RMSpropPreconditionerConfig,
     ScheduleFreeConfig,
-    ShampooPreconditionerConfig,
     SignDescentPreconditionerConfig,
 )
 from distributed_shampoo.utils.commons import get_all_non_abstract_subclasses
@@ -82,14 +82,14 @@ class RMSpropPreconditionerConfigSubclassesTest(unittest.TestCase):
 
 
 @instantiate_parametrized_tests
-class AmortizedPreconditionerConfigSubclassesTest(unittest.TestCase):
-    subclasses_types: list[type[AmortizedPreconditionerConfig]] = list(
-        get_all_non_abstract_subclasses(AmortizedPreconditionerConfig)  # type: ignore[type-abstract]
+class BaseShampooPreconditionerConfigSubclassesTest(unittest.TestCase):
+    subclasses_types: list[type[BaseShampooPreconditionerConfig]] = list(
+        get_all_non_abstract_subclasses(BaseShampooPreconditionerConfig)  # type: ignore[type-abstract]
     )
 
     @parametrize("cls", subclasses_types)
     def test_illegal_num_tolerated_failed_amortized_computations(
-        self, cls: type[AmortizedPreconditionerConfig]
+        self, cls: type[BaseShampooPreconditionerConfig]
     ) -> None:
         num_tolerated_failed_amortized_computations = -1
         self.assertRaisesRegex(
@@ -104,16 +104,16 @@ class AmortizedPreconditionerConfigSubclassesTest(unittest.TestCase):
 
 
 @instantiate_parametrized_tests
-class ShampooPreconditionerConfigSubclassesTest(unittest.TestCase):
-    subclasses_types: list[type[ShampooPreconditionerConfig]] = list(
+class ClassicShampooPreconditionerConfigSubclassesTest(unittest.TestCase):
+    subclasses_types: list[type[ClassicShampooPreconditionerConfig]] = list(
         get_all_non_abstract_subclasses(
-            ShampooPreconditionerConfig,  # type: ignore[type-abstract]
+            ClassicShampooPreconditionerConfig,  # type: ignore[type-abstract]
         )
     )
 
     @parametrize("cls", subclasses_types)
     def test_illegal_inverse_exponent_override(
-        self, cls: type[ShampooPreconditionerConfig]
+        self, cls: type[ClassicShampooPreconditionerConfig]
     ) -> None:
         non_positive_orders_config: dict[int, dict[int, float] | float] = {
             -1: {},

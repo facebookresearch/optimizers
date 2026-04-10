@@ -479,6 +479,9 @@ def matrix_inverse_root(
 
         """
 
+        # TODO(irisz): This save/modify/restore pattern is not thread-safe.
+        # Concurrent calls (e.g., from multi-threaded optimizer step) can race
+        # on this global flag. Revisit this for D97459682.
         tf32_flag = torch.backends.cuda.matmul.allow_tf32
         if disable_tf32:
             torch.backends.cuda.matmul.allow_tf32 = False
@@ -630,9 +633,11 @@ def matrix_inverse_root(
                 )
 
         finally:
-            # Make sure we restore tf32 mode correctly before returning
-            if disable_tf32:
-                torch.backends.cuda.matmul.allow_tf32 = tf32_flag
+            # Always restore tf32 mode unconditionally, so we skip the
+            # disable_tf32 check. When disable_tf32=False, this is a no-op
+            # since tf32_flag already equals the current value. When
+            # disable_tf32=True, this restores the original value.
+            torch.backends.cuda.matmul.allow_tf32 = tf32_flag
 
         return X, M, termination_flag, iteration, true_error
 
@@ -652,7 +657,7 @@ def matrix_inverse_root(
                 func=matrix_inverse_root_newton, config=root_inv_config
             )(A=A, root=root.numerator, epsilon=epsilon)
             if termination_flag == NewtonConvergenceFlag.REACHED_MAX_ITERS:
-                logging.warning(
+                logger.warning(
                     "Newton did not converge and reached maximum number of iterations!"
                 )
         case CoupledHigherOrderConfig():
@@ -660,7 +665,7 @@ def matrix_inverse_root(
                 func=matrix_inverse_root_higher_order, config=root_inv_config
             )(A=A, root=root)
             if termination_flag == NewtonConvergenceFlag.REACHED_MAX_ITERS:
-                logging.warning(
+                logger.warning(
                     "Higher order method did not converge and reached maximum number of iterations!"
                 )
         case _:

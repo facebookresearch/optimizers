@@ -39,7 +39,8 @@ from distributed_shampoo.preconditioner.tests.preconditioner_list_test_utils imp
     AbstractPreconditionerListTest,
 )
 from distributed_shampoo.shampoo_types import (
-    AmortizedPreconditionerConfig,
+    BaseShampooPreconditionerConfig,
+    ClassicShampooPreconditionerConfig,
     DefaultShampooConfig,
     DefaultSOAPConfig,
     EigendecomposedKLShampooPreconditionerConfig,
@@ -48,7 +49,6 @@ from distributed_shampoo.shampoo_types import (
     PreconditionerValueError,
     RootInvKLShampooPreconditionerConfig,
     RootInvShampooPreconditionerConfig,
-    ShampooPreconditionerConfig,
 )
 from distributed_shampoo.utils.abstract_dataclass import AbstractDataclass
 from distributed_shampoo.utils.shampoo_utils import compress_list
@@ -124,7 +124,7 @@ class AbstractTest:
 
         @property
         @abc.abstractmethod
-        def _default_preconditioner_config(self) -> AmortizedPreconditionerConfig: ...
+        def _default_preconditioner_config(self) -> BaseShampooPreconditionerConfig: ...
 
         @property
         @abc.abstractmethod
@@ -620,7 +620,9 @@ class AbstractTest:
     class ClassicShampooPreconditionerListTest(BaseShampooPreconditionerListTest):
         @property
         @abc.abstractmethod
-        def _default_preconditioner_config(self) -> ShampooPreconditionerConfig: ...
+        def _default_preconditioner_config(
+            self,
+        ) -> ClassicShampooPreconditionerConfig: ...
 
         def test_update_preconditioners_and_precondition(self) -> None:
             """
@@ -772,6 +774,60 @@ class AbstractTest:
                 ],
                 masked_expected_preconditioned_grad_list=tuple(
                     masked_expected_preconditioned_grad_list
+                ),
+            )
+
+            """
+            For the case of beta2 = 1 and use_trace_scaling = True, trace scaling normalizes
+            the factor matrix by sqrt(trace) before computing the inverse root.
+
+            With trace scaling enabled:
+            - The factor matrix L is normalized to L' = L / sqrt(trace(L))
+            - The inverse root is computed on L' instead of L
+
+            For this test, we reuse the same gradients as the baseline case (beta2 = 1).
+            The factor matrices are L = R = I (identity), so trace(L) = trace(R) = 2.
+            With trace scaling: L' = R' = I / sqrt(2)
+                L'^{-1/2} = (I / sqrt(2))^{-1/2} = I * 2^{1/4}
+                L'^{-1/4} = R'^{-1/4} = I * 2^{1/8}
+
+            Therefore:
+            (1) Tensor of Size 2:
+                P = L'^{-1/2} G2 = 2^{1/4} * G2
+
+            (2) Tensor of Size 2 x 2:
+                P = L'^{-1/4} G2 R'^{-1/4} = 2^{1/8} * G2 * 2^{1/8} = 2^{1/4} * G2
+
+            (3) Tensor of Size 1 x 2:
+                L = 2 (scalar), R = I, trace(L) = 2, trace(R) = 2
+                L' = 2 / sqrt(2) = sqrt(2), R' = I / sqrt(2)
+                L'^{-1/4} = 2^{-1/8}, R'^{-1/4} = 2^{1/8}
+                P = L'^{-1/4} G2 R'^{-1/4} = G2 (no change due to cancellation)
+
+            (4) Tensor of Size 0:
+                No preconditioner is applied. P = G2 = 2.
+
+            """
+            masked_expected_preconditioned_grad_list_trace_scaling = [
+                masked_grad_list2[0] * 2.0 ** (1 / 4),
+                masked_grad_list2[1] * 2.0 ** (1 / 4),
+                masked_grad_list2[2],  # No change due to cancellation
+                masked_grad_list2[3],  # 0D tensor, no preconditioner
+            ]
+
+            self._verify_preconditioner_updates(
+                preconditioner_list=self._instantiate_preconditioner_list(
+                    beta2=1.0,
+                    weighting_factor=1.0,
+                    use_bias_correction=True,
+                    preconditioner_config=replace(
+                        self._default_preconditioner_config,
+                        use_trace_scaling=True,
+                    ),
+                ),
+                masked_grad_lists=[masked_grad_list1, masked_grad_list2],
+                masked_expected_preconditioned_grad_list=tuple(
+                    masked_expected_preconditioned_grad_list_trace_scaling
                 ),
             )
 

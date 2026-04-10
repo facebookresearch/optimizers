@@ -76,7 +76,7 @@ class HSDPDistributor(DistributorInterface):
     For example, suppose that the num_trainers_per_group = 3. We want to form a (2, 3)-submesh on
     the ranks [3, 11, 19, 27, 35, 43] (and similar).
 
-    HSDPDistributor 2D Sub-Mesh Example with (Replicate, Shard) = (2, 3); note that the Replicate and Shard here is referring to the optimizer level computating parallelism:
+    HSDPDistributor 2D Sub-Mesh Example with (Replicate, Shard) = (2, 3); note that the Replicate and Shard here is referring to the optimizer level computing parallelism:
 
         submesh = [[ 3, 11, 19]
                    [27, 35, 43]]
@@ -112,7 +112,7 @@ class HSDPDistributor(DistributorInterface):
                 "HSDPDistributor needs torch.distributed to be initialized!"
             )
 
-        # Construct global masked blocked parameters (which is DDP-specific).
+        # Construct global masked blocked parameters.
         self._global_masked_blocked_params: tuple[Tensor, ...] = (
             self._global_blocked_params
         )
@@ -444,8 +444,8 @@ class HSDPDistributor(DistributorInterface):
             remainder_size = local_dist_buffer.size(0) - sum(required_buffer_sizes)
             assert remainder_size >= 0, (
                 f"Local distributed buffer size {local_dist_buffer.size(0)} is "
+                f"not larger than or equal to the sum of buffer sizes {sum(required_buffer_sizes)}!"
             )
-            f"not larger than or equal to the sum of buffer sizes {sum(required_buffer_sizes)}!"
             split_tensors = torch.split(
                 local_dist_buffer, required_buffer_sizes + [remainder_size]
             )
@@ -635,7 +635,7 @@ class HSDPDistributor(DistributorInterface):
                 self._local_blocked_params, self._local_grad_selector
             )
 
-            # Re-compress DDP-specific tensor lists using the updated selector.
+            # Re-compress tensor lists using the updated selector.
             self._global_masked_blocked_params = compress_list(
                 self._global_blocked_params, self._global_grad_selector
             )
@@ -663,7 +663,7 @@ class HSDPDistributor(DistributorInterface):
 
         The following is an example of how the function works for a 2-D tensor shard:
 
-        Given an original tensor with shape (7, 14) in Fig. 1, we receive a flattened tensor shard from FSDP
+        Given an original tensor with shape (7, 14) in Fig. 1, we receive a flattened tensor shard from HSDP
         corresponding to Fig. 4. Note that this flattened tensor shard corresponds to the shard of the tensor
         in Fig. 2. In order to respect the tensor shape, we need to split the tensor into up to three blocks
         (as in Fig. 5). This requires splitting the tensor in Fig. 2 (see flattened tensor shard in Fig. 4)
@@ -731,8 +731,10 @@ class HSDPDistributor(DistributorInterface):
         ) -> list[Tensor]:
             assert (
                 block_end_idx - block_start_idx == block_within_tensor_shard.numel()
-            ), f"Start/end indices do not match tensor size: {block_start_idx=}, "
-            f"{block_end_idx=}, {block_within_tensor_shard.numel()=}!"
+            ), (
+                f"Start/end indices do not match tensor size: {block_start_idx=}, "
+                f"{block_end_idx=}, {block_within_tensor_shard.numel()=}!"
+            )
 
             if block_end_idx == block_start_idx:
                 return []

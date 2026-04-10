@@ -282,8 +282,10 @@ class FSDPDistributor(Distributor):
         ) -> list[Tensor]:
             assert (
                 block_end_idx - block_start_idx == block_within_tensor_shard.numel()
-            ), f"Start/end indices do not match tensor size: {block_start_idx=}, "
-            f"{block_end_idx=}, {block_within_tensor_shard.numel()=}!"
+            ), (
+                f"Start/end indices do not match tensor size: {block_start_idx=}, "
+                f"{block_end_idx=}, {block_within_tensor_shard.numel()=}!"
+            )
 
             if block_end_idx == block_start_idx:
                 return []

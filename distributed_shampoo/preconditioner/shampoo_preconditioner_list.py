@@ -35,7 +35,7 @@ from distributed_shampoo.preconditioner.preconditioner_list import (
     profile_decorator,
 )
 from distributed_shampoo.shampoo_types import (
-    AmortizedPreconditionerConfig,
+    BaseShampooPreconditionerConfig,
     EigendecomposedShampooPreconditionerConfig,
     EigenvalueCorrectedShampooPreconditionerConfig,
     PreconditionerValueError,
@@ -139,6 +139,7 @@ class BaseShampooKroneckerFactorsUnwrapped:
     amortized_computation_config: MatrixFunctionConfig
     epsilon: float
     num_tolerated_failed_amortized_computations: int
+    use_trace_scaling: bool = False
     _failed_amortized_computation_counter: int = field(init=False, default=0)
 
     def __post_init__(self) -> None:
@@ -166,6 +167,7 @@ class BaseShampooKroneckerFactorsUnwrapped:
                 "amortized_computation_config",
                 "epsilon",
                 "num_tolerated_failed_amortized_computations",
+                "use_trace_scaling",
                 "_failed_amortized_computation_counter",
             )
         }
@@ -230,6 +232,38 @@ class BaseShampooKroneckerFactorsUnwrapped:
                 kronecker_factors_iter_dict["factor_matrices"] / bias_correction2,
                 kronecker_factors_iter_dict["factor_matrix_indices"],
             )
+
+            # Apply trace scaling if enabled.
+            # This normalizes the factor matrix by 1/sqrt(trace) before computing
+            # the inverse root, which can improve numerical stability by bringing
+            # different factor matrices to a similar scale.
+            # Credit to https://arxiv.org/pdf/2506.03595.
+            #
+            # Numerics can cause the trace to be negative. This is unlikely
+            # for normal Shampoo but could become an issue for KL-Shampoo.
+            # We clamp the trace to epsilon rather than silently replacing
+            # non-positive values with 1.0 (which skipped scaling entirely).
+            #
+            # TODO(irisz): We do not error out on negative trace for now since it should
+            # not be mathematically possible given that the factor matrices are
+            # symmetric PSD. If we want to add conditioning / positive definiteness
+            # checks in the future, they should be incorporated in a different
+            # part of the code (not here in the trace scaling logic).
+            #
+            # TODO(irisz):
+            # approach in prod_beta:
+            #    non-positive trace → replaced with 1.0 → rsqrt(1.0) = 1.0 → scaling is effectively a no-op
+            # approach in dev:
+            #    non-positive trace → clamped to epsilon → rsqrt(epsilon) produces a very large
+            #    scaling factor → could amplify the factor matrix significantly
+            # From a theoretical standpoint, this shouldn't matter much since negative traces should never
+            # occur for symmetric PSD matrices. However, we need to compare these two behaviors empircally.
+            if self.use_trace_scaling:
+                trace = torch.trace(bias_corrected_factor_matrix)
+                safe_trace = torch.clamp(trace, min=self.epsilon)
+                bias_corrected_factor_matrix = (
+                    bias_corrected_factor_matrix * torch.rsqrt(safe_trace)
+                )
 
             # Check for nan or inf values.
             if not torch.isfinite(bias_corrected_factor_matrix).all():
@@ -397,6 +431,7 @@ class RootInvShampooKroneckerFactorsUnwrapped(BaseShampooKroneckerFactorsUnwrapp
         amortized_computation_config: RootInvConfig,
         epsilon: float,
         num_tolerated_failed_amortized_computations: int,
+        use_trace_scaling: bool = False,
     ) -> "RootInvShampooKroneckerFactorsUnwrapped":
         """
         Constructs a RootInvShampooKroneckerFactorsUnwrapped object from the given Kronecker factors state.
@@ -419,6 +454,8 @@ class RootInvShampooKroneckerFactorsUnwrapped(BaseShampooKroneckerFactorsUnwrapp
                 during matrix operations like inversion.
             num_tolerated_failed_amortized_computations (int): Maximum number of consecutive
                 failed amortized computations that can be tolerated before raising an error.
+            use_trace_scaling (bool): Flag for whether to normalize the factor matrix by its trace's
+                sqrt before computing the inverse root. (Default: False)
 
         Returns:
             kronecker_factors_unwrapped (RootInvShampooKroneckerFactorsUnwrapped): An instance of
@@ -440,6 +477,7 @@ class RootInvShampooKroneckerFactorsUnwrapped(BaseShampooKroneckerFactorsUnwrapp
             amortized_computation_config=amortized_computation_config,
             epsilon=epsilon,
             num_tolerated_failed_amortized_computations=num_tolerated_failed_amortized_computations,
+            use_trace_scaling=use_trace_scaling,
         )
 
     @torch.compiler.disable
@@ -613,6 +651,7 @@ class EigendecomposedShampooKroneckerFactorsUnwrapped(
         amortized_computation_config: EigendecompositionConfig,
         epsilon: float,
         num_tolerated_failed_amortized_computations: int,
+        use_trace_scaling: bool = False,
     ) -> "EigendecomposedShampooKroneckerFactorsUnwrapped":
         """
         Constructs an EigendecomposedShampooKroneckerFactorsUnwrapped object from the given Kronecker factors state.
@@ -634,6 +673,8 @@ class EigendecomposedShampooKroneckerFactorsUnwrapped(
                 during matrix operations.
             num_tolerated_failed_amortized_computations (int): Maximum number of consecutive
                 failed amortized computations that can be tolerated before raising an error.
+            use_trace_scaling (bool): Flag for whether to normalize the factor matrix by its trace's
+                sqrt before computing the eigendecomposition. (Default: False)
 
         Returns:
             kronecker_factors_unwrapped (EigendecomposedShampooKroneckerFactorsUnwrapped): An instance of
@@ -663,6 +704,7 @@ class EigendecomposedShampooKroneckerFactorsUnwrapped(
             amortized_computation_config=amortized_computation_config,
             epsilon=epsilon,
             num_tolerated_failed_amortized_computations=num_tolerated_failed_amortized_computations,
+            use_trace_scaling=use_trace_scaling,
         )
 
     @torch.compiler.disable
@@ -855,6 +897,7 @@ class EigenvalueCorrectedShampooKroneckerFactorsUnwrapped(
         amortized_computation_config: EigendecompositionConfig,
         epsilon: float,
         num_tolerated_failed_amortized_computations: int,
+        use_trace_scaling: bool = False,
     ) -> "EigenvalueCorrectedShampooKroneckerFactorsUnwrapped":
         """
         Constructs an EigenvalueCorrectedShampooKroneckerFactorsUnwrapped object from the given Kronecker factors state.
@@ -879,6 +922,8 @@ class EigenvalueCorrectedShampooKroneckerFactorsUnwrapped(
                 during preconditioning operations.
             num_tolerated_failed_amortized_computations (int): Maximum number of consecutive
                 failed amortized computations that can be tolerated before raising an error.
+            use_trace_scaling (bool): Flag for whether to normalize the factor matrix by its trace's
+                sqrt before computing the eigendecomposition. (Default: False)
 
         Returns:
             kronecker_factors_unwrapped (EigenvalueCorrectedShampooKroneckerFactorsUnwrapped): An instance of
@@ -905,6 +950,7 @@ class EigenvalueCorrectedShampooKroneckerFactorsUnwrapped(
             amortized_computation_config=amortized_computation_config,
             epsilon=epsilon,
             num_tolerated_failed_amortized_computations=num_tolerated_failed_amortized_computations,
+            use_trace_scaling=use_trace_scaling,
         )
 
     @torch.compiler.disable
@@ -1020,7 +1066,7 @@ class BaseShampooPreconditionerList(
         state (Mapping[Tensor, _StateValueType]): Mapping containing optimizer state.
         block_info_list (tuple[BlockInfo, ...]): List containing corresponding BlockInfo for each block/parameter in block_list.
             Note that this should have the same length as block_list.
-        preconditioner_config (AmortizedPreconditionerConfig): Configuration for preconditioner computation.
+        preconditioner_config (BaseShampooPreconditionerConfig): Configuration for preconditioner computation.
         beta2 (float): The decay rate of exponential moving average factor for Shampoo factor matrices. (Default: 1.0)
         weighting_factor (float): The weighting factor for the current Shampoo gradient outer products. (Default: 1.0)
         epsilon (float): Epsilon term for regularizing preconditioner to ensure positive definiteness. (Default: 1e-12)
@@ -1033,7 +1079,7 @@ class BaseShampooPreconditionerList(
         block_list: tuple[Tensor, ...],
         state: Mapping[Tensor, _StateValueType],
         block_info_list: tuple[BlockInfo, ...],
-        preconditioner_config: AmortizedPreconditionerConfig,
+        preconditioner_config: BaseShampooPreconditionerConfig,
         beta2: float = 1.0,
         weighting_factor: float = 1.0,
         epsilon: float = 1e-12,
@@ -1150,6 +1196,7 @@ class BaseShampooPreconditionerList(
                     amortized_computation_config=self._preconditioner_config.amortized_computation_config,
                     epsilon=self._epsilon,
                     num_tolerated_failed_amortized_computations=self._preconditioner_config.num_tolerated_failed_amortized_computations,
+                    use_trace_scaling=self._preconditioner_config.use_trace_scaling,
                 )
             )
 
@@ -1450,7 +1497,7 @@ class BaseShampooPreconditionerList(
     @profile_decorator
     def precondition(self, masked_grad_list: tuple[Tensor, ...]) -> tuple[Tensor, ...]:
         """
-        Preconditions a list of gradients using the Shampoo preconditioner that rely on ShampooPreconditionerConfig.
+        Preconditions a list of gradients using the Shampoo preconditioner that rely on ClassicShampooPreconditionerConfig.
 
         Args:
             masked_grad_list (tuple[Tensor, ...]): A list of gradients with their corresponding masks.
@@ -1492,10 +1539,10 @@ class ClassicShampooPreconditionerList(
         _ClassicShampooKroneckerFactorsUnwrappedType,
     ]
 ):
-    """Base class for Shampoo preconditioners that rely on ShampooPreconditionerConfig.
+    """Base class for Shampoo preconditioners that rely on ClassicShampooPreconditionerConfig.
 
     This class factors out common implementations for Shampoo preconditioners that use
-    ShampooPreconditionerConfig to determine inverse exponent overrides and preconditioned dimensions.
+    ClassicShampooPreconditionerConfig to determine inverse exponent overrides and preconditioned dimensions.
     It provides methods to retrieve inverse exponent overrides based on dimension and order,
     and to create preconditioned dimension selectors.
 

@@ -55,8 +55,8 @@ def batched(
     """
     Batches an iterable into chunks of size n.
 
-    Note: This is a forward implementation of itertools.batched which is available in Python 3.12+.
-    Remove this function when downstream applications are using Python 3.12 or newer.
+    Note: This is a re-implementation of itertools.batched which is available in Python 3.12+.
+    Consider replacing usages with itertools.batched since Python 3.12 is the minimum supported version.
 
     Args:
         iterable (Iterable[_BatchedInputType]): The iterable to be batched.

@@ -41,7 +41,7 @@ class HybridShardLosslessDistributor(HybridShardDistributor):
     and parameter updates across the shards to achieve lossless numerical results compared to default Shampoo.
 
     .. note::
-        FullyShardLosslessDistributor is experimental and subject to change.
+        HybridShardLosslessDistributor is experimental and subject to change.
 
     Args:
         param_group (dict[str, Any]): Parameter group containing parameters.
@@ -242,10 +242,7 @@ class HybridShardLosslessDistributor(HybridShardDistributor):
         2. _global_blocked_params and _local_blocked_params - views of the full tensors
         3. _global_masked_blocked_params - HybridShardDistributor's reference to global blocked params
         """
-        with torch.no_grad():
-            full_params: list[Tensor] = [
-                p.full_tensor() for p in self._param_group[PARAMS]
-            ]
+        full_params: list[Tensor] = [p.full_tensor() for p in self._param_group[PARAMS]]
         self._assigned_full_params = [
             p
             for p, assigned in zip(full_params, self._assigned_params_mask)

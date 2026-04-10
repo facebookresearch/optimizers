@@ -8,9 +8,10 @@ LICENSE file in the root directory of this source tree.
 """
 
 import logging
+from collections.abc import Iterable
 from functools import partial
 from itertools import islice
-from typing import Any
+from typing import Any, Literal, overload
 
 import torch
 import torch.distributed as dist
@@ -35,7 +36,7 @@ from distributed_shampoo.utils.shampoo_utils import (
 )
 from torch import Tensor
 from torch.distributed import tensor as dtensor
-from torch.distributed.tensor import zeros as dtensor_zeros
+from torch.distributed.tensor import DTensor, zeros as dtensor_zeros
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -218,6 +219,54 @@ class DDPDistributor(DistributorInterface):
             group_rank=group_rank,
         )
 
+    @overload
+    @torch.no_grad()
+    def _get_params_or_grads(
+        self, get_grad: Literal[True]
+    ) -> Iterable[Tensor | None]: ...
+
+    @overload
+    @torch.no_grad()
+    def _get_params_or_grads(
+        self, get_grad: Literal[False] = False
+    ) -> Iterable[Tensor]: ...
+
+    @torch.no_grad()
+    def _get_params_or_grads(self, get_grad: bool = False) -> Iterable[Tensor | None]:
+        """Helper function that gets params or grads from the parameter group.
+
+        Overrides the base DistributorInterface implementation to handle DTensor
+        params/grads produced by the composable replicate() API. When using the
+        old DistributedDataParallel, params/grads are plain Tensors and are
+        returned as-is. When using the new replicate() (built on FSDP
+        infrastructure), params/grads are DTensors and need .to_local().
+
+        NOTE: Unlike old DDP which guarantees gradients on all params, replicate()
+        only registers backward hooks on params that participate in the forward
+        output. Unused params will have param.grad = None, hence the None check.
+
+        Args:
+            get_grad (bool): Whether to return the param or the grad of the param. (Default: False)
+
+        Returns:
+            local (Iterable[Tensor | None]): Local params (or gradients) from the param_group.
+              Gradients can be None for unused parameters under replicate().
+        """
+        if get_grad:
+            return (
+                param.grad.to_local()
+                if isinstance(param.grad, DTensor)
+                # Can be None: replicate() only registers backward hooks on
+                # params used in forward, unlike old DDP.
+                else param.grad
+                for param in self._param_group[PARAMS]
+            )
+        else:
+            return (
+                param.to_local() if isinstance(param, DTensor) else param
+                for param in self._param_group[PARAMS]
+            )
+
     @torch.no_grad()
     def update_params(
         self,
@@ -392,8 +441,8 @@ class DDPDistributor(DistributorInterface):
             remainder_size = local_dist_buffer.size(0) - sum(required_buffer_sizes)
             assert remainder_size >= 0, (
                 f"Local distributed buffer size {local_dist_buffer.size(0)} is "
+                f"not larger than or equal to the sum of buffer sizes {sum(required_buffer_sizes)}!"
             )
-            f"not larger than or equal to the sum of buffer sizes {sum(required_buffer_sizes)}!"
             split_tensors = torch.split(
                 local_dist_buffer, required_buffer_sizes + [remainder_size]
             )

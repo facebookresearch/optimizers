@@ -240,10 +240,7 @@ class FullyShardLosslessDistributor(Distributor):
         1. _assigned_full_params - the cached full tensor copies
         2. _global_blocked_params and _local_blocked_params - views of the full tensors
         """
-        with torch.no_grad():
-            full_params: list[Tensor] = [
-                p.full_tensor() for p in self._param_group[PARAMS]
-            ]
+        full_params: list[Tensor] = [p.full_tensor() for p in self._param_group[PARAMS]]
         self._assigned_full_params = [
             p
             for p, assigned in zip(full_params, self._assigned_params_mask)

@@ -55,7 +55,6 @@ PRECONDITION_FREQUENCY = "precondition_frequency"
 PRECONDITIONER_CONFIG = "preconditioner_config"
 START_PRECONDITIONING_STEP = "start_preconditioning_step"
 TRAIN_INTERP_COEFF = "train_interp_coeff"
-USE_EIGENVALUE_CORRECTION = "use_eigenvalue_correction"
 USE_BIAS_CORRECTION = "use_bias_correction"
 USE_PIN_MEMORY = "use_pin_memory"
 WEIGHT_DECAY = "weight_decay"
@@ -65,6 +64,8 @@ WEIGHT_DECAY_TYPE = "weight_decay_type"
 DISTRIBUTOR = "distributor"
 FILTERED_GRAD_LIST = "filtered_grad_list"
 GRAFTING_PRECONDITIONER_LIST = "grafting_preconditioner_list"
+LR_CPU_PINNED = "lr_cpu_pinned"
+LR_TENSOR = "lr_tensor"
 MASKED_BLOCKED_GRADS = "masked_blocked_grads"
 MASKED_BLOCKED_PARAMS = "masked_blocked_params"
 MASKED_FILTERED_GRAD_LIST = "masked_filtered_grad_list"
@@ -148,13 +149,18 @@ class AdamPreconditionerConfig(RMSpropPreconditionerConfig):
 
 
 @dataclass(init=False)
-class AmortizedPreconditionerConfig(PreconditionerConfig):
+class BaseShampooPreconditionerConfig(PreconditionerConfig):
     """Configuration for amortized preconditioner computation in DistributedShampoo.
 
     Attributes:
         amortized_computation_config (MatrixFunctionConfig): Configuration for the amortized computation, e.g., inverse-root computation or eigendecomposition.
         num_tolerated_failed_amortized_computations (int): Number of failed amortized computations to tolerate before raising an error. (Default: 3)
         factor_matrix_dtype (torch.dtype): Data type for factor matrix. (Default: torch.float32)
+        use_trace_scaling (bool): Flag for whether to normalize the factor matrix by its trace's sqrt before computing the inverse root.
+            Credit to https://arxiv.org/pdf/2506.03595. (Default: False)
+        drop_weighting_factor_on_gsquare (bool): If True, drop the (1 - beta2) weighting factor when computing
+            the updates of the preconditioners, i.e., V(t) = beta2 * V(t-1) + G^2 instead of
+            V(t) = beta2 * V(t-1) + (1 - beta2) * G^2. This keeps _bias_correction2 at 1.0 (no beta2 bias correction). (Default: False)
 
     """
 
@@ -162,6 +168,8 @@ class AmortizedPreconditionerConfig(PreconditionerConfig):
     amortized_computation_config: MatrixFunctionConfig = field(repr=False)
     num_tolerated_failed_amortized_computations: int = 3
     factor_matrix_dtype: torch.dtype = torch.float32
+    use_trace_scaling: bool = False
+    drop_weighting_factor_on_gsquare: bool = False
 
     def __post_init__(self) -> None:
         if self.num_tolerated_failed_amortized_computations < 0:
@@ -171,16 +179,13 @@ class AmortizedPreconditionerConfig(PreconditionerConfig):
 
 
 @dataclass(init=False)
-class ShampooPreconditionerConfig(AmortizedPreconditionerConfig):
+class ClassicShampooPreconditionerConfig(BaseShampooPreconditionerConfig):
     """Configuration for Shampoo preconditioner computation.
 
     Attributes:
         amortized_computation_config (MatrixFunctionConfig): Configuration for the amortized computation, e.g., inverse-root computation or eigendecomposition.
         num_tolerated_failed_amortized_computations (int): Number of failed amortized computations to tolerate before raising an error. (Default: 3)
         factor_matrix_dtype (torch.dtype): Data type for factor matrix. (Default: torch.float32)
-        drop_weighting_factor_on_gsquare (bool): If True, drop the (1 - beta2) weighting factor when computing
-            the updates of the preconditioners, i.e., V(t) = beta2 * V(t-1) + G^2 instead of
-            V(t) = beta2 * V(t-1) + (1 - beta2) * G^2. This keeps _bias_correction2 at 1.0 (no beta2 bias correction). (Default: False)
         inverse_exponent_override (dict[int, dict[int, float] | float]): The inverse_exponent_override attribute is a dictionary that allows for customizing the inverse exponent used in the Shampoo preconditioner computation.
             The keys of the dictionary represent the order of the tensor, and the values are either dictionaries with dimension indices as keys and override values as values, or a single float value for all dimensions. All unspecified dimensions use a default exponent of 1/(2*max(o,1)), where o is the order of the tensor. (Default: {})
 
@@ -220,7 +225,6 @@ class ShampooPreconditionerConfig(AmortizedPreconditionerConfig):
 
     """
 
-    drop_weighting_factor_on_gsquare: bool = False
     inverse_exponent_override: dict[int, dict[int, float] | float] = field(
         default_factory=dict
     )
@@ -265,7 +269,7 @@ class ShampooPreconditionerConfig(AmortizedPreconditionerConfig):
 
 
 @dataclass(kw_only=True)
-class RootInvShampooPreconditionerConfig(ShampooPreconditionerConfig):
+class RootInvShampooPreconditionerConfig(ClassicShampooPreconditionerConfig):
     """Configuration for Shampoo preconditioner computation with caching of the root inverse factor matrices.
 
     Note: When using custom amortized_computation_config, avoid lambda functions as they may cause
@@ -330,7 +334,7 @@ DefaultShampooConfig = RootInvShampooPreconditionerConfig()
 
 
 @dataclass(kw_only=True)
-class EigendecomposedShampooPreconditionerConfig(ShampooPreconditionerConfig):
+class EigendecomposedShampooPreconditionerConfig(ClassicShampooPreconditionerConfig):
     """Configuration for Shampoo preconditioner computation with caching of the eigendecomposed factor matrices.
 
     Note: When using custom amortized_computation_config, avoid lambda functions as they may cause
@@ -394,7 +398,7 @@ class EigendecomposedShampooPreconditionerConfig(ShampooPreconditionerConfig):
 
 
 @dataclass(kw_only=True)
-class EigenvalueCorrectedShampooPreconditionerConfig(AmortizedPreconditionerConfig):
+class EigenvalueCorrectedShampooPreconditionerConfig(BaseShampooPreconditionerConfig):
     """Configuration for eigenvalue-corrected Shampoo/SOAP preconditioner computation.
 
     Recall that in eigenvalue-corrected Shampoo, the eigenvectors and eigenvalues of the factor matrices are computed separately and stored in place of the full inverted preconditioner, as opposed to the single inverse-root computation of the factor matrices in Shampoo.
@@ -445,9 +449,6 @@ class EigenvalueCorrectedShampooPreconditionerConfig(AmortizedPreconditionerConf
         inverse_exponent_override (dict[int, float]): The inverse_exponent_override attribute is a dictionary that allows for customizing the inverse exponent used in eigenvalue correction.
             The keys of the dictionary represent the order of the tensor, and the values are the exponent override values. For example, if we want to use a custom inverse exponent for 3-D tensors, we can set inverse_exponent_override as inverse_exponent_override={3: 0.25}.
             Note that the inverse_exponent_override dictionary can contain multiple entries for different tensor orders. If the order of the tensor is not specified in the dictionary, the default exponent, 1/2, will be used. (Default: {})
-        drop_weighting_factor_on_gsquare (bool): If True, drop the (1 - beta2) weighting factor when computing
-            the updates of the preconditioners, i.e., V(t) = beta2 * V(t-1) + G^2 instead of
-            V(t) = beta2 * V(t-1) + (1 - beta2) * G^2. This keeps _bias_correction2 at 1.0 (no beta2 bias correction). (Default: False)
         factor_matrix_eigenvectors_dtype (torch.dtype): Data type for factor matrix eigenvectors. (Default: torch.float32)
         corrected_eigenvalues_dtype (torch.dtype): Data type for corrected eigenvalues. (Default: torch.float32)
 
@@ -462,7 +463,6 @@ class EigenvalueCorrectedShampooPreconditionerConfig(AmortizedPreconditionerConf
     )
     ignored_basis_change_dims: dict[int, list[int]] = field(default_factory=dict)
     inverse_exponent_override: dict[int, float] = field(default_factory=dict)
-    drop_weighting_factor_on_gsquare: bool = False
     factor_matrix_eigenvectors_dtype: torch.dtype = torch.float32
     corrected_eigenvalues_dtype: torch.dtype = torch.float32
 
@@ -721,6 +721,39 @@ class IterateAveragingConfig(AbstractDataclass):
             The previous momentum implementation (sometimes called LaProp in the codebase)
             is mathematically equivalent to the heavy-ball/primal averaging formulation
             when dampening=0. Use the heavy-ball configuration above.
+
+    Why Learning Rate Adjustment is Required:
+        In SGD heavy-ball momentum (dampening=0), the momentum buffer accumulates
+        gradients and amplifies the effective step size by 1/(1-β) at steady state:
+
+            M ← β * M + grad
+            W ← W - lr * M
+
+        At steady state with constant gradients, M ≈ grad / (1-β), so the effective
+        step size is lr / (1-β).
+
+        In GPA, the gradient step is scaled by (1 - μ_x * μ_y) without any
+        accumulation-based amplification:
+
+            search_dir ∝ (1 - μ_x * μ_y) * (-lr * preconditioned_grad) + ...
+
+        For heavy-ball (μ_x=β, μ_y=1.0), this factor is (1-β), so the effective
+        step size is lr * (1-β) — a factor of 1/(1-β)^2 smaller than heavy-ball.
+        To compensate, set lr_new = lr_old / (1-β).
+
+        This relationship is validated by `test_gpa_vs_sgd_momentum` in
+        `dev/gpu_tests/iterate_averaging_test.py`.
+
+    Concrete Example:
+        An optimizer config with `lr=0.04, momentum=0.5` (heavy-ball) has an
+        effective step size of 0.04 / (1-0.5) = 0.08 due to momentum buffer
+        amplification. The equivalent GPA config is:
+
+            lr = 0.08  # = 0.04 / (1 - 0.5)
+            iterate_averaging_config = GeneralizedPrimalAveragingConfig(
+                eval_interp_coeff=0.5,   # = momentum
+                train_interp_coeff=1.0,  # heavy-ball (non-Nesterov)
+            )
 
     """
 
