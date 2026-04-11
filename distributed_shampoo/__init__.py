@@ -34,7 +34,8 @@ from distributed_shampoo.preconditioner.matrix_functions_types import (
 from distributed_shampoo.shampoo_types import (
     AdaGradPreconditionerConfig,
     AdamPreconditionerConfig,
-    AmortizedPreconditionerConfig,
+    BaseShampooPreconditionerConfig,
+    ClassicShampooPreconditionerConfig,
     DDPDistributedConfig,
     DefaultEigenvalueCorrectedShampooConfig,
     DefaultShampooConfig,
@@ -59,7 +60,6 @@ from distributed_shampoo.shampoo_types import (
     RootInvShampooPreconditionerConfig,
     ScheduleFreeConfig,
     SGDPreconditionerConfig,
-    ShampooPreconditionerConfig,
     ShampooPT2CompileConfig,
     SignDescentPreconditionerConfig,
     SingleDeviceDistributedConfig,
@@ -85,14 +85,14 @@ __all__ = [
     # `precision_config`.
     # `preconditioner_config` options.
     "PreconditionerConfig",  # Abstract base class.
-    "AmortizedPreconditionerConfig",  # Abstract base class (based on `PreconditionerConfig`).
-    "ShampooPreconditionerConfig",  # Abstract base class (based on `AmortizedPreconditionerConfig`).
-    "RootInvShampooPreconditionerConfig",  # Based on `ShampooPreconditionerConfig`.
+    "BaseShampooPreconditionerConfig",  # Abstract base class (based on `PreconditionerConfig`).
+    "ClassicShampooPreconditionerConfig",  # Abstract base class (based on `BaseShampooPreconditionerConfig`).
+    "RootInvShampooPreconditionerConfig",  # Based on `ClassicShampooPreconditionerConfig`.
     "DefaultShampooConfig",  # Default `RootInvShampooPreconditionerConfig` using `EigenConfig`.
     "RootInvKLShampooPreconditionerConfig",  # Based on `RootInvShampooPreconditionerConfig`.
-    "EigendecomposedShampooPreconditionerConfig",  # Based on `ShampooPreconditionerConfig`.
+    "EigendecomposedShampooPreconditionerConfig",  # Based on `ClassicShampooPreconditionerConfig`.
     "EigendecomposedKLShampooPreconditionerConfig",  # Based on `EigendecomposedShampooPreconditionerConfig`.
-    "EigenvalueCorrectedShampooPreconditionerConfig",  # Based on `AmortizedPreconditionerConfig`.
+    "EigenvalueCorrectedShampooPreconditionerConfig",  # Based on `BaseShampooPreconditionerConfig`.
     "DefaultEigenvalueCorrectedShampooConfig",  # Default `EigenvalueCorrectedShampooPreconditionerConfig` using `EighEigendecompositionConfig`.
     "DefaultSOAPConfig",  # Default `EigenvalueCorrectedShampooPreconditionerConfig` using `QREigendecompositionConfig`.
     "SpectralDescentPreconditionerConfig",  # Based on `PreconditionerConfig`.
