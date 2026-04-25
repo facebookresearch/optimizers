@@ -5,15 +5,6 @@ All rights reserved.
 This source code is licensed under the BSD-style license found in the
 LICENSE file in the root directory of this source tree.
 
-"""
-
-# Copyright (c) Meta Platforms, Inc. and affiliates.
-# All rights reserved.
-#
-# This source code is licensed under the license found in the
-# LICENSE file in the root directory of this source tree.
-
-"""
 Shared test utilities for GPA optimizer tests.
 
 This module provides common helper functions used across the GPA optimizer
@@ -48,7 +39,7 @@ def get_available_devices() -> tuple[torch.device, ...]:
     Returns:
         Tuple of torch.device objects.
     """
-    devices = (torch.device("cpu"),)
+    devices: tuple[torch.device, ...] = (torch.device("cpu"),)
     if torch.cuda.is_available():
         devices = devices + (torch.device("cuda"),)
     return devices

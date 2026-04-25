@@ -225,7 +225,7 @@ class DistributorInterface(ABC):
         """
         self._global_blocked_params: tuple[Tensor, ...]
         self._global_num_blocks_per_param: tuple[int, ...]
-        self._global_blocked_params, self._global_num_blocks_per_param = map(
+        self._global_blocked_params, self._global_num_blocks_per_param = map(  # type: ignore[assignment]
             partial(tuple),
             self._merge_and_block_with_params(params=self._get_params_or_grads()),
         )
@@ -280,9 +280,9 @@ class DistributorInterface(ABC):
             assert grad is not None
 
             if self._runtime_config.eager_nan_check:
-                assert torch.isfinite(grad).all(), (
-                    f"Encountered gradient containing NaN/Inf in parameter with shape {attrgetter('shape')(grad)}. Check your model for numerical instability or consider gradient clipping."
-                )
+                assert torch.isfinite(
+                    grad
+                ).all(), f"Encountered gradient containing NaN/Inf in parameter with shape {attrgetter('shape')(grad)}. Check your model for numerical instability or consider gradient clipping."
 
             # Obtain blocks for each gradient after merging.
             blocks_within_grad = multi_dim_split(
@@ -354,9 +354,9 @@ class Distributor(DistributorInterface):
             else self._local_blocked_params
         )
 
-        assert len(blocked_search_directions) == len(target_params), (
-            f"Expected {len(blocked_search_directions)=} to be equal to {len(target_params)=}."
-        )
+        assert (
+            len(blocked_search_directions) == len(target_params)
+        ), f"Expected {len(blocked_search_directions)=} to be equal to {len(target_params)=}."
 
         # torch._foreach only accepts non-empty list
         if blocked_search_directions:

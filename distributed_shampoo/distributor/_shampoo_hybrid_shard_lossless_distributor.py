@@ -72,12 +72,14 @@ class HybridShardLosslessDistributor(HybridShardDistributor):
 
         # Stores full parameters (as opposed to DTensors) for the model parameters assigned to this rank.
         # For example, when the strategy is REPLICATE, it stores the full parameters on all ranks.
-        should_assign_param_idx = (
-            lambda i: i % self._shard_group_size == self._shard_group_rank
-            if self._param_assignment_strategy
-            == FSDPParamAssignmentStrategy.ROUND_ROBIN
-            else True
-        )
+        def should_assign_param_idx(i: int) -> bool:
+            if (
+                self._param_assignment_strategy
+                == FSDPParamAssignmentStrategy.ROUND_ROBIN
+            ):
+                return i % self._shard_group_size == self._shard_group_rank
+            return True
+
         with torch.no_grad():
             self._assigned_params_mask: tuple[bool, ...] = tuple(
                 should_assign_param_idx(idx) for idx in range(len(param_group[PARAMS]))
@@ -155,7 +157,7 @@ class HybridShardLosslessDistributor(HybridShardDistributor):
                 if assigned and (full_grad is None or full_grad.numel() > 0)
             )
         else:
-            return filter(lambda p: p.numel() > 0, self._assigned_full_params)
+            return (p for p in self._assigned_full_params if p.numel() > 0)
 
     @torch.no_grad()
     def update_params(

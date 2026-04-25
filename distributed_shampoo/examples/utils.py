@@ -5,15 +5,6 @@ All rights reserved.
 This source code is licensed under the BSD-style license found in the
 LICENSE file in the root directory of this source tree.
 
-"""
-
-"""
-Copyright (c) Meta Platforms, Inc. and affiliates.
-All rights reserved.
-
-This source code is licensed under the BSD-style license found in the
-LICENSE file in the root directory of this source tree.
-
 Utility functions for CIFAR-10 training examples.
 """
 
@@ -167,8 +158,10 @@ def get_data_loader_and_sampler(
     dataset = datasets.CIFAR10(
         data_path, train=True, download=True, transform=transform
     )
-    sampler = torch.utils.data.distributed.DistributedSampler(
-        dataset, num_replicas=world_size, rank=rank, shuffle=True
+    sampler: torch.utils.data.distributed.DistributedSampler = (
+        torch.utils.data.distributed.DistributedSampler(
+            dataset, num_replicas=world_size, rank=rank, shuffle=True
+        )
     )
     return (
         torch.utils.data.DataLoader(
