@@ -7,12 +7,6 @@ LICENSE file in the root directory of this source tree.
 
 """
 
-# Copyright (c) Meta Platforms, Inc. and affiliates.
-# All rights reserved.
-#
-# This source code is licensed under the license found in the
-# LICENSE file in the root directory of this source tree.
-
 # pyre-unsafe
 from logging import getLogger
 from typing import Callable, Optional, Union
@@ -425,9 +419,9 @@ class GPAAdamW(torch.optim.Optimizer):
             lr_max = max(lr, self.state[first_param][LR_MAX].item())
             self.state[first_param][LR_MAX].fill_(lr_max)
 
-            assert lr_max > 0, (
-                f"lr_max must be positive, got lr_max={lr_max}. Check that lr={lr} is positive."
-            )
+            assert (
+                lr_max > 0
+            ), f"lr_max must be positive, got lr_max={lr_max}. Check that lr={lr} is positive."
 
             # Compute avg_coeff ONCE per step (before the parameter loop).
             # This is important for Schedule-Free: the coefficient should be the same
