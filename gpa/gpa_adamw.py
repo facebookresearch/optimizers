@@ -9,10 +9,11 @@ LICENSE file in the root directory of this source tree.
 
 # pyre-unsafe
 from logging import getLogger
-from typing import Callable, Optional, Union
+from typing import Callable, Optional, overload, Union
 
 import torch
 import torch.optim
+from torch import Tensor
 from gpa.gpa_types import (
     BETA1,
     BETA2,
@@ -351,6 +352,11 @@ class GPAAdamW(torch.optim.Optimizer):
                             )
                 self.state[first_param][TRAIN_MODE].fill_(True)
 
+    @overload
+    def step(self, closure: None = None) -> None: ...
+    @overload
+    def step(self, closure: Callable[[], float]) -> float: ...
+
     @torch.no_grad()
     def step(self, closure: Optional[Callable[[], float]] = None) -> Optional[float]:
         """Performs a single optimization step.
@@ -377,11 +383,14 @@ class GPAAdamW(torch.optim.Optimizer):
                 loss = closure()
 
         for group in self.param_groups:
-            params_with_grad = []
-            grads = []
-            exp_avgs = []
-            exp_avg_sqs = []
-            z_buffer_list = []
+            if not group[PARAMS]:
+                continue
+
+            params_with_grad: list[Tensor] = []
+            grads: list[Tensor] = []
+            exp_avgs: list[Tensor] = []
+            exp_avg_sqs: list[Tensor] = []
+            z_buffer_list: list[Tensor] = []
 
             self._init_group(
                 group,
@@ -392,12 +401,12 @@ class GPAAdamW(torch.optim.Optimizer):
                 z_buffer_list,
             )
 
-            # Get first_param for accessing shared state.
-            first_param = group[PARAMS][0] if group[PARAMS] else None
+            # Get group_first_param for accessing shared state.
+            group_first_param: Tensor = group[PARAMS][0]
 
             # Increment step counter and use it as group step.
-            self.state[first_param][STEP] += 1
-            k = self.state[first_param][STEP].item()
+            self.state[group_first_param][STEP] += 1
+            k = self.state[group_first_param][STEP].item()
 
             # Get all group variables.
             eps = group[EPS]
@@ -416,8 +425,8 @@ class GPAAdamW(torch.optim.Optimizer):
             bias_correction2 = 1 - beta2**k
 
             # Update LR_MAX in first parameter's state.
-            lr_max = max(lr, self.state[first_param][LR_MAX].item())
-            self.state[first_param][LR_MAX].fill_(lr_max)
+            lr_max = max(lr, self.state[group_first_param][LR_MAX].item())
+            self.state[group_first_param][LR_MAX].fill_(lr_max)
 
             assert (
                 lr_max > 0
@@ -433,7 +442,7 @@ class GPAAdamW(torch.optim.Optimizer):
                 weight_pow_coeff=weight_pow_coeff,
                 lr_max=lr_max,
                 weight_lr_power=weight_lr_power,
-                weight_sum_ref=self.state[first_param][WEIGHT_SUM],
+                weight_sum_ref=self.state[group_first_param][WEIGHT_SUM],
             )
 
             for y, grad, exp_avg, exp_avg_sq, z in zip(

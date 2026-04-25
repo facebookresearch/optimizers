@@ -576,7 +576,7 @@ class DDPDistributor(DistributorInterface):
             mesh=tuple(batched(iterable=ranks_in_group, n=self._group_size)),
             mesh_dim_names=("replicate", "shard"),
         )
-        replicate_submesh = device_mesh_2d._get_all_submeshes(
+        replicate_submesh = device_mesh_2d._get_all_submeshes(  # type: ignore[attr-defined]
             mesh_dim_name="replicate"
         )[group_source_rank]
 

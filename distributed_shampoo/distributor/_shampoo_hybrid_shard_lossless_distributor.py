@@ -157,7 +157,7 @@ class HybridShardLosslessDistributor(HybridShardDistributor):
                 if assigned and (full_grad is None or full_grad.numel() > 0)
             )
         else:
-            return filter(lambda p: p.numel() > 0, self._assigned_full_params)
+            return (p for p in self._assigned_full_params if p.numel() > 0)
 
     @torch.no_grad()
     def update_params(

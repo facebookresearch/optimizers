@@ -174,7 +174,7 @@ class FullyShardStrategy(ParallelismStrategy):
         device_mesh: DeviceMesh | None = None,
     ) -> WrappedModel:
         config = self.distributed_config() if self.distributed_config else None
-        return WrappedModel(model=fully_shard(model), distributed_config=config)
+        return WrappedModel(model=fully_shard(model), distributed_config=config)  # type: ignore[arg-type]
 
 
 @dataclass
@@ -203,6 +203,6 @@ class HybridShardStrategy(ParallelismStrategy):
         if self.distributed_config:
             config = self.distributed_config(device_mesh=device_mesh)
         return WrappedModel(
-            model=fully_shard(model, mesh=device_mesh),
+            model=fully_shard(model, mesh=device_mesh),  # type: ignore[arg-type]
             distributed_config=config,
         )

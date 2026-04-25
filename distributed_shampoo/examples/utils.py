@@ -158,8 +158,10 @@ def get_data_loader_and_sampler(
     dataset = datasets.CIFAR10(
         data_path, train=True, download=True, transform=transform
     )
-    sampler = torch.utils.data.distributed.DistributedSampler(
-        dataset, num_replicas=world_size, rank=rank, shuffle=True
+    sampler: torch.utils.data.distributed.DistributedSampler = (
+        torch.utils.data.distributed.DistributedSampler(
+            dataset, num_replicas=world_size, rank=rank, shuffle=True
+        )
     )
     return (
         torch.utils.data.DataLoader(

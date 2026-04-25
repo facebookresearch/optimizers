@@ -112,7 +112,7 @@ if __name__ == "__main__":
 
             if batch_idx % 100 == 0:
                 print(
-                    f"Epoch {epoch} [{batch_idx * len(data)}/{len(train_loader.dataset)}] "
+                    f"Epoch {epoch} [{batch_idx * len(data)}/{len(train_loader.dataset)}] "  # type: ignore[arg-type]
                     f"Loss: {loss.item():.4f}"
                 )
 

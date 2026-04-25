@@ -225,7 +225,7 @@ class DistributorInterface(ABC):
         """
         self._global_blocked_params: tuple[Tensor, ...]
         self._global_num_blocks_per_param: tuple[int, ...]
-        self._global_blocked_params, self._global_num_blocks_per_param = map(
+        self._global_blocked_params, self._global_num_blocks_per_param = map(  # type: ignore[assignment]
             partial(tuple),
             self._merge_and_block_with_params(params=self._get_params_or_grads()),
         )

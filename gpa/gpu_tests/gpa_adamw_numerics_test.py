@@ -28,7 +28,7 @@ from gpa.tests.gpa_test_utils import (
     create_gpa_optimizer,
     create_schedulefree_optimizer,
 )
-from parameterized import parameterized
+from parameterized import parameterized  # type: ignore[import-not-found]
 
 
 # =============================================================================

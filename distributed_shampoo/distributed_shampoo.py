@@ -666,9 +666,9 @@ class DistributedShampoo(torch.optim.Optimizer):
                         weighting_factor = 1 - beta2
                         use_bias_correction = False
                     case AdaGradPreconditionerConfig():
-                        beta2: float = 1.0
-                        weighting_factor: float = 1.0
-                        use_bias_correction: bool = False
+                        beta2 = 1.0
+                        weighting_factor = 1.0
+                        use_bias_correction = False
                     case _:
                         raise AssertionError(
                             f"Unexpected preconditioner config: {preconditioner_config}"
@@ -1628,8 +1628,7 @@ class DistributedShampoo(torch.optim.Optimizer):
             )
             if group[ITERATE_AVERAGING_CONFIG] is not None
         ]
-        # type: ignore
-        optimizer._pre_load_train_modes = saved_train_modes
+        optimizer._pre_load_train_modes = saved_train_modes  # type: ignore[attr-defined]
 
     @staticmethod
     def _post_load_state_dict_hook(optimizer: Optimizer) -> None:

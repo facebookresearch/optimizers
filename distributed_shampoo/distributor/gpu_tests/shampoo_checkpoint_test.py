@@ -373,7 +373,7 @@ class LosslessDistributorCheckpointPreemptionTest(DTensorTestBase):
         model1 = self._construct_model(
             model_linear_layers_dims=model_linear_layers_dims,
             model_dead_layers_dims=model_dead_layers_dims,
-            post_model_decoration=post_model_decoration,
+            post_model_decoration=post_model_decoration,  # type: ignore[arg-type]
         )
         input_dim = model_linear_layers_dims[0]
         optimizer1 = self._shampoo_optim_factory(distributed_config=config)(
@@ -408,7 +408,7 @@ class LosslessDistributorCheckpointPreemptionTest(DTensorTestBase):
         model2 = self._construct_model(
             model_linear_layers_dims=model_linear_layers_dims,
             model_dead_layers_dims=model_dead_layers_dims,
-            post_model_decoration=post_model_decoration,
+            post_model_decoration=post_model_decoration,  # type: ignore[arg-type]
         )
         # Use tiny lr for init step to minimize impact
         optimizer2 = self._shampoo_optim_factory(distributed_config=config, lr=1e-10)(

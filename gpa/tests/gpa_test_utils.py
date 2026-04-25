@@ -39,7 +39,7 @@ def get_available_devices() -> tuple[torch.device, ...]:
     Returns:
         Tuple of torch.device objects.
     """
-    devices = (torch.device("cpu"),)
+    devices: tuple[torch.device, ...] = (torch.device("cpu"),)
     if torch.cuda.is_available():
         devices = devices + (torch.device("cuda"),)
     return devices
