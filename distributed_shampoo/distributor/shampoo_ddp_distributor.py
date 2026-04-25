@@ -308,9 +308,9 @@ class DDPDistributor(DistributorInterface):
             global_buffers = self._global_dist_blocked_buffers
 
         if self._communicate_params:
-            assert len(local_params) == len(blocked_search_directions), (
-                f"Expected {len(local_params)=} to be equal to {len(blocked_search_directions)=}."
-            )
+            assert (
+                len(local_params) == len(blocked_search_directions)
+            ), f"Expected {len(local_params)=} to be equal to {len(blocked_search_directions)=}."
 
             # torch._foreach only accepts non-empty list
             if blocked_search_directions:
@@ -335,9 +335,9 @@ class DDPDistributor(DistributorInterface):
                 )
 
         else:
-            assert len(local_buffers) == len(blocked_search_directions), (
-                f"Expected {len(local_buffers)=} to be equal to {len(blocked_search_directions)=}."
-            )
+            assert (
+                len(local_buffers) == len(blocked_search_directions)
+            ), f"Expected {len(local_buffers)=} to be equal to {len(blocked_search_directions)=}."
 
             # torch._foreach only accepts non-empty list
             if blocked_search_directions:

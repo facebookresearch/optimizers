@@ -101,9 +101,7 @@ class ShampooFSDPDistributorTest(FSDPTest):
             assert (
                 sum(param.numel() for param in model.parameters())
                 == sum(a * b for a, b in pairwise(model_linear_layers_dims)) // 2
-            ), (
-                f"{sum(param.numel() for param in model.parameters())=}, {sum(a * b for a, b in pairwise(model_linear_layers_dims)) // 2=}"
-            )
+            ), f"{sum(param.numel() for param in model.parameters())=}, {sum(a * b for a, b in pairwise(model_linear_layers_dims)) // 2=}"
             distributed_config.param_to_metadata = compile_fsdp_parameter_metadata(
                 model
             )

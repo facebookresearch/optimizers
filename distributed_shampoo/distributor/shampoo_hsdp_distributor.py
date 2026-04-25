@@ -262,9 +262,9 @@ class HSDPDistributor(DistributorInterface):
             global_buffers = self._global_dist_blocked_buffers
 
         if self._communicate_params:
-            assert len(local_params) == len(blocked_search_directions), (
-                f"Expected {len(local_params)=} to be equal to {len(blocked_search_directions)=}."
-            )
+            assert (
+                len(local_params) == len(blocked_search_directions)
+            ), f"Expected {len(local_params)=} to be equal to {len(blocked_search_directions)=}."
 
             # torch._foreach only accepts non-empty list
             if blocked_search_directions:
@@ -289,9 +289,9 @@ class HSDPDistributor(DistributorInterface):
                 )
 
         else:
-            assert len(local_buffers) == len(blocked_search_directions), (
-                f"Expected {len(local_buffers)=} to be equal to {len(blocked_search_directions)=}."
-            )
+            assert (
+                len(local_buffers) == len(blocked_search_directions)
+            ), f"Expected {len(local_buffers)=} to be equal to {len(blocked_search_directions)=}."
 
             # torch._foreach only accepts non-empty list
             if blocked_search_directions:
@@ -564,9 +564,9 @@ class HSDPDistributor(DistributorInterface):
             assert flattened_grad is not None
 
             if self._runtime_config.eager_nan_check:
-                assert torch.isfinite(flattened_grad).all(), (
-                    f"Encountered gradient containing NaN/Inf in parameter with shape {flattened_grad.shape}. Check your model for numerical instability or consider gradient clipping."
-                )
+                assert torch.isfinite(
+                    flattened_grad
+                ).all(), f"Encountered gradient containing NaN/Inf in parameter with shape {flattened_grad.shape}. Check your model for numerical instability or consider gradient clipping."
 
             # Split flattened gradients into valid tensor blocks of the gradient.
             split_grads = HSDPDistributor._split_tensor_block_recovery(

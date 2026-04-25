@@ -280,9 +280,9 @@ class DistributorInterface(ABC):
             assert grad is not None
 
             if self._runtime_config.eager_nan_check:
-                assert torch.isfinite(grad).all(), (
-                    f"Encountered gradient containing NaN/Inf in parameter with shape {attrgetter('shape')(grad)}. Check your model for numerical instability or consider gradient clipping."
-                )
+                assert torch.isfinite(
+                    grad
+                ).all(), f"Encountered gradient containing NaN/Inf in parameter with shape {attrgetter('shape')(grad)}. Check your model for numerical instability or consider gradient clipping."
 
             # Obtain blocks for each gradient after merging.
             blocks_within_grad = multi_dim_split(
@@ -354,9 +354,9 @@ class Distributor(DistributorInterface):
             else self._local_blocked_params
         )
 
-        assert len(blocked_search_directions) == len(target_params), (
-            f"Expected {len(blocked_search_directions)=} to be equal to {len(target_params)=}."
-        )
+        assert (
+            len(blocked_search_directions) == len(target_params)
+        ), f"Expected {len(blocked_search_directions)=} to be equal to {len(target_params)=}."
 
         # torch._foreach only accepts non-empty list
         if blocked_search_directions:
