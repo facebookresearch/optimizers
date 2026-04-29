@@ -19,6 +19,16 @@ jobs:
           run: |
             uv venv && source .venv/bin/activate
             uv pip install ".[examples]"
+        - name: Detect GPU availability.
+          id: gpu_check
+          run: |
+            source .venv/bin/activate
+            if python -c "import torch; raise SystemExit(0 if torch.cuda.is_available() else 1)"; then
+              echo "has_gpu=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "has_gpu=false" >> "$GITHUB_OUTPUT"
+              echo "::warning::No usable GPU detected on this runner; GPU-only steps will be skipped."
+            fi
         - name: Run single GPU example with Adam to serve as a baseline.
           run: |
             source .venv/bin/activate
@@ -26,19 +36,21 @@ jobs:
         - name: Run single GPU examples with Distributed Shampoo and different graftings on CPU.
           run: |
             source .venv/bin/activate
-            CUDA_VISIBLE_DEVICES="" python -m distributed_shampoo.examples.cifar10_example optimizer=shampoo optimizer.precondition_frequency=30 'optimizer.grafting_config={_target_:distributed_shampoo.AdaGradPreconditionerConfig,epsilon:1e-8}' epochs=1 batch_size=1024
-            CUDA_VISIBLE_DEVICES="" python -m distributed_shampoo.examples.cifar10_example optimizer=shampoo optimizer.precondition_frequency=30 'optimizer.grafting_config={_target_:distributed_shampoo.AdamPreconditionerConfig,beta2:0.999,epsilon:1e-8}' epochs=1 batch_size=1024
-            CUDA_VISIBLE_DEVICES="" python -m distributed_shampoo.examples.cifar10_example optimizer=shampoo optimizer.precondition_frequency=30 'optimizer.grafting_config={_target_:distributed_shampoo.RMSpropPreconditionerConfig,beta2:0.999,epsilon:1e-8}' epochs=1 batch_size=1024
-            CUDA_VISIBLE_DEVICES="" python -m distributed_shampoo.examples.cifar10_example optimizer=shampoo optimizer.precondition_frequency=30 'optimizer.grafting_config={_target_:distributed_shampoo.SGDPreconditionerConfig}' epochs=1 batch_size=1024
+            CUDA_VISIBLE_DEVICES="" python -m distributed_shampoo.examples.cifar10_example optimizer=shampoo optimizer.precondition_frequency=30 '~optimizer.grafting_config' '+optimizer.grafting_config={_target_:distributed_shampoo.AdaGradPreconditionerConfig,epsilon:1e-8}' epochs=1 batch_size=1024
+            CUDA_VISIBLE_DEVICES="" python -m distributed_shampoo.examples.cifar10_example optimizer=shampoo optimizer.precondition_frequency=30 '~optimizer.grafting_config' '+optimizer.grafting_config={_target_:distributed_shampoo.AdamPreconditionerConfig,beta2:0.999,epsilon:1e-8}' epochs=1 batch_size=1024
+            CUDA_VISIBLE_DEVICES="" python -m distributed_shampoo.examples.cifar10_example optimizer=shampoo optimizer.precondition_frequency=30 '~optimizer.grafting_config' '+optimizer.grafting_config={_target_:distributed_shampoo.RMSpropPreconditionerConfig,beta2:0.999,epsilon:1e-8}' epochs=1 batch_size=1024
+            CUDA_VISIBLE_DEVICES="" python -m distributed_shampoo.examples.cifar10_example optimizer=shampoo optimizer.precondition_frequency=30 '~optimizer.grafting_config' '+optimizer.grafting_config={_target_:distributed_shampoo.SGDPreconditionerConfig}' epochs=1 batch_size=1024
         - name: Run single GPU example on GPU.
+          if: steps.gpu_check.outputs.has_gpu == 'true'
           run: |
             source .venv/bin/activate
-            python -m distributed_shampoo.examples.cifar10_example optimizer=shampoo optimizer.precondition_frequency=30 'optimizer.grafting_config={_target_:distributed_shampoo.AdamPreconditionerConfig,beta2:0.999,epsilon:1e-8}' epochs=1 batch_size=1024
+            python -m distributed_shampoo.examples.cifar10_example optimizer=shampoo optimizer.precondition_frequency=30 '~optimizer.grafting_config' '+optimizer.grafting_config={_target_:distributed_shampoo.AdamPreconditionerConfig,beta2:0.999,epsilon:1e-8}' epochs=1 batch_size=1024
         - name: Run DDP example on CPU.
           run: |
             source .venv/bin/activate
-            CUDA_VISIBLE_DEVICES="" torchrun --standalone --nnodes=1 --nproc_per_node=2 -m distributed_shampoo.examples.cifar10_example parallelism=ddp optimizer=shampoo optimizer.precondition_frequency=15 'optimizer.grafting_config={_target_:distributed_shampoo.AdamPreconditionerConfig,beta2:0.999,epsilon:1e-8}' epochs=1 local_batch_size=1024 backend=gloo
+            CUDA_VISIBLE_DEVICES="" torchrun --standalone --nnodes=1 --nproc_per_node=2 -m distributed_shampoo.examples.cifar10_example parallelism=ddp optimizer=shampoo optimizer.precondition_frequency=15 '~optimizer.grafting_config' '+optimizer.grafting_config={_target_:distributed_shampoo.AdamPreconditionerConfig,beta2:0.999,epsilon:1e-8}' epochs=1 local_batch_size=1024 backend=gloo
         - name: Run DDP example on GPU.
+          if: steps.gpu_check.outputs.has_gpu == 'true'
           run: |
             source .venv/bin/activate
-            torchrun --standalone --nnodes=1 --nproc_per_node=1 -m distributed_shampoo.examples.cifar10_example parallelism=ddp optimizer=shampoo optimizer.precondition_frequency=30 'optimizer.grafting_config={_target_:distributed_shampoo.AdamPreconditionerConfig,beta2:0.999,epsilon:1e-8}' epochs=1 local_batch_size=1024
+            torchrun --standalone --nnodes=1 --nproc_per_node=1 -m distributed_shampoo.examples.cifar10_example parallelism=ddp optimizer=shampoo optimizer.precondition_frequency=30 '~optimizer.grafting_config' '+optimizer.grafting_config={_target_:distributed_shampoo.AdamPreconditionerConfig,beta2:0.999,epsilon:1e-8}' epochs=1 local_batch_size=1024
