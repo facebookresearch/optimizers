@@ -224,7 +224,7 @@ class PerRankLoggingFormatterTest(unittest.TestCase):
         mock_dist.get_rank.return_value = 3
 
         formatter = PerRankLoggingFormatter()
-        self.assertIsNotNone(formatter._fmt)
+        assert formatter._fmt is not None
         self.assertIn("RANK 3", formatter._fmt)
 
     @patch("distributed_shampoo.examples.utils.dist")
@@ -236,7 +236,7 @@ class PerRankLoggingFormatterTest(unittest.TestCase):
 
         formatter = PerRankLoggingFormatter()
         # When fmt=None is passed to Formatter.__init__, it defaults to '%(message)s'
-        self.assertIsNotNone(formatter._fmt)
+        assert formatter._fmt is not None
         self.assertNotIn("RANK", formatter._fmt)
 
 
