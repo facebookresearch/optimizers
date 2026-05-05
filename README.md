@@ -17,6 +17,7 @@ Optimizers is a Github repository of PyTorch optimization algorithms. It is desi
 
 Currently includes the optimizers:
 - Distributed Shampoo
+- GPA-AdamW (Generalized Primal Averaging)
 
 See the [CONTRIBUTING](CONTRIBUTING.md) file for how to help out.
 
@@ -24,17 +25,18 @@ See the [CONTRIBUTING](CONTRIBUTING.md) file for how to help out.
 Optimizers is released under the [BSD license](LICENSE).
 
 ## Installation and Dependencies
-Install `distributed_shampoo` with all dependencies:
+Install with all dependencies:
 ```bash
 git clone git@github.com:facebookresearch/optimizers.git
 cd optimizers
 pip install .
 ```
-If you also want to try the [examples](./distributed_shampoo/examples/), replace the last line with `pip install ".[examples]"`.
+If you also want to try the examples ([Distributed Shampoo](./distributed_shampoo/examples/), [GPA-AdamW](./gpa/examples/)), replace the last line with `pip install ".[examples]"`.
 
 ## Usage
 
-After installation, basic usage looks like:
+### Distributed Shampoo
+
 ```python
 import torch
 from distributed_shampoo import AdamPreconditionerConfig, DistributedShampoo
@@ -54,3 +56,24 @@ optim = DistributedShampoo(
 ```
 
 For more, please see the [additional documentation here](./distributed_shampoo/README.md) and especially the [How to Use](./distributed_shampoo/README.md#how-to-use) section.
+
+### GPA-AdamW
+
+```python
+import torch
+from gpa.gpa_adamw import GPAAdamW
+
+model = ...  # Instantiate model
+
+optim = GPAAdamW(
+    model.parameters(),
+    lr=1e-3,
+    train_interp_coeff=0.7,
+    eval_interp_coeff=0.9967,  # GPA mode (DiLoCo-equivalent of 32 local steps)
+)
+```
+
+GPA-AdamW requires switching between train and eval modes via `optimizer.train()` /
+`optimizer.eval()` so that gradients are computed on the y-sequence and evaluation
+runs on the x-sequence. For full details (Schedule-Free vs GPA mode, hyperparameter
+tuning, distributed training), see the [GPA-AdamW README](./gpa/README.md).
