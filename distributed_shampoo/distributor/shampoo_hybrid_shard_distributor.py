@@ -287,9 +287,9 @@ class HybridShardDistributor(DistributorInterface):
             global_buffers = self._global_dist_blocked_buffers
 
         if self._communicate_params:
-            assert len(local_params) == len(blocked_search_directions), (
-                f"Expected {len(local_params)=} to be equal to {len(blocked_search_directions)=}."
-            )
+            assert (
+                len(local_params) == len(blocked_search_directions)
+            ), f"Expected {len(local_params)=} to be equal to {len(blocked_search_directions)=}."
 
             # torch._foreach only accepts non-empty list
             if blocked_search_directions:
@@ -314,9 +314,9 @@ class HybridShardDistributor(DistributorInterface):
                 )
 
         else:
-            assert len(local_buffers) == len(blocked_search_directions), (
-                f"Expected {len(local_buffers)=} to be equal to {len(blocked_search_directions)=}."
-            )
+            assert (
+                len(local_buffers) == len(blocked_search_directions)
+            ), f"Expected {len(local_buffers)=} to be equal to {len(blocked_search_directions)=}."
 
             # torch._foreach only accepts non-empty list
             if blocked_search_directions:
@@ -605,7 +605,7 @@ class HybridShardDistributor(DistributorInterface):
         # For the example above, this would give me submeshes [[3, 27], [11, 35], [19, 43]].
         # Note that the group source rank must belong to {0, 1, 2} in this case.
         # Suppose the group_source_rank = 1, then this would get the submesh [11, 35].
-        replicate_submesh = device_mesh_2d._get_all_submeshes(
+        replicate_submesh = device_mesh_2d._get_all_submeshes(  # type: ignore[attr-defined]
             mesh_dim_name="replicate"
         )[group_source_rank]
 

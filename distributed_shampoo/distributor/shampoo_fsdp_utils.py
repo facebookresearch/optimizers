@@ -41,9 +41,9 @@ def compile_fsdp_parameter_metadata(
         shard_param_infos = flat_param._shard_param_infos
         sharding_strategy = fsdp_module.sharding_strategy
 
-        assert flat_param._params is not None, (
-            "flat_param._params should not be None! Set the value of `use_orig_params` in FSDP module to True "
-        )
+        assert (
+            flat_param._params is not None
+        ), "flat_param._params should not be None! Set the value of `use_orig_params` in FSDP module to True "
         "would populate flat_param._params."
         params = flat_param._params
 
@@ -156,12 +156,13 @@ def _partition_params(
             )
 
             assert (
-                unioned_keys := fsdp_params_dict.keys()
-                | hsdp_params_dict.keys()
-                | other_params_dict.keys()
-            ) == original_params_dict.keys(), (
-                f"{unioned_keys - original_params_dict.keys()=} {original_params_dict.keys() - unioned_keys=}"
-            )
+                (
+                    unioned_keys := fsdp_params_dict.keys()
+                    | hsdp_params_dict.keys()
+                    | other_params_dict.keys()
+                )
+                == original_params_dict.keys()
+            ), f"{unioned_keys - original_params_dict.keys()=} {original_params_dict.keys() - unioned_keys=}"
             for (name1, dict1), (name2, dict2) in itertools.combinations(
                 (
                     ("fsdp_params_dict", fsdp_params_dict),
@@ -170,9 +171,9 @@ def _partition_params(
                 ),
                 2,
             ):
-                assert not (common_keys := dict1.keys() & dict2.keys()), (
-                    f"{common_keys} exist in both {name1} and {name2}!"
-                )
+                assert not (
+                    common_keys := dict1.keys() & dict2.keys()
+                ), f"{common_keys} exist in both {name1} and {name2}!"
 
             return (
                 list(fsdp_params_dict.items()),

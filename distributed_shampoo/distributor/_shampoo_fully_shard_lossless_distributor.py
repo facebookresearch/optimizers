@@ -66,12 +66,14 @@ class FullyShardLosslessDistributor(Distributor):
         )[0]
         self._group_rank: int = dist.get_rank(group=self._dist_group)
 
-        should_assign_param_idx = (
-            lambda i: i % self._group_size == self._group_rank
-            if self._param_assignment_strategy
-            == FSDPParamAssignmentStrategy.ROUND_ROBIN
-            else True
-        )
+        def should_assign_param_idx(i: int) -> bool:
+            if (
+                self._param_assignment_strategy
+                == FSDPParamAssignmentStrategy.ROUND_ROBIN
+            ):
+                return i % self._group_size == self._group_rank
+            return True
+
         self._assigned_params_mask: tuple[bool, ...] = tuple(
             should_assign_param_idx(idx) for idx in range(len(param_group[PARAMS]))
         )

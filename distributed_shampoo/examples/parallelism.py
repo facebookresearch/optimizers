@@ -5,15 +5,6 @@ All rights reserved.
 This source code is licensed under the BSD-style license found in the
 LICENSE file in the root directory of this source tree.
 
-"""
-
-"""
-Copyright (c) Meta Platforms, Inc. and affiliates.
-All rights reserved.
-
-This source code is licensed under the BSD-style license found in the
-LICENSE file in the root directory of this source tree.
-
 Parallelism strategies for distributed training.
 """
 
@@ -183,7 +174,7 @@ class FullyShardStrategy(ParallelismStrategy):
         device_mesh: DeviceMesh | None = None,
     ) -> WrappedModel:
         config = self.distributed_config() if self.distributed_config else None
-        return WrappedModel(model=fully_shard(model), distributed_config=config)
+        return WrappedModel(model=fully_shard(model), distributed_config=config)  # type: ignore[arg-type]
 
 
 @dataclass
@@ -212,6 +203,6 @@ class HybridShardStrategy(ParallelismStrategy):
         if self.distributed_config:
             config = self.distributed_config(device_mesh=device_mesh)
         return WrappedModel(
-            model=fully_shard(model, mesh=device_mesh),
+            model=fully_shard(model, mesh=device_mesh),  # type: ignore[arg-type]
             distributed_config=config,
         )
