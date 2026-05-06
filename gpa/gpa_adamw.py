@@ -13,7 +13,6 @@ from typing import Callable, Optional, overload, Union
 
 import torch
 import torch.optim
-from torch import Tensor
 from gpa.gpa_types import (
     BETA1,
     BETA2,
@@ -35,6 +34,7 @@ from gpa.gpa_types import (
     WEIGHT_SUM,
     Z_BUFFER,
 )
+from torch import Tensor
 from torch.optim.optimizer import ParamsT
 
 logger = getLogger()
@@ -428,9 +428,9 @@ class GPAAdamW(torch.optim.Optimizer):
             lr_max = max(lr, self.state[group_first_param][LR_MAX].item())
             self.state[group_first_param][LR_MAX].fill_(lr_max)
 
-            assert (
-                lr_max > 0
-            ), f"lr_max must be positive, got lr_max={lr_max}. Check that lr={lr} is positive."
+            assert lr_max > 0, (
+                f"lr_max must be positive, got lr_max={lr_max}. Check that lr={lr} is positive."
+            )
 
             # Compute avg_coeff ONCE per step (before the parameter loop).
             # This is important for Schedule-Free: the coefficient should be the same
