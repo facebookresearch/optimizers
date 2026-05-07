@@ -39,6 +39,8 @@ from distributed_shampoo.shampoo_types import (
     EigenvalueCorrectedShampooPreconditionerConfig,
     GeneralizedPrimalAveragingConfig,
     IterateAveragingConfig,
+    PerFactorEigenvalueCorrectedKLShampooPreconditionerConfig,
+    PerFactorEigenvalueCorrectedShampooPreconditionerConfig,
     PreconditionerConfig,
     RootInvKLShampooPreconditionerConfig,
     RootInvShampooPreconditionerConfig,
@@ -1017,6 +1019,26 @@ class EigendecomposedKLShampooStateDictTest(EigendecomposedShampooStateDictTest)
     @property
     def _preconditioner_config(self) -> EigendecomposedKLShampooPreconditionerConfig:
         return EigendecomposedKLShampooPreconditionerConfig()
+
+
+class PerFactorEigenvalueCorrectedShampooStateDictTest(
+    EigendecomposedShampooStateDictTest
+):
+    @property
+    def _preconditioner_config(
+        self,
+    ) -> PerFactorEigenvalueCorrectedShampooPreconditionerConfig:
+        return PerFactorEigenvalueCorrectedShampooPreconditionerConfig()
+
+
+class PerFactorEigenvalueCorrectedKLShampooStateDictTest(
+    PerFactorEigenvalueCorrectedShampooStateDictTest
+):
+    @property
+    def _preconditioner_config(
+        self,
+    ) -> PerFactorEigenvalueCorrectedKLShampooPreconditionerConfig:
+        return PerFactorEigenvalueCorrectedKLShampooPreconditionerConfig()
 
 
 class SignDescentStateDictTest(AbstractTest.NoPreconditionerStateDictTestBase):

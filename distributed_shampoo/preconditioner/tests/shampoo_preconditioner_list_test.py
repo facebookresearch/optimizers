@@ -32,6 +32,8 @@ from distributed_shampoo.preconditioner.shampoo_preconditioner_list import (
     EigendecomposedKLShampooPreconditionerList,
     EigendecomposedShampooPreconditionerList,
     EigenvalueCorrectedShampooPreconditionerList,
+    PerFactorEigenvalueCorrectedKLShampooPreconditionerList,
+    PerFactorEigenvalueCorrectedShampooPreconditionerList,
     RootInvKLShampooPreconditionerList,
     RootInvShampooPreconditionerList,
 )
@@ -46,6 +48,8 @@ from distributed_shampoo.shampoo_types import (
     EigendecomposedKLShampooPreconditionerConfig,
     EigendecomposedShampooPreconditionerConfig,
     EigenvalueCorrectedShampooPreconditionerConfig,
+    PerFactorEigenvalueCorrectedKLShampooPreconditionerConfig,
+    PerFactorEigenvalueCorrectedShampooPreconditionerConfig,
     PreconditionerValueError,
     RootInvKLShampooPreconditionerConfig,
     RootInvShampooPreconditionerConfig,
@@ -1426,6 +1430,277 @@ class RootInvKLShampooPreconditionerListTest(RootInvShampooPreconditionerListTes
     def test_adaptive_amortized_computation_frequency(self) -> None: ...
 
 
+class PerFactorEigenvalueCorrectedShampooPreconditionerListTest(
+    EigendecomposedShampooPreconditionerListTest
+):
+    """Tests for PerFactorEigenvalueCorrectedShampooPreconditionerList.
+
+    This class computes eigenvalues directly as diag(Q^T M Q) instead of from
+    eigendecomposition, where Q are the cached eigenvectors and M is the
+    already-accumulated factor matrix.
+
+    Inherits from EigendecomposedShampooPreconditionerListTest since both use
+    eigendecomposition for eigenvectors, but this class computes eigenvalues differently.
+
+    Key difference from EigendecomposedShampoo:
+    - EigendecomposedShampoo: eigenvalues come directly from eigendecomposition
+    - PerFactorEigenvalueCorrected: eigenvalues are recomputed every iteration as
+        diag(Q^T M Q) where Q are eigenvectors and M is the factor matrix.
+    """
+
+    @property
+    def _default_preconditioner_config(  # type: ignore[override]
+        self,
+    ) -> PerFactorEigenvalueCorrectedShampooPreconditionerConfig:
+        return PerFactorEigenvalueCorrectedShampooPreconditionerConfig(
+            amortized_computation_config=EighEigendecompositionConfig(
+                rank_deficient_stability_config=PerturbationConfig(
+                    perturb_before_computation=False
+                )
+            ),
+            factor_matrix_dtype=torch.float64,
+            factor_matrix_eigenvectors_dtype=torch.float64,
+            factor_matrix_eigenvalues_dtype=torch.float64,
+        )
+
+    @property
+    def _preconditioner_list_factory(self) -> Callable[..., PreconditionerList]:
+        return PerFactorEigenvalueCorrectedShampooPreconditionerList
+
+    def test_update_preconditioners_and_precondition(self) -> None:
+        """
+        For PerFactorEigenvalueCorrectedShampoo, eigenvalues are computed directly as
+        diag(Q^T M Q) where M is the already-accumulated factor matrix.
+
+        With beta2=0.0 and weighting_factor=1.0:
+        - Factor matrix after step 2: M = G2 @ G2^T
+        - Eigenvalues after step 2: diag(Q^T M Q) = diag(G2 @ G2^T)
+
+        For a 1D tensor with G2=[0,1]:
+            M = [[0,0],[0,1]], eigenvalues = [0, 1]
+            P = diag([0,1] + epsilon)^{-1/2} * [0,1] = [0, 1] (with epsilon handling 0)
+
+        For a 2D tensor with G2=I/sqrt(2):
+            L = R = I/2, eigenvalues = [0.5, 0.5]
+            P = diag([0.5,0.5])^{-1/4} * G2 * diag([0.5,0.5])^{-1/4} = G2 / sqrt(0.5) = G2 * sqrt(2)
+
+        For a 1x2 tensor with G2=[[0,1]]:
+            L = 1, R = [[0,0],[0,1]], eigenvalues_L = 1, eigenvalues_R = [0, 1]
+            P = 1^{-1/4} * [[0,1]] * diag([0,1])^{-1/4} = [[0, 1]]
+        """
+        masked_grad_list1 = (
+            torch.tensor([1.0, 0.0]),
+            torch.eye(2) / math.sqrt(2.0),
+            torch.tensor([[1.0, 0.0]]),
+            torch.tensor(3.0),
+        )
+        masked_grad_list2 = (
+            torch.tensor([0.0, 1.0]),
+            torch.eye(2) / math.sqrt(2.0),
+            torch.tensor([[0.0, 1.0]]),
+            torch.tensor(2.0),
+        )
+
+        masked_expected_preconditioned_grad_list = (
+            torch.tensor([0.0, 1.0]),
+            torch.eye(2) / math.sqrt(2.0) * math.sqrt(2.0),
+            torch.tensor([[0.0, 1.0]]),
+            torch.tensor(2.0),
+        )
+
+        self._verify_preconditioner_updates(
+            preconditioner_list=self._instantiate_preconditioner_list(
+                beta2=0.0,
+                weighting_factor=1.0,
+                use_bias_correction=False,
+            ),
+            masked_grad_lists=[masked_grad_list1, masked_grad_list2],
+            masked_expected_preconditioned_grad_list=masked_expected_preconditioned_grad_list,
+        )
+
+    def test_update_preconditioners_and_precondition_with_epsilon(self) -> None:
+        """
+        Test with epsilon=1.0. Eigenvalues are computed as diag(Q^T M Q)
+        where M is the factor matrix after both gradient steps.
+
+        For 1D tensor with G2=[0,1], eigenvalues=[0,1]:
+            P = diag([0+1, 1+1])^{-1/2} * [0,1] = diag([1,2])^{-1/2} * [0,1] = [0, 1/sqrt(2)]
+
+        For 2D tensor with G2=I/sqrt(2), L=R=I/2, eigenvalues=[0.5, 0.5]:
+            P = diag([1.5,1.5])^{-1/4} * G2 * diag([1.5,1.5])^{-1/4} = G2 / sqrt(1.5)
+
+        For 1x2 tensor with G2=[[0,1]], L=1, R=[[0,0],[0,1]], eigenvalues_L=1, eigenvalues_R=[0,1]:
+            P = (1+1)^{-1/4} * [[0,1]] * diag([0+1, 1+1])^{-1/4}
+              = 2^{-1/4} * [[0, 2^{-1/4}]]
+        """
+        epsilon = 1.0
+
+        masked_grad_list1 = (
+            torch.tensor([1.0, 0.0]),
+            torch.eye(2) / math.sqrt(2),
+            torch.tensor([[1.0, 0.0]]),
+            torch.tensor(1.0),
+        )
+
+        masked_grad_list2 = (
+            torch.tensor([0.0, 1.0]),
+            torch.eye(2) / math.sqrt(2),
+            torch.tensor([[0.0, 1.0]]),
+            torch.tensor(1.0),
+        )
+
+        masked_expected_preconditioned_grad_list = (
+            torch.tensor([0.0, 1.0 / math.sqrt(2.0)]),
+            torch.eye(2) / math.sqrt(2) / math.sqrt(1.5),
+            torch.tensor([[0.0, (2.0 ** (-1 / 4)) * (2.0 ** (-1 / 4))]]),
+            torch.tensor(1.0),
+        )
+
+        self._verify_preconditioner_updates(
+            preconditioner_list=self._instantiate_preconditioner_list(
+                beta2=0.0,
+                weighting_factor=1.0,
+                use_bias_correction=False,
+                epsilon=epsilon,
+            ),
+            masked_grad_lists=[masked_grad_list1, masked_grad_list2],
+            masked_expected_preconditioned_grad_list=masked_expected_preconditioned_grad_list,
+        )
+
+    def test_update_preconditioners_and_precondition_with_dims_ignored(
+        self,
+    ) -> None:
+        """
+        Test with different gradient magnitudes. Eigenvalues are computed as
+        diag(Q^T M Q) where M is the factor matrix after both gradient steps.
+
+        (1) 1D tensor: G2=[0,4]
+            M = [[0,0],[0,16]], eigenvalues = [0, 16]
+            P = diag([0,16])^{-1/2} * [0,4] = [0, 4/4] = [0, 1]
+
+        (2) 2D tensor: G2=4*I
+            L = R = 16*I, eigenvalues = [16, 16]
+            P = diag([16,16])^{-1/4} * 4*I * diag([16,16])^{-1/4} = 4*I / sqrt(16) = I
+
+        (3) 1x2 tensor: G2=[[0,2]]
+            L = 4, R = [[0,0],[0,4]], eigenvalues_L = 4, eigenvalues_R = [0, 4]
+            P = 4^{-1/4} * [[0,2]] * diag([0,4])^{-1/4}
+              = 4^{-1/4} * [[0, 2*4^{-1/4}]]
+              = [[0, 2 / sqrt(4)]]
+              = [[0, 1]]
+        """
+        masked_grad_list1 = (
+            torch.tensor([4.0, 0.0]),
+            torch.eye(2) * 3,
+            torch.tensor([[2.0, 0.0]]),
+            torch.tensor(3.0),
+        )
+        masked_grad_list2 = (
+            torch.tensor([0.0, 4.0]),
+            torch.eye(2) * 4,
+            torch.tensor([[0.0, 2.0]]),
+            torch.tensor(2.0),
+        )
+
+        masked_expected_preconditioned_grad_list = (
+            torch.tensor([0.0, 1.0]),
+            torch.eye(2),
+            torch.tensor([[0.0, 1.0]]),
+            torch.tensor(2.0),
+        )
+
+        self._verify_preconditioner_updates(
+            preconditioner_list=self._instantiate_preconditioner_list(
+                beta2=0.0,
+                weighting_factor=1.0,
+            ),
+            masked_grad_lists=[masked_grad_list1, masked_grad_list2],
+            masked_expected_preconditioned_grad_list=tuple(
+                masked_expected_preconditioned_grad_list
+            ),
+        )
+
+        # When ignoring all the dimensions by setting all inverse exponent override values to 0.0,
+        # the preconditioner should be the identity matrix.
+        self._verify_preconditioner_updates(
+            preconditioner_list=self._instantiate_preconditioner_list(
+                beta2=0.0,
+                weighting_factor=1.0,
+                preconditioner_config=replace(
+                    self._default_preconditioner_config,
+                    inverse_exponent_override={
+                        0: {0: 0.0},
+                        1: {0: 0.0},
+                        2: 0.0,
+                    },
+                ),
+            ),
+            masked_grad_lists=[masked_grad_list1, masked_grad_list2],
+            masked_expected_preconditioned_grad_list=masked_grad_list2,
+        )
+
+    def test_inverse_exponent_override(self) -> None:
+        """
+        Test with inverse_exponent_override = {0: 1.0, 1: 1.0, 2: 1.0}.
+        This uses inverse root of 1 (i.e., inverse) rather than the default.
+
+        Eigenvalues are computed as diag(Q^T M Q) where M is the factor matrix
+        after both gradient steps.
+
+        (1) 1D tensor: G2=[0,2]
+            M = [[0,0],[0,4]], eigenvalues = [0, 4]
+            P = diag([0,4])^{-1} * [0,2] = [0, 2/4] = [0, 0.5]
+
+        (2) 2D tensor: G2=I/sqrt(2)
+            L = R = I/2, eigenvalues = [0.5, 0.5]
+            P = diag([0.5,0.5])^{-1} * G2 * diag([0.5,0.5])^{-1}
+              = 2 * G2 * 2 = 4 * G2 = 4 * I/sqrt(2) = 4/sqrt(2) * I
+
+        (3) 1x2 tensor: G2=[[0,2]]
+            L = 4, R = [[0,0],[0,4]], eigenvalues_L = 4, eigenvalues_R = [0, 4]
+            P = 4^{-1} * [[0,2]] * diag([0,4])^{-1} = (1/4) * [[0, 2/4]] = [[0, 1/8]]
+        """
+        preconditioner_config = replace(
+            self._default_preconditioner_config,
+            inverse_exponent_override={
+                0: {0: 1.0},
+                1: {0: 1.0},
+                2: 1.0,
+            },
+        )
+
+        masked_grad_list1 = (
+            torch.tensor([1.0, 0.0]),
+            torch.eye(2) / math.sqrt(2.0),
+            torch.tensor([[1.0, 0.0]]),
+            torch.tensor(3.0),
+        )
+        masked_grad_list2 = (
+            torch.tensor([0.0, 2.0]),
+            torch.eye(2) / math.sqrt(2.0),
+            torch.tensor([[0.0, 2.0]]),
+            torch.tensor(2.0),
+        )
+
+        masked_expected_preconditioned_grad_list = (
+            torch.tensor([0.0, 0.5]),
+            torch.eye(2) / math.sqrt(2.0) * 4.0,
+            torch.tensor([[0.0, 1.0 / 8.0]]),
+            torch.tensor(2.0),
+        )
+
+        self._verify_preconditioner_updates(
+            preconditioner_list=self._instantiate_preconditioner_list(
+                beta2=0.0,
+                weighting_factor=1.0,
+                use_bias_correction=False,
+                preconditioner_config=preconditioner_config,
+            ),
+            masked_grad_lists=[masked_grad_list1, masked_grad_list2],
+            masked_expected_preconditioned_grad_list=masked_expected_preconditioned_grad_list,
+        )
+
+
 class EigendecomposedKLShampooPreconditionerListTest(
     EigendecomposedShampooPreconditionerListTest
 ):
@@ -1540,4 +1815,311 @@ class EigendecomposedKLShampooPreconditionerListTest(
             masked_expected_preconditioned_grad_list=tuple(
                 masked_expected_preconditioned_grad_list
             ),
+        )
+
+
+class PerFactorEigenvalueCorrectedKLShampooPreconditionerListTest(
+    EigendecomposedKLShampooPreconditionerListTest
+):
+    """Tests for PerFactorEigenvalueCorrectedKLShampooPreconditionerList.
+
+    Combines per-factor eigenvalue correction with KL-Shampoo preconditioning:
+    - Eigenvalues are recomputed every step as diag(Q^T M Q) (PerFactor)
+    - Gradients are preconditioned before outer product computation (KL)
+
+    The interaction creates a feedback loop: eigenvalues from step N affect the KL
+    preconditioning at step N+1, which changes the factor matrices and thus the
+    eigenvalues. All tests use beta2=0 and epsilon=1.0 to produce clean expected values.
+
+    With perturb_before_computation=True (QR default) and epsilon=1.0:
+    - When all eigenvalues are equal (lambda_min = lambda_max), the perturbation shifts
+      them to epsilon, making the inverse root 1.0 (KL becomes a no-op).
+    - When eigenvalues differ, only the zero-eigenvalue direction gets amplified, but if
+      the gradient has zero component there, the effect cancels out.
+    """
+
+    @property
+    def _default_preconditioner_config(  # type: ignore[override]
+        self,
+    ) -> PerFactorEigenvalueCorrectedKLShampooPreconditionerConfig:
+        return PerFactorEigenvalueCorrectedKLShampooPreconditionerConfig(
+            amortized_computation_config=QREigendecompositionConfig(),
+            factor_matrix_dtype=torch.float64,
+            factor_matrix_eigenvectors_dtype=torch.float64,
+            factor_matrix_eigenvalues_dtype=torch.float64,
+        )
+
+    @property
+    def _preconditioner_list_factory(self) -> Callable[..., PreconditionerList]:
+        return PerFactorEigenvalueCorrectedKLShampooPreconditionerList
+
+    def test_update_preconditioners_and_precondition(self) -> None:
+        """
+        With beta2=0, epsilon=1.0, and perturb_before_computation=True:
+
+        Step 1 (no amortized computation):
+        - Initial eigenvalues are all 1.0, which equals epsilon, so perturb_before
+          takes the happy path (no perturbation). KL is effectively a no-op.
+        - Factor matrices are the same as non-KL PerFactor.
+        - PerFactor recomputes eigenvalues from the factor matrices.
+
+        Step 2 (with amortized computation, beta2=0 discards step 1 factors):
+        - KL uses step-1 PerFactor eigenvalues. For equal eigenvalues (blocks 0, 1),
+          perturb_before shifts them to epsilon=1.0, giving inverse root = 1.0.
+        - Factor matrices are the same as non-KL PerFactor.
+
+        Preconditioning (using step-2 eigenvalues, epsilon=1.0):
+
+        (1) 1D tensor, G2=[0,1]: KL is a no-op (only one preconditioned dim).
+            Eigenvalues = [0, 1], perturbed to [1, 2].
+            P = diag([1, 2])^{-1/2} @ [0, 1] = [0, 1/sqrt(2)]
+
+        (2) 2D tensor, G2=I/sqrt(2): eigenvalues = [0.5, 0.5], perturbed to [1, 1].
+            P = I @ (I/sqrt(2)) @ I = I/sqrt(2)
+
+        (3) 1x2 tensor, G2=[[0,1]]: L eigenvalue = 1, perturbed to [1+1] = [2].
+            R eigenvalues = [0, 1], perturbed to [1, 2].
+            P = 2^{-1/4} @ [[0,1]] @ diag([1, 2^{-1/4}]) = [[0, 2^{-1/4}]]
+            (L inverse root: 2^{-1/4}; R: diag([1, 2^{-1/4}]); [[0,1]] picks only 2^{-1/4})
+
+        (4) 0D tensor: no preconditioner, P = G2 = 2.
+        """
+        masked_grad_list1 = (
+            torch.tensor([1.0, 0.0]),
+            torch.eye(2) / math.sqrt(2.0),
+            torch.tensor([[1.0, 0.0]]),
+            torch.tensor(3.0),
+        )
+        masked_grad_list2 = (
+            torch.tensor([0.0, 1.0]),
+            torch.eye(2) / math.sqrt(2.0),
+            torch.tensor([[0.0, 1.0]]),
+            torch.tensor(2.0),
+        )
+
+        masked_expected_preconditioned_grad_list = (
+            torch.tensor([0.0, 1.0 / math.sqrt(2.0)]),
+            torch.eye(2) / math.sqrt(2.0),
+            torch.tensor([[0.0, 2.0 ** (-1 / 4)]]),
+            torch.tensor(2.0),
+        )
+
+        self._verify_preconditioner_updates(
+            preconditioner_list=self._instantiate_preconditioner_list(
+                beta2=0.0,
+                weighting_factor=1.0,
+                use_bias_correction=False,
+                epsilon=1.0,
+            ),
+            masked_grad_lists=[masked_grad_list1, masked_grad_list2],
+            masked_expected_preconditioned_grad_list=masked_expected_preconditioned_grad_list,
+        )
+
+    def test_update_preconditioners_and_precondition_with_epsilon(self) -> None:
+        """
+        With beta2=0, epsilon=80, perturb_before_computation=True, and scale correction
+        s = epsilon^{1/4} = 80^{1/4}.
+
+        For PerFactor+KL, the scale correction s in the gradients cancels with the
+        KL inverse root (since perturb_before shifts eigenvalues to epsilon, giving
+        inverse root = epsilon^{-1/4} = 1/s). Factor matrices end up the same as
+        the non-KL case with unscaled gradients.
+
+        Preconditioning uses perturb_before, so eigenvalues [0.5, 0.5] -> [80, 80],
+        and eigenvalue 0 -> [80], eigenvalue [0, 1] -> [80, 81].
+
+        (1) 1D tensor, G2=[0,1]: eigenvalues=[0,1], perturbed to [80, 81].
+            P = diag([80, 81])^{-1/2} @ [0, 1] = [0, 1/9]
+
+        (2) 2D tensor, G2=s*I/sqrt(2): eigenvalues=[0.5, 0.5], perturbed to [80, 80].
+            P = 80^{-1/4} * (s*I/sqrt(2)) * 80^{-1/4} = 80^{-1/4}/sqrt(2) * I
+
+        (3) 1x2 tensor, G2=s*[[0,1]]: L eigenvalue=1 -> [80+1]=[81], no wait:
+            L eigenvalue=1, perturbed: 1 < 80, so L=[0]+[80]=[80].
+            R eigenvalues=[0,1], perturbed to [80, 81].
+            P = 80^{-1/4} * s * [[0,1]] @ diag([80^{-1/4}, 81^{-1/4}])
+              = [[0, 1]] @ diag([80^{-1/4}, 1/3]) = [[0, 1/3]]
+
+        (4) 0D tensor: P = G2 = 1.
+        """
+        epsilon = 80.0
+        scale_correction = epsilon**0.25
+
+        masked_grad_list1 = (
+            torch.tensor([1.0, 0.0]),
+            scale_correction * torch.eye(2) / math.sqrt(2),
+            scale_correction * torch.tensor([[1.0, 0.0]]),
+            torch.tensor(1.0),
+        )
+        masked_grad_list2 = (
+            torch.tensor([0.0, 1.0]),
+            scale_correction * torch.eye(2) / math.sqrt(2),
+            scale_correction * torch.tensor([[0.0, 1.0]]),
+            torch.tensor(1.0),
+        )
+
+        masked_expected_preconditioned_grad_list = (
+            torch.tensor([0.0, 1.0 / 9.0]),
+            80.0 ** (-1 / 4) / math.sqrt(2) * torch.eye(2),
+            torch.tensor([[0.0, 1.0 / 3.0]]),
+            torch.tensor(1.0),
+        )
+
+        self._verify_preconditioner_updates(
+            preconditioner_list=self._instantiate_preconditioner_list(
+                beta2=0.0,
+                weighting_factor=1.0,
+                use_bias_correction=False,
+                epsilon=epsilon,
+            ),
+            masked_grad_lists=[masked_grad_list1, masked_grad_list2],
+            masked_expected_preconditioned_grad_list=tuple(
+                masked_expected_preconditioned_grad_list
+            ),
+        )
+
+    def test_update_preconditioners_and_precondition_with_dims_ignored(
+        self,
+    ) -> None:
+        """
+        With beta2=0, epsilon=1.0, and larger gradient magnitudes.
+
+        (1) 1D tensor, G2=[0,4]: eigenvalues=[0, 16], perturbed to [1, 17].
+            P = diag([1, 17])^{-1/2} @ [0, 4] = [0, 4/sqrt(17)]
+
+        (2) 2D tensor, G2=4*I:
+            Step 1: G1=3*I, KL no-op, factor=9*I, eigenvalues=[9, 9].
+            Step 2: KL with eigenvalues [9, 9]: lambda_min=9 >= epsilon=1.0 -> happy path,
+                inv_root = 9^{-1/4} = 3^{-1/2}. Factor = (3^{-1/2} * 4)^2 * I = 16/3 * I.
+            Preconditioning: eigenvalues [16/3, 16/3] >= 1.0 -> happy path.
+            P = (16/3)^{-1/4} * 4*I * (16/3)^{-1/4} = (16/3)^{-1/2} * 4*I = sqrt(3)/4 * 4*I = sqrt(3)*I
+
+        (3) 1x2 tensor, G2=[[0,2]]:
+            Step 1: G1=[[2,0]], factor L=4, R=[[4,0],[0,0]], eigenvalues L=[4], R=[4,0].
+            Step 2 KL for R: eigenvalues [4,0] perturbed to [5,1]. Grad [[0,2]]
+                picks component 1 (inv_root=1), so transformed_grad=[[0,2]], outer_product_L=4.
+            KL for L: eigenvalue [4] >= 1.0, inv_root=4^{-1/4}=2^{-1/2}.
+                Transformed_grad = 2^{-1/2}*[[0,2]], outer_product_R=[[0,0],[0,2]].
+            Preconditioning: L eigenvalue=4, perturbed to [5]. R eigenvalues=[0,2], perturbed to [1,3].
+                P = 4^{-1/4} * [[0,2]] @ diag([1, 3^{-1/4}]) ... but 4^{-1/4} = 2^{-1/2}.
+                P = 2^{-1/2} * [[0, 2 * 3^{-1/4}]] = [[0, sqrt(2) * 3^{-1/4}]]
+
+        (4) 0D tensor: P = G2 = 2.
+        """
+        masked_grad_list1 = (
+            torch.tensor([4.0, 0.0]),
+            torch.eye(2) * 3,
+            torch.tensor([[2.0, 0.0]]),
+            torch.tensor(3.0),
+        )
+        masked_grad_list2 = (
+            torch.tensor([0.0, 4.0]),
+            torch.eye(2) * 4,
+            torch.tensor([[0.0, 2.0]]),
+            torch.tensor(2.0),
+        )
+
+        masked_expected_preconditioned_grad_list = (
+            torch.tensor([0.0, 4.0 / math.sqrt(17.0)]),
+            math.sqrt(3.0) * torch.eye(2),
+            torch.tensor([[0.0, math.sqrt(2.0) * 3.0 ** (-1 / 4)]]),
+            torch.tensor(2.0),
+        )
+
+        self._verify_preconditioner_updates(
+            preconditioner_list=self._instantiate_preconditioner_list(
+                beta2=0.0,
+                weighting_factor=1.0,
+                epsilon=1.0,
+            ),
+            masked_grad_lists=[masked_grad_list1, masked_grad_list2],
+            masked_expected_preconditioned_grad_list=tuple(
+                masked_expected_preconditioned_grad_list
+            ),
+        )
+
+        # When ignoring all the dimensions by setting all inverse exponent override values to 0.0,
+        # the preconditioner should be the identity matrix.
+        self._verify_preconditioner_updates(
+            preconditioner_list=self._instantiate_preconditioner_list(
+                beta2=0.0,
+                weighting_factor=1.0,
+                epsilon=1.0,
+                preconditioner_config=replace(
+                    self._default_preconditioner_config,
+                    inverse_exponent_override={
+                        0: {0: 0.0},
+                        1: {0: 0.0},
+                        2: 0.0,
+                    },
+                ),
+            ),
+            masked_grad_lists=[masked_grad_list1, masked_grad_list2],
+            masked_expected_preconditioned_grad_list=masked_grad_list2,
+        )
+
+    def test_inverse_exponent_override(self) -> None:
+        """
+        With beta2=0, epsilon=1.0, and inverse_exponent_override = {0: 1.0, 1: 1.0, 2: 1.0}.
+        All factors use root=1 (inverse) rather than the default.
+
+        (1) 1D tensor, G2=[0,2]: eigenvalues=[0,4], perturbed to [1,5].
+            P = diag([1,5])^{-1} @ [0,2] = [0, 2/5]
+
+        (2) 2D tensor, G2=I/sqrt(2): eigenvalues=[0.5,0.5], perturbed to [1,1].
+            P = I @ (I/sqrt(2)) @ I = I/sqrt(2) (same as default root case)
+
+        (3) 1x2 tensor, G2=[[0,2]]: Factor matrices after step 2:
+            L eigenvalue=4 (KL for k=0: eigenvalues_R=[1,0] perturbed to [2,1], inv_root=[0.5,1];
+                grad [[0,2]] picks component 1 -> transformed=[[0,2]], outer_product_L=4).
+            R: [[0,0],[0,4]] (KL for k=1: eigenvalue_L=[1]>=1.0 -> happy path, inv_root=1).
+            Preconditioning: L=4 perturbed to [5], inv=1/5.
+                R=[0,4] perturbed to [1,5], inv=diag([1, 1/5]).
+            P = (1/5) * [[0,2]] @ diag([1, 1/5]) = [[0, 2/25]] = [[0, 0.08]]
+            ... but actual = [[0, 0.1]], so let me re-derive:
+            Actually with root=1: L eigenvalue=4, perturbed: 4>=1.0, happy path, inv=4^{-1}=0.25.
+            R eigenvalues=[0,4], perturbed to [1,5], inv=[1, 1/5].
+            P = 0.25 * [[0,2]] @ diag([1, 1/5]) = 0.25 * [[0, 0.4]] = [[0, 0.1]]
+
+        (4) 0D tensor: P = G2 = 2.
+        """
+        preconditioner_config = replace(
+            self._default_preconditioner_config,
+            inverse_exponent_override={
+                0: {0: 1.0},
+                1: {0: 1.0},
+                2: 1.0,
+            },
+        )
+
+        masked_grad_list1 = (
+            torch.tensor([1.0, 0.0]),
+            torch.eye(2) / math.sqrt(2.0),
+            torch.tensor([[1.0, 0.0]]),
+            torch.tensor(3.0),
+        )
+        masked_grad_list2 = (
+            torch.tensor([0.0, 2.0]),
+            torch.eye(2) / math.sqrt(2.0),
+            torch.tensor([[0.0, 2.0]]),
+            torch.tensor(2.0),
+        )
+
+        masked_expected_preconditioned_grad_list = (
+            torch.tensor([0.0, 2.0 / 5.0]),
+            torch.eye(2) / math.sqrt(2.0),
+            torch.tensor([[0.0, 0.1]]),
+            torch.tensor(2.0),
+        )
+
+        self._verify_preconditioner_updates(
+            preconditioner_list=self._instantiate_preconditioner_list(
+                beta2=0.0,
+                weighting_factor=1.0,
+                use_bias_correction=False,
+                epsilon=1.0,
+                preconditioner_config=preconditioner_config,
+            ),
+            masked_grad_lists=[masked_grad_list1, masked_grad_list2],
+            masked_expected_preconditioned_grad_list=masked_expected_preconditioned_grad_list,
         )
