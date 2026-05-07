@@ -50,6 +50,8 @@ from distributed_shampoo.preconditioner.shampoo_preconditioner_list import (
     EigendecomposedKLShampooPreconditionerList,
     EigendecomposedShampooPreconditionerList,
     EigenvalueCorrectedShampooPreconditionerList,
+    PerFactorEigenvalueCorrectedKLShampooPreconditionerList,
+    PerFactorEigenvalueCorrectedShampooPreconditionerList,
     RootInvKLShampooPreconditionerList,
     RootInvShampooPreconditionerList,
 )
@@ -76,6 +78,8 @@ from distributed_shampoo.shampoo_types import (
     EigendecomposedShampooPreconditionerConfig,
     EigenvalueCorrectedShampooPreconditionerConfig,
     EPSILON,
+    PerFactorEigenvalueCorrectedKLShampooPreconditionerConfig,
+    PerFactorEigenvalueCorrectedShampooPreconditionerConfig,
     FILTERED_GRAD,
     FILTERED_GRAD_LIST,
     FSDPDistributedConfig,
@@ -687,8 +691,10 @@ class DistributedShampoo(torch.optim.Optimizer):
                 RootInvShampooPreconditionerConfig()
                 | EigendecomposedShampooPreconditionerConfig()
                 | EigenvalueCorrectedShampooPreconditionerConfig()
+                | PerFactorEigenvalueCorrectedShampooPreconditionerConfig()
                 | RootInvKLShampooPreconditionerConfig()
                 | EigendecomposedKLShampooPreconditionerConfig()
+                | PerFactorEigenvalueCorrectedKLShampooPreconditionerConfig()
             ):
                 preconditioner_config_to_list_cls: dict[
                     type[PreconditionerConfig], Callable[..., PreconditionerList]
@@ -696,8 +702,10 @@ class DistributedShampoo(torch.optim.Optimizer):
                     RootInvShampooPreconditionerConfig: RootInvShampooPreconditionerList,
                     EigendecomposedShampooPreconditionerConfig: EigendecomposedShampooPreconditionerList,
                     EigenvalueCorrectedShampooPreconditionerConfig: EigenvalueCorrectedShampooPreconditionerList,
+                    PerFactorEigenvalueCorrectedShampooPreconditionerConfig: PerFactorEigenvalueCorrectedShampooPreconditionerList,
                     RootInvKLShampooPreconditionerConfig: RootInvKLShampooPreconditionerList,
                     EigendecomposedKLShampooPreconditionerConfig: EigendecomposedKLShampooPreconditionerList,
+                    PerFactorEigenvalueCorrectedKLShampooPreconditionerConfig: PerFactorEigenvalueCorrectedKLShampooPreconditionerList,
                 }
                 beta2 = group[BETAS][1]
                 return preconditioner_config_to_list_cls[type(preconditioner_config)](

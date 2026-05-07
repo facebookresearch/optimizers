@@ -39,6 +39,8 @@ from distributed_shampoo.shampoo_types import (
     EigenvalueCorrectedShampooPreconditionerConfig,
     GeneralizedPrimalAveragingConfig,
     IterateAveragingConfig,
+    PerFactorEigenvalueCorrectedKLShampooPreconditionerConfig,
+    PerFactorEigenvalueCorrectedShampooPreconditionerConfig,
     PreconditionerConfig,
     RootInvKLShampooPreconditionerConfig,
     RootInvShampooPreconditionerConfig,
@@ -1017,6 +1019,37 @@ class EigendecomposedKLShampooStateDictTest(EigendecomposedShampooStateDictTest)
     @property
     def _preconditioner_config(self) -> EigendecomposedKLShampooPreconditionerConfig:
         return EigendecomposedKLShampooPreconditionerConfig()
+
+
+class PerFactorEigenvalueCorrectedShampooStateDictTest(
+    EigendecomposedShampooStateDictTest
+):
+    @property
+    def _preconditioner_config(
+        self,
+    ) -> PerFactorEigenvalueCorrectedShampooPreconditionerConfig:
+        return PerFactorEigenvalueCorrectedShampooPreconditionerConfig()
+
+    @property
+    def _ref_state_dict(self) -> dict[str, Any]:
+        ref = super()._ref_state_dict
+        # PerFactor variant zero-initializes eigenvalues (EMA accumulates from zero).
+        for block_key, block_val in ref["state"][0].items():
+            if isinstance(block_val, dict) and "shampoo" in block_val:
+                evs = block_val["shampoo"]["factor_matrices_eigenvalues"]
+                for k in evs:
+                    evs[k] = torch.zeros_like(evs[k])
+        return ref
+
+
+class PerFactorEigenvalueCorrectedKLShampooStateDictTest(
+    PerFactorEigenvalueCorrectedShampooStateDictTest
+):
+    @property
+    def _preconditioner_config(
+        self,
+    ) -> PerFactorEigenvalueCorrectedKLShampooPreconditionerConfig:
+        return PerFactorEigenvalueCorrectedKLShampooPreconditionerConfig()
 
 
 class SignDescentStateDictTest(AbstractTest.NoPreconditionerStateDictTestBase):
