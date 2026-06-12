@@ -1,0 +1,5 @@
+torch >= 2.4.0
+torchdata >= 0.8.0
+datasets >= 3.6.0, < 4.8.0
+tokenizers >= 0.15.0
+wandb >= 0.16.0
