@@ -19,8 +19,6 @@ Running tests:
     python -m unittest gpa.tests.gpa_equivalence_test -v
 """
 
-# pyre-unsafe
-
 import unittest
 
 import torch
@@ -113,12 +111,77 @@ class GPAEquivalenceTest(unittest.TestCase):
 
         Tested with both weight_decay=0 and weight_decay>0. Not bitwise equal
         due to different floating point operation ordering between GPA and
-        PyTorch's AdamW implementation (e.g., GPA applies weight decay
-        by adding it to the search direction while AdamW multiplies it to the parameters directly).
+        PyTorch's AdamW implementation (e.g., GPA applies weight decay as
+        z-shrinkage z.mul_(1 - lr * wd) while AdamW multiplies it to the
+        parameters directly, but the mathematical result is equivalent).
         """
         for weight_decay in [0.0, 0.01]:
             with self.subTest(weight_decay=weight_decay):
                 self._assert_gpa_matches_adamw(weight_decay)
+
+    def test_use_wd_on_y_with_eval_interp_coeff_one(self) -> None:
+        """
+        Test use_wd_on_y behavior when eval_interp_coeff=1.0 (x never updates).
+
+        When eval_interp_coeff=1.0, avg_coeff=0, so the y-lerp is a no-op
+        and z never feeds into y. This means:
+        - use_wd_on_y=False (decay on z) should have no effect on y-parameters,
+          producing the same y as weight_decay=0.
+        - use_wd_on_y=True (decay on y) should produce different y-parameters
+          from weight_decay=0, confirming the decay takes effect.
+
+        This exercises the use_wd_on_y=True code path, which is motivated by
+        LaProp-style weight decay (applied to y=x when train_interp_coeff=1.0).
+        """
+        device = torch.device("cpu")
+        eval_interp_coeff = 1.0
+        weight_decay = 0.01
+
+        y_params = {}
+        for label, wd, use_wd_on_y in [
+            ("no_wd", 0.0, False),
+            ("wd_on_z", weight_decay, False),
+            ("wd_on_y", weight_decay, True),
+        ]:
+            torch.manual_seed(self.seed)
+            model = nn.Linear(10, 5, bias=False).to(device)
+            optimizer = GPAAdamW(
+                model.parameters(),
+                lr=self.lr,
+                beta1=self.beta1,
+                beta2=self.beta2,
+                eps=self.eps,
+                weight_decay=wd,
+                use_wd_on_y=use_wd_on_y,
+                train_interp_coeff=1.0,
+                eval_interp_coeff=eval_interp_coeff,
+                iterate_averaging_type=IterateAveragingType.GPA,
+            )
+
+            torch.manual_seed(100)
+            gradients = [
+                torch.randn(5, 10, device=device) for _ in range(self.num_steps)
+            ]
+
+            optimizer.train()
+            run_optimizer_steps(optimizer, model, gradients)
+
+            y_params[label] = list(model.parameters())[0].data.clone()
+
+        # z-decay should not affect y when eval_interp_coeff=1.0
+        torch.testing.assert_close(
+            y_params["wd_on_z"],
+            y_params["no_wd"],
+            atol=0.0,
+            rtol=0.0,
+            msg="weight decay on z should not affect y when eval_interp_coeff=1.0",
+        )
+
+        # y-decay should affect y
+        self.assertFalse(
+            torch.allclose(y_params["wd_on_y"], y_params["no_wd"]),
+            "weight decay on y should affect y-parameters",
+        )
 
 
 if __name__ == "__main__":

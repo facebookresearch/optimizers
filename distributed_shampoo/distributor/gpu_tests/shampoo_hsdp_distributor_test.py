@@ -7,8 +7,6 @@ LICENSE file in the root directory of this source tree.
 
 """
 
-#!/usr/bin/env python3
-
 import re
 import unittest
 from collections.abc import Callable
@@ -38,6 +36,7 @@ from distributed_shampoo.shampoo_types import (
 from distributed_shampoo.tests.shampoo_test_utils import (
     compare_two_optimizers_models_devices_on_weight_and_loss,
     construct_training_problem,
+    generate_global_train_data,
     train_model,
 )
 from torch import distributed as dist, nn
@@ -154,6 +153,12 @@ class ShampooHSDPDistributorTest(FSDPTest):
             communicate_params=communicate_params,
         )
 
+        global_train_data = generate_global_train_data(
+            num_steps=5,
+            world_size=dist.get_world_size(),
+            data_shape=(4 * PRECONDITIONER_DIM * PRECONDITIONER_DIM,),
+            device=torch.device("cuda"),
+        )
         compare_two_optimizers_models_devices_on_weight_and_loss(
             control_optim_factory=ShampooHSDPDistributorTest._shampoo_optim_factory(
                 distributed_config=DefaultSingleDeviceDistributedConfig,
@@ -172,6 +177,8 @@ class ShampooHSDPDistributorTest(FSDPTest):
                 ),
                 distributed_config=hsdp_config,
             ),
+            control_train_data=global_train_data,
+            experimental_train_data=global_train_data[:, dist.get_rank()],
         )
 
     @skip_if_lt_x_gpu(4)
@@ -182,6 +189,12 @@ class ShampooHSDPDistributorTest(FSDPTest):
             device_mesh=mesh_2d,
         )
 
+        global_train_data = generate_global_train_data(
+            num_steps=5,
+            world_size=dist.get_world_size(),
+            data_shape=(4 * PRECONDITIONER_DIM * PRECONDITIONER_DIM,),
+            device=torch.device("cuda"),
+        )
         model, _, _, _, optimizer = train_model(
             optim_factory=ShampooHSDPDistributorTest._shampoo_optim_factory(
                 hsdp_config
@@ -196,6 +209,7 @@ class ShampooHSDPDistributorTest(FSDPTest):
                 ),
                 distributed_config=hsdp_config,
             ),
+            train_data=global_train_data[:, dist.get_rank()],
         )
         assert isinstance(optimizer, DistributedShampoo)
         osd_state = optimizer.state_dict()["state"]
@@ -243,6 +257,12 @@ class ShampooHSDPDistributorTest(FSDPTest):
         )
 
         steps_without_gradients = 2
+        global_train_data = generate_global_train_data(
+            num_steps=steps_without_gradients,
+            world_size=dist.get_world_size(),
+            data_shape=(4 * PRECONDITIONER_DIM * PRECONDITIONER_DIM,),
+            device=torch.device("cuda"),
+        )
         with unittest.mock.patch.object(torch.Tensor, "backward") as mock_backward:
             # By mocking the backward() method, we're intercepting gradient calculation.
             # This effectively simulates running forward passes without computing gradients.
@@ -260,7 +280,7 @@ class ShampooHSDPDistributorTest(FSDPTest):
                     ),
                     distributed_config=hsdp_config,
                 ),
-                num_steps=steps_without_gradients,
+                train_data=global_train_data[:, dist.get_rank()],
             )
 
         # Verify that the backward() method was called the expected number of times and the training loop completed successfully.

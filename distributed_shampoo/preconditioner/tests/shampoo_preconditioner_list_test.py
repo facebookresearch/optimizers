@@ -7,8 +7,6 @@ LICENSE file in the root directory of this source tree.
 
 """
 
-#!/usr/bin/env python3
-
 import abc
 import math
 import re
@@ -77,11 +75,13 @@ class InverseRootProperties(AmortizedComputationProperties):
     """Dataclass for properties of matrix_inverse_root function."""
 
     amortized_computation_function_name: str = "matrix_inverse_root"
+    # pyrefly: ignore [bad-override-mutable-attribute]
     invalid_amortized_computation_return_values: tuple[Tensor, Tensor] = (
-        torch.tensor([torch.nan]),
-        torch.tensor([torch.inf]),
+        torch.tensor([[torch.nan]]),
+        torch.tensor([[torch.inf]]),
     )
-    valid_amortized_computation_return_value: Tensor = torch.tensor([1.0])
+    # pyrefly: ignore [bad-override-mutable-attribute]
+    valid_amortized_computation_return_value: Tensor = torch.tensor([[1.0]])
 
 
 @dataclass
@@ -89,12 +89,14 @@ class EigendecompositionProperties(AmortizedComputationProperties):
     """Dataclass for properties of matrix_eigendecomposition function."""
 
     amortized_computation_function_name: str = "matrix_eigendecomposition"
+    # pyrefly: ignore [bad-override-mutable-attribute]
     invalid_amortized_computation_return_values: tuple[
         tuple[Tensor, Tensor], tuple[Tensor, Tensor]
     ] = (
         (torch.tensor([torch.nan]), torch.tensor([torch.nan])),
         (torch.tensor([torch.inf]), torch.tensor([torch.inf])),
     )
+    # pyrefly: ignore [bad-override-mutable-attribute]
     valid_amortized_computation_return_value: tuple[Tensor, Tensor] = (
         torch.tensor([1.0]),
         torch.tensor([1.0]),
@@ -173,9 +175,9 @@ class AbstractTest:
                     torch,
                     "sqrt",
                     side_effect=(
-                        -math.inf
-                        if v
-                        else math.inf  # Return -inf for True (skip) and inf for False (compute)
+                        (
+                            -math.inf if v else math.inf
+                        )  # Return -inf for True (skip) and inf for False (compute)
                         for v in CRITERION_RESULTS
                     ),
                 ) as mock_criterion,
@@ -563,9 +565,11 @@ class AbstractTest:
 
             # Create a control preconditioner list, using identity matrices where not preconditioning.
             control_preconditioner_list = tuple(
-                preconditioner
-                if should_precondition
-                else torch.eye(preconditioner.shape[0])
+                (
+                    preconditioner
+                    if should_precondition
+                    else torch.eye(preconditioner.shape[0])
+                )
                 for preconditioner, should_precondition in zip(
                     preconditioner_list,
                     experimental_preconditioned_dims_selector,
@@ -616,6 +620,59 @@ class AbstractTest:
         @property
         def _expected_compress_list_call_count(self) -> int:
             return 3
+
+        def test_drop_weighting_factor_on_gsquare_skips_bias_correction2(self) -> None:
+            # When drop_weighting_factor_on_gsquare=True, the recurrence is no longer
+            # an EMA, so _bias_correction2 must stay at 1.0 even with use_bias_correction=True
+            # and beta2 < 1.
+            beta2 = 0.9
+            preconditioner_list = self._instantiate_preconditioner_list(
+                beta2=beta2,
+                weighting_factor=1.0,
+                use_bias_correction=True,
+                preconditioner_config=replace(
+                    self._default_preconditioner_config,
+                    drop_weighting_factor_on_gsquare=True,
+                ),
+            )
+            assert isinstance(preconditioner_list, BaseShampooPreconditionerList)
+            preconditioner_list.update_preconditioners(
+                masked_grad_list=(
+                    torch.tensor([1.0, 0.0]),
+                    torch.eye(2) / math.sqrt(2.0),
+                    torch.tensor([[1.0, 0.0]]),
+                    torch.tensor(1.0),
+                ),
+                step=torch.tensor(5),
+                perform_amortized_computation=False,
+            )
+            self.assertEqual(preconditioner_list._bias_correction2.item(), 1.0)
+
+        def test_bias_correction2_applied_when_drop_weighting_factor_off(self) -> None:
+            # Sanity check: when drop_weighting_factor_on_gsquare=False (the default), the
+            # standard 1 - beta2**step formula is still applied.
+            beta2 = 0.9
+            step = 5
+            preconditioner_list = self._instantiate_preconditioner_list(
+                beta2=beta2,
+                weighting_factor=1 - beta2,
+                use_bias_correction=True,
+            )
+            assert isinstance(preconditioner_list, BaseShampooPreconditionerList)
+            preconditioner_list.update_preconditioners(
+                masked_grad_list=(
+                    torch.tensor([1.0, 0.0]),
+                    torch.eye(2) / math.sqrt(2.0),
+                    torch.tensor([[1.0, 0.0]]),
+                    torch.tensor(1.0),
+                ),
+                step=torch.tensor(step),
+                perform_amortized_computation=False,
+            )
+            torch.testing.assert_close(
+                preconditioner_list._bias_correction2,
+                torch.tensor(1.0 - beta2**step),
+            )
 
     class ClassicShampooPreconditionerListTest(BaseShampooPreconditionerListTest):
         @property
@@ -828,6 +885,43 @@ class AbstractTest:
                 masked_grad_lists=[masked_grad_list1, masked_grad_list2],
                 masked_expected_preconditioned_grad_list=tuple(
                     masked_expected_preconditioned_grad_list_trace_scaling
+                ),
+            )
+
+            """
+            For the case of beta2 = 1, use_trace_scaling = True, and a non-default
+            trace_scaling_exponent = 1.0, the factor matrix is normalized by trace ** (-1.0)
+            (instead of the default sqrt, i.e. trace ** (-0.5)) before the inverse root.
+
+            With L = R = I (trace = 2): L' = R' = I * 2 ** (-1.0) = I / 2.
+
+            (1) Tensor of Size 2:   P = L'^{-1/2} G2 = 2^{1/2} * G2
+            (2) Tensor of Size 2 x 2: P = L'^{-1/4} G2 R'^{-1/4} = 2^{1/4} * G2 * 2^{1/4} = 2^{1/2} * G2
+            (3) Tensor of Size 1 x 2: L = 2 (scalar) -> L' = 1 -> L'^{-1/4} = 1; R' = I / 2 -> R'^{-1/4} = 2^{1/4}
+                P = 1 * G2 * 2^{1/4} = 2^{1/4} * G2
+            (4) Tensor of Size 0:   No preconditioner is applied. P = G2.
+            """
+            masked_expected_preconditioned_grad_list_trace_scaling_exponent = [
+                masked_grad_list2[0] * 2.0 ** (1 / 2),
+                masked_grad_list2[1] * 2.0 ** (1 / 2),
+                masked_grad_list2[2] * 2.0 ** (1 / 4),
+                masked_grad_list2[3],  # 0D tensor, no preconditioner
+            ]
+
+            self._verify_preconditioner_updates(
+                preconditioner_list=self._instantiate_preconditioner_list(
+                    beta2=1.0,
+                    weighting_factor=1.0,
+                    use_bias_correction=True,
+                    preconditioner_config=replace(
+                        self._default_preconditioner_config,
+                        use_trace_scaling=True,
+                        trace_scaling_exponent=1.0,
+                    ),
+                ),
+                masked_grad_lists=[masked_grad_list1, masked_grad_list2],
+                masked_expected_preconditioned_grad_list=tuple(
+                    masked_expected_preconditioned_grad_list_trace_scaling_exponent
                 ),
             )
 
@@ -1101,6 +1195,9 @@ class RootInvShampooPreconditionerListTest(
             DefaultShampooConfig,
             factor_matrix_dtype=torch.float64,
             inv_factor_matrix_dtype=torch.float64,
+            # Pin to True so the standard packed path is exercised even if the
+            # config default changes in the future.
+            use_symmetric_packing=True,
         )
 
     @property
@@ -1129,6 +1226,9 @@ class EigendecomposedShampooPreconditionerListTest(
             factor_matrix_dtype=torch.float64,
             factor_matrix_eigenvectors_dtype=torch.float64,
             factor_matrix_eigenvalues_dtype=torch.float64,
+            # Pin to True so the standard packed path is exercised even if the
+            # config default changes in the future.
+            use_symmetric_packing=True,
         )
 
     @property
@@ -1152,6 +1252,9 @@ class EigenvalueCorrectedShampooPreconditionerListTest(
             factor_matrix_dtype=torch.float64,
             factor_matrix_eigenvectors_dtype=torch.float64,
             corrected_eigenvalues_dtype=torch.float64,
+            # Pin to True so the standard packed path is exercised even if the
+            # config default changes in the future.
+            use_symmetric_packing=True,
         )
 
     @property
@@ -1414,6 +1517,9 @@ class RootInvKLShampooPreconditionerListTest(RootInvShampooPreconditionerListTes
         return replace(
             RootInvKLShampooPreconditionerConfig(),
             factor_matrix_dtype=torch.float64,
+            # Pin to True so the standard packed path is exercised even if the
+            # config default changes in the future.
+            use_symmetric_packing=True,
         )
 
     @property
@@ -1438,6 +1544,9 @@ class EigendecomposedKLShampooPreconditionerListTest(
             factor_matrix_dtype=torch.float64,
             factor_matrix_eigenvectors_dtype=torch.float64,
             factor_matrix_eigenvalues_dtype=torch.float64,
+            # Pin to True so the standard packed path is exercised even if the
+            # config default changes in the future.
+            use_symmetric_packing=True,
         )
 
     @property
@@ -1540,4 +1649,69 @@ class EigendecomposedKLShampooPreconditionerListTest(
             masked_expected_preconditioned_grad_list=tuple(
                 masked_expected_preconditioned_grad_list
             ),
+        )
+
+
+# ---- Unpacked (use_symmetric_packing=False) test variants ----
+# These rerun all tests with symmetric packing disabled to verify the unpacked path.
+
+
+class RootInvShampooPreconditionerListUnpackedTest(
+    RootInvShampooPreconditionerListTest,
+):
+    @property
+    def _default_preconditioner_config(self) -> RootInvShampooPreconditionerConfig:
+        return replace(
+            super()._default_preconditioner_config,
+            use_symmetric_packing=False,
+        )
+
+
+class EigendecomposedShampooPreconditionerListUnpackedTest(
+    EigendecomposedShampooPreconditionerListTest,
+):
+    @property
+    def _default_preconditioner_config(  # type: ignore[override]
+        self,
+    ) -> EigendecomposedShampooPreconditionerConfig:
+        return replace(
+            super()._default_preconditioner_config,
+            use_symmetric_packing=False,
+        )
+
+
+class EigenvalueCorrectedShampooPreconditionerListUnpackedTest(
+    EigenvalueCorrectedShampooPreconditionerListTest,
+):
+    @property
+    def _default_preconditioner_config(
+        self,
+    ) -> EigenvalueCorrectedShampooPreconditionerConfig:
+        return replace(
+            super()._default_preconditioner_config,
+            use_symmetric_packing=False,
+        )
+
+
+class RootInvKLShampooPreconditionerListUnpackedTest(
+    RootInvKLShampooPreconditionerListTest,
+):
+    @property
+    def _default_preconditioner_config(self) -> RootInvShampooPreconditionerConfig:
+        return replace(
+            super()._default_preconditioner_config,
+            use_symmetric_packing=False,
+        )
+
+
+class EigendecomposedKLShampooPreconditionerListUnpackedTest(
+    EigendecomposedKLShampooPreconditionerListTest,
+):
+    @property
+    def _default_preconditioner_config(  # type: ignore[override]
+        self,
+    ) -> EigendecomposedKLShampooPreconditionerConfig:
+        return replace(
+            super()._default_preconditioner_config,
+            use_symmetric_packing=False,
         )

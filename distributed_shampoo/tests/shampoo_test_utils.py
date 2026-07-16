@@ -16,7 +16,35 @@ import torch
 from torch import nn
 from torch.distributed.fsdp import FSDPModule, fully_shard, FullyShardedDataParallel
 from torch.distributed.tensor import DTensor
+from torch.nn.parallel import DistributedDataParallel
 from torch.optim.optimizer import ParamsT
+
+
+def generate_global_train_data(
+    num_steps: int,
+    world_size: int,
+    data_shape: tuple[int, ...],
+    device: torch.device | None = None,
+    seed: int = 42,
+) -> torch.Tensor:
+    """Generate global training data with shape (num_steps, world_size, *data_shape).
+
+    Args:
+        num_steps (int): Number of training steps.
+        world_size (int): Number of data-parallel workers.
+        data_shape (tuple[int, ...]): Shape of each data sample.
+        device (torch.device | None): Device to place data on. (Default: None)
+        seed (int): Random seed for reproducibility. (Default: 42)
+
+    Returns:
+        torch.Tensor: Global training data of shape (num_steps, world_size, *data_shape).
+    """
+    torch.manual_seed(seed)
+    data = torch.randn(num_steps, world_size, *data_shape, dtype=torch.float)
+    data /= torch.linalg.norm(data, dim=-1, keepdim=True)
+    if device is not None:
+        data = data.to(device=device)
+    return data
 
 
 class _ModelWithScalarAndLinearAndDeadLayers(nn.Module):
@@ -100,7 +128,6 @@ def construct_training_problem(
         fill (float | tuple[float, ...]): The value(s) to fill the model parameters. If a tuple, each element should correspond to one layer. (Default: 0.0)
         post_model_decoration (Callable[[nn.Module], nn.Module | FSDPModule]): A function to apply additional modifications to the model, useful for FullyShardedDataParallel and FSDPModule. (Default: identity function)
 
-
     Returns:
         model (nn.Module | FSDPModule): The model as specified from the input arguments.
         loss (nn.Module): The loss function (currently always set to MSE).
@@ -136,7 +163,8 @@ def construct_training_problem(
 
     loss = nn.MSELoss()
 
-    target = torch.tensor([[0.0] * model_linear_layers_dims[-1]]).to(device=device)
+    # Citrine C3: create tensor directly on device
+    target = torch.tensor([[0.0] * model_linear_layers_dims[-1]], device=device)
 
     return post_model_decoration(model), loss, data, target
 
@@ -148,6 +176,7 @@ def train_model(
         [], tuple[nn.Module, nn.Module, torch.Tensor, torch.Tensor]
     ],
     num_steps: int = 5,
+    train_data: torch.Tensor | None = None,
 ) -> tuple[nn.Module, nn.Module, torch.Tensor, torch.Tensor, torch.optim.Optimizer]: ...
 
 
@@ -158,6 +187,7 @@ def train_model(
         [], tuple[FSDPModule, nn.Module, torch.Tensor, torch.Tensor]
     ],
     num_steps: int = 5,
+    train_data: torch.Tensor | None = None,
 ) -> tuple[
     FSDPModule, nn.Module, torch.Tensor, torch.Tensor, torch.optim.Optimizer
 ]: ...
@@ -169,6 +199,7 @@ def train_model(
         [], tuple[nn.Module | FSDPModule, nn.Module, torch.Tensor, torch.Tensor]
     ],
     num_steps: int = 5,
+    train_data: torch.Tensor | None = None,
 ) -> tuple[
     nn.Module | FSDPModule, nn.Module, torch.Tensor, torch.Tensor, torch.optim.Optimizer
 ]:
@@ -183,6 +214,9 @@ def train_model(
         optim_factory (Callable[[ParamsT], torch.optim.Optimizer]): A factory function that returns an optimizer instance.
         model_factory (Callable[[], tuple[nn.Module | FSDPModule, nn.Module, torch.Tensor, torch.Tensor]]): A factory function that returns a tuple containing the model, loss function, validation data, and target data.
         num_steps (int): The number of training steps to perform. (Default: 5)
+        train_data (torch.Tensor | None): Pre-generated training data. If provided, num_steps is derived from train_data.shape[0].
+            Shape can be (num_steps, *data_shape) for single-sample-per-step or (num_steps, world_size, *data_shape) for
+            full-batch training. If None, generates data internally with seed 42. (Default: None)
 
     Returns:
         model (nn.Module | FSDPModule): The trained model.
@@ -196,17 +230,14 @@ def train_model(
     assert isinstance(model, nn.Module)
     optimizer = optim_factory(model.parameters())
 
-    # Pregenerate num_steps of tensor and put into a PyTorch dataset with seed
-    seed_value = 42
-    torch.manual_seed(seed_value)
-
-    train_data = torch.randn(num_steps, *validation_data.shape, dtype=torch.float)
-    train_data /= torch.linalg.norm(train_data, dim=1, keepdim=True)
-    train_data = train_data.to(device=validation_data.device)
-    train_dataset = torch.utils.data.TensorDataset(train_data)
-    train_loader = torch.utils.data.DataLoader(
-        train_dataset, batch_size=1, shuffle=False
-    )
+    if train_data is None:
+        # Generate training data internally (backward compat for single-device tests).
+        seed_value = 42
+        torch.manual_seed(seed_value)
+        train_data = torch.randn(num_steps, *validation_data.shape, dtype=torch.float)
+        train_data /= torch.linalg.norm(train_data, dim=-1, keepdim=True)
+        # pyrefly: ignore [missing-attribute]
+        train_data = train_data.to(device=validation_data.device)
 
     # Set optimizer to train mode if it supports train/eval modes (e.g., GPA-AdamW).
     train_mode = getattr(optimizer, "train", None)
@@ -214,10 +245,26 @@ def train_model(
         train_mode()
 
     # Train for the specified number of steps
-    for _, (step_data,) in enumerate(train_loader):
+    for step in range(train_data.shape[0]):
         optimizer.zero_grad()
-        objective = loss(model(step_data), target)
-        objective.backward()
+        step_data = train_data[step]
+
+        if step_data.ndim > validation_data.ndim:
+            # Full-batch data with an extra leading batch dimension
+            # (e.g., shape (world_size, *data_shape) vs validation_data shape (*data_shape)).
+            # Process each sample individually and average gradients to match
+            # DDP's per-sample computation + all-reduce averaging exactly.
+            batch_size = step_data.shape[0]
+            for i in range(batch_size):
+                objective = loss(model(step_data[i]), target)
+                objective.backward()
+            for param in model.parameters():
+                if param.grad is not None:
+                    param.grad /= batch_size
+        else:
+            objective = loss(model(step_data), target)
+            objective.backward()
+
         optimizer.step()
 
     return model, loss, validation_data.unsqueeze(0), target, optimizer
@@ -236,6 +283,8 @@ def compare_two_optimizers_models_devices_on_weight_and_loss(
     total_steps: int = 5,
     rtol: float | None = None,
     atol: float | None = None,
+    control_train_data: torch.Tensor | None = None,
+    experimental_train_data: torch.Tensor | None = None,
 ) -> None:
     """
     Compare the performance of two optimizers on models across different devices by evaluating their weights and loss.
@@ -249,6 +298,8 @@ def compare_two_optimizers_models_devices_on_weight_and_loss(
         total_steps (int): Number of training steps. (Default: 5)
         rtol (float | None): Relative tolerance for comparing weights and losses. (Default: None)
         atol (float | None): Absolute tolerance for comparing weights and losses. (Default: None)
+        control_train_data (torch.Tensor | None): Pre-generated training data for the control optimizer. (Default: None)
+        experimental_train_data (torch.Tensor | None): Pre-generated training data for the experimental optimizer. (Default: None)
 
     Returns:
         None
@@ -259,6 +310,7 @@ def compare_two_optimizers_models_devices_on_weight_and_loss(
         model_factory: Callable[
             [], tuple[nn.Module | FSDPModule, nn.Module, torch.Tensor, torch.Tensor]
         ],
+        train_data: torch.Tensor | None = None,
     ) -> tuple[list[torch.Tensor], torch.Tensor]:
         """
         Trains a model and returns the trained weights and final loss.
@@ -266,6 +318,7 @@ def compare_two_optimizers_models_devices_on_weight_and_loss(
         Args:
             optim_factory (Callable[[ParamsT], torch.optim.Optimizer]): A factory function to create an optimizer.
             model_factory (Callable[[], tuple[nn.Module | FSDPModule, nn.Module, torch.Tensor, torch.Tensor]]): A factory function to create a model, loss, data, and target.
+            train_data (torch.Tensor | None): Pre-generated training data. (Default: None)
 
         Returns:
             trained_weights (list[torch.Tensor]): A list of trained model parameters.
@@ -274,27 +327,35 @@ def compare_two_optimizers_models_devices_on_weight_and_loss(
         # Using partial here to prevent Pyre complaints on incompatible parameter type.
         model, loss, validation_data, target, _ = partial(
             train_model, model_factory=model_factory
-        )(optim_factory=optim_factory, num_steps=total_steps)
+        )(optim_factory=optim_factory, num_steps=total_steps, train_data=train_data)
 
         # We only care about model_linear_layers_dim params, not model_dead_layer params.
         assert isinstance(model, nn.Module)
-        linear_layers = model.get_submodule("linear_layers")
         match model:
+            case DistributedDataParallel():
+                linear_layers = model.module.get_submodule("linear_layers")
+                trained_weights = [
+                    param.view(-1).detach().cpu()
+                    for param in linear_layers.parameters()
+                ]
             case FSDPModule():
                 # When FullyShard or Hybrid Shard is used, model parameters are DTensors. We obtain the full value of
                 # parameters from DTensors.
+                linear_layers = model.get_submodule("linear_layers")
                 trained_weights = []
                 for param in linear_layers.parameters():
                     # Need this assertion to pass the type-checking test.
                     assert isinstance(param, DTensor)
                     trained_weights.append(param.full_tensor().view(-1).detach().cpu())
             case FullyShardedDataParallel():
+                linear_layers = model.get_submodule("linear_layers")
                 with FullyShardedDataParallel.summon_full_params(model):
                     trained_weights = [
                         param.view(-1).detach().cpu()
                         for param in linear_layers.parameters()
                     ]
             case _:
+                linear_layers = model.get_submodule("linear_layers")
                 trained_weights = [
                     param.view(-1).detach().cpu()
                     for param in linear_layers.parameters()
@@ -305,11 +366,13 @@ def compare_two_optimizers_models_devices_on_weight_and_loss(
     control_params, control_loss = generated_comparable_trained_weights_and_final_loss(
         optim_factory=control_optim_factory,
         model_factory=control_model_factory,
+        train_data=control_train_data,
     )
     experimental_params, experimental_loss = (
         generated_comparable_trained_weights_and_final_loss(
             optim_factory=experimental_optim_factory,
             model_factory=experimental_model_factory,
+            train_data=experimental_train_data,
         )
     )
     torch.testing.assert_close(
@@ -340,6 +403,9 @@ def compare_two_optimizers_devices_on_weight_and_loss(
     total_steps: int = 5,
     rtol: float | None = None,
     atol: float | None = None,
+    rank: int = 0,
+    world_size: int = 1,
+    experimental_post_model_decoration: Callable[[nn.Module], nn.Module] = lambda x: x,
 ) -> None:
     """
     Compare the performance of two optimizers on a simple neural network across different devices.
@@ -356,6 +422,11 @@ def compare_two_optimizers_devices_on_weight_and_loss(
         total_steps (int): The number of training steps. (Default: 5)
         rtol (float | None): The relative tolerance for comparing weights and losses. (Default: None)
         atol (float | None): The absolute tolerance for comparing weights and losses. (Default: None)
+        rank (int): The rank of the current process. (Default: 0)
+        world_size (int): The number of data-parallel workers. When world_size > 1, the control optimizer receives
+            the full global batch while the experimental optimizer receives its rank's shard. (Default: 1)
+        experimental_post_model_decoration (Callable[[nn.Module], nn.Module]): A function to apply additional modifications
+            to the experimental model (e.g., DDP wrapping). (Default: identity function)
 
     Returns:
         None
@@ -368,6 +439,27 @@ def compare_two_optimizers_devices_on_weight_and_loss(
         enable_learnable_scalar=enable_learnable_scalar,
         fill=fill,
     )
+
+    # Generate global training data for proper data-parallel sharding.
+    input_dim = model_linear_layers_dims[0]
+    # Use the experimental device for data generation (both devices see the same data).
+    data_device = experimental_device or control_device
+    global_train_data = generate_global_train_data(
+        num_steps=total_steps,
+        world_size=world_size,
+        data_shape=(input_dim,),
+        device=data_device,
+    )
+
+    if world_size == 1:
+        # Single device: both sides get the same (total_steps, input_dim) data.
+        control_train_data = global_train_data.squeeze(1)
+        experimental_train_data = global_train_data.squeeze(1)
+    else:
+        # Data parallel: control gets full batch, experimental gets its shard.
+        control_train_data = global_train_data
+        experimental_train_data = global_train_data[:, rank]
+
     compare_two_optimizers_models_devices_on_weight_and_loss(
         control_optim_factory=control_optim_factory,
         control_model_factory=partial(
@@ -375,12 +467,16 @@ def compare_two_optimizers_devices_on_weight_and_loss(
         ),
         experimental_optim_factory=experimental_optim_factory,
         experimental_model_factory=partial(
-            device_aware_training_problem_factory, device=experimental_device
+            device_aware_training_problem_factory,
+            device=experimental_device,
+            post_model_decoration=experimental_post_model_decoration,
         ),
         control_and_experimental_same_device=control_device == experimental_device,
         total_steps=total_steps,
         rtol=rtol,
         atol=atol,
+        control_train_data=control_train_data,
+        experimental_train_data=experimental_train_data,
     )
 
 
@@ -395,6 +491,9 @@ def compare_two_optimizers_on_weight_and_loss(
     total_steps: int = 5,
     rtol: float | None = None,
     atol: float | None = None,
+    rank: int = 0,
+    world_size: int = 1,
+    experimental_post_model_decoration: Callable[[nn.Module], nn.Module] = lambda x: x,
 ) -> None:
     """
     Compare the performance of two optimizers on a simple neural network using the same device.
@@ -410,6 +509,10 @@ def compare_two_optimizers_on_weight_and_loss(
         total_steps (int): The number of training steps. (Default: 5)
         rtol (float | None): The relative tolerance for comparing weights and losses. (Default: None)
         atol (float | None): The absolute tolerance for comparing weights and losses. (Default: None)
+        rank (int): The rank of the current process. (Default: 0)
+        world_size (int): The number of data-parallel workers. (Default: 1)
+        experimental_post_model_decoration (Callable[[nn.Module], nn.Module]): A function to apply additional modifications
+            to the experimental model (e.g., DDP wrapping). (Default: identity function)
 
     Returns:
         None
@@ -426,6 +529,9 @@ def compare_two_optimizers_on_weight_and_loss(
         total_steps=total_steps,
         rtol=rtol,
         atol=atol,
+        rank=rank,
+        world_size=world_size,
+        experimental_post_model_decoration=experimental_post_model_decoration,
     )
 
 
@@ -439,6 +545,8 @@ def compare_optimizer_on_cpu_and_device(
     total_steps: int = 5,
     rtol: float | None = None,
     atol: float | None = None,
+    rank: int = 0,
+    world_size: int = 1,
 ) -> None:
     """
     Compare the performance of the same optimizer on a simple neural network across CPU and another device.
@@ -453,6 +561,8 @@ def compare_optimizer_on_cpu_and_device(
         total_steps (int): The number of training steps. (Default: 5)
         rtol (float | None): The relative tolerance for comparing weights and losses. (Default: None)
         atol (float | None): The absolute tolerance for comparing weights and losses. (Default: None)
+        rank (int): The rank of the current process. (Default: 0)
+        world_size (int): The number of data-parallel workers. (Default: 1)
 
     Returns:
         None
@@ -469,4 +579,6 @@ def compare_optimizer_on_cpu_and_device(
         total_steps=total_steps,
         rtol=rtol,
         atol=atol,
+        rank=rank,
+        world_size=world_size,
     )

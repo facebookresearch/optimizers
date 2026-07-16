@@ -11,6 +11,7 @@ import logging
 import math
 import operator
 from collections.abc import Callable
+from contextlib import nullcontext
 from dataclasses import asdict, fields, is_dataclass
 from types import LambdaType
 from typing import Any, overload
@@ -23,6 +24,7 @@ from distributed_shampoo.distributor._shampoo_hybrid_shard_lossless_distributor 
     HybridShardLosslessDistributor,
 )
 from distributed_shampoo.distributor.shampoo_ddp_distributor import DDPDistributor
+from distributed_shampoo.distributor.shampoo_dist_utils import cuda_stream_context
 from distributed_shampoo.distributor.shampoo_distributor import (
     Distributor,
     DistributorInterface,
@@ -65,7 +67,11 @@ from distributed_shampoo.shampoo_types import (
     BaseShampooPreconditionerConfig,
     BETA3,
     BETAS,
+    ClassicMomentumConfig,
+    ConcurrencyConfig,
+    CUDA_STREAM,
     DDPDistributedConfig,
+    DefaultConcurrencyConfig,
     DefaultShampooConfig,
     DefaultShampooRuntimeConfig,
     DefaultSingleDeviceDistributedConfig,
@@ -76,6 +82,7 @@ from distributed_shampoo.shampoo_types import (
     EigendecomposedShampooPreconditionerConfig,
     EigenvalueCorrectedShampooPreconditionerConfig,
     EPSILON,
+    EVAL_INTERP_COEFF,
     FILTERED_GRAD,
     FILTERED_GRAD_LIST,
     FSDPDistributedConfig,
@@ -95,8 +102,11 @@ from distributed_shampoo.shampoo_types import (
     MASKED_BLOCKED_GRADS,
     MASKED_BLOCKED_PARAMS,
     MASKED_FILTERED_GRAD_LIST,
+    MASKED_MOMENTUM_BUFFER_LIST,
     MASKED_WEIGHT_BUFFER_LIST,
     MAX_PRECONDITIONER_DIM,
+    MOMENTUM_BUFFER,
+    MOMENTUM_BUFFER_LIST,
     PARAMS,
     PEAK_LR,
     PRECONDITION_FREQUENCY,
@@ -116,6 +126,7 @@ from distributed_shampoo.shampoo_types import (
     SpectralDescentPreconditionerConfig,
     START_PRECONDITIONING_STEP,
     STEP,
+    TRAIN_INTERP_COEFF,
     TRAIN_MODE,
     USE_BIAS_CORRECTION,
     USE_PIN_MEMORY,
@@ -129,7 +140,7 @@ from distributed_shampoo.utils.shampoo_state_dict_utils import (
     extract_state_dict_content,
     update_param_state_dict_object,
 )
-from distributed_shampoo.utils.shampoo_utils import compress_list
+from distributed_shampoo.utils.shampoo_utils import compress_list, split_param_groups
 from torch.optim.optimizer import Optimizer, ParamsT, StateDict
 
 logger: logging.Logger = logging.getLogger(__name__)
@@ -347,7 +358,7 @@ class DistributedShampoo(torch.optim.Optimizer):
 
     """
 
-    def __init__(
+    def __init__(  # noqa: C901
         self,
         params: ParamsT,
         lr: float = 1e-2,
@@ -367,6 +378,7 @@ class DistributedShampoo(torch.optim.Optimizer):
         distributed_config: DistributedConfig = DefaultSingleDeviceDistributedConfig,
         preconditioner_config: PreconditionerConfig = DefaultShampooConfig,
         shampoo_runtime_config: ShampooRuntimeConfig = DefaultShampooRuntimeConfig,
+        concurrency_config: ConcurrencyConfig = DefaultConcurrencyConfig,
     ) -> None:
         super().__init__(
             params,
@@ -392,6 +404,9 @@ class DistributedShampoo(torch.optim.Optimizer):
         self.register_state_dict_post_hook(self._post_state_dict_hook)
         self.register_load_state_dict_pre_hook(self._pre_load_state_dict_hook)
         self.register_load_state_dict_post_hook(self._post_load_state_dict_hook)
+
+        # Split FSDP/HSDP param groups with num_sub_groups > 1 for multi-stream overlap.
+        self.param_groups[:] = split_param_groups(self.param_groups)
 
         def param_group_hyperparameter_check(param_group: dict[str, Any]) -> None:
             if not param_group[LR] >= 0.0:
@@ -524,6 +539,7 @@ class DistributedShampoo(torch.optim.Optimizer):
             shampoo_pt2_compile_config
         )
         self._runtime_config: ShampooRuntimeConfig = shampoo_runtime_config
+        self._concurrency_config: ConcurrencyConfig = concurrency_config
 
         # Initialize list containing group state dictionaries.
         self._per_group_state_lists: list[dict[str, Any]] = [
@@ -552,45 +568,7 @@ class DistributedShampoo(torch.optim.Optimizer):
             if not group[PARAMS]:
                 raise ValueError(f"Shampoo got an empty parameter {group=}")
 
-            match group[DISTRIBUTED_CONFIG]:
-                case SingleDeviceDistributedConfig():
-                    distributor_cls: type[DistributorInterface] = Distributor
-                case HSDPDistributedConfig():
-                    distributor_cls = HSDPDistributor
-                case HybridShardDistributedConfig(
-                    param_assignment_strategy=FSDPParamAssignmentStrategy.DEFAULT
-                ):
-                    distributor_cls = HybridShardDistributor
-                case (
-                    HybridShardDistributedConfig(
-                        param_assignment_strategy=FSDPParamAssignmentStrategy.REPLICATE
-                    )
-                    | HybridShardDistributedConfig(
-                        param_assignment_strategy=FSDPParamAssignmentStrategy.ROUND_ROBIN
-                    )
-                ):
-                    distributor_cls = HybridShardLosslessDistributor
-                case DDPDistributedConfig():
-                    distributor_cls = DDPDistributor
-                case FSDPDistributedConfig():
-                    distributor_cls = FSDPDistributor
-                case FullyShardDistributedConfig(
-                    param_assignment_strategy=FSDPParamAssignmentStrategy.DEFAULT
-                ):
-                    distributor_cls = FullyShardDistributor
-                case (
-                    FullyShardDistributedConfig(
-                        param_assignment_strategy=FSDPParamAssignmentStrategy.REPLICATE
-                    )
-                    | FullyShardDistributedConfig(
-                        param_assignment_strategy=FSDPParamAssignmentStrategy.ROUND_ROBIN
-                    )
-                ):
-                    distributor_cls = FullyShardLosslessDistributor
-                case _:
-                    raise NotImplementedError(
-                        f"{group[DISTRIBUTED_CONFIG]=} not supported!"
-                    )
+            distributor_cls = self._select_distributor_class(group[DISTRIBUTED_CONFIG])
 
             # Instantiate distributors for each group.
             state_lists[DISTRIBUTOR] = distributor_cls(group, self._runtime_config)
@@ -613,6 +591,57 @@ class DistributedShampoo(torch.optim.Optimizer):
             ].local_blocked_params
             # First PREVIOUS_GRAD_SELECTOR is set to None.
             state_lists[PREVIOUS_GRAD_SELECTOR] = None
+
+    def _select_distributor_class(
+        self, distributed_config: DistributedConfig
+    ) -> type[DistributorInterface]:
+        """Map a per-group ``DistributedConfig`` to its ``DistributorInterface``.
+
+        Factored out of ``_instantiate_distributor`` so the config-to-distributor
+        dispatch has a single override point. Subclasses can inject a custom
+        distributor (e.g. expert-parallel) by handling their own config types
+        here and delegating everything else to
+        ``super()._select_distributor_class(...)`` -- without reimplementing the
+        per-group instantiation loop or its bookkeeping.
+        """
+        match distributed_config:
+            case SingleDeviceDistributedConfig():
+                distributor_cls: type[DistributorInterface] = Distributor
+            case HSDPDistributedConfig():
+                distributor_cls = HSDPDistributor
+            case HybridShardDistributedConfig(
+                param_assignment_strategy=FSDPParamAssignmentStrategy.DEFAULT
+            ):
+                distributor_cls = HybridShardDistributor
+            case (
+                HybridShardDistributedConfig(
+                    param_assignment_strategy=FSDPParamAssignmentStrategy.REPLICATE
+                )
+                | HybridShardDistributedConfig(
+                    param_assignment_strategy=FSDPParamAssignmentStrategy.ROUND_ROBIN
+                )
+            ):
+                distributor_cls = HybridShardLosslessDistributor
+            case DDPDistributedConfig():
+                distributor_cls = DDPDistributor
+            case FSDPDistributedConfig():
+                distributor_cls = FSDPDistributor
+            case FullyShardDistributedConfig(
+                param_assignment_strategy=FSDPParamAssignmentStrategy.DEFAULT
+            ):
+                distributor_cls = FullyShardDistributor
+            case (
+                FullyShardDistributedConfig(
+                    param_assignment_strategy=FSDPParamAssignmentStrategy.REPLICATE
+                )
+                | FullyShardDistributedConfig(
+                    param_assignment_strategy=FSDPParamAssignmentStrategy.ROUND_ROBIN
+                )
+            ):
+                distributor_cls = FullyShardLosslessDistributor
+            case _:
+                raise NotImplementedError(f"{distributed_config=} not supported!")
+        return distributor_cls
 
     @torch.no_grad()
     def _initialize_blocked_parameters_state(self) -> None:
@@ -785,6 +814,18 @@ class DistributedShampoo(torch.optim.Optimizer):
             state_lists[LR_CPU_PINNED] = torch.empty(
                 (), dtype=torch.float, pin_memory=group[USE_PIN_MEMORY]
             )
+            # Pre-allocate persistent interp coeff tensors for iterate averaging.
+            # Using persistent tensors avoids Dynamo recompilation: Dynamo treats
+            # tensor inputs as dynamic (doesn't specialize on value), unlike Python
+            # floats which trigger recompilation on every value change. This is
+            # critical for ScheduleFreeConfig where eval_interp_coeff changes every step.
+            # For ClassicMomentumConfig, these remain at 0.0 (no interpolation needed).
+            state_lists[TRAIN_INTERP_COEFF] = torch.zeros(
+                (), dtype=torch.float, device=device
+            )
+            state_lists[EVAL_INTERP_COEFF] = torch.zeros(
+                (), dtype=torch.float, device=device
+            )
 
     @torch.no_grad()
     def _instantiate_filtered_grads(self) -> None:
@@ -827,68 +868,92 @@ class DistributedShampoo(torch.optim.Optimizer):
 
     @torch.no_grad()
     def _instantiate_iterate_averaging(self) -> None:
-        # NOTE: Since we are using the memory-efficient implementation of GPA and Schedule-Free, when iterate
-        # averaging is enabled, we instantiate a weight buffer (block_state[WEIGHT_BUFFER]) that stores each
-        # parameter's "z" sequence. The current parameters are instead treated as the "y" sequence where the
-        # gradient is computed.
-        #
-        # To use the "x" sequence, one must enable the eval mode for the optimizer, which switches the "y"
-        # sequence to the "x" sequence. Train mode switches from the "x" sequence to the "y" sequence.
         for state_lists, group in zip(
             self._per_group_state_lists, self.param_groups, strict=True
         ):
-            if group[ITERATE_AVERAGING_CONFIG] is None:
-                continue
+            match group[ITERATE_AVERAGING_CONFIG]:
+                case None:
+                    continue
+                case ClassicMomentumConfig():
+                    self._instantiate_classical_momentum(state_lists, group)
+                case GeneralizedPrimalAveragingConfig() | ScheduleFreeConfig():
+                    self._instantiate_gpa_schedule_free(state_lists, group)
+                case _:
+                    raise NotImplementedError(
+                        f"{group[ITERATE_AVERAGING_CONFIG]=} is not supported! "
+                        "Supported configs: ClassicMomentumConfig, GeneralizedPrimalAveragingConfig, ScheduleFreeConfig."
+                    )
 
-            # Construct local weight buffer list.
-            local_weight_buffer_list = []
-            for block, block_info in zip(
-                state_lists[DISTRIBUTOR].local_blocked_params,
-                state_lists[DISTRIBUTOR].local_block_info_list,
-                strict=True,
-            ):
-                assert (
-                    block_index := block_info.composable_block_ids[1]
-                ) in self.state[block_info.param], (
-                    f"{block_index=} not found in {self.state[block_info.param]=}. "
-                    "Please check the initialization of self.state[block_info.param][block_index] "
-                    "within _initialize_blocked_parameters_state, and check the initialization of BlockInfo "
-                    "within Distributor for the correctness of block_index."
-                )
-                block_state = self.state[block_info.param][block_index]
+    def _instantiate_classical_momentum(
+        self, state_lists: dict[str, Any], group: dict[str, Any]
+    ) -> None:
+        self._allocate_block_buffer_list(
+            state_lists=state_lists,
+            buffer_key=MOMENTUM_BUFFER,
+            list_key=MOMENTUM_BUFFER_LIST,
+            masked_list_key=MASKED_MOMENTUM_BUFFER_LIST,
+        )
 
-                block_state[WEIGHT_BUFFER] = block_info.allocate_zeros_tensor(
-                    size=block.size(),
-                    dtype=block.dtype,
-                    device=block.device,
-                )
-                # Get the local tensor from the DTensor and copy into it.
-                local_weight_buffer = block_info.get_tensor(block_state[WEIGHT_BUFFER])
-                local_weight_buffer.copy_(block)
-                local_weight_buffer_list.append(local_weight_buffer)
+    def _instantiate_gpa_schedule_free(
+        self, state_lists: dict[str, Any], group: dict[str, Any]
+    ) -> None:
+        # The "z" sequence is initialized from the current parameters (the "y" sequence
+        # where gradients are computed). Train/eval mode switches between "y" and the
+        # averaged "x" sequence.
+        self._allocate_block_buffer_list(
+            state_lists=state_lists,
+            buffer_key=WEIGHT_BUFFER,
+            list_key=WEIGHT_BUFFER_LIST,
+            masked_list_key=MASKED_WEIGHT_BUFFER_LIST,
+            init_from_param=True,
+        )
 
-            state_lists[WEIGHT_BUFFER_LIST] = local_weight_buffer_list
-            # Here, we set masked weight buffer list to weight buffer list because we assume
-            # all parameters are active.
-            state_lists[MASKED_WEIGHT_BUFFER_LIST] = state_lists[WEIGHT_BUFFER_LIST]
+        state_lists[LR_SUM] = torch.tensor(
+            0.0, dtype=torch.float, device=group[PARAMS][0].device
+        )
+        state_lists[TRAIN_MODE] = torch.tensor(True, dtype=torch.bool, device="cpu")
 
-            # Instantiate summed learning rate tensor used by iterate averaging
-            # to track the cumulative learning rate across steps.
-            state_lists[LR_SUM] = torch.tensor(
-                0.0,
-                dtype=torch.float,
-                device=group[PARAMS][0].device,
+        # Stored under the first parameter's state so train mode and LR sum are checkpointed.
+        self.state[group[PARAMS][0]][TRAIN_MODE] = state_lists[TRAIN_MODE]
+        self.state[group[PARAMS][0]][LR_SUM] = state_lists[LR_SUM]
+
+    def _allocate_block_buffer_list(
+        self,
+        state_lists: dict[str, Any],
+        buffer_key: str,
+        list_key: str,
+        masked_list_key: str,
+        init_from_param: bool = False,
+    ) -> None:
+        local_buffer_list = []
+        for block, block_info in zip(
+            state_lists[DISTRIBUTOR].local_blocked_params,
+            state_lists[DISTRIBUTOR].local_block_info_list,
+            strict=True,
+        ):
+            assert (block_index := block_info.composable_block_ids[1]) in self.state[
+                block_info.param
+            ], (
+                f"{block_index=} not found in {self.state[block_info.param]=}. "
+                "Please check the initialization of self.state[block_info.param][block_index] "
+                "within _initialize_blocked_parameters_state, and check the initialization of BlockInfo "
+                "within Distributor for the correctness of block_index."
             )
+            block_state = self.state[block_info.param][block_index]
 
-            # Instantiate a single boolean tensor on CPU for each group in order
-            # to track the train and eval mode of each parameter group in the optimizer.
-            # This is used by iterate averaging to determine whether to apply train or eval updates.
-            state_lists[TRAIN_MODE] = torch.tensor(True, dtype=torch.bool, device="cpu")
+            block_state[buffer_key] = block_info.allocate_zeros_tensor(
+                size=block.size(),
+                dtype=block.dtype,
+                device=block.device,
+            )
+            local_buffer = block_info.get_tensor(block_state[buffer_key])
+            if init_from_param:
+                local_buffer.copy_(block)
+            local_buffer_list.append(local_buffer)
 
-            # In order to ensure that the train mode and learning rate sum are checkpointed correctly,
-            # we store it as a tensor (which is replicated across all devices) under the first parameter's state.
-            self.state[group[PARAMS][0]][TRAIN_MODE] = state_lists[TRAIN_MODE]
-            self.state[group[PARAMS][0]][LR_SUM] = state_lists[LR_SUM]
+        state_lists[list_key] = local_buffer_list
+        # Masked list aliases the full list since all parameters are assumed active.
+        state_lists[masked_list_key] = state_lists[list_key]
 
     @torch.no_grad()
     def _instantiate_per_group_step(
@@ -897,7 +962,10 @@ class DistributedShampoo(torch.optim.Optimizer):
         # Use PT2 to compile the step function for each parameter group.
         self._per_group_step: Callable[..., None] = (
             torch.compile(
-                self._per_group_step_impl, **asdict(shampoo_pt2_compile_config)
+                # pyrefly: ignore [bad-argument-type]
+                self._per_group_step_impl,
+                # pyrefly: ignore [bad-argument-type]
+                **asdict(shampoo_pt2_compile_config),
             )
             if shampoo_pt2_compile_config is not None
             else self._per_group_step_impl
@@ -906,6 +974,23 @@ class DistributedShampoo(torch.optim.Optimizer):
             logger.info(
                 f"DistributedShampoo optimizer initialization is using {shampoo_pt2_compile_config=}"
             )
+
+        # Per-group CUDA stream isolation requires CUDA params on every group.
+        all_cuda = all(g[PARAMS][0].device.type == "cuda" for g in self.param_groups)
+        self._use_cuda_streams: bool = (
+            self._concurrency_config.enable_cuda_stream_for_param_groups and all_cuda
+        )
+        if self._use_cuda_streams:
+            for i, (state_lists, group) in enumerate(
+                zip(self._per_group_state_lists, self.param_groups, strict=True)
+            ):
+                stream = torch.cuda.Stream(device=group[PARAMS][0].device)
+                state_lists[CUDA_STREAM] = stream
+                logger.info(
+                    "param_group_%d: stream_id=%s",
+                    i,
+                    stream.stream_id,
+                )
 
     @staticmethod
     @torch.no_grad()
@@ -963,9 +1048,14 @@ class DistributedShampoo(torch.optim.Optimizer):
                 state_lists[FILTERED_GRAD_LIST],
                 state_lists[DISTRIBUTOR].local_grad_selector,
             )
-        if group[ITERATE_AVERAGING_CONFIG] is not None:
+        if WEIGHT_BUFFER_LIST in state_lists:
             state_lists[MASKED_WEIGHT_BUFFER_LIST] = compress_list(
                 state_lists[WEIGHT_BUFFER_LIST],
+                state_lists[DISTRIBUTOR].local_grad_selector,
+            )
+        if MOMENTUM_BUFFER_LIST in state_lists:
+            state_lists[MASKED_MOMENTUM_BUFFER_LIST] = compress_list(
+                state_lists[MOMENTUM_BUFFER_LIST],
                 state_lists[DISTRIBUTOR].local_grad_selector,
             )
 
@@ -1090,7 +1180,7 @@ class DistributedShampoo(torch.optim.Optimizer):
         return masked_filtered_grad_list
 
     @torch.no_grad()
-    def _apply_decoupled_or_corrected_weight_decay(
+    def _apply_weight_decay(
         self,
         state_lists: dict[str, Any],
         masked_blocked_search_directions: tuple[torch.Tensor, ...],
@@ -1098,45 +1188,108 @@ class DistributedShampoo(torch.optim.Optimizer):
         weight_decay: float,
         peak_lr: float,
         weight_decay_type: WeightDecayType,
+        iterate_averaging_enabled: bool,
     ) -> None:
-        if weight_decay != 0.0 and weight_decay_type in (
-            WeightDecayType.DECOUPLED,
-            WeightDecayType.CORRECTED,
-            WeightDecayType.INDEPENDENT,
-        ):
-            match weight_decay_type:
-                case WeightDecayType.DECOUPLED:
-                    alpha = weight_decay
-                case WeightDecayType.CORRECTED:
-                    alpha = weight_decay * lr.item() / peak_lr
-                case WeightDecayType.INDEPENDENT:
-                    alpha = weight_decay / peak_lr
-                case _:
-                    raise ValueError(
-                        f"Invalid weight decay type: {weight_decay_type=}!"
-                    )
+        """Apply weight decay (decoupled, corrected, or independent).
+
+        Two cases require different strategies:
+
+        Without iterate averaging: adds weight decay to the search direction
+        (P += alpha * W). This is mathematically equivalent to multiplicative
+        shrinkage (W *= 1 - lr * alpha), but the additive form is required
+        because MASKED_BLOCKED_PARAMS only contains the local subset of
+        blocks assigned to each rank. In-place shrinkage would only decay
+        local blocks, causing params to diverge across ranks. By folding
+        weight decay into the search direction, it flows through the
+        all-gather in update_params and is applied uniformly.
+
+        With iterate averaging: shrinks Z directly (Z *= 1 - lr * alpha).
+        Weight decay cannot be folded into the search direction P here
+        because P is reused by the primal averaging update; the weight
+        decay term would leak into the W update via the primal averaging
+        coefficients. Shrinking Z directly is safe because Z is local
+        optimizer state (not shared across ranks via the distributor).
+        """
+        if weight_decay == 0.0 or weight_decay_type == WeightDecayType.L2:
+            return
+
+        match weight_decay_type:
+            case WeightDecayType.DECOUPLED:
+                alpha = weight_decay
+            case WeightDecayType.CORRECTED:
+                # Use LR_CPU_PINNED instead of lr (GPU tensor) to avoid
+                # a host-device sync from lr.item().
+                alpha = weight_decay * state_lists[LR_CPU_PINNED].item() / peak_lr
+            case WeightDecayType.INDEPENDENT:
+                alpha = weight_decay / peak_lr
+            case _:
+                raise ValueError(f"Invalid weight decay type: {weight_decay_type=}!")
+
+        if iterate_averaging_enabled:
+            torch._foreach_mul_(state_lists[MASKED_WEIGHT_BUFFER_LIST], 1 - lr * alpha)
+        else:
             torch._foreach_add_(
                 masked_blocked_search_directions,
                 state_lists[MASKED_BLOCKED_PARAMS],
                 alpha=alpha,
             )
 
+    @torch.no_grad()
+    def _apply_classic_momentum(
+        self,
+        state_lists: dict[str, Any],
+        masked_blocked_search_directions: tuple[torch.Tensor, ...],
+        momentum_param: float,
+        dampening: float,
+        use_nesterov: bool,
+    ) -> None:
+        """Apply classic SGD-style momentum to the search directions.
+
+        Updates the momentum buffer and modifies search directions in-place:
+            M <- momentum * M + (1 - dampening) * P
+            P <- (1 - dampening) * P + momentum * M     if use_nesterov
+            P <- M                                       otherwise
+        """
+        torch._foreach_mul_(state_lists[MASKED_MOMENTUM_BUFFER_LIST], momentum_param)
+        torch._foreach_add_(
+            state_lists[MASKED_MOMENTUM_BUFFER_LIST],
+            masked_blocked_search_directions,
+            alpha=1 - dampening,
+        )
+
+        if use_nesterov:
+            torch._foreach_mul_(
+                masked_blocked_search_directions,
+                1 - dampening,
+            )
+            torch._foreach_add_(
+                masked_blocked_search_directions,
+                state_lists[MASKED_MOMENTUM_BUFFER_LIST],
+                alpha=momentum_param,
+            )
+        else:
+            torch._foreach_copy_(
+                masked_blocked_search_directions,
+                state_lists[MASKED_MOMENTUM_BUFFER_LIST],
+            )
+
     @staticmethod
     @torch.no_grad()
     def _get_train_and_eval_interp_coeffs(
-        iterate_averaging_config: IterateAveragingConfig | None,
+        iterate_averaging_config: GeneralizedPrimalAveragingConfig | ScheduleFreeConfig,
         lr: torch.Tensor | None,
         state_lists: dict[str, Any],
-    ) -> tuple[float, float]:
-        if iterate_averaging_config is None:
-            return 0.0, 0.0
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        # Persistent tensors pre-allocated in _instantiate_lr_tensors; filled in place below.
+        train_interp_coeff = state_lists[TRAIN_INTERP_COEFF]
+        eval_interp_coeff = state_lists[EVAL_INTERP_COEFF]
 
         match iterate_averaging_config:
             case GeneralizedPrimalAveragingConfig():
-                train_interp_coeff = iterate_averaging_config.train_interp_coeff
-                eval_interp_coeff = iterate_averaging_config.eval_interp_coeff
+                train_interp_coeff.fill_(iterate_averaging_config.train_interp_coeff)
+                eval_interp_coeff.fill_(iterate_averaging_config.eval_interp_coeff)
             case ScheduleFreeConfig():
-                train_interp_coeff = iterate_averaging_config.train_interp_coeff
+                train_interp_coeff.fill_(iterate_averaging_config.train_interp_coeff)
                 if lr is not None:
                     # Based on Equation (23) in The Road Less Scheduled (https://arxiv.org/pdf/2405.15682).
                     # In the simplest case, computes eval_interp_coeff = 1 - gamma_t^2 / \sum_{i=1}^t gamma_i^2.
@@ -1150,15 +1303,19 @@ class DistributedShampoo(torch.optim.Optimizer):
                         lr, iterate_averaging_config.eval_coeff_lr_power
                     )
                     lr_sum += lr_power
-                    eval_interp_coeff = 1.0 - (lr_power / lr_sum).item()
+                    # Keep as tensor — avoids .item() which creates a Python float
+                    # that Dynamo would specialize on, causing recompilation every step.
+                    eval_interp_coeff.copy_(1.0 - lr_power / lr_sum)
                 else:
                     logger.warning(
                         "lr or lr_sum not provided to _get_train_and_eval_interp_coeffs; returning eval_interp_coeff = 0.0!"
                     )
-                    eval_interp_coeff = 0.0
+                    eval_interp_coeff.fill_(0.0)
             case _:
                 raise ValueError(
-                    f"Unsupported iterate averaging config {iterate_averaging_config=}!"
+                    f"Iterate averaging config {iterate_averaging_config=} is not supported "
+                    "for retrieving train and eval interpolation coefficients; only "
+                    "GeneralizedPrimalAveragingConfig and ScheduleFreeConfig are supported."
                 )
 
         return (train_interp_coeff, eval_interp_coeff)
@@ -1168,14 +1325,9 @@ class DistributedShampoo(torch.optim.Optimizer):
         self,
         state_lists: dict[str, Any],
         masked_blocked_search_directions: tuple[torch.Tensor, ...],
-        train_interp_coeff: float,
-        eval_interp_coeff: float,
+        train_interp_coeff: torch.Tensor,
+        eval_interp_coeff: torch.Tensor,
     ) -> None:
-        # If train_interp_coeff = 0, then GPA is equivalent to the base optimizer, so we
-        # return immediately.
-        if train_interp_coeff == 0.0:
-            return
-
         # Raise user error when attempting to perform primal averaging but not in train mode.
         if not state_lists[TRAIN_MODE]:
             raise RuntimeError(
@@ -1199,13 +1351,14 @@ class DistributedShampoo(torch.optim.Optimizer):
         # This computes: - (1 - mu_x * mu_y) * lr * P.
         torch._foreach_mul_(
             masked_blocked_search_directions,
-            (1 - train_interp_coeff * eval_interp_coeff),
+            (1 - train_interp_coeff * eval_interp_coeff),  # type: ignore
         )
         # This computes: (1 - mu_x) * (Z_old - Y) - (1 - mu_x * mu_y) * lr * P.
+        # pyrefly: ignore [no-matching-overload]
         torch._foreach_add_(
             masked_blocked_search_directions,
             z_minus_y_term,
-            alpha=1 - eval_interp_coeff,
+            alpha=(1 - eval_interp_coeff),  # type: ignore
         )
 
     @torch.no_grad()
@@ -1223,8 +1376,13 @@ class DistributedShampoo(torch.optim.Optimizer):
         perform_amortized_computation: bool,
         use_bias_correction: bool,
         use_grafting_method: bool,
-        train_interp_coeff: float,
-        eval_interp_coeff: float,
+        iterate_averaging_enabled: bool,
+        classic_momentum_enabled: bool,
+        train_interp_coeff: torch.Tensor,
+        eval_interp_coeff: torch.Tensor,
+        momentum_param: float,
+        dampening: float,
+        use_nesterov: bool,
     ) -> tuple[torch.Tensor, ...]:
         # Incorporate L2-regularization or (coupled) weight decay if enabled.
         #   G <- G + weight_decay * W
@@ -1279,34 +1437,47 @@ class DistributedShampoo(torch.optim.Optimizer):
             grafting_config_not_none,
         )
 
-        # Incorporate decoupled or corrected weight decay into search direction if enabled.
-        #   P <- P + weight_decay * W                       if decoupled
-        #   P <- P + weight_decay * (lr / peak_lr) * W      if corrected
-        #   P <- P + weight_decay * (1 / peak_lr) * W       if independent
-        self._apply_decoupled_or_corrected_weight_decay(
+        # Apply weight decay (decoupled, corrected, or independent).
+        self._apply_weight_decay(
             state_lists,
             masked_blocked_search_directions,
             lr,
             weight_decay,
             peak_lr,
             weight_decay_type,
+            iterate_averaging_enabled,
         )
+
+        # Apply classic momentum if enabled (ClassicMomentumConfig).
+        #   M <- momentum * M + (1 - dampening) * P
+        #   P <- (1 - dampening) * P + momentum * M     if use_nesterov
+        #   P <- M                                       otherwise
+        if classic_momentum_enabled:
+            self._apply_classic_momentum(
+                state_lists,
+                masked_blocked_search_directions,
+                momentum_param,
+                dampening,
+                use_nesterov,
+            )
 
         # Multiplies the learning rate to the search direction / update.
         torch._foreach_mul_(masked_blocked_search_directions, -lr)
 
-        # Incorporates primal averaging into the search direction if enabled.
+        # Incorporates primal averaging into the search direction if enabled
+        # (GeneralizedPrimalAveragingConfig / ScheduleFreeConfig).
         # NOTE: When primal averaging is enabled, we set Y = W in train mode.
         #   P <- (1 - mu_x * mu_y) * P + (1 - mu_x) * (Z - W)
         #
         # This is equivalent to the expanded update:
         #   P <- mu_x * Y + (1 - mu_x) * Z - (1 - mu_x * mu_y) * lr * P
-        self._apply_in_place_primal_averaging(
-            state_lists,
-            masked_blocked_search_directions,
-            train_interp_coeff,
-            eval_interp_coeff,
-        )
+        if iterate_averaging_enabled:
+            self._apply_in_place_primal_averaging(
+                state_lists,
+                masked_blocked_search_directions,
+                train_interp_coeff,
+                eval_interp_coeff,
+            )
 
         return masked_blocked_search_directions
 
@@ -1325,8 +1496,13 @@ class DistributedShampoo(torch.optim.Optimizer):
         perform_amortized_computation: bool,
         use_bias_correction: bool,
         use_grafting_method: bool,
-        train_interp_coeff: float,
-        eval_interp_coeff: float,
+        iterate_averaging_enabled: bool,
+        classic_momentum_enabled: bool,
+        train_interp_coeff: torch.Tensor,
+        eval_interp_coeff: torch.Tensor,
+        momentum_param: float,
+        dampening: float,
+        use_nesterov: bool,
     ) -> None:
         # This method computes search directions and updates parameters in one step
         # It's designed to be compiled with PyTorch 2.0 for performance optimization
@@ -1349,14 +1525,127 @@ class DistributedShampoo(torch.optim.Optimizer):
                 perform_amortized_computation=perform_amortized_computation,
                 use_bias_correction=use_bias_correction,
                 use_grafting_method=use_grafting_method,
+                iterate_averaging_enabled=iterate_averaging_enabled,
+                classic_momentum_enabled=classic_momentum_enabled,
                 train_interp_coeff=train_interp_coeff,
                 eval_interp_coeff=eval_interp_coeff,
+                momentum_param=momentum_param,
+                dampening=dampening,
+                use_nesterov=use_nesterov,
             )
             # Only update parameters if there are gradients to use
             # Otherwise, return an empty tuple to avoid unnecessary computation
             if state_lists[MASKED_BLOCKED_GRADS]
             else ()
         )
+
+    @torch.no_grad()
+    def _group_step_body(
+        self,
+        state_lists: dict[str, Any],
+        group: dict[str, Any],
+        per_group_step: Callable[..., None],
+    ) -> None:
+        """Core per-group step logic; called from step() once per param group,
+        wrapped in cuda_stream_context (or nullcontext) by the caller."""
+        # Construct blocked gradient list.
+        state_lists[MASKED_BLOCKED_GRADS] = state_lists[
+            DISTRIBUTOR
+        ].merge_and_block_gradients()
+
+        # Based on the current block selector, mask lists of parameters and optimizer states.
+        DistributedShampoo._mask_state_lists(
+            state_lists=state_lists,
+            group=group,
+            shampoo_pt2_enabled=self._shampoo_pt2_compile_config is not None,
+        )
+
+        # Iterate group step counter and define Python scalar step.
+        step = state_lists[STEP].add_(1)
+        step_val = step.item()
+        # NOTE: Reuse pre-allocated lr tensors to avoid per-step pinned
+        # memory allocation (cudaHostAlloc). Fill the pinned CPU tensor and
+        # copy to the persistent GPU tensor with non_blocking to overlap H2D.
+        # Using a persistent tensor also avoids PT2 recompilation: since lr
+        # is the same tensor object every step, PT2 treats it as a dynamic
+        # input rather than specializing on each new tensor/value.
+        state_lists[LR_CPU_PINNED].fill_(group[LR])
+        lr = state_lists[LR_TENSOR]
+        lr.copy_(state_lists[LR_CPU_PINNED], non_blocking=True)
+        beta1 = group[BETAS][0]
+        beta3 = group[BETA3]
+        weight_decay = group[WEIGHT_DECAY]
+        peak_lr = group[PEAK_LR]
+        weight_decay_type = group[WEIGHT_DECAY_TYPE]
+        grafting_config_not_none = group[GRAFTING_CONFIG] is not None
+        perform_amortized_computation = (
+            step_val % group[PRECONDITION_FREQUENCY] == 0
+            and step_val > group[START_PRECONDITIONING_STEP]
+        ) or step_val == group[START_PRECONDITIONING_STEP]
+        use_bias_correction = group[USE_BIAS_CORRECTION]
+        # Check if we apply the grafting method or not.
+        use_grafting_method = (
+            step_val < group[START_PRECONDITIONING_STEP] and grafting_config_not_none
+        )
+        # Set train and eval interpolation coefficients if enabled.
+        # ClassicMomentumConfig is excluded from iterate_averaging_enabled: it does
+        # not use iterate averaging (no z-sequence), so weight decay shrinkage
+        # should apply to W (params).
+        iterate_averaging_config = group[ITERATE_AVERAGING_CONFIG]
+        iterate_averaging_enabled = isinstance(
+            iterate_averaging_config,
+            (GeneralizedPrimalAveragingConfig, ScheduleFreeConfig),
+        )
+        classic_momentum_enabled = isinstance(
+            iterate_averaging_config, ClassicMomentumConfig
+        )
+        if iterate_averaging_enabled:
+            train_interp_coeff, eval_interp_coeff = (
+                self._get_train_and_eval_interp_coeffs(
+                    iterate_averaging_config=iterate_averaging_config,
+                    lr=lr,
+                    state_lists=state_lists,
+                )
+            )
+        else:
+            # Coefficients unused when iterate averaging is disabled; pass the
+            # persistent 0.0 tensors as inert placeholders (PT2-stable signature).
+            train_interp_coeff = state_lists[TRAIN_INTERP_COEFF]
+            eval_interp_coeff = state_lists[EVAL_INTERP_COEFF]
+        # Extract classic momentum parameters if enabled.
+        if classic_momentum_enabled:
+            momentum_param = iterate_averaging_config.momentum
+            dampening = iterate_averaging_config.dampening
+            use_nesterov = iterate_averaging_config.use_nesterov
+        else:
+            momentum_param = 0.0
+            dampening = 0.0
+            use_nesterov = False
+
+        per_group_step(
+            state_lists,
+            step,
+            lr,
+            beta1,
+            beta3,
+            weight_decay,
+            peak_lr,
+            weight_decay_type,
+            grafting_config_not_none,
+            perform_amortized_computation,
+            use_bias_correction,
+            use_grafting_method,
+            iterate_averaging_enabled,
+            classic_momentum_enabled,
+            train_interp_coeff,
+            eval_interp_coeff,
+            momentum_param,
+            dampening,
+            use_nesterov,
+        )
+
+        # Explicitly set masked blocked gradients to None to save memory so the original param.grad has no pointer to it.
+        state_lists[MASKED_BLOCKED_GRADS] = None
 
     @overload
     @torch.no_grad()
@@ -1369,6 +1658,11 @@ class DistributedShampoo(torch.optim.Optimizer):
     @torch.no_grad()
     def step(self, closure: Callable[[], float] | None = None) -> float | None:
         """Performs a single optimization step.
+
+        When ``ConcurrencyConfig.enable_cuda_stream_for_param_groups`` is set
+        and all param groups are on CUDA, each group's GPU work runs on its
+        own dedicated CUDA stream so independent NCCL communicators across
+        groups can overlap on-device.
 
         Args:
             closure (Callable[[], float] | None): A closure that reevaluates the model and returns the loss. (Default: None)
@@ -1384,76 +1678,29 @@ class DistributedShampoo(torch.optim.Optimizer):
         for state_lists, group in zip(
             self._per_group_state_lists, self.param_groups, strict=True
         ):
-            # Construct blocked gradient list.
-            state_lists[MASKED_BLOCKED_GRADS] = state_lists[
-                DISTRIBUTOR
-            ].merge_and_block_gradients()
-
-            # Based on the current block selector, mask lists of parameters and optimizer states.
-            DistributedShampoo._mask_state_lists(
-                state_lists=state_lists,
-                group=group,
-                shampoo_pt2_enabled=self._shampoo_pt2_compile_config is not None,
+            stream_ctx = (
+                cuda_stream_context(state_lists[CUDA_STREAM])
+                if self._use_cuda_streams
+                else nullcontext()
             )
+            with stream_ctx:
+                self._group_step_body(state_lists, group, self._per_group_step)
 
-            # Iterate group step counter and define Python scalar step.
-            step = state_lists[STEP].add_(1)
-            step_val = step.item()
-            # NOTE: Reuse pre-allocated lr tensors to avoid per-step pinned
-            # memory allocation (cudaHostAlloc). Fill the pinned CPU tensor and
-            # copy to the persistent GPU tensor with non_blocking to overlap H2D.
-            # Using a persistent tensor also avoids PT2 recompilation: since lr
-            # is the same tensor object every step, PT2 treats it as a dynamic
-            # input rather than specializing on each new tensor/value.
-            state_lists[LR_CPU_PINNED].fill_(group[LR])
-            lr = state_lists[LR_TENSOR]
-            lr.copy_(state_lists[LR_CPU_PINNED], non_blocking=True)
-            beta1 = group[BETAS][0]
-            beta3 = group[BETA3]
-            weight_decay = group[WEIGHT_DECAY]
-            peak_lr = group[PEAK_LR]
-            weight_decay_type = group[WEIGHT_DECAY_TYPE]
-            grafting_config_not_none = group[GRAFTING_CONFIG] is not None
-            perform_amortized_computation = (
-                step_val % group[PRECONDITION_FREQUENCY] == 0
-                and step_val > group[START_PRECONDITIONING_STEP]
-            ) or step_val == group[START_PRECONDITIONING_STEP]
-            use_bias_correction = group[USE_BIAS_CORRECTION]
-            # Check if we apply the grafting method or not.
-            use_grafting_method = (
-                step_val < group[START_PRECONDITIONING_STEP]
-                and grafting_config_not_none
-            )
-            # Set train and eval interpolation coefficients if enabled.
-            train_interp_coeff, eval_interp_coeff = (
-                self._get_train_and_eval_interp_coeffs(
-                    iterate_averaging_config=group[ITERATE_AVERAGING_CONFIG],
-                    lr=lr,
-                    state_lists=state_lists,
-                )
-            )
-
-            self._per_group_step(
-                state_lists,
-                step,
-                lr,
-                beta1,
-                beta3,
-                weight_decay,
-                peak_lr,
-                weight_decay_type,
-                grafting_config_not_none,
-                perform_amortized_computation,
-                use_bias_correction,
-                use_grafting_method,
-                train_interp_coeff,
-                eval_interp_coeff,
-            )
-
-            # Explicitly set masked blocked gradients to None to save memory so the original param.grad has no pointer to it.
-            state_lists[MASKED_BLOCKED_GRADS] = None
+        if self._use_cuda_streams:
+            self._sync_streams_to_default()
 
         return loss
+
+    @torch.no_grad()
+    def _sync_streams_to_default(self) -> None:
+        """Make each device's default stream wait for its per-group stream so
+        subsequent default-stream work observes per-group results."""
+        for state_lists, group in zip(
+            self._per_group_state_lists, self.param_groups, strict=True
+        ):
+            torch.cuda.current_stream(group[PARAMS][0].device).wait_stream(
+                state_lists[CUDA_STREAM]
+            )
 
     # ============================================================
     # TRAIN/EVAL MODE SWITCHING
@@ -1465,12 +1712,18 @@ class DistributedShampoo(torch.optim.Optimizer):
         for state_lists, group in zip(
             self._per_group_state_lists, self.param_groups, strict=True
         ):
-            # Skip groups without iterate averaging or already in train mode.
-            if group[ITERATE_AVERAGING_CONFIG] is None or state_lists[TRAIN_MODE]:
+            # Skip groups without iterate averaging, with classic momentum, or already in train mode.
+            iterate_averaging_config = group[ITERATE_AVERAGING_CONFIG]
+            if not isinstance(
+                iterate_averaging_config,
+                (GeneralizedPrimalAveragingConfig, ScheduleFreeConfig),
+            ):
+                continue
+            if state_lists[TRAIN_MODE]:
                 continue
 
             train_interp_coeff, _ = self._get_train_and_eval_interp_coeffs(
-                iterate_averaging_config=group[ITERATE_AVERAGING_CONFIG],
+                iterate_averaging_config=iterate_averaging_config,
                 lr=None,
                 state_lists=state_lists,
             )
@@ -1493,12 +1746,18 @@ class DistributedShampoo(torch.optim.Optimizer):
         for state_lists, group in zip(
             self._per_group_state_lists, self.param_groups, strict=True
         ):
-            # Skip groups without iterate averaging or already in eval mode.
-            if group[ITERATE_AVERAGING_CONFIG] is None or not state_lists[TRAIN_MODE]:
+            # Skip groups without iterate averaging, with classic momentum, or already in eval mode.
+            iterate_averaging_config = group[ITERATE_AVERAGING_CONFIG]
+            if not isinstance(
+                iterate_averaging_config,
+                (GeneralizedPrimalAveragingConfig, ScheduleFreeConfig),
+            ):
+                continue
+            if not state_lists[TRAIN_MODE]:
                 continue
 
             train_interp_coeff, _ = self._get_train_and_eval_interp_coeffs(
-                iterate_averaging_config=group[ITERATE_AVERAGING_CONFIG],
+                iterate_averaging_config=iterate_averaging_config,
                 lr=None,
                 state_lists=state_lists,
             )
@@ -1506,7 +1765,10 @@ class DistributedShampoo(torch.optim.Optimizer):
                 state_lists[WEIGHT_BUFFER_LIST],
                 state_lists[DISTRIBUTOR].local_blocked_params,
             )
-            torch._foreach_mul_(parameter_updates, 1 - 1 / train_interp_coeff)
+            torch._foreach_mul_(
+                parameter_updates,
+                1 - torch.reciprocal(train_interp_coeff),
+            )
             state_lists[DISTRIBUTOR].update_params(
                 blocked_search_directions=tuple(parameter_updates),
                 use_masked_tensors=False,
@@ -1628,8 +1890,9 @@ class DistributedShampoo(torch.optim.Optimizer):
                 strict=True,
             )
             if group[ITERATE_AVERAGING_CONFIG] is not None
+            and not isinstance(group[ITERATE_AVERAGING_CONFIG], ClassicMomentumConfig)
         ]
-        optimizer._pre_load_train_modes = saved_train_modes  # type: ignore[attr-defined]
+        optimizer._pre_load_train_modes = saved_train_modes  # type: ignore
 
     @staticmethod
     def _post_load_state_dict_hook(optimizer: Optimizer) -> None:

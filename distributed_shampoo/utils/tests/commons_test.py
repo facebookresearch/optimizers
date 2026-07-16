@@ -7,8 +7,6 @@ LICENSE file in the root directory of this source tree.
 
 """
 
-#!/usr/bin/env python3
-
 import re
 import unittest
 from abc import ABC, abstractmethod
@@ -25,25 +23,25 @@ class BatchedTest(unittest.TestCase):
     def test_normal_batching(self) -> None:
         """Test batching an iterable with size divisible by batch size."""
         data = [1, 2, 3, 4, 5, 6]
-        result = list(batched(data, n=2))
+        result = list(batched(data, n=2))  # noqa: B911
         self.assertEqual(result, [(1, 2), (3, 4), (5, 6)])
 
     def test_uneven_batching(self) -> None:
         """Test batching an iterable with size not divisible by batch size."""
         data = [1, 2, 3, 4, 5]
-        result = list(batched(data, n=2))
+        result = list(batched(data, n=2))  # noqa: B911
         self.assertEqual(result, [(1, 2), (3, 4), (5,)])
 
     def test_empty_iterable(self) -> None:
         """Test batching an empty iterable."""
         data: list[int] = []
-        result = list(batched(data, n=3))
+        result = list(batched(data, n=3))  # noqa: B911
         self.assertEqual(result, [])
 
     def test_batch_size_one(self) -> None:
         """Test batching with batch size of 1."""
         data = [1, 2, 3]
-        result = list(batched(data, n=1))
+        result = list(batched(data, n=1))  # noqa: B911
         self.assertEqual(result, [(1,), (2,), (3,)])
 
     @parametrize("n", (-1, 0))
@@ -53,7 +51,7 @@ class BatchedTest(unittest.TestCase):
         with self.assertRaisesRegex(
             ValueError, re.escape(f"{n=} must be at least one")
         ):
-            list(batched(data, n=n))
+            list(batched(data, n=n))  # noqa: B911
 
 
 class DummyRootClass:

@@ -7,8 +7,6 @@ LICENSE file in the root directory of this source tree.
 
 """
 
-#!/usr/bin/env python3
-
 import math
 import re
 import unittest
@@ -40,12 +38,15 @@ from distributed_shampoo.shampoo_types import (
 from distributed_shampoo.tests.shampoo_test_utils import (
     compare_two_optimizers_models_devices_on_weight_and_loss,
     construct_training_problem,
+    generate_global_train_data,
     train_model,
 )
 from torch import distributed as dist, nn
 from torch.distributed.device_mesh import init_device_mesh
 from torch.distributed.fsdp import FSDPModule, fully_shard
+from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim.optimizer import ParamsT
+from torch.testing._comparison import default_tolerances
 from torch.testing._internal.common_distributed import skip_if_lt_x_gpu
 from torch.testing._internal.common_utils import (
     instantiate_parametrized_tests,
@@ -176,6 +177,12 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
             communicate_params=communicate_params,
         )
 
+        global_train_data = generate_global_train_data(
+            num_steps=5,
+            world_size=dist.get_world_size(),
+            data_shape=(4 * PRECONDITIONER_DIM,),
+            device=torch.device("cuda"),
+        )
         compare_two_optimizers_models_devices_on_weight_and_loss(
             control_optim_factory=ShampooHybridShardDistributorTest._shampoo_optim_factory(
                 distributed_config=DefaultSingleDeviceDistributedConfig,
@@ -190,6 +197,8 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
                     fully_shard, mesh=hybrid_shard_config.device_mesh
                 ),
             ),
+            control_train_data=global_train_data,
+            experimental_train_data=global_train_data[:, dist.get_rank()],
         )
 
     @with_comms
@@ -224,6 +233,12 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
             communicate_params=communicate_params,
         )
 
+        global_train_data = generate_global_train_data(
+            num_steps=5,
+            world_size=dist.get_world_size(),
+            data_shape=(4 * PRECONDITIONER_DIM,),
+            device=torch.device("cuda"),
+        )
         compare_two_optimizers_models_devices_on_weight_and_loss(
             control_optim_factory=ShampooHybridShardDistributorTest._shampoo_optim_factory(
                 distributed_config=DefaultSingleDeviceDistributedConfig,
@@ -238,6 +253,8 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
                     fully_shard, mesh=hybrid_shard_config.device_mesh
                 ),
             ),
+            control_train_data=global_train_data,
+            experimental_train_data=global_train_data[:, dist.get_rank()],
         )
 
     @with_comms
@@ -246,12 +263,26 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
         "start_preconditioning_step", (2, math.inf)
     )  # math.inf here is to test the grafting similarities between HSDP2 and DDP
     @parametrize(
-        "communication_dtype, communicate_params",
+        "communication_dtype, communicate_params, rtol, atol",
         (
-            (torch.float32, False),
-            (torch.float32, True),
-            (torch.float16, False),
-            (torch.bfloat16, False),
+            # float32 collectives: bitwise identical expected because both DDP
+            # and HybridShard(n,1) perform NCCL all-reduce on the same inputs
+            # and topology — no dtype casting means no rounding divergence.
+            (torch.float32, False, 0.0, 0.0),
+            (torch.float32, True, 0.0, 0.0),
+            # Reduced-precision collectives: 2x bfloat16 default tolerances
+            # (rtol=0.032, atol=2e-5) to account for error amplification
+            # through Shampoo preconditioner (eigendecomposition / root inverse).
+            (
+                torch.float16,
+                False,
+                *[2 * tol for tol in default_tolerances(torch.bfloat16)],
+            ),
+            (
+                torch.bfloat16,
+                False,
+                *[2 * tol for tol in default_tolerances(torch.bfloat16)],
+            ),
         ),
     )
     @parametrize("num_trainers_per_group", (-1, 1, 2, 4))
@@ -261,6 +292,8 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
         communication_dtype: torch.dtype,
         communicate_params: bool,
         start_preconditioning_step: int,
+        rtol: float,
+        atol: float,
     ) -> None:
         """
         Testing the correctness of hybrid shard Shampoo distributor of (n, 1) mesh
@@ -280,12 +313,24 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
             communicate_params=communicate_params,
         )
 
+        global_train_data = generate_global_train_data(
+            num_steps=5,
+            world_size=dist.get_world_size(),
+            data_shape=(4 * PRECONDITIONER_DIM,),
+            device=torch.device("cuda"),
+        )
         compare_two_optimizers_models_devices_on_weight_and_loss(
             control_optim_factory=ShampooHybridShardDistributorTest._shampoo_optim_factory(
                 distributed_config=ddp_config,
                 start_preconditioning_step=start_preconditioning_step,
             ),
-            control_model_factory=ShampooHybridShardDistributorTest._construct_model,
+            control_model_factory=partial(
+                ShampooHybridShardDistributorTest._construct_model,
+                # DDP wrapping is needed so gradients are all-reduced across ranks.
+                # find_unused_parameters=True is required because the model's dead
+                # layers don't participate in forward() and never receive gradients.
+                post_model_decoration=partial(DDP, find_unused_parameters=True),
+            ),
             experimental_optim_factory=ShampooHybridShardDistributorTest._shampoo_optim_factory(
                 distributed_config=hybrid_shard_config,
                 start_preconditioning_step=start_preconditioning_step,
@@ -296,19 +341,35 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
                     fully_shard, mesh=hybrid_shard_config.device_mesh
                 ),
             ),
-            rtol=0.0,
-            atol=0.0,
+            rtol=rtol,
+            atol=atol,
+            control_train_data=global_train_data[:, dist.get_rank()],
+            experimental_train_data=global_train_data[:, dist.get_rank()],
         )
 
     @with_comms
     @skip_if_lt_x_gpu(4)
     @parametrize(
-        "communication_dtype, communicate_params",
+        "communication_dtype, communicate_params, rtol, atol",
         (
-            (torch.float32, False),
-            (torch.float32, True),
-            (torch.float16, False),
-            (torch.bfloat16, False),
+            # float32 collectives: bitwise identical expected because both DDP
+            # and HybridShard(n,1) perform NCCL all-reduce on the same inputs
+            # and topology — no dtype casting means no rounding divergence.
+            (torch.float32, False, 0.0, 0.0),
+            (torch.float32, True, 0.0, 0.0),
+            # Reduced-precision collectives: 2x bfloat16 default tolerances
+            # (rtol=0.032, atol=2e-5) to account for error amplification
+            # through Shampoo preconditioner (eigendecomposition / root inverse).
+            (
+                torch.float16,
+                False,
+                *[2 * tol for tol in default_tolerances(torch.bfloat16)],
+            ),
+            (
+                torch.bfloat16,
+                False,
+                *[2 * tol for tol in default_tolerances(torch.bfloat16)],
+            ),
         ),
     )
     @parametrize("num_trainers_per_group", (-1, 1, 2))
@@ -317,6 +378,8 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
         num_trainers_per_group: int,
         communication_dtype: torch.dtype,
         communicate_params: bool,
+        rtol: float,
+        atol: float,
     ) -> None:
         """
         Testing the correctness of hybrid shard shampoo distributor by comparing it with
@@ -333,6 +396,12 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
             communicate_params=communicate_params,
         )
 
+        global_train_data = generate_global_train_data(
+            num_steps=5,
+            world_size=dist.get_world_size(),
+            data_shape=(4 * PRECONDITIONER_DIM,),
+            device=torch.device("cuda"),
+        )
         compare_two_optimizers_models_devices_on_weight_and_loss(
             control_optim_factory=ShampooHybridShardDistributorTest._shampoo_optim_factory(
                 distributed_config=fully_shard_config
@@ -348,6 +417,10 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
                 ShampooHybridShardDistributorTest._construct_model,
                 post_model_decoration=partial(fully_shard, mesh=mesh_2d),
             ),
+            rtol=rtol,
+            atol=atol,
+            control_train_data=global_train_data[:, dist.get_rank()],
+            experimental_train_data=global_train_data[:, dist.get_rank()],
         )
 
     @with_comms
@@ -362,6 +435,12 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
         )
 
         steps_without_gradients = 2
+        global_train_data = generate_global_train_data(
+            num_steps=steps_without_gradients,
+            world_size=dist.get_world_size(),
+            data_shape=(4 * PRECONDITIONER_DIM,),
+            device=torch.device("cuda"),
+        )
         with unittest.mock.patch.object(torch.Tensor, "backward") as mock_backward:
             # By mocking the backward() method, we're intercepting gradient calculation.
             # This effectively simulates running forward passes without computing gradients.
@@ -375,7 +454,7 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
                         fully_shard, mesh=hybrid_shard_config.device_mesh
                     ),
                 ),
-                num_steps=steps_without_gradients,
+                train_data=global_train_data[:, dist.get_rank()],
             )
 
         # Verify that the backward() method was called the expected number of times and the training loop completed successfully.
@@ -387,6 +466,12 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
         mesh_2d = init_device_mesh(
             "cuda", (2, 2), mesh_dim_names=("replicate", "shard")
         )
+        global_train_data = generate_global_train_data(
+            num_steps=5,
+            world_size=dist.get_world_size(),
+            data_shape=(4 * PRECONDITIONER_DIM,),
+            device=torch.device("cuda"),
+        )
         model, _, _, _, optimizer = train_model(
             optim_factory=ShampooHybridShardDistributorTest._shampoo_optim_factory(
                 distributed_config=HybridShardDistributedConfig(device_mesh=mesh_2d)
@@ -395,6 +480,7 @@ class ShampooHybridShardDistributorTest(DTensorTestBase):
                 ShampooHybridShardDistributorTest._construct_model,
                 post_model_decoration=partial(fully_shard, mesh=mesh_2d),
             ),
+            train_data=global_train_data[:, dist.get_rank()],
         )
         assert isinstance(model, nn.Module)
         assert isinstance(optimizer, DistributedShampoo)

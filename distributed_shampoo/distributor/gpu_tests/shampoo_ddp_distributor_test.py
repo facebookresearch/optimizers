@@ -7,12 +7,11 @@ LICENSE file in the root directory of this source tree.
 
 """
 
-#!/usr/bin/env python3
-
 import abc
 import os
 import unittest
 from collections.abc import Callable
+from dataclasses import replace
 from functools import partial
 from typing import Any, cast, Dict
 
@@ -25,6 +24,7 @@ from distributed_shampoo.distributor.shampoo_block_info import DTensorBlockInfo
 from distributed_shampoo.distributor.shampoo_ddp_distributor import DDPDistributor
 from distributed_shampoo.shampoo_types import (
     AdaGradPreconditionerConfig,
+    ClassicMomentumConfig,
     DDPDistributedConfig,
     DefaultEigenvalueCorrectedShampooConfig,
     DefaultShampooConfig,
@@ -41,13 +41,16 @@ from distributed_shampoo.shampoo_types import (
 from distributed_shampoo.tests.shampoo_test_utils import (
     compare_two_optimizers_on_weight_and_loss,
     construct_training_problem,
+    generate_global_train_data,
     train_model,
 )
+from distributed_shampoo.utils.shampoo_utils import pack_upper_triangular
 from torch import distributed as dist, nn, tensor
 from torch.distributed.checkpoint.state_dict import get_optimizer_state_dict
 from torch.distributed.device_mesh import DeviceMesh
 from torch.distributed.tensor import DTensor
 from torch.distributed.tensor.placement_types import Replicate
+from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim.optimizer import ParamsT
 from torch.testing._comparison import default_tolerances
 from torch.testing._internal.common_distributed import (
@@ -60,6 +63,25 @@ from torch.testing._internal.common_utils import (
 
 
 PRECONDITIONER_DIM = 3
+
+
+def _shampoo_factor_dtensor(
+    local_tensor: torch.Tensor,
+    device_mesh: DeviceMesh,
+    use_symmetric_packing: bool,
+) -> DTensor:
+    """Builds an expected Shampoo factor / inverse factor matrix DTensor.
+
+    Packs `local_tensor` to upper triangular format when symmetric packing is enabled.
+    Shampoo state in this test always uses Replicate placement.
+    """
+    return DTensor.from_local(
+        local_tensor=pack_upper_triangular(local_tensor)
+        if use_symmetric_packing
+        else local_tensor,
+        device_mesh=device_mesh,
+        placements=(Replicate(),),
+    )
 
 
 # Use outer class as wrapper to avoid running the abstract test.
@@ -93,17 +115,19 @@ class AbstractTest:
             distributed_config: DDPDistributedConfig | SingleDeviceDistributedConfig,
             preconditioner_config: PreconditionerConfig = DefaultShampooConfig,
             iterate_averaging_config: IterateAveragingConfig | None = None,
+            weight_decay: float = 0.0,
+            weight_decay_type: WeightDecayType = WeightDecayType.DECOUPLED,
         ) -> Callable[[ParamsT], torch.optim.Optimizer]:
             return partial(
                 DistributedShampoo,
                 lr=0.001,
                 betas=(0.9, 1.0),
                 epsilon=1e-8,
-                weight_decay=0.0,
+                weight_decay=weight_decay,
                 max_preconditioner_dim=PRECONDITIONER_DIM,
                 precondition_frequency=1,
                 start_preconditioning_step=2,
-                weight_decay_type=WeightDecayType.DECOUPLED,
+                weight_decay_type=weight_decay_type,
                 grafting_config=AdaGradPreconditionerConfig(epsilon=1e-8),
                 distributed_config=distributed_config,
                 preconditioner_config=preconditioner_config,
@@ -186,6 +210,79 @@ class AbstractTest:
                 fill=0.01,
                 rtol=rtol,
                 atol=atol,
+                rank=self.rank,
+                world_size=self.world_size,
+                # DDP wrapping is needed so gradients are all-reduced across ranks,
+                # matching real DDP training semantics. find_unused_parameters=True
+                # is required because the model's dead layers don't participate in
+                # forward() and thus never receive gradients.
+                experimental_post_model_decoration=partial(
+                    DDP,
+                    device_ids=[self.rank] if self._device.type == "cuda" else None,
+                    find_unused_parameters=True,
+                ),
+            )
+
+        @parametrize(
+            "weight_decay_type",
+            (
+                WeightDecayType.DECOUPLED,
+                WeightDecayType.CORRECTED,
+                WeightDecayType.INDEPENDENT,
+                WeightDecayType.L2,
+            ),
+        )
+        @parametrize("num_trainers_per_group", (-1, 1, 2))
+        @parametrize(
+            "iterate_averaging_config",
+            (
+                None,
+                GeneralizedPrimalAveragingConfig(),
+                ScheduleFreeConfig(),
+                ClassicMomentumConfig(),
+            ),
+        )
+        def test_weight_decay_losses(
+            self,
+            num_trainers_per_group: int,
+            weight_decay_type: WeightDecayType,
+            iterate_averaging_config: IterateAveragingConfig | None,
+        ) -> None:
+            self._init_distributed()
+
+            compare_two_optimizers_on_weight_and_loss(
+                control_optim_factory=self._shampoo_optim_factory(
+                    distributed_config=DefaultSingleDeviceDistributedConfig,
+                    iterate_averaging_config=iterate_averaging_config,
+                    weight_decay=0.3,
+                    weight_decay_type=weight_decay_type,
+                ),
+                experimental_optim_factory=self._shampoo_optim_factory(
+                    distributed_config=DDPDistributedConfig(
+                        communication_dtype=torch.float32,
+                        num_trainers_per_group=num_trainers_per_group,
+                    ),
+                    iterate_averaging_config=iterate_averaging_config,
+                    weight_decay=0.3,
+                    weight_decay_type=weight_decay_type,
+                ),
+                model_linear_layers_dims=(
+                    PRECONDITIONER_DIM * 4,
+                    PRECONDITIONER_DIM * 2,
+                    1,
+                ),
+                model_dead_layers_dims=(PRECONDITIONER_DIM, PRECONDITIONER_DIM),
+                device=self._device,
+                fill=0.01,
+                rtol=0.0,
+                atol=0.0,
+                rank=self.rank,
+                world_size=self.world_size,
+                experimental_post_model_decoration=partial(
+                    DDP,
+                    device_ids=[self.rank] if self._device.type == "cuda" else None,
+                    find_unused_parameters=True,
+                ),
             )
 
         @parametrize(
@@ -254,15 +351,34 @@ class AbstractTest:
                 fill=0.01,
                 rtol=rtol,
                 atol=atol,
+                rank=self.rank,
+                world_size=self.world_size,
+                # DDP wrapping with find_unused_parameters=True (see test_losses comment).
+                experimental_post_model_decoration=partial(
+                    DDP,
+                    device_ids=[self.rank] if self._device.type == "cuda" else None,
+                    find_unused_parameters=True,
+                ),
             )
 
-        def test_state_dict(self) -> None:
+        @parametrize("use_symmetric_packing", (False, True))
+        def test_state_dict(self, use_symmetric_packing: bool) -> None:
             self._init_distributed()
 
             num_steps = 3
+            global_train_data = generate_global_train_data(
+                num_steps=num_steps,
+                world_size=self.world_size,
+                data_shape=(PRECONDITIONER_DIM * 2,),
+                device=self._device,
+            )
             model, _, _, _, optimizer = train_model(
                 optim_factory=AbstractTest.ShampooDDPDistributorDeviceTest._shampoo_optim_factory(
-                    distributed_config=DDPDistributedConfig()
+                    distributed_config=DDPDistributedConfig(),
+                    preconditioner_config=replace(
+                        DefaultShampooConfig,
+                        use_symmetric_packing=use_symmetric_packing,
+                    ),
                 ),
                 # Setting model_linear_layers_dims to creates an model with one linear layer with (PRECONDITIONER_DIM * 2)xPRECONDITIONER_DIM weight.
                 # Because Shampoo's max_preconditioner_dim = PRECONDITIONER_DIM, there will be two blocks; rank 0 has block 0 and rank 1 has block 1.
@@ -277,6 +393,7 @@ class AbstractTest:
                     fill=0.01,
                 ),
                 num_steps=num_steps,
+                train_data=global_train_data[:, self.rank],
             )
 
             assert isinstance(optimizer, DistributedShampoo)
@@ -293,6 +410,9 @@ class AbstractTest:
                     1,
                 ],
             )
+            factor = partial(
+                _shampoo_factor_dtensor, use_symmetric_packing=use_symmetric_packing
+            )
 
             # Define the expected state dictionary for each rank.
             # The state_dict is keyed by parameter index (0 and 1).
@@ -303,27 +423,25 @@ class AbstractTest:
                         "block_0": {
                             "shampoo": {
                                 "factor_matrices": {
-                                    0: DTensor.from_local(
-                                        local_tensor=tensor([[0.0016058803303167224]]),
+                                    0: factor(
+                                        local_tensor=tensor([[0.0001959779328899458]]),
                                         device_mesh=mesh_0,
-                                        placements=(Replicate(),),
                                     ),
                                 },
                                 "inv_factor_matrices": {
-                                    0: DTensor.from_local(
-                                        local_tensor=tensor([[24.9541072845459]]),
+                                    0: factor(
+                                        local_tensor=tensor([[71.43077087402344]]),
                                         device_mesh=mesh_0,
-                                        placements=(Replicate(),),
                                     ),
                                 },
                             },
                             "adagrad": DTensor.from_local(
-                                local_tensor=tensor([0.0016058803303167224]),
+                                local_tensor=tensor([0.0001959779328899458]),
                                 device_mesh=mesh_0,
                                 placements=(Replicate(),),
                             ),
                             "filtered_grad": DTensor.from_local(
-                                local_tensor=tensor([0.0037594244349747896]),
+                                local_tensor=tensor([0.0018590810941532254]),
                                 device_mesh=mesh_0,
                                 placements=(Replicate(),),
                             ),
@@ -334,99 +452,95 @@ class AbstractTest:
                         "block_1": {
                             "shampoo": {
                                 "factor_matrices": {
-                                    0: DTensor.from_local(
+                                    0: factor(
                                         local_tensor=tensor(
                                             [
                                                 [
-                                                    6.645893154200166e-05,
-                                                    6.645893154200166e-05,
-                                                    6.645893154200166e-05,
+                                                    1.361092654406093e-05,
+                                                    1.361092654406093e-05,
+                                                    1.361092654406093e-05,
                                                 ],
                                                 [
-                                                    6.645893154200166e-05,
-                                                    6.645893154200166e-05,
-                                                    6.645893154200166e-05,
+                                                    1.361092654406093e-05,
+                                                    1.3610928363050334e-05,
+                                                    1.361092654406093e-05,
                                                 ],
                                                 [
-                                                    6.645893154200166e-05,
-                                                    6.645893154200166e-05,
-                                                    6.645893154200166e-05,
+                                                    1.361092654406093e-05,
+                                                    1.361092654406093e-05,
+                                                    1.361092654406093e-05,
                                                 ],
                                             ]
                                         ),
                                         device_mesh=mesh_0,
-                                        placements=(Replicate(),),
                                     ),
-                                    1: DTensor.from_local(
+                                    1: factor(
                                         local_tensor=tensor(
                                             [
                                                 [
-                                                    4.689853813033551e-05,
-                                                    -3.546147490851581e-05,
-                                                    -3.7919791793683544e-05,
+                                                    1.2197860996820964e-05,
+                                                    1.3136921097611776e-06,
+                                                    -1.6640237845422234e-06,
                                                 ],
                                                 [
-                                                    -3.546147490851581e-05,
-                                                    3.5329150705365464e-05,
-                                                    1.7933603885467164e-05,
+                                                    1.3136921097611776e-06,
+                                                    7.509043371101143e-06,
+                                                    -1.2525374586402904e-05,
                                                 ],
                                                 [
-                                                    -3.7919791793683544e-05,
-                                                    1.7933603885467164e-05,
-                                                    0.0001171490948763676,
+                                                    -1.6640237845422234e-06,
+                                                    -1.2525374586402904e-05,
+                                                    2.112587753799744e-05,
                                                 ],
                                             ]
                                         ),
                                         device_mesh=mesh_0,
-                                        placements=(Replicate(),),
                                     ),
                                 },
                                 "inv_factor_matrices": {
-                                    0: DTensor.from_local(
+                                    0: factor(
                                         local_tensor=tensor(
                                             [
                                                 [
-                                                    69.4718017578125,
-                                                    -30.528188705444336,
-                                                    -30.52819061279297,
+                                                    70.83631896972656,
+                                                    -29.16368293762207,
+                                                    -29.16368293762207,
                                                 ],
                                                 [
-                                                    -30.528188705444336,
-                                                    69.45362091064453,
-                                                    -30.510019302368164,
+                                                    -29.163679122924805,
+                                                    70.83528900146484,
+                                                    -29.162641525268555,
                                                 ],
                                                 [
-                                                    -30.52819061279297,
-                                                    -30.510019302368164,
-                                                    69.45362854003906,
+                                                    -29.163679122924805,
+                                                    -29.16264533996582,
+                                                    70.83528900146484,
                                                 ],
                                             ]
                                         ),
                                         device_mesh=mesh_0,
-                                        placements=(Replicate(),),
                                     ),
-                                    1: DTensor.from_local(
+                                    1: factor(
                                         local_tensor=tensor(
                                             [
                                                 [
-                                                    16.394943237304688,
-                                                    5.6407470703125,
-                                                    1.8611559867858887,
+                                                    16.980432510375977,
+                                                    -1.1272867918014526,
+                                                    -0.1816159188747406,
                                                 ],
                                                 [
-                                                    5.6407470703125,
-                                                    16.996492385864258,
-                                                    0.27824175357818604,
+                                                    -1.1272867918014526,
+                                                    49.9351692199707,
+                                                    21.47319793701172,
                                                 ],
                                                 [
-                                                    1.8611557483673096,
-                                                    0.27824151515960693,
-                                                    10.019035339355469,
+                                                    -0.1816159337759018,
+                                                    21.47319793701172,
+                                                    26.421972274780273,
                                                 ],
                                             ]
                                         ),
                                         device_mesh=mesh_0,
-                                        placements=(Replicate(),),
                                     ),
                                 },
                             },
@@ -434,19 +548,19 @@ class AbstractTest:
                                 local_tensor=tensor(
                                     [
                                         [
-                                            1.563284604344517e-05,
-                                            1.1776383871620055e-05,
-                                            3.904970071744174e-05,
+                                            4.065953362442087e-06,
+                                            2.503014229660039e-06,
+                                            7.04195917933248e-06,
                                         ],
                                         [
-                                            1.563284604344517e-05,
-                                            1.1776383871620055e-05,
-                                            3.904970071744174e-05,
+                                            4.065953362442087e-06,
+                                            2.5030146844073897e-06,
+                                            7.04195917933248e-06,
                                         ],
                                         [
-                                            1.563284604344517e-05,
-                                            1.1776383871620055e-05,
-                                            3.904970071744174e-05,
+                                            4.065953362442087e-06,
+                                            2.503014229660039e-06,
+                                            7.04195917933248e-06,
                                         ],
                                     ]
                                 ),
@@ -457,19 +571,19 @@ class AbstractTest:
                                 local_tensor=tensor(
                                     [
                                         [
-                                            -0.0003921023744624108,
-                                            0.00012148835230618715,
-                                            0.0008510660263709724,
+                                            -0.0002331818686798215,
+                                            -8.544711454305798e-05,
+                                            0.00015910383081063628,
                                         ],
                                         [
-                                            -0.0003921023744624108,
-                                            0.00012148835230618715,
-                                            0.0008510660263709724,
+                                            -0.0002331818686798215,
+                                            -8.54471290949732e-05,
+                                            0.00015910383081063628,
                                         ],
                                         [
-                                            -0.0003921023744624108,
-                                            0.00012148835230618715,
-                                            0.0008510660263709724,
+                                            -0.0002331818686798215,
+                                            -8.544711454305798e-05,
+                                            0.00015910383081063628,
                                         ],
                                     ]
                                 ),
@@ -484,99 +598,95 @@ class AbstractTest:
                         "block_0": {
                             "shampoo": {
                                 "factor_matrices": {
-                                    0: DTensor.from_local(
+                                    0: factor(
                                         local_tensor=tensor(
                                             [
                                                 [
-                                                    0.00011197220010217279,
-                                                    0.00011197220010217279,
-                                                    0.00011197220010217279,
+                                                    2.4930672225309536e-05,
+                                                    2.4930672225309536e-05,
+                                                    2.4930672225309536e-05,
                                                 ],
                                                 [
-                                                    0.00011197220010217279,
-                                                    0.00011197220010217279,
-                                                    0.00011197220010217279,
+                                                    2.4930672225309536e-05,
+                                                    2.4930672225309536e-05,
+                                                    2.4930672225309536e-05,
                                                 ],
                                                 [
-                                                    0.00011197220010217279,
-                                                    0.00011197220010217279,
-                                                    0.00011197220010217279,
+                                                    2.4930672225309536e-05,
+                                                    2.4930672225309536e-05,
+                                                    2.4930672225309536e-05,
                                                 ],
                                             ]
                                         ),
                                         device_mesh=mesh_1,
-                                        placements=(Replicate(),),
                                     ),
-                                    1: DTensor.from_local(
+                                    1: factor(
                                         local_tensor=tensor(
                                             [
                                                 [
-                                                    0.000132521876366809,
-                                                    0.00013956104521639645,
-                                                    -1.1767312571464572e-05,
+                                                    1.4635477782576345e-05,
+                                                    -1.1405569239286706e-05,
+                                                    -8.130889909807593e-06,
                                                 ],
                                                 [
-                                                    0.00013956104521639645,
-                                                    0.0001891223801067099,
-                                                    6.5871563492692076e-06,
+                                                    -1.1405569239286706e-05,
+                                                    4.607178925652988e-05,
+                                                    2.4604041755083017e-05,
                                                 ],
                                                 [
-                                                    -1.1767312571464572e-05,
-                                                    6.5871563492692076e-06,
-                                                    1.4272330190578941e-05,
+                                                    -8.130889909807593e-06,
+                                                    2.4604041755083017e-05,
+                                                    1.4084745998843573e-05,
                                                 ],
                                             ]
                                         ),
                                         device_mesh=mesh_1,
-                                        placements=(Replicate(),),
                                     ),
                                 },
                                 "inv_factor_matrices": {
-                                    0: DTensor.from_local(
+                                    0: factor(
                                         local_tensor=tensor(
                                             [
                                                 [
-                                                    69.12242889404297,
-                                                    -30.855859756469727,
-                                                    -30.88007926940918,
+                                                    70.21800231933594,
+                                                    -29.731094360351562,
+                                                    -29.73412322998047,
                                                 ],
                                                 [
-                                                    -30.855863571166992,
-                                                    69.09217071533203,
-                                                    -30.84980583190918,
+                                                    -29.731094360351562,
+                                                    70.24112701416016,
+                                                    -29.75722885131836,
                                                 ],
                                                 [
-                                                    -30.88007926940918,
-                                                    -30.849802017211914,
-                                                    69.11640167236328,
+                                                    -29.734119415283203,
+                                                    -29.75722885131836,
+                                                    70.24415588378906,
                                                 ],
                                             ]
                                         ),
                                         device_mesh=mesh_1,
-                                        placements=(Replicate(),),
                                     ),
-                                    1: DTensor.from_local(
+                                    1: factor(
                                         local_tensor=tensor(
                                             [
                                                 [
-                                                    13.893352508544922,
-                                                    -5.123697280883789,
-                                                    4.147429466247559,
+                                                    17.4156436920166,
+                                                    0.022538283839821815,
+                                                    3.622297525405884,
                                                 ],
                                                 [
-                                                    -5.123697280883789,
-                                                    11.735774993896484,
-                                                    -3.2658231258392334,
+                                                    0.02253795601427555,
+                                                    16.994813919067383,
+                                                    -10.457884788513184,
                                                 ],
                                                 [
-                                                    4.147429466247559,
-                                                    -3.2658231258392334,
-                                                    19.706111907958984,
+                                                    3.622298002243042,
+                                                    -10.4578857421875,
+                                                    32.26253890991211,
                                                 ],
                                             ]
                                         ),
                                         device_mesh=mesh_1,
-                                        placements=(Replicate(),),
                                     ),
                                 },
                             },
@@ -584,19 +694,19 @@ class AbstractTest:
                                 local_tensor=tensor(
                                     [
                                         [
-                                            4.417396485223435e-05,
-                                            6.304078851826489e-05,
-                                            4.757443548442097e-06,
+                                            4.878492745774565e-06,
+                                            1.5357263691839762e-05,
+                                            4.694914878200507e-06,
                                         ],
                                         [
-                                            4.417396485223435e-05,
-                                            6.304078851826489e-05,
-                                            4.7574430936947465e-06,
+                                            4.878493200521916e-06,
+                                            1.5357263691839762e-05,
+                                            4.694915332947858e-06,
                                         ],
                                         [
-                                            4.417396485223435e-05,
-                                            6.304078851826489e-05,
-                                            4.757443548442097e-06,
+                                            4.878492745774565e-06,
+                                            1.5357263691839762e-05,
+                                            4.694914878200507e-06,
                                         ],
                                     ]
                                 ),
@@ -607,19 +717,19 @@ class AbstractTest:
                                 local_tensor=tensor(
                                     [
                                         [
-                                            0.000822467845864594,
-                                            0.0009405062301084399,
-                                            7.864914368838072e-05,
+                                            0.00016447670350316912,
+                                            8.83667089510709e-05,
+                                            -4.004316360806115e-05,
                                         ],
                                         [
-                                            0.000822467845864594,
-                                            0.0009405062301084399,
-                                            7.86491364124231e-05,
+                                            0.00016447667439933866,
+                                            8.836669439915568e-05,
+                                            -4.004319998784922e-05,
                                         ],
                                         [
-                                            0.000822467845864594,
-                                            0.0009405062301084399,
-                                            7.864914368838072e-05,
+                                            0.0001644766889512539,
+                                            8.836670167511329e-05,
+                                            -4.004317815997638e-05,
                                         ],
                                     ]
                                 ),
@@ -674,6 +784,12 @@ class AbstractTest:
             self._init_distributed()
 
             steps_without_gradients = 2
+            global_train_data = generate_global_train_data(
+                num_steps=steps_without_gradients,
+                world_size=self.world_size,
+                data_shape=(PRECONDITIONER_DIM * 4,),
+                device=self._device,
+            )
             with unittest.mock.patch.object(torch.Tensor, "backward") as mock_backward:
                 # By mocking the backward() method, we're intercepting gradient calculation.
                 # This effectively simulates running forward passes without computing gradients.
@@ -694,6 +810,7 @@ class AbstractTest:
                         device=self._device,
                     ),
                     num_steps=steps_without_gradients,
+                    train_data=global_train_data[:, self.rank],
                 )
 
             # Verify that the backward() method was called the expected number of times and the training loop completed successfully.
@@ -706,6 +823,12 @@ class AbstractTest:
             self._init_distributed()
 
             num_steps = 3
+            global_train_data = generate_global_train_data(
+                num_steps=num_steps,
+                world_size=self.world_size,
+                data_shape=(PRECONDITIONER_DIM,),
+                device=self._device,
+            )
             model, _, _, _, optimizer = train_model(
                 optim_factory=AbstractTest.ShampooDDPDistributorDeviceTest._shampoo_optim_factory(
                     distributed_config=DDPDistributedConfig(
@@ -721,6 +844,7 @@ class AbstractTest:
                     device=self._device,
                 ),
                 num_steps=num_steps,
+                train_data=global_train_data[:, self.rank],
             )
 
             assert isinstance(optimizer, DistributedShampoo)

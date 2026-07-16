@@ -21,7 +21,7 @@ Developers:
 
 with contributions and support from:
 
-Ganesh Ajjanagadde (Meta), Rohan Anil (Google), Adnan Aziz (Meta), Pavan Balaji (Meta), Shuo Chang (Meta), Weiwei Chu (Meta), Assaf Eisenman (Meta), Will Feng (Meta), Zhuobo Feng (Meta), Jose Gallego-Posada (Mila / Meta Platforms, Inc.), Avirup Ghosh (Meta), Yizi Gu (Meta), Vineet Gupta (Google), Yuchen Hao (Meta), Brian Hirsh (Meta), Yusuo Hu (Meta), Yuxi Hu (Meta), Minhui Huang (Meta), Guna Lakshminarayanan (Meta), Michael Lazos (Meta), Zhijing Li (Meta), Ming Liang (Meta), Wanchao Liang (Meta), Ying Liu (Meta), Wenguang Mao (Meta), Dheevatsa Mudigere (NVIDIA), Maxim Naumov (Meta), Jongsoo Park (Meta), Mike Rabbat (Meta), Kaushik Rangadurai (Meta), Dennis van der Staay (Meta), Fei Tian (Meta), Rohan Varma (Meta), Sanjay Vishwakarma (Meta), Xunnan (Shawn) Xu (Meta), Jiyan Yang (Meta), Chunxing Yin (Meta), Gavin Zhang (Meta), Haoran Zhang (Meta), Haoyu Zhang (Meta), Chuanhao Zhuge (Meta), and Will Zou (Meta).
+Ganesh Ajjanagadde (Meta), Rohan Anil (Google), Adnan Aziz (Meta), Pavan Balaji (Meta), Shuo Chang (Meta), Weiwei Chu (Meta), Assaf Eisenman (Meta), Will Feng (Meta), Zhuobo Feng (Meta), Jose Gallego-Posada (Mila / Meta Platforms, Inc.), Avirup Ghosh (Meta), Yizi Gu (Meta), Shagun Gupta (Meta), Vineet Gupta (Google), Yuchen Hao (Meta), Brian Hirsh (Meta), Yusuo Hu (Meta), Yuxi Hu (Meta), Minhui Huang (Meta), Guna Lakshminarayanan (Meta), Michael Lazos (Meta), Zhijing Li (Meta), Ming Liang (Meta), Wanchao Liang (Meta), Ying Liu (Meta), Wenguang Mao (Meta), Dheevatsa Mudigere (NVIDIA), Maxim Naumov (Meta), Jongsoo Park (Meta), Mike Rabbat (Meta), Kaushik Rangadurai (Meta), Dennis van der Staay (Meta), Fei Tian (Meta), Rohan Varma (Meta), Sanjay Vishwakarma (Meta), Xunnan (Shawn) Xu (Meta), Jiyan Yang (Meta), Chunxing Yin (Meta), Gavin Zhang (Meta), Haoran Zhang (Meta), Haoyu Zhang (Meta), Chuanhao Zhuge (Meta), and Will Zou (Meta).
 
 ## 🏆 Competition Winner 🏆
 
@@ -74,9 +74,13 @@ A few notes on hyperparameters:
 
 - Here, `betas` refer to the hyperparameters used for the exponential moving average of the gradients and Shampoo preconditioners, while `grafting_beta2` corresponds to the `beta2` used specifically for exponential moving averaging of the grafted method. This is similar for `epsilon` and `grafting_epsilon`. As a first choice, we recommend setting `betas` equal to the previous `betas` and additionally setting `grafting_beta2` equal to `betas[1]`, and set `epsilon = 1e-12` and `grafting_epsilon` equal to the previous `epsilon`.
 
-- We also distinguish between `beta1` and iterate averaging. `beta1` (via `betas[0]`) corresponds to the EMA of the gradients (or gradient filtering), while iterate averaging (via `iterate_averaging_config`) provides momentum-like behavior through primal averaging. See [Example 7](#example-7-iterate-averaging-gpa-and-schedule-free) for details on configuring iterate averaging to achieve SGD momentum equivalence.
+- We also distinguish between `beta1` and iterate averaging. `beta1` (via `betas[0]`) corresponds to the EMA of the gradients (or gradient filtering), while iterate averaging (via `iterate_averaging_config`) provides momentum-like behavior. The supported configs are `ClassicMomentumConfig` (classic SGD-style momentum with dampening and Nesterov), `GeneralizedPrimalAveragingConfig` (GPA / primal averaging), and `ScheduleFreeConfig` (Schedule-Free). See [Example 7](#example-7-iterate-averaging-classic-momentum-gpa-and-schedule-free) for details and trade-offs.
 
-- We allow for decoupled and coupled weight decay. If one sets `use_decoupled_weight_decay=True`, then you are enabling AdamW-style weight decay, while `use_decoupled_weight_decay=False` corresponds to the normal L2-regularization style weight decay.
+- We allow for multiple weight decay strategies via `weight_decay_type`. The available options are:
+  - `WeightDecayType.L2`: Applies weight decay by adding a multiple of the weights to the gradient before preconditioning (L2 regularization).
+  - `WeightDecayType.DECOUPLED`: Applies AdamW-style decoupled weight decay independent of the preconditioned gradient.
+  - `WeightDecayType.CORRECTED`: Applies weight decay scaled by the learning rate divided by the maximum learning rate, independent of the preconditioned gradient.
+  - `WeightDecayType.INDEPENDENT`: Applies weight decay divided by the maximum learning rate, independent of the preconditioned gradient.
 
 - When setting `preconditioner_config` as an instance of `EigenvalueCorrectedShampooPreconditionerConfig` (see Example 5), there is typically no need to use learning rate grafting from Adam (`grafting_config=None`) and, when they are available, Adam's optimal `lr`, `betas`, and `weight_decay` should be a good starting point for further tuning. However, the case of `beta2=1.0`, i.e. an AdaGrad-like accumulation, has not been explored yet.  Also, in settings where Shampoo would usually graft its learning rate from SGD, grafting might still be beneficial.
 
@@ -100,8 +104,8 @@ we would instead use:
 ```python
 import torch
 from distributed_shampoo import (
+    ClassicMomentumConfig,
     DistributedShampoo,
-    GeneralizedPrimalAveragingConfig,
     SGDPreconditionerConfig,
 )
 
@@ -109,16 +113,17 @@ model = instantiate_model()
 
 optimizer = DistributedShampoo(
     model.parameters(),
-    lr=0.1,  # = 0.01 / (1 - 0.9) to account for primal averaging formulation
+    lr=0.01,
     betas=(0., 0.999),
     epsilon=1e-12,
     weight_decay=1e-05,
     max_preconditioner_dim=8192,
     precondition_frequency=100,
     grafting_config=SGDPreconditionerConfig(),
-    iterate_averaging_config=GeneralizedPrimalAveragingConfig(
-        eval_interp_coeff=0.9,   # = momentum
-        train_interp_coeff=1.0,  # 1.0 for heavy-ball momentum
+    iterate_averaging_config=ClassicMomentumConfig(
+        momentum=0.9,
+        dampening=0.0,
+        use_nesterov=False,
     ),
 )
 ```
@@ -144,7 +149,7 @@ optimizer = Adam(
 we would instead use:
 ```python
 import torch
-from distributed_shampoo import AdamPreconditionerConfig, DistributedShampoo
+from distributed_shampoo import AdamPreconditionerConfig, DistributedShampoo, WeightDecayType
 
 model = instantiate_model()
 
@@ -156,7 +161,7 @@ optimizer = DistributedShampoo(
     weight_decay=1e-05,
     max_preconditioner_dim=8192,
     precondition_frequency=100,
-    use_decoupled_weight_decay=False,
+    weight_decay_type=WeightDecayType.L2,
     grafting_config=AdamPreconditionerConfig(
         beta2=0.999,
         epsilon=1e-08,
@@ -183,7 +188,7 @@ optimizer = Adagrad(
 we would instead use:
 ```python
 import torch
-from distributed_shampoo import AdaGradPreconditionerConfig, DistributedShampoo
+from distributed_shampoo import AdaGradPreconditionerConfig, DistributedShampoo, WeightDecayType
 
 model = instantiate_model()
 
@@ -195,7 +200,7 @@ optimizer = DistributedShampoo(
     weight_decay=1e-05,
     max_preconditioner_dim=8192,
     precondition_frequency=100,
-    use_decoupled_weight_decay=False,
+    weight_decay_type=WeightDecayType.L2,
     grafting_config=AdaGradPreconditionerConfig(
         epsilon=1e-10,
     ),
@@ -222,7 +227,7 @@ optimizer = AdamW(
 we would instead use:
 ```python
 import torch
-from distributed_shampoo import AdamPreconditionerConfig, DistributedShampoo
+from distributed_shampoo import AdamPreconditionerConfig, DistributedShampoo, WeightDecayType
 
 model = instantiate_model()
 
@@ -234,7 +239,7 @@ optimizer = DistributedShampoo(
     weight_decay=1e-05,
     max_preconditioner_dim=8192,
     precondition_frequency=100,
-    use_decoupled_weight_decay=True,
+    weight_decay_type=WeightDecayType.DECOUPLED,
     grafting_config=AdamPreconditionerConfig(
         beta2=0.999,
         epsilon=1e-08,
@@ -265,6 +270,7 @@ import torch
 from distributed_shampoo import (
     DistributedShampoo,
     DefaultEigenvalueCorrectedShampooConfig,
+    WeightDecayType,
 )
 
 model = instantiate_model()
@@ -277,7 +283,7 @@ optimizer = DistributedShampoo(
     weight_decay=1e-05,
     max_preconditioner_dim=8192,
     precondition_frequency=100,
-    use_decoupled_weight_decay=True,
+    weight_decay_type=WeightDecayType.DECOUPLED,
     # This can also be set to `DefaultSOAPConfig` which uses QR decompositions, hence is
     # less expensive and might thereby allow for a smaller `precondition_frequency`.
     preconditioner_config=DefaultEigenvalueCorrectedShampooConfig,
@@ -294,6 +300,7 @@ from distributed_shampoo import (
     NewtonSchulzOrthogonalizationConfig,
     SingleDeviceDistributedConfig,
     SpectralDescentPreconditionerConfig,
+    WeightDecayType,
 )
 
 
@@ -331,15 +338,54 @@ optimizer = DistributedShampoo(
         },
     ],
     weight_decay=1e-05,
-    use_decoupled_weight_decay=True,
+    weight_decay_type=WeightDecayType.DECOUPLED,
 )
 ```
 
 `SpectralDescentPreconditionerConfig` can also be used to implement other variations of spectral descent.
 
-### Example 7: Iterate Averaging (GPA and Schedule-Free)
+### Example 7: Iterate Averaging (Classic Momentum, GPA, and Schedule-Free)
 
-Distributed Shampoo supports iterate averaging methods including Generalized Primal Averaging (GPA) and Schedule-Free optimization. These methods provide an alternative to traditional momentum with improved theoretical properties.
+Distributed Shampoo supports three iterate averaging methods via `iterate_averaging_config`: `ClassicMomentumConfig` (classic SGD-style momentum applied to the preconditioned search direction), `GeneralizedPrimalAveragingConfig` (GPA), and `ScheduleFreeConfig`. GPA and Schedule-Free provide alternatives to traditional momentum with improved theoretical properties, while `ClassicMomentumConfig` provides a drop-in equivalent to PyTorch's SGD momentum semantics.
+
+#### Classic Momentum
+
+`ClassicMomentumConfig` applies classic SGD-style momentum directly to Shampoo's preconditioned search direction `P`:
+
+```
+M ← momentum * M + (1 - dampening) * P
+P ← (1 - dampening) * P + momentum * M    if use_nesterov
+P ← M                                      otherwise
+W ← W - lr * P
+```
+
+Unlike GPA, it requires no learning-rate rescaling and supports `dampening` and `use_nesterov`. It also does not require switching between `train()` / `eval()` modes (unlike Schedule-Free).
+
+```python
+from distributed_shampoo import (
+    ClassicMomentumConfig,
+    DistributedShampoo,
+    SGDPreconditionerConfig,
+)
+
+model = instantiate_model()
+
+# Shampoo with classic SGD momentum=0.9 (heavy-ball)
+optimizer = DistributedShampoo(
+    model.parameters(),
+    lr=0.01,
+    betas=(0.0, 1.0),
+    epsilon=1e-12,
+    max_preconditioner_dim=8192,
+    precondition_frequency=100,
+    preconditioner_config=SGDPreconditionerConfig(),
+    iterate_averaging_config=ClassicMomentumConfig(
+        momentum=0.9,
+        dampening=0.0,
+        use_nesterov=False,
+    ),
+)
+```
 
 #### Generalized Primal Averaging (GPA)
 
@@ -408,15 +454,15 @@ optimizer.eval()
 
 #### Migration from Previous Momentum Parameters
 
-The previous `momentum`, `dampening`, and `use_nesterov` parameters have been replaced by iterate averaging configs. Here are the equivalences:
+The previous `momentum`, `dampening`, and `use_nesterov` parameters have been replaced by iterate averaging configs. The simplest drop-in replacement is `ClassicMomentumConfig`, which preserves SGD's exact momentum/dampening/Nesterov semantics with no learning-rate rescaling. `GeneralizedPrimalAveragingConfig` is an alternative formulation with different theoretical properties (and requires `lr = lr / (1 - β)` for heavy-ball equivalence).
 
-| Previous Configuration | New Configuration |
-|------------------------|-------------------|
-| `momentum=β, dampening=0, use_nesterov=False` | `GeneralizedPrimalAveragingConfig(eval_interp_coeff=β, train_interp_coeff=1.0)` with `lr = lr / (1-β)` |
-| `momentum=β, dampening=0, use_nesterov=True` | `GeneralizedPrimalAveragingConfig(eval_interp_coeff=β, train_interp_coeff=β)` with `lr = lr / (1-β)` |
-| `momentum=β, dampening=d` (d≠0) | No direct equivalent. Dampening is not supported in iterate averaging. |
+| Previous Configuration | Recommended (`ClassicMomentumConfig`) | Equivalent GPA Configuration |
+|------------------------|---------------------------------------|------------------------------|
+| `momentum=β, dampening=0, use_nesterov=False` | `ClassicMomentumConfig(momentum=β)` (no `lr` change) | `GeneralizedPrimalAveragingConfig(eval_interp_coeff=β, train_interp_coeff=1.0)` with `lr = lr / (1-β)` |
+| `momentum=β, dampening=0, use_nesterov=True` | `ClassicMomentumConfig(momentum=β, use_nesterov=True)` (no `lr` change) | `GeneralizedPrimalAveragingConfig(eval_interp_coeff=β, train_interp_coeff=β)` with `lr = lr / (1-β)` |
+| `momentum=β, dampening=d` (d≠0) | `ClassicMomentumConfig(momentum=β, dampening=d)` | No direct equivalent — dampening is not supported in GPA. |
 
-**Note on LaProp:** The previous momentum implementation (sometimes called LaProp) is mathematically equivalent to the heavy-ball/primal averaging formulation when `dampening=0`. Use the heavy-ball configuration above.
+**Note on LaProp:** The previous momentum implementation (sometimes called LaProp) is mathematically equivalent to either `ClassicMomentumConfig` (when `dampening=0`) or the heavy-ball/primal averaging formulation. Both are valid migrations.
 
 **Note on LaPropW:** The original LaPropW from the paper includes additional weight decay handling that may differ slightly from the iterate averaging formulation. For most practical purposes, the heavy-ball configuration provides equivalent behavior.
 
@@ -444,6 +490,7 @@ from distributed_shampoo import (
     AdamPreconditionerConfig,
     DDPDistributedConfig,
     DistributedShampoo,
+    WeightDecayType,
 )
 from torch import nn
 
@@ -473,7 +520,7 @@ optimizer = DistributedShampoo(
     weight_decay=1e-05,
     max_preconditioner_dim=8192,
     precondition_frequency=100,
-    use_decoupled_weight_decay=True,
+    weight_decay_type=WeightDecayType.DECOUPLED,
     grafting_config=AdamPreconditionerConfig(
         beta2=0.999,
         epsilon=1e-12,
@@ -506,6 +553,7 @@ from distributed_shampoo import (
     compile_fsdp_parameter_metadata,
     DistributedShampoo,
     FSDPDistributedConfig,
+    WeightDecayType,
 )
 
 LOCAL_RANK = int(os.environ["LOCAL_RANK"])
@@ -531,7 +579,7 @@ optimizer = DistributedShampoo(
     weight_decay=1e-05,
     max_preconditioner_dim=8192,
     precondition_frequency=100,
-    use_decoupled_weight_decay=True,
+    weight_decay_type=WeightDecayType.DECOUPLED,
     grafting_config=AdamPreconditionerConfig(
         beta2=0.999,
         epsilon=1e-12,
@@ -558,6 +606,7 @@ from distributed_shampoo import (
     compile_fsdp_parameter_metadata,
     DistributedShampoo,
     HSDPDistributedConfig,
+    WeightDecayType,
 )
 
 LOCAL_RANK = int(os.environ["LOCAL_RANK"])
@@ -590,7 +639,7 @@ optimizer = DistributedShampoo(
     weight_decay=1e-05,
     max_preconditioner_dim=8192,
     precondition_frequency=100,
-    use_decoupled_weight_decay=True,
+    weight_decay_type=WeightDecayType.DECOUPLED,
     grafting_config=AdamPreconditionerConfig(
         beta2=0.999,
         epsilon=1e-12,
@@ -620,6 +669,7 @@ from distributed_shampoo import (
     AdamPreconditionerConfig,
     DistributedShampoo,
     FullyShardDistributedConfig,
+    WeightDecayType,
 )
 
 LOCAL_RANK = int(os.environ["LOCAL_RANK"])
@@ -645,7 +695,7 @@ optimizer = DistributedShampoo(
     weight_decay=1e-05,
     max_preconditioner_dim=8192,
     precondition_frequency=100,
-    use_decoupled_weight_decay=True,
+    weight_decay_type=WeightDecayType.DECOUPLED,
     grafting_config=AdamPreconditionerConfig(
         beta2=0.999,
         epsilon=1e-12,
@@ -671,6 +721,7 @@ from distributed_shampoo import (
     AdamPreconditionerConfig,
     DistributedShampoo,
     HybridShardDistributedConfig,
+    WeightDecayType,
 )
 
 LOCAL_RANK = int(os.environ["LOCAL_RANK"])
@@ -703,7 +754,7 @@ optimizer = DistributedShampoo(
     weight_decay=1e-05,
     max_preconditioner_dim=8192,
     precondition_frequency=100,
-    use_decoupled_weight_decay=True,
+    weight_decay_type=WeightDecayType.DECOUPLED,
     grafting_config=AdamPreconditionerConfig(
         beta2=0.999,
         epsilon=1e-12,

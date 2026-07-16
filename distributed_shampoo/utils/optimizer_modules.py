@@ -119,7 +119,7 @@ class OptimizerModule:
         save_to_state_dict(self.__dict__.items(), destination)
         return destination
 
-    def load_state_dict(
+    def load_state_dict(  # noqa: C901
         self, state_dict: StateDict, store_non_tensors: bool = False
     ) -> None:
         """
@@ -214,12 +214,15 @@ class OptimizerModule:
                 # When state dict is flattened/unflattened, dictionary keys in new_state become strings
                 if isinstance(new_state, dict) and len(new_state) > 0:
                     # Convert new_state dict to match the collection structure expected by old_state
+                    # pyrefly: ignore [bad-assignment]
                     new_state = _convert_state_key_from_str_to_int(old_state, new_state)
 
                 old_state = type(old_state)(
                     (
                         load_from_new_state_to_old_state(
+                            # pyrefly: ignore [bad-argument-type]
                             old_state=old_value,
+                            # pyrefly: ignore [bad-index]
                             new_state=new_state[i],
                         )
                         if store_non_tensors

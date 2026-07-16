@@ -7,12 +7,15 @@ LICENSE file in the root directory of this source tree.
 
 """
 
+import copy
+import itertools
 import logging
 from collections.abc import Iterable
 from typing import Any, Literal, overload
 
 import torch
 from distributed_shampoo.distributor.shampoo_block_info import DTensorBlockInfo
+from distributed_shampoo.distributor.shampoo_dist_utils import shampoo_comm_profiler
 from distributed_shampoo.distributor.shampoo_hybrid_shard_distributor import (
     HybridShardDistributor,
 )
@@ -23,13 +26,14 @@ from distributed_shampoo.shampoo_types import (
     PARAMS,
     ShampooRuntimeConfig,
 )
-from distributed_shampoo.utils.shampoo_utils import (
-    compress_list,
-    prepare_update_param_buffers,
-    redistribute_and_update_params,
+from distributed_shampoo.utils.shampoo_fully_shard_utils import (
+    GatherGradientsContext,
+    RedistributeParamsContext,
 )
+from distributed_shampoo.utils.shampoo_utils import compress_list
 from torch import distributed as dist, Tensor
 from torch.distributed import tensor as dtensor
+from torch.distributed.device_mesh import init_device_mesh
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -48,6 +52,14 @@ class HybridShardLosslessDistributor(HybridShardDistributor):
 
     """
 
+    # Generates unique DeviceMesh dim names per instance. With num_sub_groups > 1,
+    # each distributor must have its own NCCL process groups to avoid deadlocks
+    # from concurrent collectives on separate CUDA streams. Unique dim names
+    # (e.g., "0_replicate", "1_replicate") ensure each init_device_mesh() call
+    # creates fresh PGs. itertools.count is atomic in CPython, so concurrent
+    # constructions get distinct indices without an explicit lock.
+    _instance_counter: "itertools.count[int]" = itertools.count()
+
     def __init__(
         self,
         param_group: dict[str, Any],
@@ -63,48 +75,77 @@ class HybridShardLosslessDistributor(HybridShardDistributor):
             f"Shampoo HybridShardLosslessDistributor {self._param_assignment_strategy=}",
         )
 
-        self._shard_group_size: int = distributed_config.device_mesh.size(1)
+        # Create a fresh DeviceMesh with unique dim names to get dedicated
+        # process groups per distributor instance. With num_sub_groups > 1,
+        # multiple distributors run concurrent collectives on separate CUDA
+        # streams — shared PGs would deadlock.
+        idx = next(HybridShardLosslessDistributor._instance_counter)
+        mesh = distributed_config.device_mesh
+        mesh_dim_names = mesh.mesh_dim_names
+        assert mesh_dim_names is not None, "DeviceMesh must have mesh_dim_names"
+        self._device_mesh: torch.distributed.device_mesh.DeviceMesh = init_device_mesh(
+            mesh.device_type,
+            tuple(mesh.mesh.shape),
+            mesh_dim_names=tuple(f"{idx}_{name}" for name in mesh_dim_names),
+        )
+        # Shallow-copy the config to give the parent the fresh device mesh
+        # without mutating the caller's original config.
+        distributed_config = copy.copy(distributed_config)
+        distributed_config.device_mesh = self._device_mesh
+        param_group[DISTRIBUTED_CONFIG] = distributed_config
+
+        self._shard_group_size: int = self._device_mesh.size(1)
         # Initialize distributed group for communicating across the shard dimension.
-        self._shard_dist_group: dist.ProcessGroup = (
-            distributed_config.device_mesh.get_group(mesh_dim=1)
+        self._shard_dist_group: dist.ProcessGroup = self._device_mesh.get_group(
+            mesh_dim=1
         )
         self._shard_group_rank: int = dist.get_rank(self._shard_dist_group)
 
         # Stores full parameters (as opposed to DTensors) for the model parameters assigned to this rank.
         # For example, when the strategy is REPLICATE, it stores the full parameters on all ranks.
         def should_assign_param_idx(i: int) -> bool:
-            if (
-                self._param_assignment_strategy
+            return (
+                i % self._shard_group_size == self._shard_group_rank
+                if self._param_assignment_strategy
                 == FSDPParamAssignmentStrategy.ROUND_ROBIN
-            ):
-                return i % self._shard_group_size == self._shard_group_rank
-            return True
+                else True
+            )
 
         with torch.no_grad():
             self._assigned_params_mask: tuple[bool, ...] = tuple(
                 should_assign_param_idx(idx) for idx in range(len(param_group[PARAMS]))
             )
 
-        # Collects and stores the model parameters assigned to this rank.
-        with torch.no_grad():
-            full_params: list[Tensor] = [p.full_tensor() for p in param_group[PARAMS]]
-
-        # TODO (irisz): eagerly initialize the _assigned_full_params cannot handle dead layers parameters correctly,
-        # as we do not have gradient information during initialization. We need a way to handle dead layers parameters
-        # before doing performance optimization on the full_tensor call above (e.g. change full_tensor call to all_to_all).
-        self._assigned_full_params: list[Tensor] = [
-            p
-            for p, assigned in zip(full_params, self._assigned_params_mask)
-            if assigned
-        ]
-
-        # For ROUND_ROBIN strategy, creates a buffer for receiving the updated param shards.
-        self._update_param_buffers: list[Tensor] | None = (
-            prepare_update_param_buffers(param_group[PARAMS], self._shard_group_size)
+        # For ROUND_ROBIN strategy, create optimized redistribution context
+        # that precomputes all static information for efficient all_to_all
+        self._redistribute_ctx: RedistributeParamsContext | None = (
+            RedistributeParamsContext(
+                params=param_group[PARAMS],
+                assigned_params_mask=self._assigned_params_mask,
+                dist_group=self._shard_dist_group,
+            )
             if self._param_assignment_strategy
             == FSDPParamAssignmentStrategy.ROUND_ROBIN
             else None
         )
+
+        # For ROUND_ROBIN strategy, create gradient gathering context
+        # that uses all_to_all instead of per-param full_tensor() all-gathers
+        self._gather_grads_ctx: GatherGradientsContext | None = (
+            GatherGradientsContext(
+                params=param_group[PARAMS],
+                assigned_params_mask=self._assigned_params_mask,
+                dist_group=self._shard_dist_group,
+            )
+            if self._param_assignment_strategy
+            == FSDPParamAssignmentStrategy.ROUND_ROBIN
+            else None
+        )
+
+        # Set _param_group early so _get_assigned_full_params can access it
+        # (super().__init__ will set it again to the same value).
+        self._param_group = param_group
+        self._assigned_full_params: list[Tensor] = self._get_assigned_full_params()
 
         super().__init__(param_group, runtime_config)
 
@@ -117,6 +158,27 @@ class HybridShardLosslessDistributor(HybridShardDistributor):
             logger.debug(
                 f"Local blocked params[size={len(local_block_id_list)}]: {local_block_id_list}"
             )
+
+    @torch.no_grad()
+    def _get_assigned_full_params(self) -> list[Tensor]:
+        """Gather full parameter tensors for params assigned to this rank.
+
+        For ROUND_ROBIN, uses all_to_all to gather only assigned params efficiently.
+        For REPLICATE, falls back to per-param full_tensor() all-gathers.
+
+        Returns:
+            List of full parameter tensors assigned to this rank.
+        """
+        if self._gather_grads_ctx is not None:
+            all_params = self._gather_grads_ctx.gather_params()
+            return [p for p in all_params if p is not None]
+        else:
+            full_params = [p.full_tensor() for p in self._param_group[PARAMS]]
+            return [
+                p
+                for p, assigned in zip(full_params, self._assigned_params_mask)
+                if assigned
+            ]
 
     def _get_composable_block_id_rank(self) -> int | None:
         """For lossless shampoo distributor, it's unnecessary to include rank in block id."""
@@ -144,11 +206,22 @@ class HybridShardLosslessDistributor(HybridShardDistributor):
             local (Iterable[Tensor | None]): assigned params (or grad) from the param_group.
         """
         if get_grad:
-            # NOTE: getting grads at every optimizer step triggers implicit all-gather.
-            full_grads = (
-                None if p.grad is None else p.grad.full_tensor()
-                for p in self._param_group[PARAMS]
-            )
+            gather_grads_ctx = self._gather_grads_ctx
+            if gather_grads_ctx is not None:
+                # ROUND_ROBIN: use all_to_all to gather grads efficiently.
+                with shampoo_comm_profiler(
+                    f"{self.__class__.__name__}::gather_gradients_all_to_all"
+                ):
+                    full_grads = gather_grads_ctx.gather_gradients()
+            else:
+                # REPLICATE: fall back to per-param full_tensor() all-gathers.
+                with shampoo_comm_profiler(
+                    f"{self.__class__.__name__}::grad_full_tensors"
+                ):
+                    full_grads = [
+                        None if p.grad is None else p.grad.full_tensor()
+                        for p in self._param_group[PARAMS]
+                    ]
             return (
                 full_grad
                 for full_grad, assigned in zip(
@@ -181,12 +254,13 @@ class HybridShardLosslessDistributor(HybridShardDistributor):
         # redistribute it according to the device mesh to get the locally assigned slice, and copy the slice to the
         # corresponding local parameter `local_param` in the param group.
         if self._param_assignment_strategy == FSDPParamAssignmentStrategy.ROUND_ROBIN:
-            redistribute_and_update_params(
-                self._param_group[PARAMS],
-                self._assigned_full_params,
-                self._update_param_buffers,  # type: ignore
-                self._shard_dist_group,
-            )
+            with shampoo_comm_profiler(
+                f"{self.__class__.__name__}::_redistribute_ctx.redistribute_and_update_params"
+            ):
+                assert self._redistribute_ctx is not None
+                self._redistribute_ctx.redistribute_and_update_params(
+                    self._assigned_full_params,
+                )
 
         # Copy the updated full parameters to the original parameters.
         elif self._param_assignment_strategy == FSDPParamAssignmentStrategy.REPLICATE:
@@ -244,12 +318,7 @@ class HybridShardLosslessDistributor(HybridShardDistributor):
         2. _global_blocked_params and _local_blocked_params - views of the full tensors
         3. _global_masked_blocked_params - HybridShardDistributor's reference to global blocked params
         """
-        full_params: list[Tensor] = [p.full_tensor() for p in self._param_group[PARAMS]]
-        self._assigned_full_params = [
-            p
-            for p, assigned in zip(full_params, self._assigned_params_mask)
-            if assigned
-        ]
+        self._assigned_full_params = self._get_assigned_full_params()
         # Also re-block the parameters since _global_blocked_params are views of the old
         # _assigned_full_params tensors
         self._merge_and_block_parameters()

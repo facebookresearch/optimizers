@@ -7,8 +7,6 @@ LICENSE file in the root directory of this source tree.
 
 """
 
-#!/usr/bin/env python3
-
 import unittest
 from typing import cast
 
@@ -45,6 +43,7 @@ class DistributorTest(unittest.TestCase):
         linear_layers: nn.ModuleList = cast(nn.ModuleList, self._model.linear_layers)
         layer_weight: torch.Tensor = cast(torch.Tensor, linear_layers[0].weight)
         layer_weight.grad = torch.ones_like(layer_weight)
+        # pyrefly: ignore [bad-argument-type, missing-attribute]
         linear_layers[0].bias.grad = None
         self._distributor.merge_and_block_gradients()
 
@@ -85,6 +84,7 @@ class DistributorTest(unittest.TestCase):
         linear_layers: nn.ModuleList = cast(nn.ModuleList, self._model.linear_layers)
         layer_weight: torch.Tensor = cast(torch.Tensor, linear_layers[0].weight)
         layer_weight.grad = torch.ones_like(layer_weight)
+        # pyrefly: ignore [bad-argument-type, missing-attribute]
         linear_layers[0].bias.grad = None
         self._distributor.merge_and_block_gradients()
 
@@ -148,6 +148,7 @@ class DistributorTest(unittest.TestCase):
         linear_layers: nn.ModuleList = cast(nn.ModuleList, self._model.linear_layers)
         layer_weight: torch.Tensor = cast(torch.Tensor, linear_layers[0].weight)
         layer_weight.grad = torch.ones_like(layer_weight)
+        # pyrefly: ignore [bad-argument-type, missing-attribute]
         linear_layers[0].bias.grad = None
         actual_local_masked_block_grads = self._distributor.merge_and_block_gradients()
         expected_local_masked_block_grads = (
@@ -170,6 +171,7 @@ class DistributorTest(unittest.TestCase):
         linear_layers: nn.ModuleList = cast(nn.ModuleList, self._model.linear_layers)
         layer_weight: torch.Tensor = cast(torch.Tensor, linear_layers[0].weight)
         layer_weight.grad = torch.ones_like(layer_weight)
+        # pyrefly: ignore [bad-argument-type, missing-attribute]
         linear_layers[0].bias.grad = None
 
         with unittest.mock.patch.object(torch, "isfinite") as mock_isfinite:
@@ -187,6 +189,7 @@ class DistributorTest(unittest.TestCase):
         linear_layers: nn.ModuleList = cast(nn.ModuleList, self._model.linear_layers)
         layer_weight: torch.Tensor = cast(torch.Tensor, linear_layers[0].weight)
         layer_weight.grad = torch.ones_like(layer_weight)
+        # pyrefly: ignore [bad-argument-type, missing-attribute]
         linear_layers[0].bias.grad = None
 
         with unittest.mock.patch.object(torch, "isfinite") as mock_isfinite:

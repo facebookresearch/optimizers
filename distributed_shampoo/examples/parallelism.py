@@ -17,9 +17,13 @@ from distributed_shampoo.distributor.shampoo_fsdp_utils import (
     compile_fsdp_parameter_metadata,
 )
 from torch import nn
-from torch.distributed._composable.fsdp import fully_shard
 from torch.distributed.device_mesh import DeviceMesh
-from torch.distributed.fsdp import FullyShardedDataParallel as FSDP, ShardingStrategy
+from torch.distributed.fsdp import (
+    FSDPModule,
+    fully_shard,
+    FullyShardedDataParallel as FSDP,
+    ShardingStrategy,
+)
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 
@@ -27,7 +31,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 class WrappedModel:
     """Result of wrapping a model for distributed training."""
 
-    model: nn.Module
+    model: nn.Module | FSDPModule
     distributed_config: DistributedConfig | None = None
 
 
@@ -174,7 +178,7 @@ class FullyShardStrategy(ParallelismStrategy):
         device_mesh: DeviceMesh | None = None,
     ) -> WrappedModel:
         config = self.distributed_config() if self.distributed_config else None
-        return WrappedModel(model=fully_shard(model), distributed_config=config)  # type: ignore[arg-type]
+        return WrappedModel(model=fully_shard(model), distributed_config=config)
 
 
 @dataclass
@@ -203,6 +207,6 @@ class HybridShardStrategy(ParallelismStrategy):
         if self.distributed_config:
             config = self.distributed_config(device_mesh=device_mesh)
         return WrappedModel(
-            model=fully_shard(model, mesh=device_mesh),  # type: ignore[arg-type]
+            model=fully_shard(model, mesh=device_mesh),
             distributed_config=config,
         )
