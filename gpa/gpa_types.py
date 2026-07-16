@@ -25,6 +25,7 @@ TRAIN_MODE = "train_mode"
 LR_MAX = "lr_max"
 WEIGHT_LR_POWER = "weight_lr_power"
 WEIGHT_DECAY = "weight_decay"
+USE_WD_ON_Y = "use_wd_on_y"
 EVAL_INTERP_COEFF = "eval_interp_coeff"
 ITERATE_AVERAGING_TYPE = "iterate_averaging_type"
 

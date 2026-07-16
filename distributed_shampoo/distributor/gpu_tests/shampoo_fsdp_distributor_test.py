@@ -7,8 +7,6 @@ LICENSE file in the root directory of this source tree.
 
 """
 
-#!/usr/bin/env python3
-
 import unittest
 from collections.abc import Callable
 from functools import partial
@@ -37,6 +35,7 @@ from distributed_shampoo.shampoo_types import (
 from distributed_shampoo.tests.shampoo_test_utils import (
     compare_two_optimizers_models_devices_on_weight_and_loss,
     construct_training_problem,
+    generate_global_train_data,
     train_model,
 )
 from torch import distributed as dist, nn
@@ -134,6 +133,19 @@ class ShampooFSDPDistributorTest(FSDPTest):
         fsdp_config = FSDPDistributedConfig(param_to_metadata={})
 
         steps_without_gradients = 2
+        model_linear_layers_dims = (
+            4 * PRECONDITIONER_DIM * PRECONDITIONER_DIM,
+            2 * PRECONDITIONER_DIM,
+            9,
+            4 * PRECONDITIONER_DIM * PRECONDITIONER_DIM,
+            1,
+        )
+        global_train_data = generate_global_train_data(
+            num_steps=steps_without_gradients,
+            world_size=dist.get_world_size(),
+            data_shape=(model_linear_layers_dims[0],),
+            device=torch.device("cuda"),
+        )
         with unittest.mock.patch.object(torch.Tensor, "backward") as mock_backward:
             # By mocking the backward() method, we're intercepting gradient calculation.
             # This effectively simulates running forward passes without computing gradients.
@@ -147,6 +159,7 @@ class ShampooFSDPDistributorTest(FSDPTest):
                     distributed_config=fsdp_config,
                 ),
                 num_steps=steps_without_gradients,
+                train_data=global_train_data[:, dist.get_rank()],
             )
 
         # Verify that the backward() method was called the expected number of times and the training loop completed successfully.
@@ -155,6 +168,20 @@ class ShampooFSDPDistributorTest(FSDPTest):
     @skip_if_lt_x_gpu(2)
     def test_fsdp_shampoo_against_default_shampoo(self) -> None:
         fsdp_config = FSDPDistributedConfig(param_to_metadata={})
+        model_linear_layers_dims = (
+            4 * PRECONDITIONER_DIM * PRECONDITIONER_DIM,
+            2 * PRECONDITIONER_DIM,
+            9,
+            4 * PRECONDITIONER_DIM * PRECONDITIONER_DIM,
+            1,
+        )
+        total_steps = 5
+        global_train_data = generate_global_train_data(
+            num_steps=total_steps,
+            world_size=dist.get_world_size(),
+            data_shape=(model_linear_layers_dims[0],),
+            device=torch.device("cuda"),
+        )
         compare_two_optimizers_models_devices_on_weight_and_loss(
             control_optim_factory=ShampooFSDPDistributorTest._shampoo_optim_factory(
                 distributed_config=DefaultSingleDeviceDistributedConfig,
@@ -168,6 +195,9 @@ class ShampooFSDPDistributorTest(FSDPTest):
                 post_model_decoration=partial(FSDP1, use_orig_params=True),
                 distributed_config=fsdp_config,
             ),
+            total_steps=total_steps,
+            control_train_data=global_train_data,
+            experimental_train_data=global_train_data[:, dist.get_rank()],
         )
 
     @skip_if_lt_x_gpu(2)
@@ -225,7 +255,20 @@ class ShampooFSDPDistributorTest(FSDPTest):
             device_mesh=init_device_mesh("cuda", (1, self.world_size)),
             communicate_params=communicate_params,
         )
-
+        model_linear_layers_dims = (
+            4 * PRECONDITIONER_DIM * PRECONDITIONER_DIM,
+            2 * PRECONDITIONER_DIM,
+            9,
+            4 * PRECONDITIONER_DIM * PRECONDITIONER_DIM,
+            1,
+        )
+        total_steps = 100
+        global_train_data = generate_global_train_data(
+            num_steps=total_steps,
+            world_size=dist.get_world_size(),
+            data_shape=(model_linear_layers_dims[0],),
+            device=torch.device("cuda"),
+        )
         compare_two_optimizers_models_devices_on_weight_and_loss(
             control_optim_factory=ShampooFSDPDistributorTest._shampoo_optim_factory(
                 distributed_config=fsdp_config,
@@ -248,9 +291,11 @@ class ShampooFSDPDistributorTest(FSDPTest):
                 ),
                 distributed_config=hsdp_config,
             ),
-            total_steps=100,
+            total_steps=total_steps,
             rtol=0.0,
             atol=0.0,
+            control_train_data=global_train_data[:, dist.get_rank()],
+            experimental_train_data=global_train_data[:, dist.get_rank()],
         )
 
 

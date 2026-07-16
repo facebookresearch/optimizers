@@ -7,8 +7,6 @@ LICENSE file in the root directory of this source tree.
 
 """
 
-#!/usr/bin/env python3
-
 import unittest
 from collections.abc import Callable
 from functools import partial
@@ -22,28 +20,27 @@ from distributed_shampoo.distributor._shampoo_hybrid_shard_lossless_distributor 
 )
 from distributed_shampoo.distributor.gpu_tests.distributor_test_utils import (
     DistributorOnEmptyParamTest,
+    HYBRID_SHARD_PARAM_GROUP_TEST_MODEL_DIMS,
+    PARAM_GROUP_TEST_DEAD_DIMS,
+    shampoo_optim_factory,
 )
 from distributed_shampoo.distributor.shampoo_block_info import DTensorBlockInfo
 from distributed_shampoo.shampoo_types import (
-    AdaGradPreconditionerConfig,
-    DDPDistributedConfig,
     DefaultSingleDeviceDistributedConfig,
     FSDPParamAssignmentStrategy,
     FullyShardDistributedConfig,
-    GeneralizedPrimalAveragingConfig,
     HybridShardDistributedConfig,
-    SingleDeviceDistributedConfig,
-    WeightDecayType,
+    ShampooPT2CompileConfig,
 )
 from distributed_shampoo.tests.shampoo_test_utils import (
     compare_two_optimizers_models_devices_on_weight_and_loss,
     construct_training_problem,
+    generate_global_train_data,
     train_model,
 )
 from torch import distributed as dist, nn
 from torch.distributed.device_mesh import init_device_mesh
 from torch.distributed.fsdp import FSDPModule, fully_shard
-from torch.optim.optimizer import ParamsT
 from torch.testing._internal.common_distributed import skip_if_lt_x_gpu
 from torch.testing._internal.common_utils import (
     instantiate_parametrized_tests,
@@ -118,29 +115,6 @@ class ShampooHybridShardLosslessDistributorTest(DTensorTestBase):
             fill=0.1,
         )
 
-    @staticmethod
-    def _shampoo_optim_factory(
-        distributed_config: DDPDistributedConfig
-        | FullyShardDistributedConfig
-        | HybridShardDistributedConfig
-        | SingleDeviceDistributedConfig,
-        start_preconditioning_step: int = 2,
-    ) -> Callable[[ParamsT], torch.optim.Optimizer]:
-        return partial(
-            DistributedShampoo,
-            lr=0.001,
-            betas=(0.9, 1.0),
-            epsilon=1e-8,
-            weight_decay=0.0,
-            max_preconditioner_dim=PRECONDITIONER_DIM,
-            precondition_frequency=1,
-            start_preconditioning_step=start_preconditioning_step,
-            weight_decay_type=WeightDecayType.DECOUPLED,
-            grafting_config=AdaGradPreconditionerConfig(epsilon=1e-8),
-            distributed_config=distributed_config,
-            iterate_averaging_config=GeneralizedPrimalAveragingConfig(),
-        )
-
     @with_comms
     @skip_if_lt_x_gpu(4)
     @parametrize(
@@ -181,8 +155,14 @@ class ShampooHybridShardLosslessDistributorTest(DTensorTestBase):
             param_assignment_strategy=param_assignment_strategy,
         )
 
+        global_train_data = generate_global_train_data(
+            num_steps=5,
+            world_size=self.world_size,
+            data_shape=(model_linear_layers_dims[0],),
+            device=torch.device("cuda"),
+        )
         compare_two_optimizers_models_devices_on_weight_and_loss(
-            control_optim_factory=ShampooHybridShardLosslessDistributorTest._shampoo_optim_factory(
+            control_optim_factory=shampoo_optim_factory(
                 distributed_config=DefaultSingleDeviceDistributedConfig,
             ),
             control_model_factory=partial(
@@ -190,7 +170,7 @@ class ShampooHybridShardLosslessDistributorTest(DTensorTestBase):
                 model_linear_layers_dims=model_linear_layers_dims,
                 model_dead_layers_dims=model_dead_layers_dims,
             ),
-            experimental_optim_factory=ShampooHybridShardLosslessDistributorTest._shampoo_optim_factory(
+            experimental_optim_factory=shampoo_optim_factory(
                 distributed_config=hybrid_shard_config,
             ),
             experimental_model_factory=partial(
@@ -201,6 +181,8 @@ class ShampooHybridShardLosslessDistributorTest(DTensorTestBase):
                     fully_shard, mesh=hybrid_shard_config.device_mesh
                 ),
             ),
+            control_train_data=global_train_data,
+            experimental_train_data=global_train_data[:, dist.get_rank()],
         )
 
     @with_comms
@@ -249,8 +231,14 @@ class ShampooHybridShardLosslessDistributorTest(DTensorTestBase):
             param_assignment_strategy=param_assignment_strategy,
         )
 
+        global_train_data = generate_global_train_data(
+            num_steps=5,
+            world_size=self.world_size,
+            data_shape=(model_linear_layers_dims[0],),
+            device=torch.device("cuda"),
+        )
         compare_two_optimizers_models_devices_on_weight_and_loss(
-            control_optim_factory=ShampooHybridShardLosslessDistributorTest._shampoo_optim_factory(
+            control_optim_factory=shampoo_optim_factory(
                 distributed_config=fully_shard_config
             ),
             control_model_factory=partial(
@@ -259,7 +247,7 @@ class ShampooHybridShardLosslessDistributorTest(DTensorTestBase):
                 model_dead_layers_dims=(),
                 post_model_decoration=partial(fully_shard),
             ),
-            experimental_optim_factory=ShampooHybridShardLosslessDistributorTest._shampoo_optim_factory(
+            experimental_optim_factory=shampoo_optim_factory(
                 distributed_config=hybrid_shard_config
             ),
             experimental_model_factory=partial(
@@ -268,6 +256,8 @@ class ShampooHybridShardLosslessDistributorTest(DTensorTestBase):
                 model_dead_layers_dims=(),
                 post_model_decoration=partial(fully_shard, mesh=mesh_2d),
             ),
+            control_train_data=global_train_data[:, dist.get_rank()],
+            experimental_train_data=global_train_data[:, dist.get_rank()],
         )
 
     @with_comms
@@ -290,11 +280,17 @@ class ShampooHybridShardLosslessDistributorTest(DTensorTestBase):
         )
 
         steps_without_gradients = 2
+        global_train_data = generate_global_train_data(
+            num_steps=steps_without_gradients,
+            world_size=self.world_size,
+            data_shape=(model_linear_layers_dims[0],),
+            device=torch.device("cuda"),
+        )
         with unittest.mock.patch("torch.Tensor.backward") as mock_backward:
             # By mocking the backward() method, we're intercepting gradient calculation.
             # This effectively simulates running forward passes without computing gradients.
             train_model(
-                optim_factory=ShampooHybridShardLosslessDistributorTest._shampoo_optim_factory(
+                optim_factory=shampoo_optim_factory(
                     distributed_config=hybrid_shard_config
                 ),
                 model_factory=partial(
@@ -305,7 +301,7 @@ class ShampooHybridShardLosslessDistributorTest(DTensorTestBase):
                         fully_shard, mesh=hybrid_shard_config.device_mesh
                     ),
                 ),
-                num_steps=steps_without_gradients,
+                train_data=global_train_data[:, dist.get_rank()],
             )
 
         # Verify that the backward() method was called the expected number of times and the training loop completed successfully.
@@ -317,8 +313,14 @@ class ShampooHybridShardLosslessDistributorTest(DTensorTestBase):
         mesh_2d = init_device_mesh(
             "cuda", (2, 2), mesh_dim_names=("replicate", "shard")
         )
+        global_train_data = generate_global_train_data(
+            num_steps=5,
+            world_size=self.world_size,
+            data_shape=(TEST_MODEL_LAYER_DIMS[0][0],),
+            device=torch.device("cuda"),
+        )
         model, _, _, _, optimizer = train_model(
-            optim_factory=ShampooHybridShardLosslessDistributorTest._shampoo_optim_factory(
+            optim_factory=shampoo_optim_factory(
                 distributed_config=HybridShardDistributedConfig(
                     device_mesh=mesh_2d,
                     param_assignment_strategy=FSDPParamAssignmentStrategy.REPLICATE,
@@ -330,6 +332,7 @@ class ShampooHybridShardLosslessDistributorTest(DTensorTestBase):
                 model_dead_layers_dims=DEAD_MODEL_LAYER_DIMS[0],
                 post_model_decoration=partial(fully_shard, mesh=mesh_2d),
             ),
+            train_data=global_train_data[:, dist.get_rank()],
         )
         assert isinstance(model, nn.Module)
         assert isinstance(optimizer, DistributedShampoo)
@@ -500,3 +503,108 @@ class HybridShardLosslessDistributorOnEmptyParamTest(
     @with_comms
     def test_merge_and_block_gradients(self) -> None:  # type: ignore[override]
         DistributorOnEmptyParamTest.Interface.test_merge_and_block_gradients(self)
+
+
+@unittest.skipIf(not torch.cuda.is_available(), "Skip when CUDA is not available")
+@instantiate_parametrized_tests
+class ShampooHybridShardParamGroupTest(DTensorTestBase):
+    """Tests for param group splitting with HybridShardDistributedConfig and num_sub_groups > 1."""
+
+    @property
+    def world_size(self) -> int:
+        return 4
+
+    @with_comms
+    @skip_if_lt_x_gpu(4)
+    @parametrize("num_sub_groups", (2, 3, 4))
+    @parametrize(
+        "shampoo_pt2_compile_config",
+        (ShampooPT2CompileConfig(), None),
+    )
+    def test_hybrid_shard_shampoo_split_matches_unsplit(
+        self,
+        num_sub_groups: int,
+        shampoo_pt2_compile_config: ShampooPT2CompileConfig | None,
+    ) -> None:
+        """Verify split HSDP (num_sub_groups > 1) matches unsplit single-group."""
+        device_mesh = init_device_mesh(
+            "cuda", (2, 2), mesh_dim_names=("replicate", "shard")
+        )
+        control_config = HybridShardDistributedConfig(
+            device_mesh=device_mesh,
+            param_assignment_strategy=FSDPParamAssignmentStrategy.ROUND_ROBIN,
+            num_sub_groups=1,
+        )
+        experimental_config = HybridShardDistributedConfig(
+            device_mesh=device_mesh,
+            param_assignment_strategy=FSDPParamAssignmentStrategy.ROUND_ROBIN,
+            num_sub_groups=num_sub_groups,
+        )
+        model_factory = partial(
+            construct_training_problem,
+            model_linear_layers_dims=HYBRID_SHARD_PARAM_GROUP_TEST_MODEL_DIMS,
+            model_dead_layers_dims=PARAM_GROUP_TEST_DEAD_DIMS,
+            enable_learnable_scalar=False,
+            device=torch.device("cuda"),
+            fill=0.1,
+            post_model_decoration=partial(fully_shard, mesh=device_mesh),
+        )
+        compare_two_optimizers_models_devices_on_weight_and_loss(
+            control_optim_factory=shampoo_optim_factory(
+                distributed_config=control_config,
+                shampoo_pt2_compile_config=shampoo_pt2_compile_config,
+            ),
+            control_model_factory=model_factory,
+            experimental_optim_factory=shampoo_optim_factory(
+                distributed_config=experimental_config,
+                shampoo_pt2_compile_config=shampoo_pt2_compile_config,
+            ),
+            experimental_model_factory=model_factory,
+        )
+
+    @with_comms
+    @skip_if_lt_x_gpu(4)
+    @parametrize(
+        "shampoo_pt2_compile_config",
+        (ShampooPT2CompileConfig(), None),
+    )
+    def test_hybrid_shard_shampoo_with_num_sub_groups_against_default_shampoo(
+        self,
+        shampoo_pt2_compile_config: ShampooPT2CompileConfig | None,
+    ) -> None:
+        """Verify split HSDP (num_sub_groups=2) matches single-device default Shampoo."""
+        device_mesh = init_device_mesh(
+            "cuda", (2, 2), mesh_dim_names=("replicate", "shard")
+        )
+        hybrid_shard_config = HybridShardDistributedConfig(
+            device_mesh=device_mesh,
+            param_assignment_strategy=FSDPParamAssignmentStrategy.ROUND_ROBIN,
+            num_sub_groups=2,
+        )
+        compare_two_optimizers_models_devices_on_weight_and_loss(
+            control_optim_factory=shampoo_optim_factory(
+                distributed_config=DefaultSingleDeviceDistributedConfig,
+                shampoo_pt2_compile_config=shampoo_pt2_compile_config,
+            ),
+            control_model_factory=partial(
+                construct_training_problem,
+                model_linear_layers_dims=HYBRID_SHARD_PARAM_GROUP_TEST_MODEL_DIMS,
+                model_dead_layers_dims=PARAM_GROUP_TEST_DEAD_DIMS,
+                enable_learnable_scalar=False,
+                device=torch.device("cuda"),
+                fill=0.1,
+            ),
+            experimental_optim_factory=shampoo_optim_factory(
+                distributed_config=hybrid_shard_config,
+                shampoo_pt2_compile_config=shampoo_pt2_compile_config,
+            ),
+            experimental_model_factory=partial(
+                construct_training_problem,
+                model_linear_layers_dims=HYBRID_SHARD_PARAM_GROUP_TEST_MODEL_DIMS,
+                model_dead_layers_dims=PARAM_GROUP_TEST_DEAD_DIMS,
+                enable_learnable_scalar=False,
+                device=torch.device("cuda"),
+                fill=0.1,
+                post_model_decoration=partial(fully_shard, mesh=device_mesh),
+            ),
+        )

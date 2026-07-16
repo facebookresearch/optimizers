@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 """
 Copyright (c) Meta Platforms, Inc. and affiliates.
 All rights reserved.
@@ -6,8 +8,6 @@ This source code is licensed under the BSD-style license found in the
 LICENSE file in the root directory of this source tree.
 
 """
-
-#!/usr/bin/env python3
 
 import logging
 import os
@@ -169,7 +169,8 @@ class LoadCheckpointTest(unittest.TestCase):
     def test_load_checkpoint_returns_early_if_no_checkpoint_dir(self) -> None:
         """Test that load_checkpoint returns early if checkpoint_dir is None."""
         model = nn.Linear(10, 5)
-        optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
+        # Citrine C2: foreach=True for multi-tensor execution
+        optimizer = torch.optim.SGD(model.parameters(), lr=0.01, foreach=True)
 
         # Should not raise - just returns early
         load_checkpoint(None, model, optimizer)
@@ -177,7 +178,8 @@ class LoadCheckpointTest(unittest.TestCase):
     def test_load_checkpoint_returns_early_if_not_shampoo(self) -> None:
         """Test that load_checkpoint returns early for non-Shampoo optimizers."""
         model = nn.Linear(10, 5)
-        optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
+        # Citrine C2: foreach=True for multi-tensor execution
+        optimizer = torch.optim.SGD(model.parameters(), lr=0.01, foreach=True)
 
         # Should not raise - just returns early
         load_checkpoint("/some/path", model, optimizer)

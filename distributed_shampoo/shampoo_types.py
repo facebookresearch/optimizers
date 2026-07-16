@@ -35,6 +35,7 @@ from torch.nn.parameter import Parameter
 # Keys for optimizer state (always checkpointed)
 FILTERED_GRAD = "filtered_grad"
 LR_SUM = "lr_sum"
+MOMENTUM_BUFFER = "momentum_buffer"
 STEP = "step"
 TRAIN_MODE = "train_mode"
 WEIGHT_BUFFER = "weight_buffer"
@@ -44,7 +45,6 @@ BETA3 = "beta3"
 BETAS = "betas"
 DISTRIBUTED_CONFIG = "distributed_config"
 EPSILON = "epsilon"
-EVAL_INTERP_COEFF = "eval_interp_coeff"
 GRAFTING_CONFIG = "grafting_config"
 ITERATE_AVERAGING_CONFIG = "iterate_averaging_config"
 LR = "lr"
@@ -54,14 +54,15 @@ PEAK_LR = "peak_lr"
 PRECONDITION_FREQUENCY = "precondition_frequency"
 PRECONDITIONER_CONFIG = "preconditioner_config"
 START_PRECONDITIONING_STEP = "start_preconditioning_step"
-TRAIN_INTERP_COEFF = "train_interp_coeff"
 USE_BIAS_CORRECTION = "use_bias_correction"
 USE_PIN_MEMORY = "use_pin_memory"
 WEIGHT_DECAY = "weight_decay"
 WEIGHT_DECAY_TYPE = "weight_decay_type"
 
 # Keys for lists of blocked states and metadata (never checkpointed)
+CUDA_STREAM = "cuda_stream"
 DISTRIBUTOR = "distributor"
+EVAL_INTERP_COEFF = "eval_interp_coeff"
 FILTERED_GRAD_LIST = "filtered_grad_list"
 GRAFTING_PRECONDITIONER_LIST = "grafting_preconditioner_list"
 LR_CPU_PINNED = "lr_cpu_pinned"
@@ -69,9 +70,12 @@ LR_TENSOR = "lr_tensor"
 MASKED_BLOCKED_GRADS = "masked_blocked_grads"
 MASKED_BLOCKED_PARAMS = "masked_blocked_params"
 MASKED_FILTERED_GRAD_LIST = "masked_filtered_grad_list"
+MASKED_MOMENTUM_BUFFER_LIST = "masked_momentum_buffer_list"
 MASKED_WEIGHT_BUFFER_LIST = "masked_weight_buffer_list"
+MOMENTUM_BUFFER_LIST = "momentum_buffer_list"
 PREVIOUS_GRAD_SELECTOR = "previous_grad_selector"
 SHAMPOO_PRECONDITIONER_LIST = "shampoo_preconditioner_list"
+TRAIN_INTERP_COEFF = "train_interp_coeff"
 WEIGHT_BUFFER_LIST = "weight_buffer_list"
 
 
@@ -154,27 +158,39 @@ class BaseShampooPreconditionerConfig(PreconditionerConfig):
 
     Attributes:
         amortized_computation_config (MatrixFunctionConfig): Configuration for the amortized computation, e.g., inverse-root computation or eigendecomposition.
-        num_tolerated_failed_amortized_computations (int): Number of failed amortized computations to tolerate before raising an error. (Default: 3)
-        factor_matrix_dtype (torch.dtype): Data type for factor matrix. (Default: torch.float32)
-        use_trace_scaling (bool): Flag for whether to normalize the factor matrix by its trace's sqrt before computing the inverse root.
-            Credit to https://arxiv.org/pdf/2506.03595. (Default: False)
         drop_weighting_factor_on_gsquare (bool): If True, drop the (1 - beta2) weighting factor when computing
             the updates of the preconditioners, i.e., V(t) = beta2 * V(t-1) + G^2 instead of
             V(t) = beta2 * V(t-1) + (1 - beta2) * G^2. This keeps _bias_correction2 at 1.0 (no beta2 bias correction). (Default: False)
+        factor_matrix_dtype (torch.dtype): Data type for factor matrix. (Default: torch.float32)
+        num_tolerated_failed_amortized_computations (int): Number of failed amortized computations to tolerate before raising an error. (Default: 3)
+        use_symmetric_packing (bool): If True, stores symmetric Kronecker factor matrices
+            (factor_matrices and inv_factor_matrices) in packed upper triangular format
+            (d*(d+1)/2 elements instead of d*d), saving ~50% memory. This is lossless since
+            these matrices are symmetric PSD. (Default: True)
+        use_trace_scaling (bool): Flag for whether to normalize the factor matrix by its trace raised to trace_scaling_exponent before computing the inverse root.
+            Credit to https://arxiv.org/pdf/2506.03595. (Default: False)
+        trace_scaling_exponent (float): Exponent applied to the trace when use_trace_scaling is True; the factor matrix is multiplied by trace ** (-trace_scaling_exponent).
+            Must be in (0.0, 1.0]. The default 0.5 reproduces 1 / sqrt(trace). (Default: 0.5)
 
     """
 
     # repr=False prevents __repr__() from accessing this field to avoid linter complaints
     amortized_computation_config: MatrixFunctionConfig = field(repr=False)
-    num_tolerated_failed_amortized_computations: int = 3
-    factor_matrix_dtype: torch.dtype = torch.float32
-    use_trace_scaling: bool = False
     drop_weighting_factor_on_gsquare: bool = False
+    factor_matrix_dtype: torch.dtype = torch.float32
+    num_tolerated_failed_amortized_computations: int = 3
+    use_symmetric_packing: bool = True
+    use_trace_scaling: bool = False
+    trace_scaling_exponent: float = 0.5
 
     def __post_init__(self) -> None:
         if self.num_tolerated_failed_amortized_computations < 0:
             raise ValueError(
                 f"Invalid num_tolerated_failed_amortized_computations value: {self.num_tolerated_failed_amortized_computations}. Must be >= 0."
+            )
+        if self.use_trace_scaling and not 0.0 < self.trace_scaling_exponent <= 1.0:
+            raise ValueError(
+                f"Invalid trace_scaling_exponent value: {self.trace_scaling_exponent}. Must be in (0.0, 1.0] when use_trace_scaling=True."
             )
 
 
@@ -324,6 +340,7 @@ class RootInvShampooPreconditionerConfig(ClassicShampooPreconditionerConfig):
     def _get_default_amortized_computation_config() -> RootInvConfig:
         return DefaultEigenConfig
 
+    # pyrefly: ignore [bad-override-mutable-attribute]
     amortized_computation_config: RootInvConfig = field(
         default_factory=_get_default_amortized_computation_config
     )
@@ -390,6 +407,7 @@ class EigendecomposedShampooPreconditionerConfig(ClassicShampooPreconditionerCon
     def _get_default_amortized_computation_config() -> EigendecompositionConfig:
         return DefaultEigendecompositionConfig
 
+    # pyrefly: ignore [bad-override-mutable-attribute]
     amortized_computation_config: EigendecompositionConfig = field(
         default_factory=_get_default_amortized_computation_config
     )
@@ -458,6 +476,7 @@ class EigenvalueCorrectedShampooPreconditionerConfig(BaseShampooPreconditionerCo
     def _get_default_amortized_computation_config() -> EigendecompositionConfig:
         return DefaultEigendecompositionConfig
 
+    # pyrefly: ignore [bad-override-mutable-attribute]
     amortized_computation_config: EigendecompositionConfig = field(
         default_factory=_get_default_amortized_computation_config
     )
@@ -691,38 +710,11 @@ DefaultSignDescentPreconditionerConfig = SignDescentPreconditionerConfig()
 class IterateAveragingConfig(AbstractDataclass):
     """Configuration for primal or iterate averaging in Shampoo.
 
-    Iterate averaging methods like Generalized Primal Averaging (GPA) and Schedule-Free
-    provide an alternative to traditional momentum that can achieve equivalent or better
-    convergence properties.
+    Iterate averaging methods like Generalized Primal Averaging (GPA), Schedule-Free,
+    and ClassicMomentumConfig provide different approaches to incorporating momentum
+    into the optimizer.
 
-    Migration from Previous Momentum Parameters:
-        The previous `momentum`, `dampening`, and `use_nesterov` parameters have been replaced
-        by iterate averaging configs. Below are the equivalences:
-
-        **SGD Heavy-Ball Momentum (momentum=β, dampening=0, use_nesterov=False):**
-            Use GeneralizedPrimalAveragingConfig with:
-            - eval_interp_coeff = β (the momentum value)
-            - train_interp_coeff = 1.0
-            - Adjust learning rate: lr_new = lr_old / (1 - β)
-
-        **SGD Nesterov Momentum (momentum=β, dampening=0, use_nesterov=True):**
-            Use GeneralizedPrimalAveragingConfig with:
-            - eval_interp_coeff = β (the momentum value)
-            - train_interp_coeff = β (the momentum value)
-            - Adjust learning rate: lr_new = lr_old / (1 - β)
-
-        **Dampening (dampening ≠ 0):**
-            The previous dampening parameter does not have a direct equivalent in the
-            iterate averaging framework. If dampening was used, the behavior cannot be
-            exactly replicated. In practice, dampening was rarely used (default was 0.0),
-            and the primal averaging formulation provides better theoretical properties.
-
-        **LaProp:**
-            The previous momentum implementation (sometimes called LaProp in the codebase)
-            is mathematically equivalent to the heavy-ball/primal averaging formulation
-            when dampening=0. Use the heavy-ball configuration above.
-
-    Why Learning Rate Adjustment is Required:
+    Learning Rate Adjustment for Momentum -> GPA:
         In SGD heavy-ball momentum (dampening=0), the momentum buffer accumulates
         gradients and amplifies the effective step size by 1/(1-β) at steady state:
 
@@ -741,14 +733,24 @@ class IterateAveragingConfig(AbstractDataclass):
         step size is lr * (1-β) — a factor of 1/(1-β)^2 smaller than heavy-ball.
         To compensate, set lr_new = lr_old / (1-β).
 
-        This relationship is validated by `test_gpa_vs_sgd_momentum` in
+        ClassicMomentumConfig does NOT require this adjustment because it uses the
+        same momentum buffer accumulation as SGD.
+
+        These relationships are validated by `test_gpa_vs_sgd_momentum` and
+        `test_classic_momentum_vs_sgd_momentum` in
         `dev/gpu_tests/iterate_averaging_test.py`.
 
     Concrete Example:
-        An optimizer config with `lr=0.04, momentum=0.5` (heavy-ball) has an
-        effective step size of 0.04 / (1-0.5) = 0.08 due to momentum buffer
-        amplification. The equivalent GPA config is:
+        An optimizer config with `lr=0.04, momentum=0.5` (heavy-ball) can be implemented
+        two ways:
 
+        1. ClassicMomentumConfig (no lr change):
+            lr = 0.04
+            iterate_averaging_config = ClassicMomentumConfig(
+                momentum=0.5,
+            )
+
+        2. GPA (requires lr change):
             lr = 0.08  # = 0.04 / (1 - 0.5)
             iterate_averaging_config = GeneralizedPrimalAveragingConfig(
                 eval_interp_coeff=0.5,   # = momentum
@@ -756,6 +758,42 @@ class IterateAveragingConfig(AbstractDataclass):
             )
 
     """
+
+
+@dataclass(kw_only=True)
+class ClassicMomentumConfig(IterateAveragingConfig):
+    """Configuration for classic SGD-style momentum in Shampoo.
+
+    This configures and enables the momentum/dampening/Nesterov behavior as traditional
+    SGD momentum applied to the preconditioned search direction, without requiring
+    train/eval mode switching (unlike GPA or Schedule-Free).
+
+    The momentum update applied to the search direction P is:
+        M <- momentum * M + (1 - dampening) * P
+        P <- (1 - dampening) * P + momentum * M     if use_nesterov
+        P <- M                                       otherwise
+
+    Then the parameter update is:
+        W <- W - lr * P
+
+    Attributes:
+        momentum (float): Momentum factor. Must be in (0.0, 1.0). (Default: 0.5)
+            Note: momentum=0.0 is a no-op and is rejected; pass
+            `iterate_averaging_config=None` instead to disable iterate averaging.
+        dampening (float): Dampening for momentum. Must be in [0.0, 1.0). (Default: 0.0)
+        use_nesterov (bool): Enables Nesterov momentum. (Default: False)
+
+    """
+
+    momentum: float = 0.5
+    dampening: float = 0.0
+    use_nesterov: bool = False
+
+    def __post_init__(self) -> None:
+        if not 0.0 < self.momentum < 1.0:
+            raise ValueError(f"Invalid {self.momentum=}. Must be within (0.0, 1.0).")
+        if not 0.0 <= self.dampening < 1.0:
+            raise ValueError(f"Invalid {self.dampening=}. Must be within [0.0, 1.0).")
 
 
 @dataclass(kw_only=True)
@@ -1114,11 +1152,35 @@ class FullyShardDistributedConfig(DistributedConfig):
             (Default: 1)
         param_assignment_strategy (FSDPParamAssignmentStrategy): Strategy for assigning model parameters among the FSDP shards.
             (Default: FSDPParamAssignmentStrategy.DEFAULT)
+        num_sub_groups (int): Number of sub-groups to split a single param group into. Each sub-group gets its
+            own distributor and NCCL communicator, enabling multi-stream overlap of compute and communication.
+            Currently only effective with the *lossless* FSDP/HSDP distributors
+            (`_shampoo_fully_shard_lossless_distributor`,
+            `_shampoo_hybrid_shard_lossless_distributor`); other distributor
+            types ignore this field. (Default: 1)
     """
 
     param_assignment_strategy: FSDPParamAssignmentStrategy = (
         FSDPParamAssignmentStrategy.DEFAULT
     )
+    num_sub_groups: int = 1
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if self.num_sub_groups < 1:
+            raise ValueError(f"Invalid {self.num_sub_groups=}. Must be >= 1.")
+        # Sub-group splitting is only supported by the lossless distributors
+        # (selected when param_assignment_strategy is REPLICATE or ROUND_ROBIN).
+        if (
+            self.num_sub_groups > 1
+            and self.param_assignment_strategy == FSDPParamAssignmentStrategy.DEFAULT
+        ):
+            raise ValueError(
+                f"num_sub_groups > 1 requires param_assignment_strategy != DEFAULT "
+                f"(REPLICATE or ROUND_ROBIN); only the lossless FSDP/HSDP "
+                f"distributors support param-group splitting. Got "
+                f"{self.num_sub_groups=}, {self.param_assignment_strategy=}."
+            )
 
 
 @dataclass(kw_only=True)
@@ -1191,3 +1253,21 @@ class ShampooRuntimeConfig:
 
 
 DefaultShampooRuntimeConfig = ShampooRuntimeConfig()
+
+
+@dataclass(kw_only=True)
+class ConcurrencyConfig:
+    """
+    Controls concurrent execution of param-group steps.
+
+    Attributes:
+        enable_cuda_stream_for_param_groups (bool): Run each param group's GPU
+            work on its own CUDA stream so independent NCCL communicators can
+            overlap on-device. Requires all param groups to be on CUDA;
+            ignored on CPU. (Default: True)
+    """
+
+    enable_cuda_stream_for_param_groups: bool = True
+
+
+DefaultConcurrencyConfig = ConcurrencyConfig()

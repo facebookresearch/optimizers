@@ -190,6 +190,7 @@ class DDPDistributor(DistributorInterface):
             load_balancing_config=distributed_config.load_balancing_config,
         )
 
+        # pyrefly: ignore [bad-override-mutable-attribute]
         self._local_block_info_list: tuple[DTensorBlockInfo, ...] = (
             self._construct_local_block_info_list(
                 group_source_ranks=tuple(
@@ -573,7 +574,7 @@ class DDPDistributor(DistributorInterface):
         ranks_in_group = dist.get_process_group_ranks(group=self._dist_group)
         device_mesh_2d = get_device_mesh(
             device_type=device.type,
-            mesh=tuple(batched(iterable=ranks_in_group, n=self._group_size)),
+            mesh=tuple(batched(iterable=ranks_in_group, n=self._group_size)),  # noqa: B911
             mesh_dim_names=("replicate", "shard"),
         )
         replicate_submesh = device_mesh_2d._get_all_submeshes(  # type: ignore[attr-defined]

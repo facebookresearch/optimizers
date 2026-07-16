@@ -195,6 +195,7 @@ class HSDPDistributor(DistributorInterface):
             load_balancing_config=LoadBalancingConfig(),
         )
 
+        # pyrefly: ignore [bad-override-mutable-attribute]
         self._local_block_info_list: tuple[DTensorBlockInfo, ...] = (
             self._construct_local_block_info_list(
                 group_source_ranks=tuple(
@@ -865,7 +866,7 @@ class HSDPDistributor(DistributorInterface):
         device_mesh_2d = get_device_mesh(
             device_type=device.type,
             # NOTE: Use itertools.batched(ranks_in_replicated_group, self._dist_group_size) when downstream applications are Python 3.12+ available
-            mesh=tuple(batched(ranks_in_replicated_group, self._dist_group_size)),
+            mesh=tuple(batched(ranks_in_replicated_group, self._dist_group_size)),  # noqa: B911
             mesh_dim_names=("replicate", "shard"),
         )
         # NOTE: We get all submeshes along the "replicate" dimension, then pick out

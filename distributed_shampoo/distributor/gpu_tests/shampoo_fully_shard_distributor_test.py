@@ -7,8 +7,6 @@ LICENSE file in the root directory of this source tree.
 
 """
 
-#!/usr/bin/env python3
-
 import unittest
 from collections.abc import Callable
 from functools import partial
@@ -36,6 +34,7 @@ from distributed_shampoo.shampoo_types import (
 from distributed_shampoo.tests.shampoo_test_utils import (
     compare_two_optimizers_models_devices_on_weight_and_loss,
     construct_training_problem,
+    generate_global_train_data,
     train_model,
 )
 from torch import distributed as dist, nn
@@ -140,6 +139,12 @@ class ShampooFullyShardDistributorTest(DTensorTestBase):
         fully_shard_config = FullyShardDistributedConfig()
 
         steps_without_gradients = 2
+        global_train_data = generate_global_train_data(
+            num_steps=steps_without_gradients,
+            world_size=self.world_size,
+            data_shape=(4 * PRECONDITIONER_DIM,),
+            device=torch.device("cuda"),
+        )
         with unittest.mock.patch.object(torch.Tensor, "backward") as mock_backward:
             # By mocking the backward() method, we're intercepting gradient calculation.
             # This effectively simulates running forward passes without computing gradients.
@@ -151,7 +156,7 @@ class ShampooFullyShardDistributorTest(DTensorTestBase):
                     ShampooFullyShardDistributorTest._construct_model,
                     post_model_decoration=partial(fully_shard),
                 ),
-                num_steps=steps_without_gradients,
+                train_data=global_train_data[:, dist.get_rank()],
             )
 
         # Verify that the backward() method was called the expected number of times and the training loop completed successfully.
@@ -161,6 +166,13 @@ class ShampooFullyShardDistributorTest(DTensorTestBase):
     @skip_if_lt_x_gpu(2)
     def test_fully_shard_shampoo_against_default_shampoo(self) -> None:
         fully_shard_config = FullyShardDistributedConfig()
+        total_steps = 5
+        global_train_data = generate_global_train_data(
+            num_steps=total_steps,
+            world_size=self.world_size,
+            data_shape=(4 * PRECONDITIONER_DIM,),
+            device=torch.device("cuda"),
+        )
         compare_two_optimizers_models_devices_on_weight_and_loss(
             control_optim_factory=ShampooFullyShardDistributorTest._shampoo_optim_factory(
                 distributed_config=DefaultSingleDeviceDistributedConfig,
@@ -173,6 +185,9 @@ class ShampooFullyShardDistributorTest(DTensorTestBase):
                 ShampooFullyShardDistributorTest._construct_model,
                 post_model_decoration=partial(fully_shard),
             ),
+            total_steps=total_steps,
+            control_train_data=global_train_data,
+            experimental_train_data=global_train_data[:, dist.get_rank()],
         )
 
     @with_comms
@@ -189,6 +204,13 @@ class ShampooFullyShardDistributorTest(DTensorTestBase):
             device_mesh=mesh_2d, communicate_params=communicate_params
         )
 
+        total_steps = 100
+        global_train_data = generate_global_train_data(
+            num_steps=total_steps,
+            world_size=self.world_size,
+            data_shape=(4 * PRECONDITIONER_DIM,),
+            device=torch.device("cuda"),
+        )
         compare_two_optimizers_models_devices_on_weight_and_loss(
             control_optim_factory=ShampooFullyShardDistributorTest._shampoo_optim_factory(
                 distributed_config=fully_shard_config
@@ -204,14 +226,22 @@ class ShampooFullyShardDistributorTest(DTensorTestBase):
                 ShampooFullyShardDistributorTest._construct_model,
                 post_model_decoration=partial(fully_shard, mesh=mesh_2d),
             ),
-            total_steps=100,
+            total_steps=total_steps,
             rtol=0.0,
             atol=0.0,
+            control_train_data=global_train_data[:, dist.get_rank()],
+            experimental_train_data=global_train_data[:, dist.get_rank()],
         )
 
     @with_comms
     @skip_if_lt_x_gpu(2)
     def test_fully_shard_shampoo_block_index(self) -> None:
+        global_train_data = generate_global_train_data(
+            num_steps=5,
+            world_size=self.world_size,
+            data_shape=(4 * PRECONDITIONER_DIM,),
+            device=torch.device("cuda"),
+        )
         model, _, _, _, optimizer = train_model(
             optim_factory=ShampooFullyShardDistributorTest._shampoo_optim_factory(
                 distributed_config=FullyShardDistributedConfig()
@@ -220,6 +250,7 @@ class ShampooFullyShardDistributorTest(DTensorTestBase):
                 ShampooFullyShardDistributorTest._construct_model,
                 post_model_decoration=partial(fully_shard),
             ),
+            train_data=global_train_data[:, dist.get_rank()],
         )
         assert isinstance(model, nn.Module)
         assert isinstance(optimizer, DistributedShampoo)

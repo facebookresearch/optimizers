@@ -9,14 +9,102 @@ LICENSE file in the root directory of this source tree.
 
 import abc
 import unittest
+from collections.abc import Callable
+from functools import partial
 
 import torch
+from distributed_shampoo.distributed_shampoo import DistributedShampoo
 from distributed_shampoo.distributor.shampoo_block_info import (
     BlockInfo,
     DTensorBlockInfo,
 )
 from distributed_shampoo.distributor.shampoo_distributor import DistributorInterface
+from distributed_shampoo.shampoo_types import (
+    AdaGradPreconditionerConfig,
+    DistributedConfig,
+    GeneralizedPrimalAveragingConfig,
+    ShampooPT2CompileConfig,
+    WeightDecayType,
+)
 from torch import nn
+from torch.optim.optimizer import ParamsT
+
+# Shared constants for fully-shard and hybrid-shard param group tests.
+PRECONDITIONER_DIM = 4
+
+FULLY_SHARD_TEST_MODEL_LAYER_DIMS: tuple[tuple[int, ...], ...] = (
+    (4 * PRECONDITIONER_DIM, 2 * PRECONDITIONER_DIM, 1),
+    (3 * PRECONDITIONER_DIM - 1, PRECONDITIONER_DIM + 1, PRECONDITIONER_DIM - 1),
+    (2, 2 * PRECONDITIONER_DIM - 1),
+    (PRECONDITIONER_DIM, 1),
+)
+
+FULLY_SHARD_DEAD_MODEL_LAYER_DIMS: tuple[tuple[int, ...], ...] = (
+    (PRECONDITIONER_DIM, 1),
+    (),
+)
+
+HYBRID_SHARD_TEST_MODEL_LAYER_DIMS: tuple[tuple[int, ...], ...] = (
+    (4 * PRECONDITIONER_DIM, 2 * PRECONDITIONER_DIM, 1, 1, 1),
+    (3 * PRECONDITIONER_DIM - 1, PRECONDITIONER_DIM + 1, PRECONDITIONER_DIM - 1, 1, 1),
+    (PRECONDITIONER_DIM, 1),
+)
+
+HYBRID_SHARD_DEAD_MODEL_LAYER_DIMS: tuple[tuple[int, ...], ...] = (
+    (PRECONDITIONER_DIM, 1),
+)
+
+# Model dims for param group tests. Uses a single fixed model with enough
+# params for num_sub_groups=4. No dims parametrization needed — the model
+# size doesn't affect the splitting/threading logic.
+# FSDP: 5 params (4 live + 1 dead). No shard_size constraint.
+PARAM_GROUP_TEST_MODEL_DIMS: tuple[int, ...] = (
+    4 * PRECONDITIONER_DIM,
+    2 * PRECONDITIONER_DIM,
+    PRECONDITIONER_DIM,
+    1,
+)
+PARAM_GROUP_TEST_DEAD_DIMS: tuple[int, ...] = (PRECONDITIONER_DIM, 1)
+# HSDP with (2,2) mesh: shard_size=2, so each sub-group needs >= 2 params.
+# num_sub_groups=4 needs >= 8 params. This model has 8 live + 1 dead = 9.
+# Two wider blocks (2*PD) mixed with uniform PD layers give three numel tiers
+# (32 / 16 / 4 with PD=4) so greedy LPT bin-packing has to interleave rather
+# than trivially round-robin; no single weight dominates enough to strand a bin
+# and trip the per-bin shard_size guard in _create_sub_groups.
+HYBRID_SHARD_PARAM_GROUP_TEST_MODEL_DIMS: tuple[int, ...] = (
+    2 * PRECONDITIONER_DIM,
+    PRECONDITIONER_DIM,
+    2 * PRECONDITIONER_DIM,
+    PRECONDITIONER_DIM,
+    PRECONDITIONER_DIM,
+    PRECONDITIONER_DIM,
+    PRECONDITIONER_DIM,
+    PRECONDITIONER_DIM,
+    1,
+)
+
+
+def shampoo_optim_factory(
+    distributed_config: DistributedConfig,
+    shampoo_pt2_compile_config: ShampooPT2CompileConfig | None = None,
+    start_preconditioning_step: int = 2,
+) -> Callable[[ParamsT], torch.optim.Optimizer]:
+    """Shared optimizer factory for FSDP/HSDP lossless distributor tests."""
+    return partial(
+        DistributedShampoo,
+        lr=0.001,
+        betas=(0.9, 1.0),
+        epsilon=1e-8,
+        weight_decay=0.0,
+        max_preconditioner_dim=PRECONDITIONER_DIM,
+        precondition_frequency=1,
+        start_preconditioning_step=start_preconditioning_step,
+        weight_decay_type=WeightDecayType.DECOUPLED,
+        grafting_config=AdaGradPreconditionerConfig(epsilon=1e-8),
+        distributed_config=distributed_config,
+        iterate_averaging_config=GeneralizedPrimalAveragingConfig(),
+        shampoo_pt2_compile_config=shampoo_pt2_compile_config,
+    )
 
 
 class DistributorOnEmptyParamTest:

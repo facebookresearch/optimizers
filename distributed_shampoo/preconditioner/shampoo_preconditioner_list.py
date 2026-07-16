@@ -8,6 +8,7 @@ LICENSE file in the root directory of this source tree.
 """
 
 import logging
+import math
 from abc import abstractmethod
 from collections.abc import Callable, Hashable, Mapping
 from dataclasses import asdict, dataclass, field, fields
@@ -43,7 +44,12 @@ from distributed_shampoo.shampoo_types import (
 )
 from distributed_shampoo.utils.dict_zip_iterator import DictZipIterator
 from distributed_shampoo.utils.optimizer_modules import OptimizerModule
-from distributed_shampoo.utils.shampoo_utils import compress_list, get_dtype_size
+from distributed_shampoo.utils.shampoo_utils import (
+    compress_list,
+    get_dtype_size,
+    pack_upper_triangular,
+    unpack_upper_triangular,
+)
 from torch import Tensor
 
 
@@ -58,17 +64,60 @@ _SubStateValueType = TypeVar("_SubStateValueType")
 _StateValueType: TypeAlias = dict[Hashable, _SubStateValueType]
 
 
+def _allocate_packed_eye(
+    block_info: BlockInfo,
+    dim: int,
+    dtype: torch.dtype,
+    device: torch.device,
+) -> Tensor:
+    """Allocates a packed upper triangular identity matrix.
+
+    Creates a packed-size tensor (possibly DTensor) filled with zeros, then sets
+    the diagonal entries to 1.0 on the local tensor. This avoids fancy indexing
+    on DTensor which is not supported.
+
+    Args:
+        block_info (BlockInfo): Block info providing tensor allocation functions.
+        dim (int): The dimension of the identity matrix.
+        dtype (torch.dtype): Data type for the tensor.
+        device (torch.device): Device for the tensor.
+
+    Returns:
+        packed (Tensor): A 1D tensor (or DTensor) of size dim*(dim+1)/2
+            containing the packed upper triangular identity matrix.
+    """
+    packed = block_info.allocate_zeros_tensor(
+        size=(dim * (dim + 1) // 2,),
+        dtype=dtype,
+        device=device,
+    )
+    # In row-major upper-triangular packing, the i-th diagonal entry (i, i) sits
+    # at offset i*dim - i*(i-1)//2 (skip the first i rows which contribute
+    # d, d-1, ..., d-i+1 entries).
+    local = block_info.get_tensor(packed)
+    diagonal_indices = torch.arange(dim, device=local.device)
+    diagonal_positions = (
+        diagonal_indices * dim - diagonal_indices * (diagonal_indices - 1) // 2
+    )
+    local[diagonal_positions] = 1.0
+    return packed
+
+
 @dataclass
 class BaseShampooKroneckerFactorsState(OptimizerModule):
     """Base class for Shampoo Kronecker factors (wrapped).
 
     Attributes:
         factor_matrices (tuple[Tensor, ...]): A tuple of tensors representing the factor matrices.
+            When use_symmetric_packing is True, these are 1D tensors in packed upper triangular
+            format with size d*(d+1)/2. Otherwise, they are 2D tensors of shape (d, d).
         factor_matrix_indices (tuple[str, ...]): A tuple of strings representing the indices of the factor matrices.
+        use_symmetric_packing (bool): Whether symmetric matrices are stored in packed format.
     """
 
     factor_matrices: tuple[Tensor, ...]
     factor_matrix_indices: tuple[str, ...]
+    use_symmetric_packing: bool
 
     @classmethod
     def from_block(cls, **kwargs: Any) -> "BaseShampooKroneckerFactorsState":
@@ -79,6 +128,7 @@ class BaseShampooKroneckerFactorsState(OptimizerModule):
             block_info (BlockInfo): Information about the block, including methods to allocate tensors.
             factor_matrix_dtype (torch.dtype): Data type for the factor matrices.
             preconditioned_dims (tuple[int, ...]): Dimensions for which the factor matrices are preconditioned.
+            use_symmetric_packing (bool): Whether to pack symmetric matrices.
 
         Returns:
             kronecker_factors_state (BaseShampooKroneckerFactorsState): An instance of BaseShampooKroneckerFactorsState with initialized factor matrices and indices.
@@ -86,11 +136,14 @@ class BaseShampooKroneckerFactorsState(OptimizerModule):
         block_info: BlockInfo = kwargs["block_info"]
         factor_matrix_dtype: torch.dtype = kwargs["factor_matrix_dtype"]
         preconditioned_dims: tuple[int, ...] = kwargs["preconditioned_dims"]
+        use_symmetric_packing: bool = kwargs["use_symmetric_packing"]
 
         return cls(
             factor_matrices=tuple(
                 block_info.allocate_zeros_tensor(
-                    size=(dim, dim),
+                    size=(
+                        (dim * (dim + 1) // 2,) if use_symmetric_packing else (dim, dim)
+                    ),
                     dtype=factor_matrix_dtype,
                     device=block_info.param.device,
                 )
@@ -100,6 +153,7 @@ class BaseShampooKroneckerFactorsState(OptimizerModule):
                 ".".join((*map(str, block_info.composable_block_ids), str(k)))
                 for k in range(len(preconditioned_dims))
             ),
+            use_symmetric_packing=use_symmetric_packing,
         )
 
     def __post_init__(self) -> None:
@@ -117,9 +171,11 @@ class BaseShampooKroneckerFactorsUnwrapped:
 
     Attributes:
         factor_matrices (tuple[Tensor, ...]): A tuple of tensors representing the factor matrices.
-            These are the Kronecker factors accumulated during optimization.
+            When use_symmetric_packing is True, these are 1D tensors in packed upper triangular
+            format with size d*(d+1)/2. Otherwise, they are 2D tensors of shape (d, d).
         factor_matrix_indices (tuple[str, ...]): A tuple of strings representing the indices of
             the factor matrices, used for identification and debugging.
+        use_symmetric_packing (bool): Whether symmetric matrices are stored in packed format.
         roots (tuple[float, ...]): A tuple of float values representing the inverse exponent roots
             to be applied to each factor matrix during preconditioner computation.
         amortized_computation_config (MatrixFunctionConfig): Configuration for the amortized
@@ -135,11 +191,13 @@ class BaseShampooKroneckerFactorsUnwrapped:
 
     factor_matrices: tuple[Tensor, ...]
     factor_matrix_indices: tuple[str, ...]
+    use_symmetric_packing: bool
     roots: tuple[float, ...]
     amortized_computation_config: MatrixFunctionConfig
     epsilon: float
     num_tolerated_failed_amortized_computations: int
     use_trace_scaling: bool = False
+    trace_scaling_exponent: float = 0.5
     _failed_amortized_computation_counter: int = field(init=False, default=0)
 
     def __post_init__(self) -> None:
@@ -164,11 +222,13 @@ class BaseShampooKroneckerFactorsUnwrapped:
             for field in fields(self)
             if field.name
             not in (
+                "_failed_amortized_computation_counter",
                 "amortized_computation_config",
                 "epsilon",
                 "num_tolerated_failed_amortized_computations",
+                "use_symmetric_packing",
                 "use_trace_scaling",
-                "_failed_amortized_computation_counter",
+                "trace_scaling_exponent",
             )
         }
 
@@ -206,6 +266,51 @@ class BaseShampooKroneckerFactorsUnwrapped:
             exception (Exception | None): Any exception that occurred during computation, or None if successful.
         """
 
+    @staticmethod
+    def _packed_dim(packed: Tensor) -> int:
+        """Computes the matrix dimension from a packed upper triangular tensor's length.
+
+        For a d×d symmetric matrix, the packed length is d*(d+1)/2. This method
+        inverts that formula.
+
+        Args:
+            packed (Tensor): A 1D tensor in packed upper triangular format.
+
+        Returns:
+            dim (int): The dimension of the original square matrix.
+        """
+        return (-1 + math.isqrt(1 + 8 * packed.numel())) // 2
+
+    def _pack_matrix(self, matrix: Tensor) -> Tensor:
+        """Packs a 2D symmetric matrix to upper triangular form when packing is enabled.
+
+        When use_symmetric_packing is False, returns the input matrix unchanged.
+        """
+        return pack_upper_triangular(matrix) if self.use_symmetric_packing else matrix
+
+    def _unpack_matrix(self, matrix: Tensor) -> Tensor:
+        """Reconstructs a full 2D symmetric matrix from packed storage when packing is enabled.
+
+        When use_symmetric_packing is False, returns the input matrix unchanged.
+        Note: When packing is enabled, this allocates a new d×d tensor.
+        """
+        return (
+            unpack_upper_triangular(matrix, self._packed_dim(matrix))
+            if self.use_symmetric_packing
+            else matrix
+        )
+
+    def get_unpacked_factor_matrices(self) -> tuple[Tensor, ...]:
+        """Reconstructs full symmetric factor matrices from packed storage.
+
+        Note: This method allocates new d×d tensors each call, trading compute
+        for the memory savings from packed storage.
+
+        Returns:
+            factor_matrices (tuple[Tensor, ...]): A tuple of 2D symmetric tensors.
+        """
+        return tuple(map(self._unpack_matrix, self.factor_matrices))
+
     @profile_decorator
     def amortized_computation(self, bias_correction2: float) -> None:
         """Performs amortized computation for Shampoo preconditioners.
@@ -227,11 +332,11 @@ class BaseShampooKroneckerFactorsUnwrapped:
         """
         last_seen_exception: Exception | None = None
         for kronecker_factors_iter_dict in DictZipIterator(data=self._get_field_dict()):
-            bias_corrected_factor_matrix, factor_matrix_index = (
-                # Incorporate bias correction.
-                kronecker_factors_iter_dict["factor_matrices"] / bias_correction2,
-                kronecker_factors_iter_dict["factor_matrix_indices"],
+            # Incorporate bias correction, then unpack to full 2D matrix if packed.
+            bias_corrected_factor_matrix = self._unpack_matrix(
+                kronecker_factors_iter_dict["factor_matrices"] / bias_correction2
             )
+            factor_matrix_index = kronecker_factors_iter_dict["factor_matrix_indices"]
 
             # Apply trace scaling if enabled.
             # This normalizes the factor matrix by 1/sqrt(trace) before computing
@@ -261,8 +366,8 @@ class BaseShampooKroneckerFactorsUnwrapped:
             if self.use_trace_scaling:
                 trace = torch.trace(bias_corrected_factor_matrix)
                 safe_trace = torch.clamp(trace, min=self.epsilon)
-                bias_corrected_factor_matrix = (
-                    bias_corrected_factor_matrix * torch.rsqrt(safe_trace)
+                bias_corrected_factor_matrix = bias_corrected_factor_matrix * torch.pow(
+                    safe_trace, -self.trace_scaling_exponent
                 )
 
             # Check for nan or inf values.
@@ -342,8 +447,15 @@ class BaseShampooKroneckerFactorsUnwrapped:
 class RootInvShampooKroneckerFactorsState(BaseShampooKroneckerFactorsState):
     """Shampoo Kronecker factors (wrapped) for storing in the optimizer state.
 
+    When use_symmetric_packing is True, the inverse factor matrices are stored in
+    packed upper triangular format to save ~50% memory, since they are symmetric
+    positive semi-definite.
+
     Attributes:
-        inv_factor_matrices (tuple[Tensor, ...]): A tuple of tensors representing the inverse of the factor matrices.
+        inv_factor_matrices (tuple[Tensor, ...]): A tuple of tensors representing the inverse
+            of the factor matrices. When use_symmetric_packing is True, these are 1D tensors
+            containing the packed upper triangular elements with size d*(d+1)/2. Otherwise,
+            they are 2D tensors of shape (d, d).
         factor_matrices (tuple[Tensor, ...]): A tuple of tensors representing the factor matrices.
         factor_matrix_indices (tuple[str, ...]): A tuple of strings representing the indices of the factor matrices.
     """
@@ -368,6 +480,7 @@ class RootInvShampooKroneckerFactorsState(BaseShampooKroneckerFactorsState):
             "preconditioner_config"
         ]
         preconditioned_dims: tuple[int, ...] = kwargs["preconditioned_dims"]
+        use_symmetric_packing: bool = preconditioner_config.use_symmetric_packing
 
         return cls(
             **asdict(
@@ -375,14 +488,26 @@ class RootInvShampooKroneckerFactorsState(BaseShampooKroneckerFactorsState):
                     block_info=block_info,
                     factor_matrix_dtype=preconditioner_config.factor_matrix_dtype,
                     preconditioned_dims=preconditioned_dims,
+                    use_symmetric_packing=use_symmetric_packing,
                 )
             ),
             # Initialize inv_factor_matrices as identity matrices.
+            # When packing, allocate packed-size zeros (possibly DTensor), then fill identity
+            # values on the local tensor to avoid fancy indexing on DTensor.
             inv_factor_matrices=tuple(
-                block_info.allocate_eye_tensor(
-                    n=dim,
-                    dtype=preconditioner_config.inv_factor_matrix_dtype,
-                    device=block_info.param.device,
+                (
+                    _allocate_packed_eye(
+                        block_info=block_info,
+                        dim=dim,
+                        dtype=preconditioner_config.inv_factor_matrix_dtype,
+                        device=block_info.param.device,
+                    )
+                    if use_symmetric_packing
+                    else block_info.allocate_eye_tensor(
+                        n=dim,
+                        dtype=preconditioner_config.inv_factor_matrix_dtype,
+                        device=block_info.param.device,
+                    )
                 )
                 for dim in preconditioned_dims
             ),
@@ -400,9 +525,15 @@ class RootInvShampooKroneckerFactorsUnwrapped(BaseShampooKroneckerFactorsUnwrapp
     This class implements the Root Inverse variant of Shampoo, which directly computes
     the inverse root of factor matrices for preconditioning.
 
+    When use_symmetric_packing is True, the inverse factor matrices are stored in packed
+    upper triangular format to save ~50% memory. They are unpacked to full symmetric
+    matrices when needed for computation.
+
     Attributes:
         inv_factor_matrices (tuple[Tensor, ...]): A tuple of tensors representing the inverse
-            of the factor matrices. These are the preconditioners that are applied to gradients.
+            of the factor matrices. When use_symmetric_packing is True, these are 1D tensors
+            containing the packed upper triangular elements with size d*(d+1)/2. Otherwise,
+            they are 2D tensors of shape (d, d).
         factor_matrices (tuple[Tensor, ...]): A tuple of tensors representing the factor matrices.
             These are the Kronecker factors accumulated during optimization.
         factor_matrix_indices (tuple[str, ...]): A tuple of strings representing the indices of
@@ -432,6 +563,7 @@ class RootInvShampooKroneckerFactorsUnwrapped(BaseShampooKroneckerFactorsUnwrapp
         epsilon: float,
         num_tolerated_failed_amortized_computations: int,
         use_trace_scaling: bool = False,
+        trace_scaling_exponent: float = 0.5,
     ) -> "RootInvShampooKroneckerFactorsUnwrapped":
         """
         Constructs a RootInvShampooKroneckerFactorsUnwrapped object from the given Kronecker factors state.
@@ -456,6 +588,8 @@ class RootInvShampooKroneckerFactorsUnwrapped(BaseShampooKroneckerFactorsUnwrapp
                 failed amortized computations that can be tolerated before raising an error.
             use_trace_scaling (bool): Flag for whether to normalize the factor matrix by its trace's
                 sqrt before computing the inverse root. (Default: False)
+            trace_scaling_exponent (float): Exponent applied to the trace when use_trace_scaling is True;
+                the factor matrix is multiplied by trace ** (-trace_scaling_exponent). (Default: 0.5)
 
         Returns:
             kronecker_factors_unwrapped (RootInvShampooKroneckerFactorsUnwrapped): An instance of
@@ -473,12 +607,26 @@ class RootInvShampooKroneckerFactorsUnwrapped(BaseShampooKroneckerFactorsUnwrapp
                 map(unwrapped_tensor_getter, kronecker_factors_state.factor_matrices)
             ),
             factor_matrix_indices=kronecker_factors_state.factor_matrix_indices,
+            use_symmetric_packing=kronecker_factors_state.use_symmetric_packing,
             roots=roots,
             amortized_computation_config=amortized_computation_config,
             epsilon=epsilon,
             num_tolerated_failed_amortized_computations=num_tolerated_failed_amortized_computations,
             use_trace_scaling=use_trace_scaling,
+            trace_scaling_exponent=trace_scaling_exponent,
         )
+
+    def get_unpacked_inv_factor_matrices(self) -> tuple[Tensor, ...]:
+        """Reconstructs full symmetric inverse factor matrices from packed storage.
+
+        Note: This method allocates new d×d tensors each call. It is called every
+        precondition step (not just amortized computation steps), trading compute
+        for the memory savings from packed storage.
+
+        Returns:
+            inv_factor_matrices (tuple[Tensor, ...]): A tuple of 2D symmetric tensors.
+        """
+        return tuple(map(self._unpack_matrix, self.inv_factor_matrices))
 
     @torch.compiler.disable
     def _amortized_computation(
@@ -496,6 +644,9 @@ class RootInvShampooKroneckerFactorsUnwrapped(BaseShampooKroneckerFactorsUnwrapp
         configuration specified in amortized_computation_config. Error handling is included
         to gracefully recover from numerical issues.
 
+        When use_symmetric_packing is True, the computed inverse root is packed into upper
+        triangular format before being stored.
+
         Args:
             bias_corrected_factor_matrix (Tensor): The factor matrix after bias correction
                 has been applied.
@@ -503,7 +654,8 @@ class RootInvShampooKroneckerFactorsUnwrapped(BaseShampooKroneckerFactorsUnwrapp
                 inv_factor_matrices and roots values for the computation.
 
         Returns:
-            computed_quantities (dict[str, Tensor]): A dictionary with the computed inverse factor matrices.
+            computed_quantities (dict[str, Tensor]): A dictionary with the computed inverse
+                factor matrices, packed if use_symmetric_packing is enabled.
             exception (Exception | None): Any exception that occurred during computation, or None if successful.
 
         Note:
@@ -516,15 +668,14 @@ class RootInvShampooKroneckerFactorsUnwrapped(BaseShampooKroneckerFactorsUnwrapp
         )
 
         try:
-            # Compute inverse preconditioners
-            return {
-                "inv_factor_matrices": matrix_inverse_root(
-                    A=bias_corrected_factor_matrix,
-                    root=Fraction(root),
-                    root_inv_config=self.amortized_computation_config,
-                    epsilon=self.epsilon,
-                ).to(dtype=inv_factor_matrix.dtype)
-            }, None
+            # Compute inverse preconditioners, then pack to upper triangular if enabled.
+            computed = matrix_inverse_root(
+                A=bias_corrected_factor_matrix,
+                root=Fraction(root),
+                root_inv_config=self.amortized_computation_config,
+                epsilon=self.epsilon,
+            ).to(dtype=inv_factor_matrix.dtype)
+            return {"inv_factor_matrices": self._pack_matrix(computed)}, None
         except Exception as exception:
             return {"inv_factor_matrices": inv_factor_matrix}, exception
 
@@ -576,6 +727,7 @@ class EigendecomposedShampooKroneckerFactorsState(BaseShampooKroneckerFactorsSta
                     block_info=block_info,
                     factor_matrix_dtype=preconditioner_config.factor_matrix_dtype,
                     preconditioned_dims=preconditioned_dims,
+                    use_symmetric_packing=preconditioner_config.use_symmetric_packing,
                 )
             ),
             # Initialize factor_matrices_eigenvectors as identity matrices.
@@ -652,6 +804,7 @@ class EigendecomposedShampooKroneckerFactorsUnwrapped(
         epsilon: float,
         num_tolerated_failed_amortized_computations: int,
         use_trace_scaling: bool = False,
+        trace_scaling_exponent: float = 0.5,
     ) -> "EigendecomposedShampooKroneckerFactorsUnwrapped":
         """
         Constructs an EigendecomposedShampooKroneckerFactorsUnwrapped object from the given Kronecker factors state.
@@ -675,6 +828,8 @@ class EigendecomposedShampooKroneckerFactorsUnwrapped(
                 failed amortized computations that can be tolerated before raising an error.
             use_trace_scaling (bool): Flag for whether to normalize the factor matrix by its trace's
                 sqrt before computing the eigendecomposition. (Default: False)
+            trace_scaling_exponent (float): Exponent applied to the trace when use_trace_scaling is True;
+                the factor matrix is multiplied by trace ** (-trace_scaling_exponent). (Default: 0.5)
 
         Returns:
             kronecker_factors_unwrapped (EigendecomposedShampooKroneckerFactorsUnwrapped): An instance of
@@ -700,11 +855,13 @@ class EigendecomposedShampooKroneckerFactorsUnwrapped(
                 map(unwrapped_tensor_getter, kronecker_factors_state.factor_matrices)
             ),
             factor_matrix_indices=kronecker_factors_state.factor_matrix_indices,
+            use_symmetric_packing=kronecker_factors_state.use_symmetric_packing,
             roots=roots,
             amortized_computation_config=amortized_computation_config,
             epsilon=epsilon,
             num_tolerated_failed_amortized_computations=num_tolerated_failed_amortized_computations,
             use_trace_scaling=use_trace_scaling,
+            trace_scaling_exponent=trace_scaling_exponent,
         )
 
     @torch.compiler.disable
@@ -825,6 +982,7 @@ class EigenvalueCorrectedShampooKroneckerFactorsState(BaseShampooKroneckerFactor
                     block_info=block_info,
                     factor_matrix_dtype=preconditioner_config.factor_matrix_dtype,
                     preconditioned_dims=preconditioned_dims,
+                    use_symmetric_packing=preconditioner_config.use_symmetric_packing,
                 )
             ),
             # Initialize factor_matrices_eigenvectors as identity matrices.
@@ -898,6 +1056,7 @@ class EigenvalueCorrectedShampooKroneckerFactorsUnwrapped(
         epsilon: float,
         num_tolerated_failed_amortized_computations: int,
         use_trace_scaling: bool = False,
+        trace_scaling_exponent: float = 0.5,
     ) -> "EigenvalueCorrectedShampooKroneckerFactorsUnwrapped":
         """
         Constructs an EigenvalueCorrectedShampooKroneckerFactorsUnwrapped object from the given Kronecker factors state.
@@ -924,6 +1083,8 @@ class EigenvalueCorrectedShampooKroneckerFactorsUnwrapped(
                 failed amortized computations that can be tolerated before raising an error.
             use_trace_scaling (bool): Flag for whether to normalize the factor matrix by its trace's
                 sqrt before computing the eigendecomposition. (Default: False)
+            trace_scaling_exponent (float): Exponent applied to the trace when use_trace_scaling is True;
+                the factor matrix is multiplied by trace ** (-trace_scaling_exponent). (Default: 0.5)
 
         Returns:
             kronecker_factors_unwrapped (EigenvalueCorrectedShampooKroneckerFactorsUnwrapped): An instance of
@@ -946,11 +1107,13 @@ class EigenvalueCorrectedShampooKroneckerFactorsUnwrapped(
                 map(unwrapped_tensor_getter, kronecker_factors_state.factor_matrices)
             ),
             factor_matrix_indices=kronecker_factors_state.factor_matrix_indices,
+            use_symmetric_packing=kronecker_factors_state.use_symmetric_packing,
             roots=roots,
             amortized_computation_config=amortized_computation_config,
             epsilon=epsilon,
             num_tolerated_failed_amortized_computations=num_tolerated_failed_amortized_computations,
             use_trace_scaling=use_trace_scaling,
+            trace_scaling_exponent=trace_scaling_exponent,
         )
 
     @torch.compiler.disable
@@ -1197,6 +1360,7 @@ class BaseShampooPreconditionerList(
                     epsilon=self._epsilon,
                     num_tolerated_failed_amortized_computations=self._preconditioner_config.num_tolerated_failed_amortized_computations,
                     use_trace_scaling=self._preconditioner_config.use_trace_scaling,
+                    trace_scaling_exponent=self._preconditioner_config.trace_scaling_exponent,
                 )
             )
 
@@ -1247,7 +1411,13 @@ class BaseShampooPreconditionerList(
         self._update_factor_matrices(masked_grad_list=masked_grad_list)
 
         # Update bias correction term based on step.
-        if self._use_bias_correction and self._beta2 < 1.0:
+        # When drop_weighting_factor_on_gsquare is True, _bias_correction2 stays at 1.0
+        # because the recurrence is no longer an EMA.
+        if (
+            self._use_bias_correction
+            and self._beta2 < 1.0
+            and not self._preconditioner_config.drop_weighting_factor_on_gsquare
+        ):
             self._bias_correction2 = torch.tensor(1.0) - self._beta2**step
 
         # In Shampoo, this is equivalent to computing the inverse factor matrix.
@@ -1352,8 +1522,11 @@ class BaseShampooPreconditionerList(
             if not kronecker_factors.factor_matrices:
                 continue
 
-            outer_product_list = self._compute_outer_product_list(
-                grad, order, preconditioned_dims_selector, kronecker_factors
+            outer_product_list = tuple(
+                kronecker_factors._pack_matrix(op)
+                for op in self._compute_outer_product_list(
+                    grad, order, preconditioned_dims_selector, kronecker_factors
+                )
             )
 
             if self._beta2 != 1.0:
@@ -1388,16 +1561,18 @@ class BaseShampooPreconditionerList(
         preconditioner_list_iter = iter(preconditioner_list)
 
         return reduce(
-            lambda grad, should_precondition: torch.tensordot(
-                # Use the single target dtype for all operations
-                grad.to(dtype=target_dtype),
-                # Use the actual iterator for the operation
-                next(preconditioner_list_iter),
-                dims=dims,
-            )
-            if should_precondition
-            # Perform a left rotation on grad if not preconditioned.
-            else grad.permute(*range(1, grad.ndim), 0),
+            lambda grad, should_precondition: (
+                torch.tensordot(
+                    # Use the single target dtype for all operations
+                    grad.to(dtype=target_dtype),
+                    # Use the actual iterator for the operation
+                    next(preconditioner_list_iter),
+                    dims=dims,
+                )
+                if should_precondition
+                # Perform a left rotation on grad if not preconditioned.
+                else grad.permute(*range(1, grad.ndim), 0)
+            ),
             preconditioned_dims_selector,
             grad,
         ).to(dtype=grad.dtype)
@@ -1611,7 +1786,7 @@ class RootInvShampooPreconditionerList(
         return self._precondition_grad(
             grad=grad,
             preconditioned_dims_selector=preconditioned_dims_selector,
-            preconditioner_list=kronecker_factors.inv_factor_matrices,
+            preconditioner_list=kronecker_factors.get_unpacked_inv_factor_matrices(),
         )
 
 
@@ -1779,6 +1954,9 @@ class RootInvKLShampooPreconditionerList(RootInvShampooPreconditionerList):
         kronecker_factors: RootInvShampooKroneckerFactorsUnwrapped,
     ) -> tuple[Tensor, ...]:
         # Construct outer product list for updating Kronecker factors.
+        unpacked_inv_factor_matrices = (
+            kronecker_factors.get_unpacked_inv_factor_matrices()
+        )
         outer_product_list = []
         for idx_of_k, k in enumerate(
             compress_list(range(order), preconditioned_dims_selector)
@@ -1792,7 +1970,7 @@ class RootInvKLShampooPreconditionerList(RootInvShampooPreconditionerList):
                 preconditioner_list=tuple(
                     inv_factor_matrix
                     for idx, inv_factor_matrix in enumerate(
-                        kronecker_factors.inv_factor_matrices
+                        unpacked_inv_factor_matrices
                     )
                     if idx != idx_of_k
                 ),

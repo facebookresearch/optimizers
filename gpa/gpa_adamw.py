@@ -7,7 +7,6 @@ LICENSE file in the root directory of this source tree.
 
 """
 
-# pyre-unsafe
 from logging import getLogger
 from typing import Callable, Optional, overload, Union
 
@@ -28,13 +27,13 @@ from gpa.gpa_types import (
     STEP,
     TRAIN_INTERP_COEFF,
     TRAIN_MODE,
+    USE_WD_ON_Y,
     WEIGHT_DECAY,
     WEIGHT_LR_POWER,
     WEIGHT_POW_COEFF,
     WEIGHT_SUM,
     Z_BUFFER,
 )
-from torch import Tensor
 from torch.optim.optimizer import ParamsT
 
 logger = getLogger()
@@ -102,9 +101,12 @@ class GPAAdamW(torch.optim.Optimizer):
             gradient term. (default: 0.9)
         beta2 (float): Coefficient used for computing running average of the
             gradient squared term. (default: 0.999)
-        weight_decay (float): Weight decay. Note that weight_decay can be either
-            applied to the y or x sequence. In this implementation, it is applied
-            to the y sequence. (default: 0)
+        weight_decay (float): Weight decay coefficient. Applied as multiplicative
+            shrinkage on either the y-sequence or z-sequence depending on
+            use_wd_on_y: z_shrunk = (1 - lr * weight_decay) * z. (default: 0)
+        use_wd_on_y (bool): If True, apply weight decay shrinkage on y (the
+            training params): y *= (1 - lr * weight_decay). If False (default),
+            apply on z (the z-buffer): z *= (1 - lr * weight_decay). (default: False)
         iterate_averaging_type (IterateAveragingType): Controls which averaging
             mode is used. GPA uses a fixed eval_interp_coeff (mu_x).
             SCHEDULE_FREE uses polynomial weighting (no fixed mu_x).
@@ -132,6 +134,7 @@ class GPAAdamW(torch.optim.Optimizer):
         beta1: float = 0.9,
         beta2: float = 0.999,
         weight_decay: float = 0,
+        use_wd_on_y: bool = False,
         iterate_averaging_type: IterateAveragingType = IterateAveragingType.GPA,
         train_interp_coeff: float = 0.7,
         eval_interp_coeff: float = 0.9967,
@@ -192,6 +195,7 @@ class GPAAdamW(torch.optim.Optimizer):
                 WEIGHT_POW_COEFF: weight_pow_coeff,
                 WEIGHT_LR_POWER: weight_lr_power,
                 WEIGHT_DECAY: weight_decay,
+                USE_WD_ON_Y: use_wd_on_y,
                 EVAL_INTERP_COEFF: eval_interp_coeff,
                 ITERATE_AVERAGING_TYPE: iterate_averaging_type,
             },
@@ -353,8 +357,10 @@ class GPAAdamW(torch.optim.Optimizer):
                 self.state[first_param][TRAIN_MODE].fill_(True)
 
     @overload
+    @torch.no_grad()
     def step(self, closure: None = None) -> None: ...
     @overload
+    @torch.no_grad()
     def step(self, closure: Callable[[], float]) -> float: ...
 
     @torch.no_grad()
@@ -386,11 +392,11 @@ class GPAAdamW(torch.optim.Optimizer):
             if not group[PARAMS]:
                 continue
 
-            params_with_grad: list[Tensor] = []
-            grads: list[Tensor] = []
-            exp_avgs: list[Tensor] = []
-            exp_avg_sqs: list[Tensor] = []
-            z_buffer_list: list[Tensor] = []
+            params_with_grad: list[torch.Tensor] = []
+            grads: list[torch.Tensor] = []
+            exp_avgs: list[torch.Tensor] = []
+            exp_avg_sqs: list[torch.Tensor] = []
+            z_buffer_list: list[torch.Tensor] = []
 
             self._init_group(
                 group,
@@ -401,8 +407,8 @@ class GPAAdamW(torch.optim.Optimizer):
                 z_buffer_list,
             )
 
-            # Get group_first_param for accessing shared state.
-            group_first_param: Tensor = group[PARAMS][0]
+            # Get first_param for accessing shared state.
+            group_first_param: torch.Tensor = group[PARAMS][0]
 
             # Increment step counter and use it as group step.
             self.state[group_first_param][STEP] += 1
@@ -414,6 +420,7 @@ class GPAAdamW(torch.optim.Optimizer):
             beta1 = group[BETA1]
             beta2 = group[BETA2]
             weight_decay = group[WEIGHT_DECAY]
+            use_wd_on_y = group[USE_WD_ON_Y]
             weight_lr_power = group[WEIGHT_LR_POWER]
             lr = group[LR]
             weight_pow_coeff = group[WEIGHT_POW_COEFF]
@@ -462,9 +469,12 @@ class GPAAdamW(torch.optim.Optimizer):
                 # grad_normalized = exp_avg.div_(denom)
                 grad_normalized = exp_avg.div(bias_correction1).div_(denom)
 
-                # Weight decay calculated at y
+                # Weight decay applied as multiplicative shrinkage.
                 if weight_decay != 0:
-                    grad_normalized.add_(y, alpha=weight_decay)
+                    if use_wd_on_y:
+                        y.mul_(1 - lr * weight_decay)
+                    else:
+                        z.mul_(1 - lr * weight_decay)
 
                 # Memory-efficient y-update without explicitly computing x:
                 # The standard updates are:
