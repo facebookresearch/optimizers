@@ -48,7 +48,11 @@ jobs:
         - name: Run DDP example on CPU.
           run: |
             source .venv/bin/activate
-            CUDA_VISIBLE_DEVICES="" torchrun --standalone --nnodes=1 --nproc_per_node=2 -m distributed_shampoo.examples.cifar10_example parallelism=ddp optimizer=shampoo optimizer.precondition_frequency=15 '~optimizer.grafting_config' '+optimizer.grafting_config={_target_:distributed_shampoo.AdamPreconditionerConfig,beta2:0.999,epsilon:1e-8}' epochs=1 local_batch_size=1024 backend=gloo
+            # Keep the per-rank batch small here: two gloo ranks each at
+            # local_batch_size=1024 exhaust memory on the 4-core CPU runner, so one
+            # rank stalls/OOMs and the peer hangs until the 30-min gloo recv timeout
+            # in backward. 128 exercises the same DDP + Shampoo path within budget.
+            CUDA_VISIBLE_DEVICES="" torchrun --standalone --nnodes=1 --nproc_per_node=2 -m distributed_shampoo.examples.cifar10_example parallelism=ddp optimizer=shampoo optimizer.precondition_frequency=15 '~optimizer.grafting_config' '+optimizer.grafting_config={_target_:distributed_shampoo.AdamPreconditionerConfig,beta2:0.999,epsilon:1e-8}' epochs=1 local_batch_size=128 backend=gloo
         - name: Run DDP example on GPU.
           if: steps.gpu_check.outputs.has_gpu == 'true'
           run: |
