@@ -16,6 +16,7 @@ from typing import Any, Literal, overload
 import torch
 from distributed_shampoo.distributor.shampoo_block_info import DTensorBlockInfo
 from distributed_shampoo.distributor.shampoo_dist_utils import (
+    create_hybrid_shard_process_groups,
     get_device_mesh,
     shampoo_comm_profiler,
 )
@@ -145,33 +146,11 @@ class HybridShardDistributor(DistributorInterface):
         # Create flag for distributing parameters instead of search directions.
         self._communicate_params: bool = distributed_config.communicate_params
 
-        # Initialize _dist_group and _group_rank.
-        # Note that this requires initializing all process groups.
-        # Splits replicated ranks group into smaller groups of size self._dist_group_size.
-        # Instantiates this by using DeviceMesh.
-        ranks_in_all_replicated_groups = self._hybrid_shard_device_mesh.mesh.T
-        for ranks_in_replicated_group in ranks_in_all_replicated_groups:
-            device_mesh = get_device_mesh(
-                device_type=self._hybrid_shard_device_mesh.device_type,
-                mesh=tuple(
-                    map(
-                        partial(tuple),
-                        ranks_in_replicated_group.view(
-                            -1, self._dist_group_size
-                        ).tolist(),
-                    )
-                ),
-                mesh_dim_names=("replicate", "shard"),
-            )
-            if dist.get_rank() in ranks_in_replicated_group:
-                # NOTE: We want the process group in the device mesh that the current rank
-                # belongs to but solely along the "shard" dimension for communications.
-                #
-                # For example, if the current rank is 11, then I want the process group
-                # that contains the ranks [3, 11, 19].
-                self._comms_dist_group: dist.ProcessGroup = device_mesh.get_group(
-                    "shard"
-                )
+        # Create comms process group for distributing computation across ranks.
+        self._comms_dist_group: dist.ProcessGroup = create_hybrid_shard_process_groups(
+            device_mesh=self._hybrid_shard_device_mesh,
+            dist_group_size=self._dist_group_size,
+        )
 
         comms_group_rank: int = dist.get_rank(self._comms_dist_group)
 
@@ -187,6 +166,7 @@ class HybridShardDistributor(DistributorInterface):
             load_balancing_config=LoadBalancingConfig(),
         )
 
+        # pyrefly: ignore [bad-override-mutable-attribute]
         self._local_block_info_list: tuple[DTensorBlockInfo, ...] = (
             self._construct_local_block_info_list(
                 group_source_ranks=tuple(
@@ -596,7 +576,7 @@ class HybridShardDistributor(DistributorInterface):
         )
         device_mesh_2d = get_device_mesh(
             device_type=device.type,
-            mesh=tuple(batched(ranks_in_replicated_group, self._dist_group_size)),
+            mesh=tuple(batched(ranks_in_replicated_group, self._dist_group_size)),  # noqa: B911
             mesh_dim_names=("replicate", "shard"),
         )
         # NOTE: We get all submeshes along the "replicate" dimension, then pick out
@@ -605,7 +585,7 @@ class HybridShardDistributor(DistributorInterface):
         # For the example above, this would give me submeshes [[3, 27], [11, 35], [19, 43]].
         # Note that the group source rank must belong to {0, 1, 2} in this case.
         # Suppose the group_source_rank = 1, then this would get the submesh [11, 35].
-        replicate_submesh = device_mesh_2d._get_all_submeshes(  # type: ignore[attr-defined]
+        replicate_submesh = device_mesh_2d._get_all_submeshes(
             mesh_dim_name="replicate"
         )[group_source_rank]
 

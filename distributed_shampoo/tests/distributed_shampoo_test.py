@@ -7,8 +7,6 @@ LICENSE file in the root directory of this source tree.
 
 """
 
-#!/usr/bin/env python3
-
 import abc
 import gc
 import logging
@@ -28,6 +26,7 @@ from distributed_shampoo.preconditioner.matrix_functions_types import (
 )
 from distributed_shampoo.shampoo_types import (
     AdaGradPreconditionerConfig,
+    BaseShampooPreconditionerConfig,
     DefaultEigenvalueCorrectedShampooConfig,
     DefaultShampooConfig,
     DefaultSignDescentPreconditionerConfig,
@@ -49,11 +48,24 @@ from distributed_shampoo.shampoo_types import (
     SpectralDescentPreconditionerConfig,
     WeightDecayType,
 )
+from distributed_shampoo.utils.shampoo_utils import pack_upper_triangular
 from torch import nn, Tensor
 from torch.testing._internal.common_utils import (
     instantiate_parametrized_tests,
     parametrize,
 )
+
+
+def _pack_if_enabled(
+    config: PreconditionerConfig, matrix: torch.Tensor
+) -> torch.Tensor:
+    """Pack matrix to upper triangular format if symmetric packing is enabled."""
+    return (
+        pack_upper_triangular(matrix)
+        if isinstance(config, BaseShampooPreconditionerConfig)
+        and config.use_symmetric_packing
+        else matrix
+    )
 
 
 @instantiate_parametrized_tests
@@ -243,7 +255,7 @@ class DistributedShampooInitTest(unittest.TestCase):
 
         self.assertRaisesRegex(
             NotImplementedError,
-            r"group\[DISTRIBUTED_CONFIG\]=.*\.NotSupportedDistributedConfig\(.*\) not supported!",
+            r"distributed_config=.*\.NotSupportedDistributedConfig\(.*\) not supported!",
             DistributedShampoo,
             params=self._model.parameters(),
             distributed_config=NotSupportedDistributedConfig(),
@@ -505,43 +517,19 @@ class ShampooStateDictTest(AbstractTest.StateDictTestBase):
                     "block_0": {
                         "shampoo": {
                             "factor_matrices": {
-                                0: torch.tensor(
-                                    [
-                                        [0.0, 0.0, 0.0, 0.0, 0.0],
-                                        [0.0, 0.0, 0.0, 0.0, 0.0],
-                                        [0.0, 0.0, 0.0, 0.0, 0.0],
-                                        [0.0, 0.0, 0.0, 0.0, 0.0],
-                                        [0.0, 0.0, 0.0, 0.0, 0.0],
-                                    ]
+                                0: _pack_if_enabled(
+                                    self._preconditioner_config, torch.zeros(5, 5)
                                 ),
-                                1: torch.tensor(
-                                    [
-                                        [0.0, 0.0, 0.0, 0.0, 0.0],
-                                        [0.0, 0.0, 0.0, 0.0, 0.0],
-                                        [0.0, 0.0, 0.0, 0.0, 0.0],
-                                        [0.0, 0.0, 0.0, 0.0, 0.0],
-                                        [0.0, 0.0, 0.0, 0.0, 0.0],
-                                    ]
+                                1: _pack_if_enabled(
+                                    self._preconditioner_config, torch.zeros(5, 5)
                                 ),
                             },
                             "inv_factor_matrices": {
-                                0: torch.tensor(
-                                    [
-                                        [1.0, 0.0, 0.0, 0.0, 0.0],
-                                        [0.0, 1.0, 0.0, 0.0, 0.0],
-                                        [0.0, 0.0, 1.0, 0.0, 0.0],
-                                        [0.0, 0.0, 0.0, 1.0, 0.0],
-                                        [0.0, 0.0, 0.0, 0.0, 1.0],
-                                    ]
+                                0: _pack_if_enabled(
+                                    self._preconditioner_config, torch.eye(5)
                                 ),
-                                1: torch.tensor(
-                                    [
-                                        [1.0, 0.0, 0.0, 0.0, 0.0],
-                                        [0.0, 1.0, 0.0, 0.0, 0.0],
-                                        [0.0, 0.0, 1.0, 0.0, 0.0],
-                                        [0.0, 0.0, 0.0, 1.0, 0.0],
-                                        [0.0, 0.0, 0.0, 0.0, 1.0],
-                                    ]
+                                1: _pack_if_enabled(
+                                    self._preconditioner_config, torch.eye(5)
                                 ),
                             },
                         },
@@ -567,43 +555,19 @@ class ShampooStateDictTest(AbstractTest.StateDictTestBase):
                     "block_1": {
                         "shampoo": {
                             "factor_matrices": {
-                                0: torch.tensor(
-                                    [
-                                        [0.0, 0.0, 0.0, 0.0, 0.0],
-                                        [0.0, 0.0, 0.0, 0.0, 0.0],
-                                        [0.0, 0.0, 0.0, 0.0, 0.0],
-                                        [0.0, 0.0, 0.0, 0.0, 0.0],
-                                        [0.0, 0.0, 0.0, 0.0, 0.0],
-                                    ]
+                                0: _pack_if_enabled(
+                                    self._preconditioner_config, torch.zeros(5, 5)
                                 ),
-                                1: torch.tensor(
-                                    [
-                                        [0.0, 0.0, 0.0, 0.0, 0.0],
-                                        [0.0, 0.0, 0.0, 0.0, 0.0],
-                                        [0.0, 0.0, 0.0, 0.0, 0.0],
-                                        [0.0, 0.0, 0.0, 0.0, 0.0],
-                                        [0.0, 0.0, 0.0, 0.0, 0.0],
-                                    ]
+                                1: _pack_if_enabled(
+                                    self._preconditioner_config, torch.zeros(5, 5)
                                 ),
                             },
                             "inv_factor_matrices": {
-                                0: torch.tensor(
-                                    [
-                                        [1.0, 0.0, 0.0, 0.0, 0.0],
-                                        [0.0, 1.0, 0.0, 0.0, 0.0],
-                                        [0.0, 0.0, 1.0, 0.0, 0.0],
-                                        [0.0, 0.0, 0.0, 1.0, 0.0],
-                                        [0.0, 0.0, 0.0, 0.0, 1.0],
-                                    ]
+                                0: _pack_if_enabled(
+                                    self._preconditioner_config, torch.eye(5)
                                 ),
-                                1: torch.tensor(
-                                    [
-                                        [1.0, 0.0, 0.0, 0.0, 0.0],
-                                        [0.0, 1.0, 0.0, 0.0, 0.0],
-                                        [0.0, 0.0, 1.0, 0.0, 0.0],
-                                        [0.0, 0.0, 0.0, 1.0, 0.0],
-                                        [0.0, 0.0, 0.0, 0.0, 1.0],
-                                    ]
+                                1: _pack_if_enabled(
+                                    self._preconditioner_config, torch.eye(5)
                                 ),
                             },
                         },
@@ -668,23 +632,11 @@ class EigendecomposedShampooStateDictTest(AbstractTest.StateDictTestBase):
                     "block_0": {
                         "shampoo": {
                             "factor_matrices": {
-                                0: torch.tensor(
-                                    [
-                                        [0.0, 0.0, 0.0, 0.0, 0.0],
-                                        [0.0, 0.0, 0.0, 0.0, 0.0],
-                                        [0.0, 0.0, 0.0, 0.0, 0.0],
-                                        [0.0, 0.0, 0.0, 0.0, 0.0],
-                                        [0.0, 0.0, 0.0, 0.0, 0.0],
-                                    ]
+                                0: _pack_if_enabled(
+                                    self._preconditioner_config, torch.zeros(5, 5)
                                 ),
-                                1: torch.tensor(
-                                    [
-                                        [0.0, 0.0, 0.0, 0.0, 0.0],
-                                        [0.0, 0.0, 0.0, 0.0, 0.0],
-                                        [0.0, 0.0, 0.0, 0.0, 0.0],
-                                        [0.0, 0.0, 0.0, 0.0, 0.0],
-                                        [0.0, 0.0, 0.0, 0.0, 0.0],
-                                    ]
+                                1: _pack_if_enabled(
+                                    self._preconditioner_config, torch.zeros(5, 5)
                                 ),
                             },
                             "factor_matrices_eigenvectors": {
@@ -734,23 +686,11 @@ class EigendecomposedShampooStateDictTest(AbstractTest.StateDictTestBase):
                     "block_1": {
                         "shampoo": {
                             "factor_matrices": {
-                                0: torch.tensor(
-                                    [
-                                        [0.0, 0.0, 0.0, 0.0, 0.0],
-                                        [0.0, 0.0, 0.0, 0.0, 0.0],
-                                        [0.0, 0.0, 0.0, 0.0, 0.0],
-                                        [0.0, 0.0, 0.0, 0.0, 0.0],
-                                        [0.0, 0.0, 0.0, 0.0, 0.0],
-                                    ]
+                                0: _pack_if_enabled(
+                                    self._preconditioner_config, torch.zeros(5, 5)
                                 ),
-                                1: torch.tensor(
-                                    [
-                                        [0.0, 0.0, 0.0, 0.0, 0.0],
-                                        [0.0, 0.0, 0.0, 0.0, 0.0],
-                                        [0.0, 0.0, 0.0, 0.0, 0.0],
-                                        [0.0, 0.0, 0.0, 0.0, 0.0],
-                                        [0.0, 0.0, 0.0, 0.0, 0.0],
-                                    ]
+                                1: _pack_if_enabled(
+                                    self._preconditioner_config, torch.zeros(5, 5)
                                 ),
                             },
                             "factor_matrices_eigenvectors": {
@@ -839,23 +779,11 @@ class EigenvalueCorrectedShampooStateDictTest(AbstractTest.StateDictTestBase):
                     "block_0": {
                         "shampoo": {
                             "factor_matrices": {
-                                0: torch.tensor(
-                                    [
-                                        [0.0, 0.0, 0.0, 0.0, 0.0],
-                                        [0.0, 0.0, 0.0, 0.0, 0.0],
-                                        [0.0, 0.0, 0.0, 0.0, 0.0],
-                                        [0.0, 0.0, 0.0, 0.0, 0.0],
-                                        [0.0, 0.0, 0.0, 0.0, 0.0],
-                                    ]
+                                0: _pack_if_enabled(
+                                    self._preconditioner_config, torch.zeros(5, 5)
                                 ),
-                                1: torch.tensor(
-                                    [
-                                        [0.0, 0.0, 0.0, 0.0, 0.0],
-                                        [0.0, 0.0, 0.0, 0.0, 0.0],
-                                        [0.0, 0.0, 0.0, 0.0, 0.0],
-                                        [0.0, 0.0, 0.0, 0.0, 0.0],
-                                        [0.0, 0.0, 0.0, 0.0, 0.0],
-                                    ]
+                                1: _pack_if_enabled(
+                                    self._preconditioner_config, torch.zeros(5, 5)
                                 ),
                             },
                             "factor_matrices_eigenvectors": {
@@ -910,23 +838,11 @@ class EigenvalueCorrectedShampooStateDictTest(AbstractTest.StateDictTestBase):
                     "block_1": {
                         "shampoo": {
                             "factor_matrices": {
-                                0: torch.tensor(
-                                    [
-                                        [0.0, 0.0, 0.0, 0.0, 0.0],
-                                        [0.0, 0.0, 0.0, 0.0, 0.0],
-                                        [0.0, 0.0, 0.0, 0.0, 0.0],
-                                        [0.0, 0.0, 0.0, 0.0, 0.0],
-                                        [0.0, 0.0, 0.0, 0.0, 0.0],
-                                    ]
+                                0: _pack_if_enabled(
+                                    self._preconditioner_config, torch.zeros(5, 5)
                                 ),
-                                1: torch.tensor(
-                                    [
-                                        [0.0, 0.0, 0.0, 0.0, 0.0],
-                                        [0.0, 0.0, 0.0, 0.0, 0.0],
-                                        [0.0, 0.0, 0.0, 0.0, 0.0],
-                                        [0.0, 0.0, 0.0, 0.0, 0.0],
-                                        [0.0, 0.0, 0.0, 0.0, 0.0],
-                                    ]
+                                1: _pack_if_enabled(
+                                    self._preconditioner_config, torch.zeros(5, 5)
                                 ),
                             },
                             "factor_matrices_eigenvectors": {
@@ -1017,6 +933,54 @@ class EigendecomposedKLShampooStateDictTest(EigendecomposedShampooStateDictTest)
     @property
     def _preconditioner_config(self) -> EigendecomposedKLShampooPreconditionerConfig:
         return EigendecomposedKLShampooPreconditionerConfig()
+
+
+# ---- Unpacked (use_symmetric_packing=False) state dict test variants ----
+
+
+class ShampooStateDictUnpackedTest(ShampooStateDictTest):
+    @property
+    def _preconditioner_config(self) -> RootInvShampooPreconditionerConfig:
+        return replace(DefaultShampooConfig, use_symmetric_packing=False)
+
+
+class EigendecomposedShampooStateDictUnpackedTest(EigendecomposedShampooStateDictTest):
+    @property
+    def _preconditioner_config(self) -> EigendecomposedShampooPreconditionerConfig:
+        return replace(
+            EigendecomposedShampooPreconditionerConfig(),
+            use_symmetric_packing=False,
+        )
+
+
+class EigenvalueCorrectedShampooStateDictUnpackedTest(
+    EigenvalueCorrectedShampooStateDictTest,
+):
+    @property
+    def _preconditioner_config(self) -> EigenvalueCorrectedShampooPreconditionerConfig:
+        return replace(
+            DefaultEigenvalueCorrectedShampooConfig,
+            use_symmetric_packing=False,
+        )
+
+
+class RootInvKLShampooStateDictUnpackedTest(RootInvKLShampooStateDictTest):
+    @property
+    def _preconditioner_config(self) -> RootInvKLShampooPreconditionerConfig:
+        return replace(
+            RootInvKLShampooPreconditionerConfig(), use_symmetric_packing=False
+        )
+
+
+class EigendecomposedKLShampooStateDictUnpackedTest(
+    EigendecomposedKLShampooStateDictTest,
+):
+    @property
+    def _preconditioner_config(self) -> EigendecomposedKLShampooPreconditionerConfig:
+        return replace(
+            EigendecomposedKLShampooPreconditionerConfig(),
+            use_symmetric_packing=False,
+        )
 
 
 class SignDescentStateDictTest(AbstractTest.NoPreconditionerStateDictTestBase):
@@ -1148,43 +1112,19 @@ class AbstractIterateAveragingTest:
                         "block_0": {
                             "shampoo": {
                                 "factor_matrices": {
-                                    0: torch.tensor(
-                                        [
-                                            [0.0, 0.0, 0.0, 0.0, 0.0],
-                                            [0.0, 0.0, 0.0, 0.0, 0.0],
-                                            [0.0, 0.0, 0.0, 0.0, 0.0],
-                                            [0.0, 0.0, 0.0, 0.0, 0.0],
-                                            [0.0, 0.0, 0.0, 0.0, 0.0],
-                                        ]
+                                    0: _pack_if_enabled(
+                                        self._preconditioner_config, torch.zeros(5, 5)
                                     ),
-                                    1: torch.tensor(
-                                        [
-                                            [0.0, 0.0, 0.0, 0.0, 0.0],
-                                            [0.0, 0.0, 0.0, 0.0, 0.0],
-                                            [0.0, 0.0, 0.0, 0.0, 0.0],
-                                            [0.0, 0.0, 0.0, 0.0, 0.0],
-                                            [0.0, 0.0, 0.0, 0.0, 0.0],
-                                        ]
+                                    1: _pack_if_enabled(
+                                        self._preconditioner_config, torch.zeros(5, 5)
                                     ),
                                 },
                                 "inv_factor_matrices": {
-                                    0: torch.tensor(
-                                        [
-                                            [1.0, 0.0, 0.0, 0.0, 0.0],
-                                            [0.0, 1.0, 0.0, 0.0, 0.0],
-                                            [0.0, 0.0, 1.0, 0.0, 0.0],
-                                            [0.0, 0.0, 0.0, 1.0, 0.0],
-                                            [0.0, 0.0, 0.0, 0.0, 1.0],
-                                        ]
+                                    0: _pack_if_enabled(
+                                        self._preconditioner_config, torch.eye(5)
                                     ),
-                                    1: torch.tensor(
-                                        [
-                                            [1.0, 0.0, 0.0, 0.0, 0.0],
-                                            [0.0, 1.0, 0.0, 0.0, 0.0],
-                                            [0.0, 0.0, 1.0, 0.0, 0.0],
-                                            [0.0, 0.0, 0.0, 1.0, 0.0],
-                                            [0.0, 0.0, 0.0, 0.0, 1.0],
-                                        ]
+                                    1: _pack_if_enabled(
+                                        self._preconditioner_config, torch.eye(5)
                                     ),
                                 },
                             },
@@ -1219,43 +1159,19 @@ class AbstractIterateAveragingTest:
                         "block_1": {
                             "shampoo": {
                                 "factor_matrices": {
-                                    0: torch.tensor(
-                                        [
-                                            [0.0, 0.0, 0.0, 0.0, 0.0],
-                                            [0.0, 0.0, 0.0, 0.0, 0.0],
-                                            [0.0, 0.0, 0.0, 0.0, 0.0],
-                                            [0.0, 0.0, 0.0, 0.0, 0.0],
-                                            [0.0, 0.0, 0.0, 0.0, 0.0],
-                                        ]
+                                    0: _pack_if_enabled(
+                                        self._preconditioner_config, torch.zeros(5, 5)
                                     ),
-                                    1: torch.tensor(
-                                        [
-                                            [0.0, 0.0, 0.0, 0.0, 0.0],
-                                            [0.0, 0.0, 0.0, 0.0, 0.0],
-                                            [0.0, 0.0, 0.0, 0.0, 0.0],
-                                            [0.0, 0.0, 0.0, 0.0, 0.0],
-                                            [0.0, 0.0, 0.0, 0.0, 0.0],
-                                        ]
+                                    1: _pack_if_enabled(
+                                        self._preconditioner_config, torch.zeros(5, 5)
                                     ),
                                 },
                                 "inv_factor_matrices": {
-                                    0: torch.tensor(
-                                        [
-                                            [1.0, 0.0, 0.0, 0.0, 0.0],
-                                            [0.0, 1.0, 0.0, 0.0, 0.0],
-                                            [0.0, 0.0, 1.0, 0.0, 0.0],
-                                            [0.0, 0.0, 0.0, 1.0, 0.0],
-                                            [0.0, 0.0, 0.0, 0.0, 1.0],
-                                        ]
+                                    0: _pack_if_enabled(
+                                        self._preconditioner_config, torch.eye(5)
                                     ),
-                                    1: torch.tensor(
-                                        [
-                                            [1.0, 0.0, 0.0, 0.0, 0.0],
-                                            [0.0, 1.0, 0.0, 0.0, 0.0],
-                                            [0.0, 0.0, 1.0, 0.0, 0.0],
-                                            [0.0, 0.0, 0.0, 1.0, 0.0],
-                                            [0.0, 0.0, 0.0, 0.0, 1.0],
-                                        ]
+                                    1: _pack_if_enabled(
+                                        self._preconditioner_config, torch.eye(5)
                                     ),
                                 },
                             },
@@ -1388,6 +1304,18 @@ class ScheduleFreeShampooStateDictTest(
         return ScheduleFreeConfig(
             train_interp_coeff=0.9,
         )
+
+
+class GPAShampooStateDictUnpackedTest(GPAShampooStateDictTest):
+    @property
+    def _preconditioner_config(self) -> RootInvShampooPreconditionerConfig:
+        return replace(DefaultShampooConfig, use_symmetric_packing=False)
+
+
+class ScheduleFreeShampooStateDictUnpackedTest(ScheduleFreeShampooStateDictTest):
+    @property
+    def _preconditioner_config(self) -> RootInvShampooPreconditionerConfig:
+        return replace(DefaultShampooConfig, use_symmetric_packing=False)
 
 
 @instantiate_parametrized_tests

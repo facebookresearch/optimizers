@@ -1,6 +1,14 @@
 #!/usr/bin/env python3
 
-"""CIFAR-10 training example.
+
+"""
+Copyright (c) Meta Platforms, Inc. and affiliates.
+All rights reserved.
+
+This source code is licensed under the BSD-style license found in the
+LICENSE file in the root directory of this source tree.
+
+CIFAR-10 training example.
 
 Supports single GPU and distributed training with various parallelism strategies.
 Optimizers (sgd, adam, adamw, shampoo) can be combined with any parallelism strategy.
@@ -89,12 +97,16 @@ def main(cfg: DictConfig) -> None:
         device_mesh = create_device_mesh(cfg.dp_replicate_degree, world_size)
 
     wrapped_model = parallelism.wrap_model(model, local_rank, cfg.backend, device_mesh)
+    # FSDPModule is a runtime mixin on nn.Module, so this assert always holds;
+    # it narrows the Union for the downstream APIs that expect plain nn.Module.
+    wrapped_module = wrapped_model.model
+    assert isinstance(wrapped_module, torch.nn.Module)
 
     optimizer = instantiate_optimizer(
-        cfg, wrapped_model.model.parameters(), wrapped_model.distributed_config
+        cfg, wrapped_module.parameters(), wrapped_model.distributed_config
     )
 
-    load_checkpoint(cfg.checkpoint_dir, wrapped_model.model, optimizer)
+    load_checkpoint(cfg.checkpoint_dir, wrapped_module, optimizer)
 
     batch_size = (
         cfg.local_batch_size if parallelism.requires_distributed else cfg.batch_size
@@ -104,7 +116,7 @@ def main(cfg: DictConfig) -> None:
     )
 
     train_model(
-        model=wrapped_model.model,
+        model=wrapped_module,
         world_size=world_size,
         loss_fn=loss_fn,
         sampler=sampler if parallelism.requires_distributed else None,

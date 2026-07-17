@@ -223,12 +223,11 @@ class DistributorInterface(ABC):
 
         NOTE: FSDP may modify this function.
         """
-        self._global_blocked_params: tuple[Tensor, ...]
-        self._global_num_blocks_per_param: tuple[int, ...]
-        self._global_blocked_params, self._global_num_blocks_per_param = map(  # type: ignore[assignment]
-            partial(tuple),
-            self._merge_and_block_with_params(params=self._get_params_or_grads()),
+        blocked_params, num_blocks_per_param = self._merge_and_block_with_params(
+            params=self._get_params_or_grads()
         )
+        self._global_blocked_params: tuple[Tensor, ...] = tuple(blocked_params)
+        self._global_num_blocks_per_param: tuple[int, ...] = tuple(num_blocks_per_param)
 
     @abstractmethod
     def merge_and_block_gradients(

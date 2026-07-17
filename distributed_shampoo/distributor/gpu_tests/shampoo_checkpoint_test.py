@@ -7,8 +7,6 @@ LICENSE file in the root directory of this source tree.
 
 """
 
-#!/usr/bin/env python3
-
 import copy
 from collections.abc import Callable
 from functools import partial
@@ -39,7 +37,7 @@ from torch.distributed.checkpoint.state_dict import (
     StateDictOptions,
 )
 from torch.distributed.device_mesh import init_device_mesh
-from torch.distributed.fsdp import fully_shard
+from torch.distributed.fsdp import FSDPModule, fully_shard
 from torch.distributed.tensor import DTensor
 from torch.optim.optimizer import ParamsT
 from torch.testing._internal.common_distributed import skip_if_lt_x_gpu
@@ -261,8 +259,10 @@ class LosslessDistributorCheckpointPreemptionTest(DTensorTestBase):
     def _construct_model(
         model_linear_layers_dims: tuple[int, ...],
         model_dead_layers_dims: tuple[int, ...],
-        post_model_decoration: Callable[[nn.Module], nn.Module] = lambda x: x,
-    ) -> nn.Module:
+        post_model_decoration: Callable[
+            [nn.Module], nn.Module | FSDPModule
+        ] = lambda x: x,
+    ) -> nn.Module | FSDPModule:
         # Using partial here to prevent Pyre complain on incompatible parameter type.
         model, _, _, _ = partial(
             construct_training_problem, post_model_decoration=post_model_decoration
@@ -373,8 +373,12 @@ class LosslessDistributorCheckpointPreemptionTest(DTensorTestBase):
         model1 = self._construct_model(
             model_linear_layers_dims=model_linear_layers_dims,
             model_dead_layers_dims=model_dead_layers_dims,
-            post_model_decoration=post_model_decoration,  # type: ignore[arg-type]
+            post_model_decoration=post_model_decoration,
         )
+        # FSDPModule is a runtime mixin on nn.Module, so this assert always
+        # holds; it narrows the Union for the downstream PyTorch APIs that
+        # expect plain nn.Module.
+        assert isinstance(model1, nn.Module)
         input_dim = model_linear_layers_dims[0]
         optimizer1 = self._shampoo_optim_factory(distributed_config=config)(
             model1.parameters()
@@ -408,8 +412,9 @@ class LosslessDistributorCheckpointPreemptionTest(DTensorTestBase):
         model2 = self._construct_model(
             model_linear_layers_dims=model_linear_layers_dims,
             model_dead_layers_dims=model_dead_layers_dims,
-            post_model_decoration=post_model_decoration,  # type: ignore[arg-type]
+            post_model_decoration=post_model_decoration,
         )
+        assert isinstance(model2, nn.Module)
         # Use tiny lr for init step to minimize impact
         optimizer2 = self._shampoo_optim_factory(distributed_config=config, lr=1e-10)(
             model2.parameters()

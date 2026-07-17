@@ -7,8 +7,6 @@ LICENSE file in the root directory of this source tree.
 
 """
 
-#!/usr/bin/env python3
-
 import re
 import unittest
 from typing import Any
@@ -22,16 +20,17 @@ from distributed_shampoo.preconditioner.matrix_functions_types import (
 from distributed_shampoo.shampoo_types import (
     AdaGradPreconditionerConfig,
     BaseShampooPreconditionerConfig,
+    ClassicMomentumConfig,
     ClassicShampooPreconditionerConfig,
     DistributedConfig,
     EigenvalueCorrectedShampooPreconditionerConfig,
     FSDPDistributedConfig,
+    FullyShardDistributedConfig,
     GeneralizedPrimalAveragingConfig,
     HSDPDistributedConfig,
     HybridShardDistributedConfig,
     IterateAveragingConfig,
     RMSpropPreconditionerConfig,
-    ScheduleFreeConfig,
     SignDescentPreconditionerConfig,
 )
 from distributed_shampoo.utils.commons import get_all_non_abstract_subclasses
@@ -299,9 +298,12 @@ class SignDescentPreconditionerConfigSubclassesTest(unittest.TestCase):
 
 @instantiate_parametrized_tests
 class IterateAveragingConfigSubclassesTest(unittest.TestCase):
-    subclasses_types: list[type[IterateAveragingConfig]] = list(
-        get_all_non_abstract_subclasses(IterateAveragingConfig)  # type: ignore[type-abstract]
-    )
+    # Only test subclasses that have a train_interp_coeff field.
+    subclasses_types: list[type[IterateAveragingConfig]] = [
+        cls  # type: ignore[type-abstract]
+        for cls in get_all_non_abstract_subclasses(IterateAveragingConfig)
+        if hasattr(cls, "train_interp_coeff")
+    ]
 
     @parametrize("train_interp_coeff", (-0.1, 0.0, 1.5))
     @parametrize("cls", subclasses_types)
@@ -331,23 +333,28 @@ class GeneralizedPrimalAveragingConfigTest(unittest.TestCase):
             eval_interp_coeff=eval_interp_coeff,
         )
 
-    def test_valid_config(self) -> None:
-        # Test that valid configurations do not raise exceptions.
-        # Boundary values for eval_interp_coeff: 0.0 (inclusive) and just below 1.0.
-        # Boundary values for train_interp_coeff: just above 0.0 (exclusive) and 1.0 (inclusive).
-        GeneralizedPrimalAveragingConfig(eval_interp_coeff=0.0, train_interp_coeff=0.01)
-        GeneralizedPrimalAveragingConfig(eval_interp_coeff=0.5, train_interp_coeff=0.5)
-        GeneralizedPrimalAveragingConfig(eval_interp_coeff=0.99, train_interp_coeff=1.0)
-
 
 @instantiate_parametrized_tests
-class ScheduleFreeConfigTest(unittest.TestCase):
-    def test_valid_config(self) -> None:
-        # Test that valid configurations do not raise exceptions.
-        # Boundary values: just above 0.0 (exclusive) and 1.0 (inclusive).
-        ScheduleFreeConfig(train_interp_coeff=0.01)
-        ScheduleFreeConfig(train_interp_coeff=0.5)
-        ScheduleFreeConfig(train_interp_coeff=1.0)
+class ClassicMomentumConfigTest(unittest.TestCase):
+    @parametrize("momentum", (-0.1, 0.0, 1.0, 1.5))
+    def test_illegal_momentum(self, momentum: float) -> None:
+        self.assertRaisesRegex(
+            ValueError,
+            re.escape(f"Invalid self.momentum={momentum}. Must be within (0.0, 1.0)."),
+            ClassicMomentumConfig,
+            momentum=momentum,
+        )
+
+    @parametrize("dampening", (-0.1, 1.0, 1.5))
+    def test_illegal_dampening(self, dampening: float) -> None:
+        self.assertRaisesRegex(
+            ValueError,
+            re.escape(
+                f"Invalid self.dampening={dampening}. Must be within [0.0, 1.0)."
+            ),
+            ClassicMomentumConfig,
+            dampening=dampening,
+        )
 
 
 @instantiate_parametrized_tests
@@ -388,4 +395,29 @@ class DistributedConfigSubclassesTest(unittest.TestCase):
             ),
             cls,
             **kwargs,
+        )
+
+
+@instantiate_parametrized_tests
+class FullyShardDistributedConfigTest(unittest.TestCase):
+    @parametrize("num_sub_groups", (0, -1))
+    def test_illegal_num_sub_groups(self, num_sub_groups: int) -> None:
+        self.assertRaisesRegex(
+            ValueError,
+            re.escape(f"Invalid self.num_sub_groups={num_sub_groups}. Must be >= 1."),
+            FullyShardDistributedConfig,
+            num_sub_groups=num_sub_groups,
+        )
+
+
+@instantiate_parametrized_tests
+class HybridShardDistributedConfigTest(unittest.TestCase):
+    @parametrize("num_sub_groups", (0, -1))
+    def test_illegal_num_sub_groups(self, num_sub_groups: int) -> None:
+        self.assertRaisesRegex(
+            ValueError,
+            re.escape(f"Invalid self.num_sub_groups={num_sub_groups}. Must be >= 1."),
+            HybridShardDistributedConfig,
+            device_mesh=MagicMock(),
+            num_sub_groups=num_sub_groups,
         )

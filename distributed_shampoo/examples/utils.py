@@ -73,6 +73,7 @@ def get_distributed_env() -> tuple[int, int, int]:
 
 def set_seed(seed: int) -> None:
     torch.manual_seed(seed)
+    # pyrefly: ignore [bad-argument-type]
     np.random.seed(seed)
     random.seed(seed)
     torch.use_deterministic_algorithms(True)
@@ -149,7 +150,9 @@ def get_data_loader_and_sampler(
     data_path = Path(data_path) / str(rank)
 
     with importlib.resources.path(
-        __package__, CIFAR_10_DATASET_FILENAME
+        # pyrefly: ignore [bad-argument-type]
+        __package__,
+        CIFAR_10_DATASET_FILENAME,
     ) as resource_path:
         if resource_path.exists():
             data_path.mkdir(parents=True, exist_ok=True)
@@ -158,14 +161,19 @@ def get_data_loader_and_sampler(
     dataset = datasets.CIFAR10(
         data_path, train=True, download=True, transform=transform
     )
-    sampler: torch.utils.data.distributed.DistributedSampler = (
-        torch.utils.data.distributed.DistributedSampler(
-            dataset, num_replicas=world_size, rank=rank, shuffle=True
-        )
+    sampler: torch.utils.data.distributed.DistributedSampler[
+        torch.utils.data.Dataset
+    ] = torch.utils.data.distributed.DistributedSampler(
+        dataset, num_replicas=world_size, rank=rank, shuffle=True
     )
     return (
         torch.utils.data.DataLoader(
-            dataset, batch_size=batch_size, sampler=sampler, num_workers=2
+            dataset,
+            batch_size=batch_size,
+            sampler=sampler,
+            num_workers=2,
+            # Citrine C0: pin_memory=True for efficient CPU-to-GPU transfer
+            pin_memory=True,
         ),
         sampler,
     )

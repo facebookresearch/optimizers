@@ -22,9 +22,9 @@ from distributed_shampoo.shampoo_types import (
     PARAMS,
     ShampooRuntimeConfig,
 )
-from distributed_shampoo.utils.shampoo_utils import (
-    prepare_update_param_buffers,
-    redistribute_and_update_params,
+from distributed_shampoo.utils.shampoo_fully_shard_utils import (
+    GatherGradientsContext,
+    RedistributeParamsContext,
 )
 from torch import distributed as dist, Tensor
 
@@ -67,42 +67,47 @@ class FullyShardLosslessDistributor(Distributor):
         self._group_rank: int = dist.get_rank(group=self._dist_group)
 
         def should_assign_param_idx(i: int) -> bool:
-            if (
-                self._param_assignment_strategy
+            return (
+                i % self._group_size == self._group_rank
+                if self._param_assignment_strategy
                 == FSDPParamAssignmentStrategy.ROUND_ROBIN
-            ):
-                return i % self._group_size == self._group_rank
-            return True
+                else True
+            )
 
         self._assigned_params_mask: tuple[bool, ...] = tuple(
             should_assign_param_idx(idx) for idx in range(len(param_group[PARAMS]))
         )
 
-        # Collects and stores the model parameters assigned to this rank.
-        # Note that we explicitly disable the unnecessary gradient tracking for the all-gather collectives
-        # used to initialize the full parameters.
-        with (
-            torch.no_grad(),
-            shampoo_comm_profiler(f"{self.__class__.__name__}::full_tensor_calls"),
-        ):
-            full_params: list[Tensor] = [p.full_tensor() for p in param_group[PARAMS]]
-
-        # TODO (irisz): eagerly initialize the _assigned_full_params cannot handle dead layers parameters correctly,
-        # as we do not have gradient information during initialization. We need a way to handle dead layers parameters
-        # before doing performance optimization on the full_tensor call above (e.g. change full_tensor call to all_to_all).
-        self._assigned_full_params: list[Tensor] = [
-            p
-            for p, assigned in zip(full_params, self._assigned_params_mask)
-            if assigned
-        ]
-
-        # For ROUND_ROBIN strategy, creates a buffer for receiving the updated param shards.
-        self._update_param_buffers: list[Tensor] | None = (
-            prepare_update_param_buffers(param_group[PARAMS], self._group_size)
+        # For ROUND_ROBIN strategy, create optimized redistribution context
+        # that precomputes all static information for efficient all_to_all
+        self._redistribute_ctx: RedistributeParamsContext | None = (
+            RedistributeParamsContext(
+                params=param_group[PARAMS],
+                assigned_params_mask=self._assigned_params_mask,
+                dist_group=self._dist_group,
+            )
             if self._param_assignment_strategy
             == FSDPParamAssignmentStrategy.ROUND_ROBIN
             else None
         )
+
+        # For ROUND_ROBIN strategy, create gradient gathering context
+        # that uses all_to_all instead of per-param full_tensor() all-gathers
+        self._gather_grads_ctx: GatherGradientsContext | None = (
+            GatherGradientsContext(
+                params=param_group[PARAMS],
+                assigned_params_mask=self._assigned_params_mask,
+                dist_group=self._dist_group,
+            )
+            if self._param_assignment_strategy
+            == FSDPParamAssignmentStrategy.ROUND_ROBIN
+            else None
+        )
+
+        # Set _param_group early so _get_assigned_full_params can access it
+        # (super().__init__ will set it again to the same value).
+        self._param_group = param_group
+        self._assigned_full_params: list[Tensor] = self._get_assigned_full_params()
 
         super().__init__(param_group, runtime_config)
 
@@ -115,6 +120,27 @@ class FullyShardLosslessDistributor(Distributor):
             logger.debug(
                 f"Local blocked params[size={len(local_block_id_list)}]: {local_block_id_list}"
             )
+
+    @torch.no_grad()
+    def _get_assigned_full_params(self) -> list[Tensor]:
+        """Gather full parameter tensors for params assigned to this rank.
+
+        For ROUND_ROBIN, uses all_to_all to gather only assigned params efficiently.
+        For REPLICATE, falls back to per-param full_tensor() all-gathers.
+
+        Returns:
+            List of full parameter tensors assigned to this rank.
+        """
+        if self._gather_grads_ctx is not None:
+            all_params = self._gather_grads_ctx.gather_params()
+            return [p for p in all_params if p is not None]
+        else:
+            full_params = [p.full_tensor() for p in self._param_group[PARAMS]]
+            return [
+                p
+                for p, assigned in zip(full_params, self._assigned_params_mask)
+                if assigned
+            ]
 
     @overload
     @torch.no_grad()
@@ -139,13 +165,23 @@ class FullyShardLosslessDistributor(Distributor):
         """
 
         if get_grad:
-            # Getting grads at every optimizer step triggers implicit all-gather. Note that p.numel()
-            # returns total number of elements in the tensor (as opposed to local shard of DTensor).
-            with shampoo_comm_profiler(f"{self.__class__.__name__}::grad_full_tensors"):
-                full_grads = [
-                    None if p.grad is None else p.grad.full_tensor()
-                    for p in self._param_group[PARAMS]
-                ]
+            gather_grads_ctx = self._gather_grads_ctx
+            if gather_grads_ctx is not None:
+                # ROUND_ROBIN: use all_to_all to gather grads efficiently.
+                # Each rank only receives full grads for its assigned params.
+                with shampoo_comm_profiler(
+                    f"{self.__class__.__name__}::gather_gradients_all_to_all"
+                ):
+                    full_grads = gather_grads_ctx.gather_gradients()
+            else:
+                # REPLICATE: fall back to per-param full_tensor() all-gathers.
+                with shampoo_comm_profiler(
+                    f"{self.__class__.__name__}::grad_full_tensors"
+                ):
+                    full_grads = [
+                        None if p.grad is None else p.grad.full_tensor()
+                        for p in self._param_group[PARAMS]
+                    ]
             return (
                 full_grad
                 for full_grad, assigned in zip(
@@ -183,13 +219,11 @@ class FullyShardLosslessDistributor(Distributor):
         # corresponding local parameter `local_param` in the param group.
         if self._param_assignment_strategy == FSDPParamAssignmentStrategy.ROUND_ROBIN:
             with shampoo_comm_profiler(
-                f"{self.__class__.__name__}::redistribute_and_update_params"
+                f"{self.__class__.__name__}::_redistribute_ctx.redistribute_and_update_params"
             ):
-                redistribute_and_update_params(
-                    self._param_group[PARAMS],
+                assert self._redistribute_ctx is not None
+                self._redistribute_ctx.redistribute_and_update_params(
                     self._assigned_full_params,
-                    self._update_param_buffers,  # type: ignore
-                    self._dist_group,
                 )
 
         elif self._param_assignment_strategy == FSDPParamAssignmentStrategy.REPLICATE:
@@ -242,12 +276,7 @@ class FullyShardLosslessDistributor(Distributor):
         1. _assigned_full_params - the cached full tensor copies
         2. _global_blocked_params and _local_blocked_params - views of the full tensors
         """
-        full_params: list[Tensor] = [p.full_tensor() for p in self._param_group[PARAMS]]
-        self._assigned_full_params = [
-            p
-            for p, assigned in zip(full_params, self._assigned_params_mask)
-            if assigned
-        ]
+        self._assigned_full_params = self._get_assigned_full_params()
         # Also re-block the parameters since _global_blocked_params are views of the old
         # _assigned_full_params tensors
         self._merge_and_block_parameters()

@@ -7,8 +7,6 @@ LICENSE file in the root directory of this source tree.
 
 """
 
-#!/usr/bin/env python3
-
 import torch
 from distributed_shampoo.preconditioner.sgd_preconditioner_list import (
     SGDPreconditionerList,

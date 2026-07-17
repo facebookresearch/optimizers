@@ -144,28 +144,35 @@ def _check_square_matrix(
 
 def _matrix_perturbation(
     A: Tensor,
-    epsilon: float = 0.0,
+    epsilon: float | Tensor = 0.0,
     is_eigenvalues: bool = True,
 ) -> Tensor:
     """Add epsilon * I to matrix (if square) or epsilon (if vector).
 
     Args:
         A (Tensor): Matrix of interest.
-        epsilon (float): Value to add to matrix for perturbation/regularization. (Default: 0.0)
+        epsilon (float | Tensor): Value to add to matrix for perturbation/regularization.
+            May be a Python float or a 0-d Tensor; a Tensor epsilon avoids the host-device
+            sync that ``float(epsilon)`` would force on the higher-order Newton path. (Default: 0.0)
         is_eigenvalues (bool): Whether A is a matrix of eigenvalues (true) or a full matrix (false). In the former case (true), add epsilon to all values; in the latter (false), add epsilon along the diagonal. (Default: True)
 
     Returns:
         A_ridge (Tensor): Matrix with perturbation/regularization.
 
     """
+    # Fast path only when epsilon is the literal Python 0; comparing a Tensor
+    # epsilon against 0 would force a host-device sync.
+    if isinstance(epsilon, (int, float)) and epsilon == 0:
+        return A
+    if is_eigenvalues:
+        return A + epsilon
+    identity = torch.eye(A.shape[0], dtype=A.dtype, device=A.device)
+    # `A.add(I, alpha=epsilon)` requires a Python scalar; use the elementwise
+    # form so a Tensor epsilon works without a sync.
     return (
-        (
-            A.add(torch.eye(A.shape[0], dtype=A.dtype, device=A.device), alpha=epsilon)
-            if not is_eigenvalues
-            else A + epsilon
-        )
-        if epsilon != 0
-        else A  # Fast path when epsilon is 0.0, return A without modification
+        A + epsilon * identity
+        if isinstance(epsilon, Tensor)
+        else A.add(identity, alpha=epsilon)
     )
 
 
@@ -201,7 +208,7 @@ def matrix_inverse_root_from_eigendecomposition(
         L: Tensor,
         rank_rtol: float | None = None,
         rank_atol: float = 0.0,
-    ) -> float:
+    ) -> Tensor:
         """Compute threshold for filtering eigenvalues based on numerical rank.
 
         Determines which eigenvalues should be considered numerically zero based on
@@ -214,13 +221,16 @@ def matrix_inverse_root_from_eigendecomposition(
             rank_atol (float): Absolute tolerance for determining numerical rank. (Default: 0.0)
 
         Returns:
-            threshold (float): Threshold value below which eigenvalues are treated as zero.
+            threshold (Tensor): 0-d tensor threshold below which eigenvalues are treated as zero.
         """
         if rank_rtol is None:
             rtol = L.numel() * torch.finfo(L.dtype).eps
         else:
             rtol = rank_rtol
-        return max(rank_atol, rtol * L.max().relu().item())
+        # Keep as 0-d tensor — `.item()` would force a host-device sync per
+        # eigendecomposition. `torch.where(L <= spectrum_cutoff, ...)` below
+        # accepts a 0-d tensor as the threshold.
+        return torch.clamp(rtol * L.max().relu(), min=rank_atol)
 
     match rank_deficient_stability_config:
         case PseudoInverseConfig():
@@ -270,7 +280,7 @@ def matrix_inverse_root_from_eigendecomposition(
 
 
 @_check_square_matrix
-def matrix_inverse_root(
+def matrix_inverse_root(  # noqa: C901
     A: Tensor,
     root: Fraction,
     root_inv_config: RootInvConfig = DefaultEigenConfig,
@@ -501,14 +511,14 @@ def matrix_inverse_root(
                 )
 
             # develop the b coefficients array first (ref: Lakic's paper)
-            b = torch.zeros(order, dtype=A.dtype, device=A.device)
-            b[0] = 1
+            # Keep b as a Python list of floats in order to prevent host-device sync.
+            b: list[float] = [1.0]
             num = 1
             denom = 1
             for i in range(1, order):
                 num *= 1 + (i - 1) * p
                 denom *= i * p
-                b[i] = num / denom
+                b.append(num / denom)
 
             # initialize iteration, dimension, and s
             iteration = 0
@@ -528,23 +538,27 @@ def matrix_inverse_root(
                     "Input matrix has entries close to inf, exiting root inverse"
                 )
 
-            # Now scale and setup our variables
-            epsilon = max(rel_epsilon * lambda_max_approx, abs_epsilon)
+            # Now scale and setup our variables.
+            epsilon = torch.clamp(lambda_max_approx * rel_epsilon, min=abs_epsilon)
             identity = torch.eye(n, dtype=dtype, device=A.device)
             A_ridge = _matrix_perturbation(A, epsilon=epsilon, is_eigenvalues=False)
-            lambda_max_approx += epsilon
+            lambda_max_approx = lambda_max_approx + epsilon
 
             # Figure out a constant that gives good starting location
             # We stick to a conservative setting that gives very good accuracy
             # For a ref, see https://github.com/google-research/google-research/blob/master/scalable_shampoo/pytorch/matrix_functions.py#L114
-            z = 1.0 / torch.trace(A_ridge).item()
-            X = (z ** (-s)) * identity
+            # Keep z as a 0-d tensor — `.item()` would force a host-device sync per
+            # higher-order Newton call. Use `torch.pow` / `torch.reciprocal` for
+            # tensor-native math (pyre rejects `Tensor ** float` and `float / Tensor`).
+            z = torch.reciprocal(torch.trace(A_ridge))
+            X = torch.pow(z, -s) * identity
             M = z * A_ridge
             error = torch.linalg.vector_norm(M - identity, torch.inf)
             t_iter_end = time.perf_counter()
-            logger.debug(
-                f"Iteration dur (s): {t_iter_end - t_iter_begin}, Error (|M-I|) at iteration {iteration}: {error.item()}"
-            )
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    f"Iteration dur (s): {t_iter_end - t_iter_begin}, Error (|M-I|) at iteration {iteration}: {error.item()}"
+                )
 
             # Do one iteration of basic Newton first. This is used to mathematically guarantee convergence of higher order method.
             # TODO: we may be able to get rid of this with a more careful analysis of the convergence region
@@ -556,9 +570,10 @@ def matrix_inverse_root(
             n_matmul = math.ceil(math.log2(p)) + 2
             iteration += 1
             t_iter_end = time.perf_counter()
-            logger.debug(
-                f"Iteration dur (s): {t_iter_end - t_iter_begin}, Error (|M-I|) at iteration {iteration}: {error.item()}"
-            )
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    f"Iteration dur (s): {t_iter_end - t_iter_begin}, Error (|M-I|) at iteration {iteration}: {error.item()}"
+                )
 
             # main while loop
             while error > tolerance and iteration < max_iterations:
@@ -567,11 +582,9 @@ def matrix_inverse_root(
 
                 # create M_p via Horner's rule
                 base_matrix = identity - M
-                M_p = base_matrix.mul(b[order - 1]).add_(
-                    identity, alpha=float(b[order - 2])
-                )
+                M_p = base_matrix.mul(b[order - 1]).add_(identity, alpha=b[order - 2])
                 for i in reversed(range(order - 2)):
-                    M_p = torch.addmm(identity, M_p, base_matrix, beta=float(b[i]))
+                    M_p = torch.addmm(identity, M_p, base_matrix, beta=b[i])
 
                 # rest is same as Newton
                 X = X @ M_p
@@ -581,18 +594,20 @@ def matrix_inverse_root(
 
                 # TODO: 1.2 is the value from the Google code, can be tuned
                 if new_error > error * 1.2 or (new_error == error and error < 1e-3):
-                    logger.debug(
-                        f"Coupled inverse Newton is stagnating or diverging based on comparing current error {new_error.item()} against last iteration's error {error.item()}."
-                        f"(We assume divergence if the new error > 1.2 * previous error, and assume stagnation if they are equal.)"
-                    )
+                    if logger.isEnabledFor(logging.DEBUG):
+                        logger.debug(
+                            f"Coupled inverse Newton is stagnating or diverging based on comparing current error {new_error.item()} against last iteration's error {error.item()}."
+                            f"(We assume divergence if the new error > 1.2 * previous error, and assume stagnation if they are equal.)"
+                        )
                     termination_flag = NewtonConvergenceFlag.EARLY_STOP
                     break
                 error = new_error
 
                 t_iter_end = time.perf_counter()
-                logger.debug(
-                    f"Iteration dur (s): {t_iter_end - t_iter_begin}, Error (|M-I|) at iteration {iteration}: {error.item()}"
-                )
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(
+                        f"Iteration dur (s): {t_iter_end - t_iter_begin}, Error (|M-I|) at iteration {iteration}: {error.item()}"
+                    )
             else:
                 # determine convergence flag based on error and tolerance because the main while loop exited with False condition.
                 termination_flag = (
@@ -618,11 +633,15 @@ def matrix_inverse_root(
                 X = torch.linalg.matrix_power(X, q)
                 n_matmul += math.ceil(math.log2(q))
 
-            logger.debug(f"Upper bound on maximum eigenvalue: {lambda_max_approx}")
-            logger.debug(f"Number of matmuls: {n_matmul}")
-            logger.debug(f"Number of iterations: {iteration}")
-            logger.debug(f"Error before powering: {true_error}")
-            logger.debug(f"Termination Flag: {termination_flag}")
+            # `lambda_max_approx` and `true_error` are 0-d GPU tensors;
+            # interpolating them in an f-string forces a host-device sync via
+            # `Tensor.__format__`. Guard the whole block behind a level check.
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(f"Upper bound on maximum eigenvalue: {lambda_max_approx}")
+                logger.debug(f"Number of matmuls: {n_matmul}")
+                logger.debug(f"Number of iterations: {iteration}")
+                logger.debug(f"Error before powering: {true_error}")
+                logger.debug(f"Termination Flag: {termination_flag}")
 
             # If we have inf/nan in our answer also raise an arithmetic exception.
             # Usually, this is due to the powering to q > 1 which can blow up entries.
@@ -965,7 +984,7 @@ def matrix_orthogonalization(
 
         """
         # Normalize the matrix A in order to ensure spectral norm <= 1.
-        X = A / max(torch.linalg.matrix_norm(A), 1e-8)
+        X = A / torch.clamp(torch.linalg.matrix_norm(A), min=1e-8)
 
         a, b, c = coefficients
 

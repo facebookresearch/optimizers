@@ -135,6 +135,7 @@ def _partition_params(
             for cur_dict in original_params:
                 cur_fsdp_params, cur_hsdp_params, cur_other_params = (
                     partition_param_list(
+                        # pyrefly: ignore [bad-index]
                         original_params=cur_dict[
                             "params"  # type: ignore
                         ]
@@ -147,6 +148,7 @@ def _partition_params(
 
         # Case 3: The original params is a Iterable[tuple[str, torch.Tensor]]
         case tuple():
+            # pyrefly: ignore [no-matching-overload]
             original_params_dict: dict[str, torch.Tensor] = dict(
                 original_params  # type: ignore
             )

@@ -1,6 +1,11 @@
-#!/usr/bin/env python3
+"""
+Copyright (c) Meta Platforms, Inc. and affiliates.
+All rights reserved.
 
-"""Tests for validating iterate averaging (GPA and Schedule-Free) equivalence.
+This source code is licensed under the BSD-style license found in the
+LICENSE file in the root directory of this source tree.
+
+Tests for validating iterate averaging (GPA and Schedule-Free) equivalence.
 
 This module contains tests that validate the theoretical equivalence between Shampoo's
 iterate averaging implementations and:
@@ -27,6 +32,7 @@ import torch
 from distributed_shampoo.distributed_shampoo import DistributedShampoo
 from distributed_shampoo.shampoo_types import (
     AdamPreconditionerConfig,
+    ClassicMomentumConfig,
     GeneralizedPrimalAveragingConfig,
     IterateAveragingConfig,
     ScheduleFreeConfig,
@@ -222,6 +228,70 @@ class IterateAveragingTest(unittest.TestCase):
             ),
             grafting_config=None,
             iterate_averaging_config=iterate_averaging_config,
+        )
+
+        compare_two_optimizers_on_weight_and_loss(
+            control_optim_factory=control_optim_factory,
+            experimental_optim_factory=experimental_optim_factory,
+            model_linear_layers_dims=(10, 10),
+            device=device,
+        )
+
+    @staticmethod
+    def _shampoo_with_classic_momentum_factory(
+        iterate_averaging_config: ClassicMomentumConfig,
+        lr: float = 0.01,
+        weight_decay: float = 0.0,
+    ) -> partial[torch.optim.Optimizer]:
+        """Create a Shampoo optimizer factory with ClassicMomentumConfig and SGD preconditioner."""
+        return partial(
+            IterateAveragingTest._optim_factory,
+            optim_cls=DistributedShampoo,
+            lr=lr,
+            weight_decay=weight_decay,
+            betas=(0.0, 1.0),
+            epsilon=1e-10,
+            max_preconditioner_dim=10,
+            precondition_frequency=1,
+            start_preconditioning_step=-1,
+            weight_decay_type=WeightDecayType.L2,
+            preconditioner_config=SGDPreconditionerConfig(),  # type: ignore[abstract]
+            grafting_config=None,
+            iterate_averaging_config=iterate_averaging_config,
+        )
+
+    @parametrize("device", available_devices)
+    @parametrize("use_nesterov", [False, True])
+    def test_classic_momentum_vs_sgd_momentum(
+        self,
+        device: torch.device,
+        use_nesterov: bool,
+    ) -> None:
+        """Test that Shampoo with ClassicMomentumConfig produces equivalent results to SGD with momentum.
+
+        Uses dampening=0 so that the first-step behavior matches PyTorch SGD exactly
+        (both initialize the momentum buffer to the raw gradient when dampening=0).
+        """
+        lr = 0.01
+        momentum = 0.9
+
+        control_optim_factory = partial(
+            IterateAveragingTest._optim_factory,
+            optim_cls=SGD,
+            lr=lr,
+            weight_decay=0.0,
+            momentum=momentum,
+            dampening=0.0,
+            nesterov=use_nesterov,
+        )
+
+        experimental_optim_factory = self._shampoo_with_classic_momentum_factory(
+            iterate_averaging_config=ClassicMomentumConfig(
+                momentum=momentum,
+                dampening=0.0,
+                use_nesterov=use_nesterov,
+            ),
+            lr=lr,
         )
 
         compare_two_optimizers_on_weight_and_loss(

@@ -45,20 +45,6 @@ Where:
 - `β₁` and `β₂` are the inner optimizer (AdamW)'s hyperparameters
 - `g^{(t)}` is the gradient coming from the inner optimizer
 
-## Requirements
-
-- PyTorch >= 2.0
-- Python >= 3.10
-- CUDA 11.x or 12.x (for GPU training)
-
-## Installation
-
-The GPAAdamW optimizer is available in the `gpa` package.
-
-```python
-from gpa.gpa_adamw import GPAAdamW
-```
-
 ## Quick Start
 
 ### Basic Usage
@@ -132,7 +118,8 @@ torch.save({
 | `beta1` | EMA coefficient for gradient (like Adam). Must be in [0, 1) | 0.9 |
 | `beta2` | EMA coefficient for squared gradient (like Adam). Must be in [0, 1) | 0.999 |
 | `eps` | Numerical stability term. Must be >= 0 | 1e-8 |
-| `weight_decay` | L2 regularization applied to y-sequence. Must be >= 0 | 0.0 |
+| `weight_decay` | Weight decay coefficient applied as multiplicative shrinkage. Applied to z-sequence by default, or y-sequence if `use_wd_on_y=True`. Must be >= 0 | 0.0 |
+| `use_wd_on_y` | If True, apply weight decay to y-sequence instead of z-sequence | False |
 | `weight_pow_coeff` | Polynomial weighting power, r in the paper (Schedule-Free mode only). Must be >= 0 | 0.0 |
 | `weight_lr_power` | Learning rate weighting power during warmup (Schedule-Free mode only). Must be >= 0 | 2.0 |
 
@@ -247,10 +234,11 @@ optimizer = GPAAdamW(
    | 16                     | 0.9934                  |
    | 32                     | 0.9967                  |
    | 64                     | 0.9984                  |
-   | 128                    | 0.9972                  |
+   | 128                    | 0.9992                  |
 
 4. **Weight Decay:**
-   - Applied to the y-sequence (training sequence)
+   - By default, applied as multiplicative shrinkage on the z-sequence (z-buffer)
+   - Set `use_wd_on_y=True` to apply to the y-sequence (training params) instead
    - Standard values (0.01-0.1) work well
    - Reduce if training becomes unstable
 
@@ -264,60 +252,7 @@ optimizer = GPAAdamW(
 
 GPAAdamW works seamlessly with PyTorch's distributed training APIs including DDP and FSDP. No special configuration is required—simply wrap your model with DDP or FSDP and create the optimizer as usual.
 
-## Checkpointing
-
-### Saving Checkpoints
-
-Save checkpoints in eval mode (optional if y and x sequences are similar):
-
-```python
-
-# Switch to eval mode before saving (optional if y and x sequences are similar)
-model.eval()
-optimizer.eval()
-
-checkpoint = {
-    'epoch': epoch,
-    'model_state_dict': model.state_dict(),
-    'optimizer_state_dict': optimizer.state_dict(),
-}
-torch.save(checkpoint, 'checkpoint.pt')
-```
-
-### Loading Checkpoints
-
-```python
-
-# Create model and optimizer
-model = create_model()
-optimizer = GPAAdamW(model.parameters(), lr=0.001)
-
-# Load checkpoint
-checkpoint = torch.load('checkpoint.pt')
-model.load_state_dict(checkpoint['model_state_dict'])
-optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-start_epoch = checkpoint['epoch']
-
-# Resume training
-model.train()
-optimizer.train()
-
-# ... continue training
-```
-
 ## Running Tests
-
-The test suite is organized into unit tests (`tests/`) and GPU tests (`gpu_tests/`).
-
-### Test Organization
-
-| Test File | Description | # Tests |
-|-----------|-------------|---------|
-| `tests/gpa_adamw_test.py` | Core GPAAdamW unit tests (initialization, step/mode, avg_coeff, state_dict) | 17 |
-| `tests/gpa_equivalence_test.py` | Base optimizer equivalence tests | 1 |
-| `gpu_tests/gpa_adamw_numerics_test.py` | GPU convergence and numerical tests (CPU + CUDA parameterized) | 12 |
-
-### Run Tests
 
 ```bash
 # Core GPAAdamW unit tests
@@ -332,55 +267,6 @@ python -m unittest gpa.gpu_tests.gpa_adamw_numerics_test -v
 # Run all tests in the tests/ directory
 python -m unittest discover -s gpa.tests -v
 ```
-
-## Common Issues and Troubleshooting
-
-### RuntimeError: Optimizer was not in train mode
-
-**Cause:** Calling `optimizer.step()` without first calling `optimizer.train()`.
-
-**Solution:** Always call `optimizer.train()` before the training loop.
-
-```python
-
-optimizer.train()  # Add this before training
-
-for batch in train_loader:
-    optimizer.zero_grad()
-    # ...
-    optimizer.step()
-```
-
-### Incorrect evaluation results
-
-**Cause:** Evaluating the model without switching to eval mode.
-
-**Solution:** Call `optimizer.eval()` before evaluation (optional if y and x sequences are similar).
-
-```python
-
-model.eval()
-optimizer.eval()  # Add this before evaluation (optional if y ≈ x)
-
-with torch.no_grad():
-    for batch in val_loader:
-        output = model(batch)
-        # ...
-```
-
-### Checkpoint incompatibility
-
-**Cause:** Checkpoint saved in train mode contains y-sequence instead of x-sequence.
-
-**Solution:** Save checkpoints after calling `optimizer.eval()` (optional if y and x sequences are similar).
-
-### Training instability
-
-**Possible solutions:**
-1. Reduce learning rate
-2. Add warmup
-3. Reduce `train_interp_coeff` (e.g., from 0.9 to 0.8)
-4. Increase `beta2` (e.g., from 0.999 to 0.9999)
 
 ## Advanced Options
 

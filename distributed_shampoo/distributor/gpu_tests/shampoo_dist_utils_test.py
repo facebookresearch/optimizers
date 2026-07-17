@@ -7,8 +7,6 @@ LICENSE file in the root directory of this source tree.
 
 """
 
-#!/usr/bin/env python3
-
 from functools import partial
 from operator import attrgetter
 from unittest import mock
