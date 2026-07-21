@@ -112,7 +112,7 @@ def main(cfg: DictConfig) -> None:
         cfg.local_batch_size if parallelism.requires_distributed else cfg.batch_size
     )
     data_loader, sampler = get_data_loader_and_sampler(
-        cfg.data_path, world_size, rank, batch_size
+        cfg.data_path, world_size, rank, local_rank, batch_size
     )
 
     train_model(

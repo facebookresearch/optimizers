@@ -135,7 +135,11 @@ def instantiate_optimizer(
 
 
 def get_data_loader_and_sampler(
-    data_path: Path | str, world_size: int, rank: int, batch_size: int
+    data_path: Path | str,
+    world_size: int,
+    rank: int,
+    local_rank: int,
+    batch_size: int,
 ) -> tuple[
     torch.utils.data.DataLoader,
     torch.utils.data.distributed.DistributedSampler[torch.utils.data.Dataset],
@@ -147,19 +151,33 @@ def get_data_loader_and_sampler(
         ]
     )
 
-    data_path = Path(data_path) / str(rank)
+    data_path = Path(data_path)
 
-    with importlib.resources.path(
-        # pyrefly: ignore [bad-argument-type]
-        __package__,
-        CIFAR_10_DATASET_FILENAME,
-    ) as resource_path:
-        if resource_path.exists():
-            data_path.mkdir(parents=True, exist_ok=True)
-            shutil.copy(resource_path, data_path)
+    # Fetch the dataset once per node (local rank 0) into that node's data
+    # directory, then barrier so every rank loads from disk with
+    # download=False. Gating on local_rank (not the global rank) keeps this
+    # correct for multi-node: each node's leader populates its own local disk,
+    # so ranks on nodes other than global-rank-0's node still find the data.
+    # Downloading concurrently on every rank makes the CIFAR-10 host throttle
+    # the parallel pulls, so the ranks desync (one still downloading while
+    # another enters the training loop) and the gradient all-reduce in
+    # backward() times out.
+    if local_rank == 0:
+        with importlib.resources.path(
+            # pyrefly: ignore [bad-argument-type]
+            __package__,
+            CIFAR_10_DATASET_FILENAME,
+        ) as resource_path:
+            if resource_path.exists():
+                data_path.mkdir(parents=True, exist_ok=True)
+                shutil.copy(resource_path, data_path)
+        datasets.CIFAR10(data_path, train=True, download=True, transform=transform)
+
+    if dist.is_initialized():
+        dist.barrier()
 
     dataset = datasets.CIFAR10(
-        data_path, train=True, download=True, transform=transform
+        data_path, train=True, download=False, transform=transform
     )
     sampler: torch.utils.data.distributed.DistributedSampler[
         torch.utils.data.Dataset
