@@ -15,9 +15,6 @@ from typing import cast, overload
 
 import torch
 from distributed_shampoo.distributed_shampoo import DistributedShampoo
-from distributed_shampoo.distributor._shampoo_fully_shard_lossless_distributor import (
-    FullyShardLosslessDistributor,
-)
 from distributed_shampoo.distributor.gpu_tests.distributor_test_utils import (
     DistributorOnEmptyParamTest,
     PARAM_GROUP_TEST_DEAD_DIMS,
@@ -25,6 +22,9 @@ from distributed_shampoo.distributor.gpu_tests.distributor_test_utils import (
     shampoo_optim_factory,
 )
 from distributed_shampoo.distributor.shampoo_block_info import BlockInfo
+from distributed_shampoo.distributor.shampoo_fully_shard_lossless_distributor import (
+    FullyShardLosslessDistributor,
+)
 from distributed_shampoo.shampoo_types import (
     DefaultSingleDeviceDistributedConfig,
     FSDPParamAssignmentStrategy,
@@ -293,10 +293,15 @@ class ShampooFullyShardLosslessDistributorTest(DTensorTestBase):
         ]
 
         self.assertEqual(
-            non_block_keys,
-            ["step", "train_mode", "lr_sum"],
+            set(non_block_keys),
+            {"step", "train_mode", "lr_sum"},
             msg=f"find unexpected non-block key in {non_block_keys=}.",
         )
+        # Per-param coverage: EVERY param must carry all three scalars (the set
+        # check above alone would still pass if a single param dropped one).
+        for inner in osd_state.values():
+            for scalar_key in ("step", "train_mode", "lr_sum"):
+                self.assertIn(scalar_key, inner)
         self.assertEqual(block_keys, filtered_flatten_keys)
 
 

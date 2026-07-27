@@ -67,8 +67,14 @@ TEST_MODEL_LAYER_DIMS: tuple[tuple[int, ...], ...] = (
     (PRECONDITIONER_DIM, 1),
 )
 
-# TODO (irisz): Add dead layer dims once lossless distributor supports it.
-DEAD_MODEL_LAYER_DIMS: tuple[tuple[int, ...], ...] = ((),)
+# A dead layer's parameters are registered on the module (so they enter the
+# optimizer param group with requires_grad=True) but are never used in forward,
+# so they receive no gradient. This exercises the grad-selector masking path
+# through a checkpoint resume, which regresses the lossless distributors.
+DEAD_MODEL_LAYER_DIMS: tuple[tuple[int, ...], ...] = (
+    (),
+    (PRECONDITIONER_DIM, PRECONDITIONER_DIM),
+)
 
 
 @torch.no_grad()

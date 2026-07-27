@@ -38,6 +38,7 @@ from distributed_shampoo.shampoo_types import (
     EigenvalueCorrectedShampooPreconditionerConfig,
     GeneralizedPrimalAveragingConfig,
     IterateAveragingConfig,
+    LR_SUM,
     PreconditionerConfig,
     RootInvKLShampooPreconditionerConfig,
     RootInvShampooPreconditionerConfig,
@@ -46,6 +47,8 @@ from distributed_shampoo.shampoo_types import (
     SignDescentPreconditionerConfig,
     SingleDeviceDistributedConfig,
     SpectralDescentPreconditionerConfig,
+    STEP,
+    TRAIN_MODE,
     WeightDecayType,
 )
 from distributed_shampoo.utils.shampoo_utils import pack_upper_triangular
@@ -1425,10 +1428,10 @@ class DistributedShampooTrainEvalModeTest(unittest.TestCase):
     @parametrize(
         "save_in_eval,load_in_eval",
         (
-            (False, False),  # Save in train, load in train → stay in train.
-            (True, False),  # Save in eval, load in train → stay in train.
-            (False, True),  # Save in train, load in eval → stay in eval.
-            (True, True),  # Save in eval, load in eval → stay in eval.
+            (False, False),  # Save in train, load in train -> stay in train.
+            (True, False),  # Save in eval, load in train -> stay in train.
+            (False, True),  # Save in train, load in eval -> stay in eval.
+            (True, True),  # Save in eval, load in eval -> stay in eval.
         ),
     )
     def test_load_state_dict_preserves_mode(
@@ -1574,3 +1577,524 @@ class DistributedShampooNoneGradTest(unittest.TestCase):
         self.assertEqual(len(msgs), 1)
         self.assertIn(expected_msg, msgs[0])
         self.assertIn(ending_msg, msgs[0])
+
+
+class CheckpointPerParamScalarStateTest(unittest.TestCase):
+    """Per-param checkpointing of the shared per-group scalars step / lr_sum / train_mode.
+
+    The optimizer keeps ``step`` (and, with iterate averaging, ``lr_sum`` /
+    ``train_mode``) as a single tensor shared (aliased) across all params in a
+    group. These are checkpointed under EVERY param's state (the PyTorch per-param
+    convention) rather than only under the group's first param, so the on-disk
+    ``state_dict`` key set is param-keyed and invariant to how params are
+    partitioned into groups.
+
+    ``num_sub_groups > 1`` only applies to FSDP2 / HSDP2
+    (``FullyShardDistributedConfig`` / ``HybridShardDistributedConfig``), which
+    require a live ``device_mesh`` and cannot be constructed CPU-only.
+    ``split_param_groups`` turns one qualifying group into N sub-groups over the
+    same params, which is structurally identical to supplying N param groups over
+    those params. These CPU-only tests therefore use 1 vs 2 param groups over the
+    same params as a faithful proxy for ``num_sub_groups`` = 1 vs > 1.
+    """
+
+    def _make_model(self) -> nn.Sequential:
+        model = nn.Sequential(
+            nn.Linear(5, 10, bias=False),
+            nn.Linear(10, 4, bias=False),
+        )
+        # Zero the weights for deterministic state values.
+        with torch.no_grad():
+            for param in model.parameters():
+                param.zero_()
+        return model
+
+    def _make_optimizer(
+        self,
+        params: Any,
+        iterate_averaging_config: IterateAveragingConfig | None = None,
+    ) -> DistributedShampoo:
+        return DistributedShampoo(
+            params,
+            lr=0.01,
+            betas=(0.9, 1.0),
+            epsilon=1e-12,
+            weight_decay=0.0,
+            max_preconditioner_dim=5,
+            precondition_frequency=1,
+            start_preconditioning_step=-1,
+            iterate_averaging_config=iterate_averaging_config,
+            distributed_config=replace(
+                DefaultSingleDeviceDistributedConfig,
+                target_parameter_dimensionality=2,
+            ),
+            grafting_config=AdaGradPreconditionerConfig(epsilon=0.001),
+        )
+
+    @staticmethod
+    def _gpa_config() -> GeneralizedPrimalAveragingConfig:
+        return GeneralizedPrimalAveragingConfig(
+            eval_interp_coeff=0.5,
+            train_interp_coeff=0.9,
+        )
+
+    @staticmethod
+    def _param_ids_with_scalar(optimizer: DistributedShampoo, key: str) -> set[int]:
+        """Param indices whose serialized state contains the given scalar key."""
+        state = optimizer.state_dict()["state"]
+        return {param_id for param_id, sub in state.items() if key in sub}
+
+    def test_step_stored_under_every_param(self) -> None:
+        # Setup: multi-param model in a single param group.
+        model = self._make_model()
+        params = list(model.parameters())
+        self.assertEqual(len(params), 2)
+        optimizer = self._make_optimizer(params)
+
+        # Assert: step is checkpointed under EVERY param (not just the first).
+        self.assertEqual(self._param_ids_with_scalar(optimizer, STEP), {0, 1})
+
+        # Assert: all params alias one shared step tensor (no extra memory / hot-path cost).
+        self.assertIs(
+            optimizer.state[params[0]][STEP],
+            optimizer.state[params[1]][STEP],
+        )
+
+    def test_lr_sum_and_train_mode_stored_under_every_param(self) -> None:
+        # Setup: multi-param model with iterate averaging (adds lr_sum / train_mode).
+        model = self._make_model()
+        params = list(model.parameters())
+        optimizer = self._make_optimizer(
+            params, iterate_averaging_config=self._gpa_config()
+        )
+
+        # Assert: both scalars are checkpointed under EVERY param.
+        self.assertEqual(self._param_ids_with_scalar(optimizer, LR_SUM), {0, 1})
+        self.assertEqual(self._param_ids_with_scalar(optimizer, TRAIN_MODE), {0, 1})
+
+        # Assert: all params alias one shared tensor for each scalar.
+        self.assertIs(
+            optimizer.state[params[0]][LR_SUM],
+            optimizer.state[params[1]][LR_SUM],
+        )
+        self.assertIs(
+            optimizer.state[params[0]][TRAIN_MODE],
+            optimizer.state[params[1]][TRAIN_MODE],
+        )
+
+    def test_state_dict_key_set_invariant_to_param_group_structure(self) -> None:
+        gpa_config = self._gpa_config()
+
+        # num_sub_groups = 1 analog: both params in ONE group.
+        single_group = self._make_optimizer(
+            list(self._make_model().parameters()), gpa_config
+        )
+        # num_sub_groups = 2 analog: each param in its OWN group.
+        multi_params = list(self._make_model().parameters())
+        multi_group = self._make_optimizer(
+            [{"params": [multi_params[0]]}, {"params": [multi_params[1]]}],
+            gpa_config,
+        )
+
+        single_state = single_group.state_dict()["state"]
+        multi_state = multi_group.state_dict()["state"]
+
+        # Both layouts expose the same per-param key set (same param ids).
+        self.assertEqual(single_state.keys(), multi_state.keys())
+
+        # Each scalar is present under exactly the same (every) param in both layouts,
+        # so the checkpoint key set does not depend on the param-group structure.
+        for key in (STEP, LR_SUM, TRAIN_MODE):
+            single_ids = {pid for pid, sub in single_state.items() if key in sub}
+            multi_ids = {pid for pid, sub in multi_state.items() if key in sub}
+            self.assertEqual(
+                single_ids,
+                multi_ids,
+                msg=f"{key!r} key set differs between 1-group and 2-group layouts",
+            )
+            self.assertEqual(
+                multi_ids,
+                set(multi_state.keys()),
+                msg=f"{key!r} should be stored under every param",
+            )
+
+    def test_param_keyed_cross_regroup_resume_preserves_scalars(self) -> None:
+        """Emulates a distributed-checkpoint (param-keyed) resume across a change in
+        param-group structure (num_sub_groups 1 -> 2).
+
+        DCP matches optimizer state by param key, so every param must independently
+        carry step / lr_sum / train_mode for a differently-grouped optimizer to be
+        repopulated on resume. (Positional ``torch.optim.load_state_dict`` cannot
+        cross group counts, so the per-param scalars are merged by key here, mirroring
+        DCP resharding.)
+        """
+        gpa_config = self._gpa_config()
+
+        # Save side: num_sub_groups = 1 analog (both params in one group).
+        src_params = list(self._make_model().parameters())
+        src = self._make_optimizer(src_params, gpa_config)
+        # Set distinctive, non-default values on the shared scalar tensors.
+        src.state[src_params[0]][STEP].fill_(7)
+        src.state[src_params[0]][LR_SUM].fill_(0.5)
+        saved = src.state_dict()
+
+        # The param-keyed checkpoint carries the scalars under EVERY param -- this is
+        # what makes a differently-grouped resume possible.
+        for sub in saved["state"].values():
+            self.assertIn(STEP, sub)
+            self.assertIn(LR_SUM, sub)
+            self.assertIn(TRAIN_MODE, sub)
+
+        # Load side: num_sub_groups = 2 analog (each param its own group).
+        dst_params = list(self._make_model().parameters())
+        dst = self._make_optimizer(
+            [{"params": [dst_params[0]]}, {"params": [dst_params[1]]}],
+            gpa_config,
+        )
+        target = dst.state_dict()
+        # DCP-style param-keyed merge: copy each param's saved scalars into the
+        # (differently grouped) target checkpoint, then load with matching structure.
+        for param_id, sub in target["state"].items():
+            for key in (STEP, LR_SUM, TRAIN_MODE):
+                sub[key] = saved["state"][param_id][key]
+        dst.load_state_dict(target)
+
+        # Every param recovers the saved step / lr_sum values; train_mode is present
+        # under every param (its value follows the loader's mode by design).
+        loaded = dst.state_dict()["state"]
+        self.assertEqual(set(loaded.keys()), {0, 1})
+        for sub in loaded.values():
+            self.assertEqual(sub[STEP].item(), 7)
+            self.assertAlmostEqual(sub[LR_SUM].item(), 0.5, places=6)
+            self.assertIn(TRAIN_MODE, sub)
+
+    def test_shared_scalars_track_runtime_mutations(self) -> None:
+        """The aliased scalars are one tensor, so hot-path mutations (an optimizer
+        step, an eval/train toggle) are visible identically through EVERY param's
+        state -- the per-param checkpoint keys never diverge at runtime."""
+        model = self._make_model()
+        params = list(model.parameters())
+        optimizer = self._make_optimizer(params, self._gpa_config())
+
+        for param in params:
+            param.grad = torch.ones_like(param)
+        optimizer.step()
+
+        # step advanced to 1 under every param, and lr_sum reads identically everywhere.
+        self.assertTrue(all(optimizer.state[p][STEP].item() == 1 for p in params))
+        self.assertEqual(len({optimizer.state[p][LR_SUM].item() for p in params}), 1)
+
+        # train/eval toggles propagate through every param's shared train_mode.
+        optimizer.eval()
+        self.assertTrue(all(not optimizer.state[p][TRAIN_MODE].item() for p in params))
+        optimizer.train()
+        self.assertTrue(all(optimizer.state[p][TRAIN_MODE].item() for p in params))
+
+    def test_divergent_aliased_scalar_raises_on_load(self) -> None:
+        """A checkpoint storing DIVERGENT values for the same aliased per-group scalar
+        under two params in one group must fail loudly on the native torch.optim load
+        path (where the __setstate__ guard runs)."""
+        params = list(self._make_model().parameters())
+        optimizer = self._make_optimizer(params, self._gpa_config())
+        state_dict = optimizer.state_dict()
+        # Both params share one aliased lr_sum tensor; store differing values.
+        state_dict["state"][0][LR_SUM] = torch.tensor(0.5)
+        state_dict["state"][1][LR_SUM] = torch.tensor(0.9)
+        self.assertRaisesRegex(
+            ValueError,
+            "aliased across parameters sharing a group",
+            optimizer.load_state_dict,
+            state_dict,
+        )
+
+    def test_consistent_aliased_scalar_loads_without_error(self) -> None:
+        """Consistent duplicate values for an aliased scalar must load without error."""
+        params = list(self._make_model().parameters())
+        optimizer = self._make_optimizer(params, self._gpa_config())
+        state_dict = optimizer.state_dict()
+        # Same value under every param -> consistent, must not raise.
+        for sub in state_dict["state"].values():
+            sub[LR_SUM] = torch.tensor(0.5)
+        optimizer.load_state_dict(state_dict)
+        loaded = optimizer.state_dict()["state"]
+        for sub in loaded.values():
+            self.assertAlmostEqual(sub[LR_SUM].item(), 0.5, places=6)
+
+    def test_schedule_free_nonzero_lr_sum_survives_round_trip(self) -> None:
+        """ScheduleFree actually accumulates lr_sum (unlike GPA, which never updates it),
+        so a NON-ZERO lr_sum must survive a save -> load round trip under every param."""
+        sf_config = ScheduleFreeConfig(train_interp_coeff=0.9)
+        src_params = list(self._make_model().parameters())
+        src = self._make_optimizer(src_params, sf_config)
+        # Take steps so lr_sum accumulates to a non-zero value.
+        for _ in range(3):
+            for param in src_params:
+                param.grad = torch.ones_like(param)
+            src.step()
+        lr_sum_val = src.state[src_params[0]][LR_SUM].item()
+        self.assertGreater(lr_sum_val, 0.0)
+        saved = src.state_dict()
+
+        dst_params = list(self._make_model().parameters())
+        dst = self._make_optimizer(dst_params, sf_config)
+        dst.load_state_dict(saved)
+
+        loaded = dst.state_dict()["state"]
+        for sub in loaded.values():
+            self.assertAlmostEqual(sub[LR_SUM].item(), lr_sum_val, places=6)
+
+
+class MultiParamStepStateTest(unittest.TestCase):
+    """Verify that the STEP tensor is stored under every parameter's state
+    when a group contains multiple parameters."""
+
+    def setUp(self) -> None:
+        # Two linear layers (bias=False) -> two distinct parameters in one group.
+        self._model = nn.Sequential(
+            nn.Linear(5, 10, bias=False),
+            nn.Linear(10, 3, bias=False),
+        )
+        self._optimizer = DistributedShampoo(
+            self._model.parameters(),
+            lr=0.01,
+            betas=(0.9, 1.0),
+            epsilon=1e-12,
+            weight_decay=0.0,
+            max_preconditioner_dim=5,
+            precondition_frequency=1,
+            start_preconditioning_step=1,
+            distributed_config=DefaultSingleDeviceDistributedConfig,
+            grafting_config=None,
+        )
+
+    def test_step_tensor_present_in_all_params(self) -> None:
+        """Every parameter in the group must have a 'step' key in its state."""
+        for param in self._model.parameters():
+            self.assertIn(
+                "step",
+                self._optimizer.state[param],
+                msg="Expected 'step' key in every parameter's optimizer state",
+            )
+
+    def test_step_tensor_aliased_across_params(self) -> None:
+        """All parameters in the same group must share the exact same step tensor
+        (aliased, not copied) so that incrementing the counter is visible everywhere."""
+        params = list(self._model.parameters())
+        step_tensors = [self._optimizer.state[p]["step"] for p in params]
+
+        # All step tensors should point to the same underlying storage.
+        for i in range(1, len(step_tensors)):
+            self.assertEqual(
+                step_tensors[0].data_ptr(),
+                step_tensors[i].data_ptr(),
+                msg=f"Step tensor for param {i} is not aliased with param 0",
+            )
+
+    def test_step_increments_visible_to_all_params(self) -> None:
+        """After an optimizer step, the shared step counter should be visible
+        through every parameter's state."""
+        # Provide gradients and take a step.
+        for param in self._model.parameters():
+            tensor = cast(torch.Tensor, param)
+            tensor.grad = torch.rand_like(tensor)
+        self._optimizer.step()
+
+        params = list(self._model.parameters())
+        for param in params:
+            step_val = self._optimizer.state[param]["step"].item()
+            self.assertEqual(
+                step_val,
+                1,
+                msg="Step counter should be 1 after one optimizer step",
+            )
+
+    def test_step_in_state_dict_for_all_params(self) -> None:
+        """The state_dict() output must include 'step' for every parameter index."""
+        state_dict = self._optimizer.state_dict()
+        for param_idx in state_dict["state"]:
+            self.assertIn(
+                "step",
+                state_dict["state"][param_idx],
+                msg=f"'step' missing from state_dict for param index {param_idx}",
+            )
+
+
+class MultiParamScheduleFreeStateTest(unittest.TestCase):
+    """Verify that TRAIN_MODE and LR_SUM are stored under every parameter's
+    state when using ScheduleFreeConfig with multiple parameters."""
+
+    def setUp(self) -> None:
+        self._model = nn.Sequential(
+            nn.Linear(5, 10, bias=False),
+            nn.Linear(10, 3, bias=False),
+        )
+        self._optimizer = DistributedShampoo(
+            self._model.parameters(),
+            lr=0.01,
+            betas=(0.9, 1.0),
+            epsilon=1e-12,
+            weight_decay=0.0,
+            max_preconditioner_dim=5,
+            precondition_frequency=1,
+            start_preconditioning_step=1,
+            iterate_averaging_config=ScheduleFreeConfig(train_interp_coeff=0.9),
+            distributed_config=DefaultSingleDeviceDistributedConfig,
+            grafting_config=None,
+        )
+
+    def test_train_mode_present_in_all_params(self) -> None:
+        """Every parameter must have 'train_mode' in its optimizer state."""
+        for param in self._model.parameters():
+            self.assertIn(
+                "train_mode",
+                self._optimizer.state[param],
+                msg="Expected 'train_mode' in every parameter's optimizer state",
+            )
+
+    def test_lr_sum_present_in_all_params(self) -> None:
+        """Every parameter must have 'lr_sum' in its optimizer state."""
+        for param in self._model.parameters():
+            self.assertIn(
+                "lr_sum",
+                self._optimizer.state[param],
+                msg="Expected 'lr_sum' in every parameter's optimizer state",
+            )
+
+    def test_train_mode_aliased_across_params(self) -> None:
+        """All parameters must share the same train_mode tensor (aliased)."""
+        params = list(self._model.parameters())
+        train_mode_tensors = [self._optimizer.state[p]["train_mode"] for p in params]
+        for i in range(1, len(train_mode_tensors)):
+            self.assertEqual(
+                train_mode_tensors[0].data_ptr(),
+                train_mode_tensors[i].data_ptr(),
+                msg=f"train_mode tensor for param {i} is not aliased with param 0",
+            )
+
+    def test_lr_sum_aliased_across_params(self) -> None:
+        """All parameters must share the same lr_sum tensor (aliased)."""
+        params = list(self._model.parameters())
+        lr_sum_tensors = [self._optimizer.state[p]["lr_sum"] for p in params]
+        for i in range(1, len(lr_sum_tensors)):
+            self.assertEqual(
+                lr_sum_tensors[0].data_ptr(),
+                lr_sum_tensors[i].data_ptr(),
+                msg=f"lr_sum tensor for param {i} is not aliased with param 0",
+            )
+
+    def test_train_eval_mode_visible_to_all_params(self) -> None:
+        """Switching to eval mode should be reflected in every parameter's state."""
+        # Take a step first to populate state.
+        for param in self._model.parameters():
+            tensor = cast(torch.Tensor, param)
+            tensor.grad = torch.rand_like(tensor)
+        self._optimizer.step()
+
+        # Verify initial train mode.
+        for param in self._model.parameters():
+            self.assertTrue(
+                self._optimizer.state[param]["train_mode"].item(),
+                msg="Expected train_mode=True after training step",
+            )
+
+        # Switch to eval.
+        self._optimizer.eval()
+        for param in self._model.parameters():
+            self.assertFalse(
+                self._optimizer.state[param]["train_mode"].item(),
+                msg="Expected train_mode=False after eval()",
+            )
+
+        # Switch back to train.
+        self._optimizer.train()
+        for param in self._model.parameters():
+            self.assertTrue(
+                self._optimizer.state[param]["train_mode"].item(),
+                msg="Expected train_mode=True after train()",
+            )
+
+    def test_state_dict_contains_train_mode_and_lr_sum_for_all_params(self) -> None:
+        """state_dict() must include train_mode and lr_sum for every parameter."""
+        state_dict = self._optimizer.state_dict()
+        for param_idx in state_dict["state"]:
+            self.assertIn(
+                "train_mode",
+                state_dict["state"][param_idx],
+                msg=f"'train_mode' missing from state_dict for param {param_idx}",
+            )
+            self.assertIn(
+                "lr_sum",
+                state_dict["state"][param_idx],
+                msg=f"'lr_sum' missing from state_dict for param {param_idx}",
+            )
+
+
+class MultiParamGPAStateTest(unittest.TestCase):
+    """Verify that TRAIN_MODE and LR_SUM are stored under every parameter's
+    state when using GeneralizedPrimalAveragingConfig with multiple parameters."""
+
+    def setUp(self) -> None:
+        self._model = nn.Sequential(
+            nn.Linear(5, 10, bias=False),
+            nn.Linear(10, 3, bias=False),
+        )
+        self._optimizer = DistributedShampoo(
+            self._model.parameters(),
+            lr=0.01,
+            betas=(0.9, 1.0),
+            epsilon=1e-12,
+            weight_decay=0.0,
+            max_preconditioner_dim=5,
+            precondition_frequency=1,
+            start_preconditioning_step=1,
+            iterate_averaging_config=GeneralizedPrimalAveragingConfig(
+                eval_interp_coeff=0.5,
+                train_interp_coeff=0.9,
+            ),
+            distributed_config=DefaultSingleDeviceDistributedConfig,
+            grafting_config=None,
+        )
+
+    def test_train_mode_and_lr_sum_present_in_all_params(self) -> None:
+        """With GPA config, every parameter must have train_mode and lr_sum."""
+        for param in self._model.parameters():
+            state = self._optimizer.state[param]
+            self.assertIn("train_mode", state)
+            self.assertIn("lr_sum", state)
+
+    def test_shared_state_aliased_across_params_with_gpa(self) -> None:
+        """train_mode and lr_sum must be aliased (same tensor) across all params."""
+        params = list(self._model.parameters())
+        first_train_mode = self._optimizer.state[params[0]]["train_mode"]
+        first_lr_sum = self._optimizer.state[params[0]]["lr_sum"]
+
+        for param in params[1:]:
+            self.assertEqual(
+                first_train_mode.data_ptr(),
+                self._optimizer.state[param]["train_mode"].data_ptr(),
+                msg="train_mode tensors must be aliased across parameters",
+            )
+            self.assertEqual(
+                first_lr_sum.data_ptr(),
+                self._optimizer.state[param]["lr_sum"].data_ptr(),
+                msg="lr_sum tensors must be aliased across parameters",
+            )
+
+    def test_gpa_optimizer_step_updates_shared_state(self) -> None:
+        """After an optimizer step, the shared lr_sum is visible identically through
+        every parameter's state (the aliased tensor is mutated in place)."""
+        for param in self._model.parameters():
+            tensor = cast(torch.Tensor, param)
+            tensor.grad = torch.rand_like(tensor)
+        self._optimizer.step()
+
+        params = list(self._model.parameters())
+        lr_sum_val = self._optimizer.state[params[0]]["lr_sum"].item()
+
+        # All params observe the same lr_sum value because they alias one tensor.
+        for param in params[1:]:
+            self.assertEqual(
+                self._optimizer.state[param]["lr_sum"].item(),
+                lr_sum_val,
+                msg="lr_sum should be identical across all parameters",
+            )

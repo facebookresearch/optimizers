@@ -21,9 +21,11 @@ from typing import Any, TypeGuard, TypeVar
 import torch
 from distributed_shampoo.shampoo_types import (
     DISTRIBUTED_CONFIG,
+    FSDPParamAssignmentStrategy,
     FullyShardDistributedConfig,
     HybridShardDistributedConfig,
     LoadBalancingConfig,
+    OWNER_RANKS,
     PARAMS,
 )
 from distributed_shampoo.utils.load_balancing_utils import DefaultCostModel
@@ -1301,6 +1303,22 @@ def split_param_groups(
     Within a qualifying group, params are distributed across sub-groups via
     greedy bin-packing on numel to balance element count.
 
+    For the ``ROUND_ROBIN`` assignment strategy, a per-parameter owner-rank map is
+    computed here via greedy LPT bin-packing on per-param cost and attached to each
+    resulting group under the ``OWNER_RANKS`` key:
+
+    * Non-split path (``num_sub_groups == 1``): a single GLOBAL map over the full
+      parameter set, so per-owner-rank byte load is balanced across the whole model.
+    * Split path (``num_sub_groups > 1``): a PER-BUCKET map (Option C, see
+      ``_compute_per_bucket_owner_ranks``) that assigns owners within each sub-group
+      while carrying accumulated per-rank load across buckets. This keeps global byte
+      balance AND gives every shard rank coverage within each sub-group, avoiding the
+      residue-class collapse that slicing one global map per bucket would cause at
+      ``num_sub_groups > 1`` (which leaves most shard ranks empty per sub-group).
+
+    A map is always produced (even at ``num_sub_groups == 1``) so the single
+    distributor still gets one.
+
     Currently scoped to ``FullyShardDistributedConfig`` (and its subclass
     ``HybridShardDistributedConfig``); other distributor types pass through
     unchanged.
@@ -1310,8 +1328,10 @@ def split_param_groups(
 
     Returns:
         new_param_groups (list[dict[str, Any]]): New param groups list. Groups
-            that don't opt into splitting pass through; qualifying groups are
-            replaced by N sub-groups with the params evenly distributed.
+            that don't opt into splitting pass through (with an ``OWNER_RANKS``
+            map attached for ROUND_ROBIN); qualifying groups are replaced by N
+            sub-groups with the params evenly distributed and each carrying its
+            own per-bucket owner map (Option C: per-bucket LPT with carried load).
 
     TODO(irisz): Support automatic determination of optimal num_sub_groups
     based on param count, compute cost, and communicator memory overhead.
@@ -1319,11 +1339,45 @@ def split_param_groups(
     new_param_groups: list[dict[str, Any]] = []
     for group in param_groups:
         distributed_config = group[DISTRIBUTED_CONFIG]
+        # ROUND_ROBIN is load-balanced via greedy LPT. The non-split branch below
+        # attaches a single GLOBAL (all-params) owner map; the split branch attaches
+        # a PER-BUCKET map with carried load (Option C). Both balance per-owner-rank
+        # byte load across the whole model. (Positional ``i % shard`` is just this
+        # LPT with a uniform cost model; the default AlignedMemoryCostModel makes it
+        # size-balanced.) None for REPLICATE / non-FSDP configs.
+        is_round_robin: bool = (
+            isinstance(distributed_config, FullyShardDistributedConfig)
+            and distributed_config.param_assignment_strategy
+            == FSDPParamAssignmentStrategy.ROUND_ROBIN
+        )
         if not _should_split(distributed_config):
-            new_param_groups.append(group)
+            # No sub-group split: attach the global owner map for ROUND_ROBIN so
+            # the single distributor consumes it; otherwise pass through unchanged.
+            if is_round_robin:
+                new_param_groups.append(
+                    {
+                        **group,
+                        OWNER_RANKS: _compute_global_owner_ranks(
+                            group[PARAMS], distributed_config
+                        ),
+                    }
+                )
+            else:
+                new_param_groups.append(group)
             continue
+        # Validate BEFORE computing the owner map so a bad num_sub_groups raises
+        # cheaply (and without needing a process group for the world size).
         _validate_num_sub_groups(distributed_config, len(group[PARAMS]))
-        sub_groups = _create_sub_groups(group, distributed_config.num_sub_groups)
+        # Option C: assign owners PER BUCKET with per-rank load carried across
+        # buckets (inside _create_sub_groups), instead of slicing one global owner
+        # map. Global-map-then-slice collapsed each sub-group's owners onto a
+        # residue class mod num_sub_groups (leaving shard ranks empty per sub-group
+        # -> the "Some workers have no parameters" path); per-bucket-with-carry
+        # keeps global per-rank balance AND covers all shard ranks in every
+        # sub-group.
+        sub_groups = _create_sub_groups(
+            group, distributed_config.num_sub_groups, is_round_robin=is_round_robin
+        )
         new_param_groups.extend(sub_groups)
         logger.info(
             "Split param group (%d params) into %d sub-groups (numel per group: %s).",
@@ -1332,6 +1386,36 @@ def split_param_groups(
             [sum(p.numel() for p in g[PARAMS]) for g in sub_groups],
         )
     return new_param_groups
+
+
+def _compute_global_owner_ranks(
+    params: Sequence[Tensor],
+    distributed_config: FullyShardDistributedConfig,
+) -> list[int]:
+    """Compute a per-parameter owner-rank map balanced GLOBALLY across all params.
+
+    Uses the DDP distributor's LPT primitive (``distribute_buffer_sizes``) over the
+    FULL parameter set, greedily assigning each param to the currently least-loaded
+    owner rank by cost (aligned bytes by default). Returns a list aligned to
+    ``params``: entry ``i`` is the owner rank of param ``i``.
+
+    The owner space is the shard dimension: ``device_mesh.size(1)`` for HSDP,
+    else the world size for FSDP. ``distribute_buffer_sizes`` is deterministic, so
+    the map is identical on every rank and stable across checkpoints for a fixed
+    topology (shard size) and cost config -- changing the shard size or the
+    ``load_balancing_config`` cost model recomputes a different ownership map.
+    """
+    shard_size = (
+        distributed_config.device_mesh.size(1)
+        if isinstance(distributed_config, HybridShardDistributedConfig)
+        else dist.get_world_size()
+    )
+    buffer_size_ranks = distribute_buffer_sizes(
+        blocked_params=tuple(params),
+        group_size=shard_size,
+        load_balancing_config=distributed_config.load_balancing_config,
+    )
+    return [rank for _, rank in buffer_size_ranks]
 
 
 def _should_split(
@@ -1347,11 +1431,18 @@ def _should_split(
 def _validate_num_sub_groups(
     distributed_config: FullyShardDistributedConfig, num_params: int
 ) -> None:
-    """Raise ValueError if num_sub_groups can't be satisfied for this group's params.
+    """Raise ValueError if num_sub_groups is too large for this group's params.
 
-    Each sub-group needs at least ``shard_size`` params so ROUND_ROBIN assigns
-    at least one param to each shard. Otherwise, shards with zero params deadlock
-    on all-to-all. For FSDP this collapses to ``shard_size=1`` (i.e., n <= num_params).
+    This is a SOFT efficiency guard, not a correctness requirement. It keeps each
+    sub-group large enough (>= ``shard_size`` params) that every shard rank tends
+    to own at least one param, avoiding degenerate tiny sub-groups that still spin
+    up a full per-sub-group distributor + NCCL communicator + CUDA stream for
+    little work. A shard rank that ends up owning zero params in a sub-group does
+    NOT deadlock: the lossless all_to_all pads zero-owner ranks with empty tensors
+    so they still participate (see ``shampoo_fully_shard_utils.py`` --
+    ``prepare_update_param_buffers`` pads the buffer offsets, and
+    ``redistribute_and_update_params`` sends a zero-size tensor for a missing
+    owner). For FSDP this collapses to ``shard_size=1`` (i.e., n <= num_params).
     """
     n = distributed_config.num_sub_groups
     shard_size = (
@@ -1363,13 +1454,19 @@ def _validate_num_sub_groups(
     if n > max_groups:
         raise ValueError(
             f"num_sub_groups={n} is too large for {num_params} params with "
-            f"shard_group_size={shard_size}. Each sub-group needs at least "
-            f"{shard_size} params for ROUND_ROBIN assignment. "
+            f"shard_group_size={shard_size}: each sub-group should hold at least "
+            f"{shard_size} params to avoid degenerate tiny sub-groups (an "
+            f"efficiency guard, not a correctness/deadlock requirement -- "
+            f"zero-owner shard ranks are handled by all_to_all padding). "
             f"Maximum num_sub_groups={max_groups}."
         )
 
 
-def _create_sub_groups(group: dict[str, Any], n: int) -> list[dict[str, Any]]:
+def _create_sub_groups(
+    group: dict[str, Any],
+    n: int,
+    is_round_robin: bool = False,
+) -> list[dict[str, Any]]:
     """Split ``group``'s params into N sub-groups via greedy bin-packing on
     numel; each carries a fresh copy of the distributed config so each gets
     its own distributor and NCCL communicator.
@@ -1377,17 +1474,36 @@ def _create_sub_groups(group: dict[str, Any], n: int) -> list[dict[str, Any]]:
     Empty bins are dropped (can occur when one param's numel dominates the
     total enough to leave a bin unfilled).
 
-    For HSDP, additionally validates that every non-empty bin holds at least
+    For HSDP, additionally applies the same SOFT efficiency guard as
+    ``_validate_num_sub_groups``: every non-empty bin should hold at least
     ``shard_size`` params. Greedy LPT can place a single dominant-numel param
     alone in a bin, leaving fewer than ``shard_size`` params there even though
-    ``_validate_num_sub_groups`` (which assumes contiguous chunking) accepted
-    the count. ROUND_ROBIN within such a bin would assign zero params to some
-    shard ranks, deadlocking on all-to-all.
+    ``_validate_num_sub_groups`` (which assumes contiguous chunking) accepted the
+    count. This is NOT a deadlock condition: a shard rank owning zero params in a
+    bin still participates in the all_to_all via padding (see
+    ``shampoo_fully_shard_utils.py``); the guard just rejects degenerate tiny
+    sub-groups whose per-sub-group communicator/stream overhead isn't worth it.
+
+    Option C: for ROUND_ROBIN (``is_round_robin``), owner ranks are assigned PER
+    BUCKET via ``_compute_per_bucket_owner_ranks`` -- LPT over each bucket's params
+    across all shard ranks, with per-rank load carried across buckets. This
+    replaces the global-map-then-slice, which collapsed each sub-group's owners
+    onto a residue class (leaving shard ranks empty per sub-group). Per-bucket
+    assignment aims to cover all shard ranks per sub-group (coverage is best-effort
+    -- a heavily skewed carried load can still leave a rank without an owner,
+    handled by all_to_all padding) while the carried load preserves global per-rank
+    balance (the largest param of every bucket is NOT re-stacked onto rank 0).
     """
     params = group[PARAMS]
     distributed_config = group[DISTRIBUTED_CONFIG]
-    base_keys = {k: v for k, v in group.items() if k != PARAMS}
-    buckets, _ = greedy_bin_pack(items=params, num_bins=n, cost_fn=lambda p: p.numel())
+    base_keys = {k: v for k, v in group.items() if k not in (PARAMS, OWNER_RANKS)}
+    # Bin-pack over indices (not the param objects). Using the index as the item
+    # reproduces the previous params-as-items packing exactly (the sort key's
+    # unique enumerate tiebreaker means the item is never compared).
+    indices = list(range(len(params)))
+    buckets, _ = greedy_bin_pack(
+        items=indices, num_bins=n, cost_fn=lambda i: params[i].numel()
+    )
     if isinstance(distributed_config, HybridShardDistributedConfig):
         shard_size = distributed_config.device_mesh.size(1)
         for i, bucket in enumerate(buckets):
@@ -1395,17 +1511,81 @@ def _create_sub_groups(group: dict[str, Any], n: int) -> list[dict[str, Any]]:
                 raise ValueError(
                     f"HSDP sub-group {i} got {len(bucket)} params after "
                     f"greedy bin-packing, fewer than shard_size={shard_size}. "
-                    f"This happens when one or more params dominate by numel; "
-                    f"ROUND_ROBIN would leave shard ranks with no params and "
-                    f"deadlock on all-to-all. Reduce num_sub_groups or "
-                    f"rebalance the param shapes."
+                    f"This happens when one or more params dominate by numel, "
+                    f"leaving a degenerate tiny sub-group. This is an efficiency "
+                    f"guard, not a correctness/deadlock requirement -- shard ranks "
+                    f"owning zero params still participate via all_to_all padding. "
+                    f"Reduce num_sub_groups or rebalance the param shapes."
                 )
-    return [
-        {
+    # Option C: per-bucket owner map (aligned to each bucket's param order).
+    per_bucket_owner_ranks: list[list[int]] | None = (
+        _compute_per_bucket_owner_ranks(buckets, params, distributed_config)
+        if is_round_robin
+        else None
+    )
+    sub_groups: list[dict[str, Any]] = []
+    for b, bucket in enumerate(buckets):
+        if not bucket:
+            continue
+        new_group: dict[str, Any] = {
             **base_keys,
-            PARAMS: bucket,
+            PARAMS: [params[i] for i in bucket],
             DISTRIBUTED_CONFIG: copy.copy(distributed_config),
         }
-        for bucket in buckets
-        if bucket
-    ]
+        if per_bucket_owner_ranks is not None:
+            new_group[OWNER_RANKS] = per_bucket_owner_ranks[b]
+        sub_groups.append(new_group)
+    return sub_groups
+
+
+def _compute_per_bucket_owner_ranks(
+    buckets: list[list[int]],
+    params: Sequence[Tensor],
+    distributed_config: FullyShardDistributedConfig,
+) -> list[list[int]]:
+    """Option C: per-bucket owner assignment with carried load.
+
+    For each bucket (processed in order), greedily assign its params to the
+    currently least-loaded shard rank via LPT -- but SEED the per-rank load with
+    the accumulated load from all prior buckets (the "carry"). This aims to spread
+    owners across shard ranks; note coverage is best-effort -- a heavily skewed
+    carried load from prior buckets can still leave a rank without an owner in a
+    given bucket (padding in the all_to_all handles zero-owner ranks). The carry
+    keeps the global per-rank byte load balanced (the largest param of every
+    bucket is not re-stacked onto rank 0). Mirrors ``distribute_buffer_sizes`` per
+    bucket (same cost model, sort order, and heap tiebreak) so at
+    ``num_sub_groups == 1`` it is identical to the global map.
+
+    Returns a list aligned to ``buckets``: entry ``b`` is a list of owner ranks
+    aligned to ``buckets[b]`` (owner of the p-th param of bucket b).
+    """
+    shard_size = (
+        distributed_config.device_mesh.size(1)
+        if isinstance(distributed_config, HybridShardDistributedConfig)
+        else dist.get_world_size()
+    )
+    cost_model = distributed_config.load_balancing_config.cost_model
+    carried_load: list[float] = [0.0] * shard_size
+    per_bucket_owner_ranks: list[list[int]] = []
+    for bucket in buckets:
+        owners: list[int] = [-1] * len(bucket)
+        # Min-heap seeded with the load carried from prior buckets so this bucket
+        # fills the globally-lightest ranks first (keeps the global map balanced).
+        heap: list[tuple[float, int]] = [
+            (carried_load[rank], rank) for rank in range(shard_size)
+        ]
+        heapq.heapify(heap)
+        # Assign this bucket's params in cost-descending order (LPT), matching
+        # distribute_buffer_sizes' ordering and tiebreaks.
+        costs = [
+            (float(cost_model.cost(params[i])), pos) for pos, i in enumerate(bucket)
+        ]
+        for cost, pos in sorted(costs, key=operator.itemgetter(0), reverse=True):
+            load, rank = heapq.heappop(heap)
+            heapq.heappush(heap, (load + cost, rank))
+            owners[pos] = rank
+        # Persist this bucket's resulting per-rank load as the carry for the next.
+        for load, rank in heap:
+            carried_load[rank] = load
+        per_bucket_owner_ranks.append(owners)
+    return per_bucket_owner_ranks

@@ -241,10 +241,15 @@ class ShampooHSDPDistributorTest(FSDPTest):
         ]
 
         self.assertEqual(
-            non_block_keys,
-            ["step", "train_mode", "lr_sum"],
+            set(non_block_keys),
+            {"step", "train_mode", "lr_sum"},
             msg=f"find unexpected non-block key in {non_block_keys=}.",
         )
+        # Per-param coverage: EVERY param must carry all three scalars (the set
+        # check above alone would still pass if a single param dropped one).
+        for inner in osd_state.values():
+            for scalar_key in ("step", "train_mode", "lr_sum"):
+                self.assertIn(scalar_key, inner)
         self.assertEqual(block_keys, filtered_flatten_keys)
 
     @skip_if_lt_x_gpu(4)

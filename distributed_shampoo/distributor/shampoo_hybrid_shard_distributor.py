@@ -24,7 +24,6 @@ from distributed_shampoo.distributor.shampoo_distributor import DistributorInter
 from distributed_shampoo.shampoo_types import (
     DISTRIBUTED_CONFIG,
     HybridShardDistributedConfig,
-    LoadBalancingConfig,
     PARAMS,
     ShampooRuntimeConfig,
 )
@@ -163,7 +162,7 @@ class HybridShardDistributor(DistributorInterface):
         buffer_size_ranks = distribute_buffer_sizes(
             blocked_params=blocked_params,
             group_size=self._dist_group_size,
-            load_balancing_config=LoadBalancingConfig(),
+            load_balancing_config=distributed_config.load_balancing_config,
         )
 
         # pyrefly: ignore [bad-override-mutable-attribute]

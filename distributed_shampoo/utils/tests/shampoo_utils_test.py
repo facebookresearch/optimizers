@@ -11,7 +11,7 @@ import math
 import re
 import unittest
 from operator import methodcaller
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import torch
 from distributed_shampoo.shampoo_types import (
@@ -20,13 +20,17 @@ from distributed_shampoo.shampoo_types import (
     FullyShardDistributedConfig,
     HybridShardDistributedConfig,
     LoadBalancingConfig,
+    OWNER_RANKS,
     PARAMS,
     SingleDeviceDistributedConfig,
 )
 from distributed_shampoo.utils.load_balancing_utils import (
     PolynomialComputationalCostModel,
 )
-from distributed_shampoo.utils.shampoo_fully_shard_utils import _compute_chunk_sizes
+from distributed_shampoo.utils.shampoo_fully_shard_utils import (
+    _compute_chunk_sizes,
+    GatherGradientsContext,
+)
 from distributed_shampoo.utils.shampoo_utils import (
     _device_key,
     _get_triu_indices,
@@ -42,10 +46,14 @@ from distributed_shampoo.utils.shampoo_utils import (
     split_param_groups,
     unpack_upper_triangular,
 )
+from torch import distributed as dist
+from torch.distributed.device_mesh import DeviceMesh, init_device_mesh
+from torch.distributed.tensor import DTensor, Shard
 from torch.testing._internal.common_utils import (
     instantiate_parametrized_tests,
     parametrize,
 )
+from torch.testing._internal.distributed.fake_pg import FakeStore
 
 # Hoisted as an annotated module constant so pyre can infer the type of the
 # argument passed to @unittest.skipUnless (it cannot infer from a bare call).
@@ -599,6 +607,20 @@ class TriuIndicesCacheTest(unittest.TestCase):
 
 @instantiate_parametrized_tests
 class SplitParamGroupsTest(unittest.TestCase):
+    def setUp(self) -> None:
+        # ROUND_ROBIN now computes a load-balanced global owner map in
+        # split_param_groups; for FSDP configs the shard-dim size is the world
+        # size. These CPU unit tests run without an initialized process group,
+        # so patch get_world_size. (HSDP configs read the size from device_mesh
+        # and are unaffected.) The value only affects owner assignment, not the
+        # bucket sizes these tests assert on.
+        patcher = patch(
+            "distributed_shampoo.utils.shampoo_utils.dist.get_world_size",
+            return_value=2,
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     @staticmethod
     def _make_group(
         num_params: int,
@@ -622,11 +644,134 @@ class SplitParamGroupsTest(unittest.TestCase):
         )
 
     def test_passthrough_when_num_sub_groups_is_1(self) -> None:
+        # No sub-group split, but ROUND_ROBIN still gets a load-balanced global
+        # owner map attached under OWNER_RANKS so the single distributor can
+        # consume it. The params are preserved (same list object).
         config = self._make_fsdp_config(num_sub_groups=1)
         group = self._make_group(num_params=4, distributed_config=config)
         result = split_param_groups([group])
         self.assertEqual(len(result), 1)
-        self.assertIs(result[0], group)
+        self.assertIs(result[0][PARAMS], group[PARAMS])
+        self.assertIn(OWNER_RANKS, result[0])
+        owner_ranks = result[0][OWNER_RANKS]
+        self.assertEqual(len(owner_ranks), 4)
+        # world size patched to 2 -> every owner is a valid shard rank.
+        self.assertTrue(all(0 <= r < 2 for r in owner_ranks))
+
+    def test_round_robin_owner_map_is_load_balanced(self) -> None:
+        """ROUND_ROBIN's owner map is LPT-balanced by bytes, not positional.
+
+        With large params whose indices collide under ``i % shard``, the
+        positional scheme stacks them on one rank; the load-balanced map spreads
+        them across ranks and lowers the per-owner byte maximum.
+        """
+        shard_size = 4
+        # Two large params at indices that collide mod shard_size (0 and 4), plus
+        # small params. Positional (i % shard) would put both large ones on rank 0.
+        numels = [1000, 10, 10, 10, 1000, 10, 10, 10]
+        params = [torch.zeros(n) for n in numels]
+        config = self._make_fsdp_config(num_sub_groups=1)
+        group: dict[str, object] = {PARAMS: params, DISTRIBUTED_CONFIG: config}
+        with patch(
+            "distributed_shampoo.utils.shampoo_utils.dist.get_world_size",
+            return_value=shard_size,
+        ):
+            owner_ranks = split_param_groups([group])[0][OWNER_RANKS]
+
+        self.assertEqual(len(owner_ranks), len(numels))
+        self.assertTrue(all(0 <= r < shard_size for r in owner_ranks))
+        # The two large params (indices 0 and 4) land on DISTINCT owner ranks.
+        self.assertNotEqual(owner_ranks[0], owner_ranks[4])
+
+        elem = params[0].element_size()
+
+        def per_owner_max(assignment: list[int]) -> float:
+            totals = [0.0] * shard_size
+            for i, r in enumerate(assignment):
+                totals[r] += numels[i] * elem
+            return max(totals)
+
+        positional = [i % shard_size for i in range(len(numels))]
+        # Load-balanced max per-owner bytes is strictly better than positional
+        # here (positional stacks both large params on rank 0).
+        self.assertLess(per_owner_max(owner_ranks), per_owner_max(positional))
+
+    def test_split_per_bucket_owner_coverage_and_balance(self) -> None:
+        """Split-path owner assignment (Option C): per-bucket coverage + balance.
+
+        ``_create_sub_groups`` assigns owners PER BUCKET (LPT across all shard
+        ranks, with per-rank load carried across buckets), so every sub-group must
+        cover ALL shard ranks -- no zero-owner ranks (the residue-class collapse a
+        single sliced global map produced at num_sub_groups>1) -- while the carry
+        keeps the GLOBAL per-owner byte load balanced. ``OWNER_RANKS`` must also
+        stay length-aligned to each sub-group's ``PARAMS`` even though
+        ``greedy_bin_pack`` (LPT) reorders indices within a bucket.
+        """
+        # get_world_size is patched to 2 in setUp -> shard_size 2. numels chosen so
+        # LPT reorders indices within buckets (large params sort first).
+        numels = [1, 100, 1, 100]
+        params = [torch.zeros(n) for n in numels]
+        shard_size = 2
+        config = self._make_fsdp_config(num_sub_groups=2)
+        group: dict[str, object] = {PARAMS: params, DISTRIBUTED_CONFIG: config}
+
+        result = split_param_groups([group])
+        self.assertEqual(len(result), 2)
+
+        load_per_rank = [0] * shard_size
+        for sub in result:
+            self.assertIn(OWNER_RANKS, sub)
+            sub_params = sub[PARAMS]
+            sub_owners = sub[OWNER_RANKS]
+            # Present + length-aligned to this sub-group's params.
+            self.assertEqual(len(sub_owners), len(sub_params))
+            # Coverage: every shard rank owns >= 1 param in THIS sub-group -- the
+            # property the global-slice approach violated by collapsing owners onto
+            # a residue class mod num_sub_groups.
+            self.assertEqual(
+                set(sub_owners),
+                set(range(shard_size)),
+                f"sub-group leaves shard ranks empty: OWNER_RANKS={sub_owners}",
+            )
+            for p, r in zip(sub_params, sub_owners, strict=True):
+                load_per_rank[r] += p.numel()
+        # Global balance: per-rank total load is even (LPT-with-carry across
+        # buckets keeps the whole-model owner load balanced, like a global map).
+        self.assertEqual(
+            max(load_per_rank),
+            min(load_per_rank),
+            f"global per-rank load imbalanced across sub-groups: {load_per_rank}",
+        )
+
+    def test_round_robin_zero_owner_rank_split_is_accepted(self) -> None:
+        """Regression test for the codex finding (split-acceptance half): a shard
+        rank owning zero params is NOT rejected as a deadlock.
+
+        Fewer params (2) than shard ranks (4) -> the global LPT owner map covers
+        only 2 ranks, so >= 2 shard ranks own zero params. FSDP has no per-bucket
+        >= shard_size guard, so split_param_groups must accept it without raising.
+        The REAL send/recv-size behavior for such a zero-owner rank (recv empty,
+        still sends -> participates via all_to_all padding, no hang) is exercised
+        against the real GatherGradientsContext in
+        ``GatherGradientsZeroOwnerRankTest`` below.
+        """
+        shard_size = 4
+        params = [torch.zeros(1000), torch.zeros(500)]
+        config = self._make_fsdp_config(num_sub_groups=1)
+        group: dict[str, object] = {PARAMS: params, DISTRIBUTED_CONFIG: config}
+        with patch(
+            "distributed_shampoo.utils.shampoo_utils.dist.get_world_size",
+            return_value=shard_size,
+        ):
+            # No raise; OWNER_RANKS attached and aligned to params.
+            result = split_param_groups([group])
+
+        self.assertEqual(len(result), 1)
+        owner_ranks = result[0][OWNER_RANKS]
+        self.assertEqual(len(owner_ranks), len(params))
+        self.assertTrue(all(0 <= r < shard_size for r in owner_ranks))
+        # At least one shard rank owns zero params -> the accepted scenario.
+        self.assertTrue([r for r in range(shard_size) if r not in set(owner_ranks)])
 
     def test_passthrough_for_non_fsdp_config(self) -> None:
         # SingleDeviceDistributedConfig has no num_sub_groups field; should pass through.
@@ -707,6 +852,80 @@ class SplitParamGroupsTest(unittest.TestCase):
         group: dict[str, object] = {PARAMS: params, DISTRIBUTED_CONFIG: config}
         with self.assertRaisesRegex(ValueError, "fewer than shard_size=3"):
             split_param_groups([group])
+
+
+class GatherGradientsZeroOwnerRankTest(unittest.TestCase):
+    """Regression test for the codex finding: a shard rank owning zero params is
+    NOT a deadlock. Drives the REAL ``GatherGradientsContext`` size computation
+    (the routing line ``owner_ranks[i] == peer_rank``) via a single-process fake
+    process group, so a revert to positional ``i % group_size`` routing would fail
+    this test -- rather than re-deriving the sizes in the test.
+    """
+
+    world_size: int = 4
+    # Owned by no param under the balanced map below -> the zero-owner rank.
+    zero_owner_rank: int = 3
+
+    def setUp(self) -> None:
+        super().setUp()
+        store = FakeStore()
+        dist.init_process_group(
+            backend="fake",
+            rank=self.zero_owner_rank,
+            world_size=self.world_size,
+            store=store,
+        )
+
+    def tearDown(self) -> None:
+        dist.destroy_process_group()
+        super().tearDown()
+
+    def _shard(self, mesh: DeviceMesh, global_numel: int) -> DTensor:
+        # Even dim-0 shard (global_numel divisible by world_size); from_local is
+        # collective-free (only metadata), so it is safe under the fake backend.
+        local = torch.zeros(global_numel // self.world_size)
+        return DTensor.from_local(local, device_mesh=mesh, placements=[Shard(0)])
+
+    def test_zero_owner_rank_sends_but_receives_nothing(self) -> None:
+        mesh = init_device_mesh("cpu", (self.world_size,))
+        # param0 (smaller) and param1 (larger): the balanced LPT map assigns the
+        # LARGER param to rank 0 and the smaller to rank 1 -> owner map [1, 0],
+        # which DIFFERS from positional i % world (== [0, 1]). Ranks 2 and 3 own
+        # nothing under either scheme.
+        params = (self._shard(mesh, 500), self._shard(mesh, 1000))
+        owner_ranks = [
+            r
+            for _, r in distribute_buffer_sizes(
+                params, self.world_size, LoadBalancingConfig()
+            )
+        ]
+        # Balanced map differs from positional and leaves rank 3 zero-owner.
+        self.assertEqual(owner_ranks, [1, 0])
+        self.assertNotIn(self.zero_owner_rank, set(owner_ranks))
+        assigned_params_mask = tuple(o == self.zero_owner_rank for o in owner_ranks)
+        self.assertFalse(any(assigned_params_mask))
+
+        ctx = GatherGradientsContext(
+            params=params,
+            assigned_params_mask=assigned_params_mask,
+            dist_group=mesh.get_group(),
+            owner_ranks=owner_ranks,
+        )
+        # Drive the REAL size-computation method (routes via owner_ranks).
+        send_sizes, recv_sizes = ctx._compute_send_recv_sizes()
+
+        # Zero-owner rank receives nothing (owns no params) ...
+        self.assertEqual(sum(recv_sizes), 0)
+        # ... but still SENDS its local shard of every param to that param's owner,
+        # so it participates in the all_to_all (padded) -> no hang/deadlock.
+        self.assertGreater(sum(send_sizes), 0)
+
+        # And the send sizes reflect the BALANCED owner map, not positional. Rank 3
+        # ships its shard of each param to that param's owner:
+        #   balanced owners [1, 0]:  peer0 gets param1's shard (1000/4=250),
+        #                            peer1 gets param0's shard (500/4=125).
+        # A positional revert (owners [0, 1]) would instead yield [125, 250, 0, 0].
+        self.assertEqual(send_sizes, [250, 125, 0, 0])
 
 
 class GreedyBinPackTest(unittest.TestCase):
