@@ -266,6 +266,14 @@ class AllToAllContext(ABC):
         params (tuple[DTensor, ...]): Tuple of DTensor parameters.
         assigned_params_mask (tuple[bool, ...]): Boolean mask indicating which params this rank owns.
         dist_group (torch.distributed.ProcessGroup): Process group for communication.
+        owner_ranks (list[int] | None): Per-param owner-rank map; entry ``i`` is the rank that owns
+            param ``i``. This is the single source of truth for ownership at every send/recv site.
+            The lossless distributors pass the load-balanced global map here (see OWNER_RANKS). When
+            ``None`` (default), it falls back to a positional ``[i % group_size for i in range(len(params))]``
+            map -- convenient for direct construction (e.g. unit tests) that supply a positional
+            ``assigned_params_mask``. Must be consistent with ``assigned_params_mask`` (i.e.
+            ``owner_ranks[i] == this_rank`` iff ``assigned_params_mask[i]``) and identical across all
+            ranks in the group.
     """
 
     @torch.no_grad()
@@ -274,6 +282,7 @@ class AllToAllContext(ABC):
         params: tuple[DTensor, ...],
         assigned_params_mask: tuple[bool, ...],
         dist_group: torch.distributed.ProcessGroup,
+        owner_ranks: list[int] | None = None,
     ) -> None:
         self._params: tuple[DTensor, ...] = params
         self._assigned_params_mask: tuple[bool, ...] = assigned_params_mask
@@ -288,6 +297,20 @@ class AllToAllContext(ABC):
             raise ValueError(
                 f"len(params) ({len(params)}) != "
                 f"len(assigned_params_mask) ({len(assigned_params_mask)})"
+            )
+
+        # Single source of truth for ownership across all send/recv sites. None ->
+        # positional (i % group_size) default for direct construction; the lossless
+        # distributors always pass the load-balanced global map explicitly.
+        self._owner_ranks: list[int] = (
+            list(owner_ranks)
+            if owner_ranks is not None
+            else [i % self._group_size for i in range(len(params))]
+        )
+        if len(self._owner_ranks) != len(params):
+            raise ValueError(
+                f"len(owner_ranks) ({len(self._owner_ranks)}) != "
+                f"len(params) ({len(params)})"
             )
 
         self._dtype: torch.dtype = params[0].to_local().dtype
@@ -371,6 +394,7 @@ class RedistributeParamsContext(AllToAllContext):
         params: tuple[DTensor, ...],
         assigned_params_mask: tuple[bool, ...],
         dist_group: torch.distributed.ProcessGroup,
+        owner_ranks: list[int] | None = None,
     ) -> None:
         # Forward-declare subclass-specific attributes for Pyre before
         # super().__init__() calls _precompute_subclass_metadata().
@@ -381,7 +405,7 @@ class RedistributeParamsContext(AllToAllContext):
         self._param_recv_info: list[tuple[int, int]] = []
         self._send_plan = _RedistributeSendPlan()
         self._recv_plan = _RedistributeRecvPlan()
-        super().__init__(params, assigned_params_mask, dist_group)
+        super().__init__(params, assigned_params_mask, dist_group, owner_ranks)
 
     def _compute_send_recv_sizes(self) -> tuple[list[int], list[int]]:
         """Owner-to-all: send owned params' chunks to each peer, recv each peer's chunks."""
@@ -400,7 +424,7 @@ class RedistributeParamsContext(AllToAllContext):
         recv_sizes: list[int] = []
         for peer_rank in range(group_size):
             peer_param_indices = [
-                i for i in range(len(self._params)) if i % group_size == peer_rank
+                i for i in range(len(self._params)) if self._owner_ranks[i] == peer_rank
             ]
             recv_size = sum(
                 self._param_chunk_sizes[param_idx][self._rank]
@@ -469,7 +493,7 @@ class RedistributeParamsContext(AllToAllContext):
         recv_offset = 0
         for peer_rank in range(group_size):
             peer_param_indices = [
-                i for i in range(len(self._params)) if i % group_size == peer_rank
+                i for i in range(len(self._params)) if self._owner_ranks[i] == peer_rank
             ]
             for param_idx in peer_param_indices:
                 chunk_size = self._param_chunk_sizes[param_idx][self._rank]
@@ -594,6 +618,7 @@ class GatherGradientsContext(AllToAllContext):
         params: tuple[DTensor, ...],
         assigned_params_mask: tuple[bool, ...],
         dist_group: torch.distributed.ProcessGroup,
+        owner_ranks: list[int] | None = None,
     ) -> None:
         # Forward-declare subclass-specific attributes for Pyre before
         # super().__init__() calls _precompute_subclass_metadata().
@@ -603,7 +628,7 @@ class GatherGradientsContext(AllToAllContext):
         self._full_grad_buffers: list[Tensor] = []
         self._send_plan = _GatherSendPlan()
         self._unpack_plan = _GatherUnpackPlan()
-        super().__init__(params, assigned_params_mask, dist_group)
+        super().__init__(params, assigned_params_mask, dist_group, owner_ranks)
 
     def _compute_send_recv_sizes(self) -> tuple[list[int], list[int]]:
         """All-to-owner: send this rank's chunks to each owner, recv all peers' chunks for owned params."""
@@ -614,7 +639,7 @@ class GatherGradientsContext(AllToAllContext):
         send_sizes: list[int] = []
         for peer_rank in range(group_size):
             peer_param_indices = [
-                i for i in range(len(self._params)) if i % group_size == peer_rank
+                i for i in range(len(self._params)) if self._owner_ranks[i] == peer_rank
             ]
             send_size = sum(
                 self._param_chunk_sizes[param_idx][self._rank]
@@ -706,7 +731,7 @@ class GatherGradientsContext(AllToAllContext):
         send_offset = 0
         for peer_rank in range(group_size):
             for param_idx in range(len(self._params)):
-                if param_idx % group_size != peer_rank:
+                if self._owner_ranks[param_idx] != peer_rank:
                     continue
                 chunk_size = self._param_chunk_sizes[param_idx][self._rank]
                 if chunk_size > 0:

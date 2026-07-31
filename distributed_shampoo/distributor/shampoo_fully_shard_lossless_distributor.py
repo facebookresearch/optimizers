@@ -19,6 +19,7 @@ from distributed_shampoo.shampoo_types import (
     DISTRIBUTED_CONFIG,
     FSDPParamAssignmentStrategy,
     FullyShardDistributedConfig,
+    OWNER_RANKS,
     PARAMS,
     ShampooRuntimeConfig,
 )
@@ -36,9 +37,6 @@ class FullyShardLosslessDistributor(Distributor):
 
     On top of FullyShardDistributor, this distributor handles the parameter assignment to exchange the gradients
     and parameter updates across the shards to achieve lossless numerical results compared to default Shampoo.
-
-    .. note::
-        FullyShardLosslessDistributor is experimental and subject to change.
 
     Args:
         param_group (dict[str, Any]): Parameter group containing parameters.
@@ -66,41 +64,62 @@ class FullyShardLosslessDistributor(Distributor):
         )[0]
         self._group_rank: int = dist.get_rank(group=self._dist_group)
 
+        # Per-param owner-rank map -- the single source of truth for the assignment
+        # mask AND for every send/recv site in the all_to_all contexts.
+        #   ROUND_ROBIN: load-balanced global map computed once over ALL params in
+        #                split_param_groups() (greedy LPT on per-param cost, aligned
+        #                bytes by default via load_balancing_config) and attached
+        #                under OWNER_RANKS. This replaces the old positional
+        #                ``i % group_size`` assignment, which is just this LPT with a
+        #                uniform cost model; there is no separate strategy.
+        #   REPLICATE:   unused (all ranks own everything); left as None.
+        num_params = len(param_group[PARAMS])
+        if self._param_assignment_strategy == FSDPParamAssignmentStrategy.ROUND_ROBIN:
+            owner_ranks = param_group.get(OWNER_RANKS)
+            assert owner_ranks is not None and len(owner_ranks) == num_params, (
+                "ROUND_ROBIN requires a precomputed OWNER_RANKS map aligned to "
+                "params (set by split_param_groups); "
+                f"got {None if owner_ranks is None else len(owner_ranks)} for "
+                f"{num_params} params."
+            )
+            self._owner_ranks: list[int] | None = list(owner_ranks)
+        else:  # REPLICATE
+            self._owner_ranks = None
+
         def should_assign_param_idx(i: int) -> bool:
             return (
-                i % self._group_size == self._group_rank
-                if self._param_assignment_strategy
-                == FSDPParamAssignmentStrategy.ROUND_ROBIN
+                self._owner_ranks[i] == self._group_rank
+                if self._owner_ranks is not None
                 else True
             )
 
         self._assigned_params_mask: tuple[bool, ...] = tuple(
-            should_assign_param_idx(idx) for idx in range(len(param_group[PARAMS]))
+            should_assign_param_idx(idx) for idx in range(num_params)
         )
 
-        # For ROUND_ROBIN strategy, create optimized redistribution context
-        # that precomputes all static information for efficient all_to_all
+        # For ROUND_ROBIN, create the optimized redistribution context that
+        # precomputes all static information for efficient all_to_all.
         self._redistribute_ctx: RedistributeParamsContext | None = (
             RedistributeParamsContext(
                 params=param_group[PARAMS],
                 assigned_params_mask=self._assigned_params_mask,
                 dist_group=self._dist_group,
+                owner_ranks=self._owner_ranks,
             )
-            if self._param_assignment_strategy
-            == FSDPParamAssignmentStrategy.ROUND_ROBIN
+            if self._owner_ranks is not None
             else None
         )
 
-        # For ROUND_ROBIN strategy, create gradient gathering context
-        # that uses all_to_all instead of per-param full_tensor() all-gathers
+        # For ROUND_ROBIN, create the gradient gathering context that uses
+        # all_to_all instead of per-param full_tensor() all-gathers.
         self._gather_grads_ctx: GatherGradientsContext | None = (
             GatherGradientsContext(
                 params=param_group[PARAMS],
                 assigned_params_mask=self._assigned_params_mask,
                 dist_group=self._dist_group,
+                owner_ranks=self._owner_ranks,
             )
-            if self._param_assignment_strategy
-            == FSDPParamAssignmentStrategy.ROUND_ROBIN
+            if self._owner_ranks is not None
             else None
         )
 
@@ -217,11 +236,10 @@ class FullyShardLosslessDistributor(Distributor):
         # For example, when the strategy is REPLICATE, we need to take each updated full parameter `full_param`,
         # redistribute it according to the device mesh to get the locally assigned slice, and copy the slice to the
         # corresponding local parameter `local_param` in the param group.
-        if self._param_assignment_strategy == FSDPParamAssignmentStrategy.ROUND_ROBIN:
+        if self._redistribute_ctx is not None:
             with shampoo_comm_profiler(
                 f"{self.__class__.__name__}::_redistribute_ctx.redistribute_and_update_params"
             ):
-                assert self._redistribute_ctx is not None
                 self._redistribute_ctx.redistribute_and_update_params(
                     self._assigned_full_params,
                 )
@@ -284,3 +302,9 @@ class FullyShardLosslessDistributor(Distributor):
         # in parent's __init__ but don't get updated by _merge_and_block_parameters()
         self._local_blocked_params = self._global_blocked_params
         self._local_masked_blocked_params = self._local_blocked_params
+        # Force merge_and_block_gradients() to rebuild _local_masked_blocked_params on
+        # the next step: its resync is gated on the grad selector changing, which does
+        # not happen when the same param is grad-less before and after a checkpoint
+        # resume, leaving _local_masked_blocked_params at the full (unmasked) length and
+        # mismatching the masked blocked_search_directions in update_params.
+        self._previous_global_grad_selector = None

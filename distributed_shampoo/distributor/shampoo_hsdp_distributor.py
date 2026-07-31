@@ -21,7 +21,6 @@ from distributed_shampoo.shampoo_types import (
     DISTRIBUTED_CONFIG,
     FSDPParameterMetadata,
     HSDPDistributedConfig,
-    LoadBalancingConfig,
     MAX_PRECONDITIONER_DIM,
     PARAMS,
     ShampooRuntimeConfig,
@@ -192,7 +191,7 @@ class HSDPDistributor(DistributorInterface):
         buffer_size_ranks = distribute_buffer_sizes(
             blocked_params=blocked_params,
             group_size=self._dist_group_size,
-            load_balancing_config=LoadBalancingConfig(),
+            load_balancing_config=distributed_config.load_balancing_config,
         )
 
         # pyrefly: ignore [bad-override-mutable-attribute]

@@ -17,12 +17,6 @@ from types import LambdaType
 from typing import Any, overload
 
 import torch
-from distributed_shampoo.distributor._shampoo_fully_shard_lossless_distributor import (
-    FullyShardLosslessDistributor,
-)
-from distributed_shampoo.distributor._shampoo_hybrid_shard_lossless_distributor import (
-    HybridShardLosslessDistributor,
-)
 from distributed_shampoo.distributor.shampoo_ddp_distributor import DDPDistributor
 from distributed_shampoo.distributor.shampoo_dist_utils import cuda_stream_context
 from distributed_shampoo.distributor.shampoo_distributor import (
@@ -33,9 +27,15 @@ from distributed_shampoo.distributor.shampoo_fsdp_distributor import FSDPDistrib
 from distributed_shampoo.distributor.shampoo_fully_shard_distributor import (
     FullyShardDistributor,
 )
+from distributed_shampoo.distributor.shampoo_fully_shard_lossless_distributor import (
+    FullyShardLosslessDistributor,
+)
 from distributed_shampoo.distributor.shampoo_hsdp_distributor import HSDPDistributor
 from distributed_shampoo.distributor.shampoo_hybrid_shard_distributor import (
     HybridShardDistributor,
+)
+from distributed_shampoo.distributor.shampoo_hybrid_shard_lossless_distributor import (
+    HybridShardLosslessDistributor,
 )
 from distributed_shampoo.preconditioner.adagrad_preconditioner_list import (
     AdagradPreconditionerList,
@@ -797,9 +797,22 @@ class DistributedShampoo(torch.optim.Optimizer):
             #       Instantiating on CPU avoids GPU synchronization.
             state_lists[STEP] = torch.tensor(0, dtype=torch.int64, device="cpu")
 
-            # In order to ensure that the step counter is checkpointed correctly, we store it
-            # as a tensor (which is replicated across all devices) under the first parameter's state.
-            self.state[group[PARAMS][0]][STEP] = state_lists[STEP]
+            # `step` is a single per-group counter (state_lists[STEP], on CPU to avoid GPU
+            # sync) that the hot path increments once per step. We alias that same tensor
+            # under EVERY parameter in the group so the checkpoint is param-keyed (a `step`
+            # per param) instead of parked on one param. That makes the saved state_dict key
+            # set invariant to how a group's params are redistributed -- num_sub_groups,
+            # world size, sharding -- which is the portability we need. Aliasing keeps it one
+            # tensor: no extra memory, one increment; only the checkpoint key placement
+            # changes. Every param in a group shares one counter with one value, so loading
+            # is well defined; __setstate__ asserts aliased values agree, so merging params
+            # with divergent histories into a group fails loudly rather than silently
+            # collapsing to one param's value. Caveats: that guard only runs on the native
+            # torch.optim.Optimizer.load_state_dict path (not the torchrec KeyedOptimizer /
+            # APS in-place-copy path), and the key-set invariance above is what enables
+            # DCP-resharded loads across differing param-group / num_sub_groups layouts.
+            for param in group[PARAMS]:
+                self.state[param][STEP] = state_lists[STEP]
 
     @torch.no_grad()
     def _instantiate_lr_tensors(self) -> None:
@@ -913,9 +926,15 @@ class DistributedShampoo(torch.optim.Optimizer):
         )
         state_lists[TRAIN_MODE] = torch.tensor(True, dtype=torch.bool, device="cpu")
 
-        # Stored under the first parameter's state so train mode and LR sum are checkpointed.
-        self.state[group[PARAMS][0]][TRAIN_MODE] = state_lists[TRAIN_MODE]
-        self.state[group[PARAMS][0]][LR_SUM] = state_lists[LR_SUM]
+        # Alias under every param for the same reason as `step` above: a param-keyed,
+        # redistribution-invariant checkpoint. These stay single per-group scalars at
+        # runtime via state_lists (same tensor aliased -- no extra memory or hot-path cost).
+        # Unlike `step`, `lr_sum` can legitimately differ between groups that ran with
+        # different learning rates, so the __setstate__ aliasing check is what stops a
+        # cross-group merge from silently picking one group's value.
+        for param in group[PARAMS]:
+            self.state[param][TRAIN_MODE] = state_lists[TRAIN_MODE]
+            self.state[param][LR_SUM] = state_lists[LR_SUM]
 
     def _allocate_block_buffer_list(
         self,
@@ -1798,6 +1817,55 @@ class DistributedShampoo(torch.optim.Optimizer):
         if "state" not in state:
             super().__setstate__(state)
             return
+
+        # `step`, `lr_sum`, and `train_mode` are single per-group scalars aliased under every
+        # parameter in the group (see _instantiate_steps / _instantiate_gpa_schedule_free).
+        # Because those params share one tensor, a checkpoint that stored *different* values
+        # for the same aliased scalar -- e.g. params merged from groups that ran with
+        # different learning rates -- would collapse to whichever param is copied last below.
+        # Detect that up front and fail loudly instead of silently corrupting resumed state.
+        # NOTE: this guard only runs on the native torch.optim.Optimizer.load_state_dict path,
+        # not the torchrec KeyedOptimizer / APS in-place-copy path.
+        aliased_seen: dict[int, tuple[str, Any]] = {}
+        for param_id, param_state_to_load in state["state"].items():
+            if param_id not in self.state:
+                continue
+            current_param_state = self.state[param_id]
+            for scalar_key in (STEP, LR_SUM, TRAIN_MODE):
+                if (
+                    scalar_key not in current_param_state
+                    or scalar_key not in param_state_to_load
+                ):
+                    continue
+                shared_id = id(current_param_state[scalar_key])
+                incoming = param_state_to_load[scalar_key]
+                incoming_val = (
+                    incoming.item() if isinstance(incoming, torch.Tensor) else incoming
+                )
+                if shared_id in aliased_seen:
+                    seen_key, seen_val = aliased_seen[shared_id]
+                    # `step` (int) and `train_mode` (bool) use exact equality; float
+                    # scalars (`lr_sum`) use a tolerance-based compare (treating two
+                    # NaNs as equal) so NaN and mixed-precision dtype rounding do not
+                    # trigger false-positive divergence.
+                    if scalar_key == LR_SUM:
+                        values_diverge = not (
+                            (math.isnan(seen_val) and math.isnan(incoming_val))
+                            or math.isclose(seen_val, incoming_val, rel_tol=1e-6)
+                        )
+                    else:
+                        values_diverge = seen_val != incoming_val
+                    if values_diverge:
+                        raise ValueError(
+                            f"Cannot load optimizer state: the per-group scalar "
+                            f"'{scalar_key}' is aliased across parameters sharing a group, "
+                            f"but the checkpoint stored differing values ({seen_val} != "
+                            f"{incoming_val}). This happens when parameters are regrouped "
+                            f"across groups that had different histories (e.g. different "
+                            f"learning rates), which distributed_shampoo does not support."
+                        )
+                else:
+                    aliased_seen[shared_id] = (scalar_key, incoming_val)
 
         # The current `self.state` should already have OptimizerModule objects from initialization.
         # `state["state"]` is a nested dictionary of tensors, so we need to use the data from the

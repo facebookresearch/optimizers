@@ -252,10 +252,9 @@ class DistributorInterface(ABC):
 
 ### 6. Fully Shard Lossless Distributor
 
-**File**: [`_shampoo_fully_shard_lossless_distributor.py`](_shampoo_fully_shard_lossless_distributor.py)
+**File**: [`shampoo_fully_shard_lossless_distributor.py`](shampoo_fully_shard_lossless_distributor.py)
 
 #### `FullyShardLosslessDistributor`
-- **Note**: This is an experimental feature and subject to change.
 - **Purpose**: Fully sharded training while maintaining numerical precision
 - **Best for**: Scenarios requiring maximum precision with memory efficiency
 - **Algorithm**: Lossless precision maintenance during sharding operations

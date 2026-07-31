@@ -62,6 +62,10 @@ WEIGHT_DECAY_TYPE = "weight_decay_type"
 # Keys for lists of blocked states and metadata (never checkpointed)
 CUDA_STREAM = "cuda_stream"
 DISTRIBUTOR = "distributor"
+# Per-param owner-rank map (never checkpointed; recomputed deterministically in
+# split_param_groups on every __init__). Used by the lossless distributors under
+# the ROUND_ROBIN assignment strategy.
+OWNER_RANKS = "owner_ranks"
 EVAL_INTERP_COEFF = "eval_interp_coeff"
 FILTERED_GRAD_LIST = "filtered_grad_list"
 GRAFTING_PRECONDITIONER_LIST = "grafting_preconditioner_list"
@@ -961,9 +965,15 @@ class FSDPParamAssignmentStrategy(enum.Enum):
         This strategy should produce identical results as the default Shampoo implementation, but at the cost of
         significantly increased memory usage and communication.
 
-    ROUND_ROBIN: Parameters are assigned to ranks in a round-robin fashion.
-        This strategy balances the memory and compute overhead across all ranks, by assigning the whole model
-        parameters to the ranks in the shard dimension (and it should be used when there are more parameters than shards).
+    ROUND_ROBIN: Parameters are assigned to whole ranks in the shard dimension so each rank owns a subset
+        of the full model parameters (use when there are more parameters than shards). Assignment is
+        load-balanced: a global owner map is computed by greedy longest-processing-time (LPT) bin-packing on
+        per-parameter cost (aligned bytes by default, via ``load_balancing_config``'s cost model), so the
+        total gather/update byte load per owner rank is balanced. The map is computed GLOBALLY over the full
+        parameter set (before any ``num_sub_groups`` split) so ranks are balanced across the whole model
+        rather than per sub-group. Deterministic, hence checkpoint-stable. (The classic positional
+        ``i % shard`` assignment is just LPT with a uniform cost model; the default byte cost model makes it
+        size-balanced -- there is no separate strategy for it.)
 
     """
 
@@ -1155,15 +1165,26 @@ class FullyShardDistributedConfig(DistributedConfig):
         num_sub_groups (int): Number of sub-groups to split a single param group into. Each sub-group gets its
             own distributor and NCCL communicator, enabling multi-stream overlap of compute and communication.
             Currently only effective with the *lossless* FSDP/HSDP distributors
-            (`_shampoo_fully_shard_lossless_distributor`,
-            `_shampoo_hybrid_shard_lossless_distributor`); other distributor
+            (`shampoo_fully_shard_lossless_distributor`,
+            `shampoo_hybrid_shard_lossless_distributor`); other distributor
             types ignore this field. (Default: 1)
+        load_balancing_config (LoadBalancingConfig): Cost model used by the ROUND_ROBIN assignment
+            strategy to balance per-owner-rank load when assigning parameters to ranks. Defaults to
+            ``AlignedMemoryCostModel`` (aligned bytes). Only consulted for ROUND_ROBIN. (Default: LoadBalancingConfig())
     """
 
     param_assignment_strategy: FSDPParamAssignmentStrategy = (
         FSDPParamAssignmentStrategy.DEFAULT
     )
     num_sub_groups: int = 1
+
+    @staticmethod
+    def _get_default_load_balancing_config() -> LoadBalancingConfig:
+        return LoadBalancingConfig()
+
+    load_balancing_config: LoadBalancingConfig = field(
+        default_factory=_get_default_load_balancing_config
+    )
 
     def __post_init__(self) -> None:
         super().__post_init__()
