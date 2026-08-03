@@ -11,8 +11,10 @@ import enum
 import inspect
 import logging
 import math
+import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Generator
+from contextlib import contextmanager
 from dataclasses import fields
 from fractions import Fraction
 from functools import partial, wraps
@@ -42,6 +44,27 @@ from distributed_shampoo.preconditioner.matrix_functions_types import (
 from torch import Tensor
 
 logger: logging.Logger = logging.getLogger(__name__)
+
+_TF32_LOCK: threading.RLock = threading.RLock()
+
+
+@contextmanager
+def _scoped_tf32_setting(disable_tf32: bool) -> Generator[None, None, None]:
+    """Context manager to safely modify torch.backends.cuda.matmul.allow_tf32 in a thread-safe manner."""
+    if not disable_tf32:
+        yield
+        return
+
+    with _TF32_LOCK:
+        tf32_flag = torch.backends.cuda.matmul.allow_tf32
+        torch.backends.cuda.matmul.allow_tf32 = False
+        logger.debug(
+            f"Using tf32 precision for fp32 matmul: {torch.backends.cuda.matmul.allow_tf32}"
+        )
+        try:
+            yield
+        finally:
+            torch.backends.cuda.matmul.allow_tf32 = tf32_flag
 
 
 @enum.unique
@@ -489,17 +512,7 @@ def matrix_inverse_root(  # noqa: C901
 
         """
 
-        # TODO(irisz): This save/modify/restore pattern is not thread-safe.
-        # Concurrent calls (e.g., from multi-threaded optimizer step) can race
-        # on this global flag. Revisit this for D97459682.
-        tf32_flag = torch.backends.cuda.matmul.allow_tf32
-        if disable_tf32:
-            torch.backends.cuda.matmul.allow_tf32 = False
-        logger.debug(
-            f"Using tf32 precision for fp32 matmul: {torch.backends.cuda.matmul.allow_tf32}"
-        )
-
-        try:
+        with _scoped_tf32_setting(disable_tf32=disable_tf32):
             t_iter_begin = time.perf_counter()
             p = root.numerator
             q = root.denominator
@@ -643,22 +656,12 @@ def matrix_inverse_root(  # noqa: C901
                 logger.debug(f"Error before powering: {true_error}")
                 logger.debug(f"Termination Flag: {termination_flag}")
 
-            # If we have inf/nan in our answer also raise an arithmetic exception.
-            # Usually, this is due to the powering to q > 1 which can blow up entries.
-            # We have not seen this yet for q = 1 in Shampoo.
             if not torch.isfinite(X).all():
                 raise ArithmeticError(
                     "NaN/Inf in matrix inverse root (after powering for fractions), raising an exception!"
                 )
 
-        finally:
-            # Always restore tf32 mode unconditionally, so we skip the
-            # disable_tf32 check. When disable_tf32=False, this is a no-op
-            # since tf32_flag already equals the current value. When
-            # disable_tf32=True, this restores the original value.
-            torch.backends.cuda.matmul.allow_tf32 = tf32_flag
-
-        return X, M, termination_flag, iteration, true_error
+            return X, M, termination_flag, iteration, true_error
 
     match root_inv_config:
         case EigenConfig():
@@ -851,7 +854,6 @@ def matrix_eigendecomposition(
 
         return eigenvalues_estimate, eigenvectors_estimate
 
-    # TODO: reduce redundant code when rank_deficient_stability_config is generalized to all methods
     # check epsilon is 0 when using pseudo-inverse
     if (
         isinstance(
