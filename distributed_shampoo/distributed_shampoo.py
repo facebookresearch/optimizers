@@ -754,6 +754,7 @@ class DistributedShampoo(torch.optim.Optimizer):
                 return SpectralDescentPreconditionerList(
                     block_list=state_lists[DISTRIBUTOR].local_blocked_params,
                     preconditioner_config=preconditioner_config,
+                    shampoo_pt2_compile_config=self._shampoo_pt2_compile_config,
                 )
             case _:
                 raise NotImplementedError(f"{preconditioner_config=} not supported!")
