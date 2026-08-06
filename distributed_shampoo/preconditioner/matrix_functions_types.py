@@ -32,7 +32,6 @@ class PerturbationConfig(RankDeficientStabilityConfig):
             that both options are mathematically equivalent, but not necessarily numerically equivalent.
             For eigenvalue-corrected Shampoo this will only affect the stability of the eigenbasis computation and epsilon will always also be added to the corrected eigenvalues.
             Recommended to be set to True for numerical stability.
-            TODO: When generalizing to all MatrixFunctionConfigs, this is only applicable to EigendecompositionConfig.
             (Default: True)
     """
 
@@ -50,11 +49,9 @@ class PseudoInverseConfig(RankDeficientStabilityConfig):
 
     Attributes:
         rank_atol: Absolute tolerance for filtering singular values.
-            TODO: When generalizing to all MatrixFunctionConfigs, this is only applicable to EigendecompositionConfig.
             (Default: 0.0)
         rank_rtol: Relative tolerance for filtering singular values. When None, takes value of max dim of the matrix times the
             epsilon of the dtype of the matrix.
-            TODO: When generalizing to all MatrixFunctionConfigs, this is only applicable to EigendecompositionConfig.
             (Default: 0.0)
     """
 
@@ -64,7 +61,23 @@ class PseudoInverseConfig(RankDeficientStabilityConfig):
 
 @dataclass(init=False)
 class MatrixFunctionConfig(AbstractDataclass):
-    """Base dataclass for matrix function configurations."""
+    """Base dataclass for matrix function configurations.
+
+    Note: When using custom rank_deficient_stability_config, avoid lambda functions as they may cause
+    pickling issues during serialization/deserialization. Use regular named functions
+    instead for better compatibility with distributed training and checkpointing.
+
+    Attributes:
+        rank_deficient_stability_config (RankDeficientStabilityConfig): Configuration for handling/stabilizing rank-deficient matrices. (Default: DefaultPerturbationConfig)
+    """
+
+    @staticmethod
+    def _get_default_rank_deficient_stability_config() -> RankDeficientStabilityConfig:
+        return DefaultPerturbationConfig
+
+    rank_deficient_stability_config: RankDeficientStabilityConfig = field(
+        default_factory=_get_default_rank_deficient_stability_config
+    )
 
 
 @dataclass(init=False)
@@ -84,25 +97,12 @@ class EigendecompositionConfig(MatrixFunctionConfig):
     Moreover, we have ||B||_F = ||Q^T A Q||_F = ||A||_F.
     Hence, the two relative errors are also equivalent: ||A - A'||_F / ||A||_F = ||B - diag(B)||_F / ||B||_F.
 
-    Note: When using custom rank_deficient_stability_config, avoid lambda functions as they may cause
-    pickling issues during serialization/deserialization. Use regular named functions
-    instead for better compatibility with distributed training and checkpointing.
-
     Attributes:
-        rank_deficient_stability_config (RankDeficientStabilityConfig): Configuration for handling/stabilizing rank-deficient matrices. (Default: DefaultPerturbationConfig)
-            TODO: generalize this to MatrixFunctionConfig
         tolerance (float): The tolerance for the error of the eigendecomposition based on the norm of the off-diagonal elements of the eigenvalue estimate.
             (Default: 0.0)
 
     """
 
-    @staticmethod
-    def _get_default_rank_deficient_stability_config() -> RankDeficientStabilityConfig:
-        return DefaultPerturbationConfig
-
-    rank_deficient_stability_config: RankDeficientStabilityConfig = field(
-        default_factory=_get_default_rank_deficient_stability_config
-    )
     tolerance: float = 0.0
 
     def __post_init__(self) -> None:
@@ -129,7 +129,6 @@ class EighEigendecompositionConfig(EigendecompositionConfig):
     Hence, the two relative errors are also equivalent: ||A - A'||_F / ||A||_F = ||B - diag(B)||_F / ||B||_F.
 
     Attributes:
-        rank_deficient_stability_config (RankDeficientStabilityConfig): Configuration for handling/stabilizing rank-deficient matrices. (Default: DefaultPerturbationConfig)
         retry_double_precision (bool): Whether to retry eigendecomposition with higher (double) precision if lower precision fails due
             to CuSOLVER failure. (Default: True)
         eigendecomposition_offload_device (str): Device to offload eigendecomposition to. If value is empty string, we don't perform offloading. (Default: "")
@@ -161,7 +160,6 @@ class QREigendecompositionConfig(EigendecompositionConfig):
     Hence, the two relative errors are also equivalent: ||A - A'||_F / ||A||_F = ||B - diag(B)||_F / ||B||_F.
 
     Attributes:
-        rank_deficient_stability_config (RankDeficientStabilityConfig): Configuration for handling/stabilizing rank-deficient matrices. (Default: DefaultPerturbationConfig)
         max_iterations (int): The maximum number of iterations to perform. (Default: 1)
         tolerance (float): The tolerance for determining convergence in terms of the norm of the off-diagonal elements of the eigenvalue estimate.
             (Default: 0.0)
@@ -181,7 +179,6 @@ class EigenConfig(RootInvConfig, EighEigendecompositionConfig):
     """Configuration for matrix root inverse via an eigendecomposition.
 
     Attributes:
-        rank_deficient_stability_config (RankDeficientStabilityConfig): Configuration for handling/stabilizing rank-deficient matrices. (Default: DefaultPerturbationConfig)
         retry_double_precision (bool): Whether to retry eigendecomposition with higher (double) precision if lower precision fails due
             to CuSOLVER failure. (Default: True)
         eigendecomposition_offload_device (str): Device to offload eigendecomposition to. If value is empty string, we don't perform offloading. (Default: "")

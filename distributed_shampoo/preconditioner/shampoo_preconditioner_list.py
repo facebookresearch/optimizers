@@ -13,7 +13,7 @@ from abc import abstractmethod
 from collections.abc import Callable, Hashable, Mapping
 from dataclasses import asdict, dataclass, field, fields
 from fractions import Fraction
-from functools import partial, reduce
+from functools import partial
 from itertools import chain
 from operator import attrgetter
 from pathlib import Path
@@ -1545,8 +1545,6 @@ class BaseShampooPreconditionerList(
         preconditioner_list: tuple[Tensor, ...],
         dims: tuple[list[int], list[int]] = ([0], [0]),
     ) -> Tensor:
-        # TODO: Need to refactor this function to be more efficient. Ideally eliminate those branches.
-        # Might consider einsum?
         assert sum(preconditioned_dims_selector) == len(preconditioner_list), (
             f"The number of dimensions to precondition ({sum(preconditioned_dims_selector)}) must match the number of preconditioners ({len(preconditioner_list)})."
         )
@@ -1558,24 +1556,29 @@ class BaseShampooPreconditionerList(
 
         # Use the single dtype if preconditioners exist, otherwise use grad dtype
         target_dtype = next(iter(unique_dtypes), grad.dtype)
-        preconditioner_list_iter = iter(preconditioner_list)
+        orig_dtype = grad.dtype
+        curr_grad = grad if orig_dtype == target_dtype else grad.to(dtype=target_dtype)
 
-        return reduce(
-            lambda grad, should_precondition: (
-                torch.tensordot(
-                    # Use the single target dtype for all operations
-                    grad.to(dtype=target_dtype),
-                    # Use the actual iterator for the operation
-                    next(preconditioner_list_iter),
+        p_idx = 0
+        ndim = grad.ndim
+        permute_dims = (*range(1, ndim), 0) if ndim > 1 else ()
+
+        for should_precondition in preconditioned_dims_selector:
+            if should_precondition:
+                curr_grad = torch.tensordot(
+                    curr_grad,
+                    preconditioner_list[p_idx],
                     dims=dims,
                 )
-                if should_precondition
-                # Perform a left rotation on grad if not preconditioned.
-                else grad.permute(*range(1, grad.ndim), 0)
-            ),
-            preconditioned_dims_selector,
-            grad,
-        ).to(dtype=grad.dtype)
+                p_idx += 1
+            elif ndim > 1:
+                curr_grad = curr_grad.permute(permute_dims)
+
+        return (
+            curr_grad
+            if curr_grad.dtype == orig_dtype
+            else curr_grad.to(dtype=orig_dtype)
+        )
 
     @overload
     @staticmethod
@@ -1804,11 +1807,6 @@ class EigendecomposedShampooPreconditionerList(
         preconditioned_dims_selector: tuple[bool, ...],
         kronecker_factors: EigendecomposedShampooKroneckerFactorsUnwrapped,
     ) -> Tensor:
-        # TODO: remove assertion when rank_deficient_stability_config is generalized to MatrixFunctionConfig
-        assert isinstance(
-            self._preconditioner_config.amortized_computation_config,
-            EigendecompositionConfig,
-        )
         rank_deficient_stability_config = self._preconditioner_config.amortized_computation_config.rank_deficient_stability_config
 
         return self._precondition_grad(
@@ -1999,11 +1997,6 @@ class EigendecomposedKLShampooPreconditionerList(
         preconditioned_dims_selector: tuple[bool, ...],
         kronecker_factors: EigendecomposedShampooKroneckerFactorsUnwrapped,
     ) -> tuple[Tensor, ...]:
-        # TODO: remove assertion when rank_deficient_stability_config is generalized to MatrixFunctionConfig
-        assert isinstance(
-            self._preconditioner_config.amortized_computation_config,
-            EigendecompositionConfig,
-        )
         rank_deficient_stability_config = self._preconditioner_config.amortized_computation_config.rank_deficient_stability_config
 
         # Construct outer product list for updating Kronecker factors.

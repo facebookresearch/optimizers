@@ -7,6 +7,7 @@ LICENSE file in the root directory of this source tree.
 
 """
 
+import concurrent.futures
 import itertools
 import re
 import unittest
@@ -23,6 +24,7 @@ from distributed_shampoo.preconditioner.matrix_functions import (
     _check_2d_tensor,
     _check_square_matrix,
     _matrix_perturbation,
+    _scoped_tf32_setting,
     matrix_eigendecomposition,
     matrix_inverse_root,
     matrix_inverse_root_from_eigendecomposition,
@@ -960,3 +962,22 @@ class MatrixOrthogonalizationTest(unittest.TestCase):
             A=torch.tensor([[1.0, 0.0], [0.0, 4.0]]),
             orthogonalization_config=NotSupportedOrthogonalizationConfig(),
         )
+
+    def test_scoped_tf32_setting_thread_safety(self) -> None:
+        initial_flag = torch.backends.cuda.matmul.allow_tf32
+        errors: list[Exception] = []
+
+        def worker(disable: bool) -> None:
+            try:
+                with _scoped_tf32_setting(disable_tf32=disable):
+                    if disable:
+                        self.assertFalse(torch.backends.cuda.matmul.allow_tf32)
+            except Exception as e:
+                errors.append(e)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+            futures = [executor.submit(worker, bool(i % 2)) for i in range(50)]
+            concurrent.futures.wait(futures)
+
+        self.assertEqual(len(errors), 0)
+        self.assertEqual(torch.backends.cuda.matmul.allow_tf32, initial_flag)
