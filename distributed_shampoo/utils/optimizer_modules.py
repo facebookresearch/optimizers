@@ -87,6 +87,7 @@ class OptimizerModule:
 
             for key, value in states:
                 if isinstance(value, torch.Tensor):
+                    # pyrefly: ignore [bad-argument-type]
                     destination[key] = value if keep_vars else value.detach()
                 elif isinstance(value, OptimizerModule):
                     destination[key] = {}
@@ -220,7 +221,6 @@ class OptimizerModule:
                 old_state = type(old_state)(
                     (
                         load_from_new_state_to_old_state(
-                            # pyrefly: ignore [bad-argument-type]
                             old_state=old_value,
                             # pyrefly: ignore [bad-index]
                             new_state=new_state[i],

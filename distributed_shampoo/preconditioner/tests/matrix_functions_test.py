@@ -8,6 +8,7 @@ LICENSE file in the root directory of this source tree.
 """
 
 import itertools
+import math
 import re
 import unittest
 from collections.abc import Callable
@@ -37,6 +38,7 @@ from distributed_shampoo.preconditioner.matrix_functions_types import (
     EigendecompositionConfig,
     EighEigendecompositionConfig,
     NewtonSchulzOrthogonalizationConfig,
+    NewtonSchulzRootInvConfig,
     OrthogonalizationConfig,
     PerturbationConfig,
     PseudoInverseConfig,
@@ -659,6 +661,207 @@ class NewtonRootInverseTest(unittest.TestCase):
             A_tol=1e-4,
             M_tol=1e-6,
         )
+
+
+@instantiate_parametrized_tests
+class NewtonSchulzRootInverseTest(unittest.TestCase):
+    @staticmethod
+    def _spd_matrix(n: int, condition_number: float) -> Tensor:
+        torch.manual_seed(42)
+        Q, _ = torch.linalg.qr(torch.randn(n, n, dtype=torch.float64))
+        eigenvalues = torch.logspace(
+            0, -math.log10(condition_number), n, dtype=torch.float64
+        )
+        return ((Q * eigenvalues) @ Q.T).float()
+
+    @staticmethod
+    def _relative_error(X: Tensor, expected: Tensor) -> float:
+        """Normwise relative error. Elementwise rtol is not meaningful here: entries of the inverse
+        root that are near zero carry large relative error at negligible absolute error."""
+        return (
+            torch.dist(X, expected, p=torch.inf)
+            / torch.linalg.norm(expected, ord=torch.inf)
+        ).item()
+
+    @parametrize("root", [2, 4, 8])
+    @parametrize("n", [10, 100])
+    def test_newton_schulz_root_inverse_identity(self, n: int, root: int) -> None:
+        torch.testing.assert_close(
+            matrix_inverse_root(
+                A=torch.eye(n),
+                root=Fraction(root),
+                root_inv_config=NewtonSchulzRootInvConfig(),
+            ),
+            torch.eye(n),
+            atol=1e-5,
+            rtol=1e-5,
+        )
+
+    @parametrize("root", [2, 4, 8])
+    # Attainable accuracy is floored by the condition number, not by the iteration count.
+    @parametrize("condition_number, tolerance", [(1e2, 1e-5), (1e4, 1e-4), (1e6, 1e-2)])
+    def test_newton_schulz_root_inverse_matches_eigen(
+        self, condition_number: float, tolerance: float, root: int
+    ) -> None:
+        A = NewtonSchulzRootInverseTest._spd_matrix(
+            n=64, condition_number=condition_number
+        )
+        self.assertLessEqual(
+            NewtonSchulzRootInverseTest._relative_error(
+                # relative_epsilon is disabled so this measures the accuracy of the iteration itself
+                # rather than the extra regularization it applies by default.
+                matrix_inverse_root(
+                    A=A,
+                    root=Fraction(root),
+                    root_inv_config=NewtonSchulzRootInvConfig(relative_epsilon=0.0),
+                ),
+                matrix_inverse_root(
+                    A=A, root=Fraction(root), root_inv_config=EigenConfig()
+                ),
+            ),
+            tolerance,
+        )
+
+    def test_newton_schulz_root_inverse_coefficient_schedule(self) -> None:
+        """A per-iteration coefficient schedule, the form Polar Express supplies, is accepted."""
+        A = NewtonSchulzRootInverseTest._spd_matrix(n=32, condition_number=1e4)
+        X = matrix_inverse_root(
+            A=A,
+            root=Fraction(4),
+            root_inv_config=NewtonSchulzRootInvConfig(
+                coefficients=[[3.0, -16.0 / 5.0, 6.0 / 5.0]] * 12
+            ),
+        )
+        self.assertTrue(torch.isfinite(X).all())
+
+    def test_newton_schulz_root_inverse_applies_epsilon(self) -> None:
+        # Singular matrix: without the epsilon ridge the inverse root does not exist.
+        A = torch.tensor([[1.0, 0.0], [0.0, 0.0]])
+        epsilon = 1e-2
+        torch.testing.assert_close(
+            matrix_inverse_root(
+                A=A,
+                root=Fraction(2),
+                root_inv_config=NewtonSchulzRootInvConfig(),
+                epsilon=epsilon,
+            ),
+            matrix_inverse_root(
+                A=A,
+                root=Fraction(2),
+                root_inv_config=EigenConfig(),
+                epsilon=epsilon,
+            ),
+            atol=1e-3,
+            rtol=1e-3,
+        )
+
+    @parametrize("root", [1, 3, 6])
+    def test_newton_schulz_root_inverse_unsupported_root(self, root: int) -> None:
+        self.assertRaisesRegex(
+            ValueError,
+            re.escape(
+                f"root={root} must be a power of two to use Newton-Schulz iteration!"
+            ),
+            matrix_inverse_root,
+            A=torch.eye(2),
+            root=Fraction(root),
+            root_inv_config=NewtonSchulzRootInvConfig(),
+        )
+
+    def test_newton_schulz_root_inverse_non_integer_root(self) -> None:
+        self.assertRaisesRegex(
+            ValueError,
+            re.escape(
+                "root.denominator=3 must be equal to 1 to use Newton-Schulz iteration!"
+            ),
+            matrix_inverse_root,
+            A=torch.tensor([[1.0, 0.0], [0.0, 4.0]]),
+            root=Fraction(2, 3),
+            root_inv_config=NewtonSchulzRootInvConfig(),
+        )
+
+    def test_newton_schulz_root_inverse_empty_coefficients(self) -> None:
+        self.assertRaisesRegex(
+            ValueError,
+            re.escape("coefficients must be non-empty."),
+            NewtonSchulzRootInvConfig,
+            coefficients=[],
+        )
+
+    def test_newton_schulz_root_inverse_warns_on_coefficients_not_summing_to_one(
+        self,
+    ) -> None:
+        with self.assertLogs(level="WARNING") as cm:
+            NewtonSchulzRootInvConfig(coefficients=[[3.4445, -4.7750, 2.0315]])
+        self.assertIn("do not sum to 1", "".join(r.msg for r in cm.records))
+
+    @parametrize(
+        "coefficients",
+        [
+            [[1.875, -1.25]],
+            [[1.875, -1.25, 0.375, 0.0]],
+            [[1.875, -1.25, 0.375], [1.0, 0.0]],
+        ],
+    )
+    def test_newton_schulz_root_inverse_coefficients_wrong_arity(
+        self, coefficients: list[list[float]]
+    ) -> None:
+        self.assertRaisesRegex(
+            ValueError,
+            re.escape("must contain exactly three coefficients"),
+            NewtonSchulzRootInvConfig,
+            coefficients=coefficients,
+        )
+
+    @parametrize("coefficient", [float("nan"), float("inf"), float("-inf")])
+    def test_newton_schulz_root_inverse_non_finite_coefficients(
+        self, coefficient: float
+    ) -> None:
+        self.assertRaisesRegex(
+            ValueError,
+            re.escape("must be finite"),
+            NewtonSchulzRootInvConfig,
+            coefficients=[[1.875, -1.25, coefficient]],
+        )
+
+    @parametrize("coefficient", ["0.375", None, True])
+    def test_newton_schulz_root_inverse_non_numeric_coefficients(
+        self, coefficient: object
+    ) -> None:
+        self.assertRaisesRegex(
+            ValueError,
+            re.escape("must contain real numbers"),
+            NewtonSchulzRootInvConfig,
+            coefficients=[[1.875, -1.25, coefficient]],
+        )
+
+    def test_newton_schulz_root_inverse_accepts_integer_coefficients(self) -> None:
+        """Integers are real numbers; the arity/finiteness checks must not reject them."""
+        self.assertTrue(
+            torch.isfinite(
+                matrix_inverse_root(
+                    A=torch.eye(4),
+                    root=Fraction(2),
+                    root_inv_config=NewtonSchulzRootInvConfig(
+                        coefficients=[[3, -3, 1]]
+                    ),
+                )
+            ).all()
+        )
+
+    @parametrize("dtype", [torch.float32, torch.float64])
+    def test_newton_schulz_root_inverse_accepts_supported_dtype(
+        self, dtype: torch.dtype
+    ) -> None:
+        X = matrix_inverse_root(
+            A=NewtonSchulzRootInverseTest._spd_matrix(n=16, condition_number=1e2).to(
+                dtype=dtype
+            ),
+            root=Fraction(2),
+            root_inv_config=NewtonSchulzRootInvConfig(),
+        )
+        self.assertIs(X.dtype, dtype)
+        self.assertTrue(torch.isfinite(X).all())
 
 
 class CoupledHigherOrderRootInverseTest(unittest.TestCase):

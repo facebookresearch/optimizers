@@ -12,6 +12,7 @@ import math
 from collections.abc import Callable
 from dataclasses import dataclass, field, make_dataclass
 from inspect import signature
+from typing import Any
 
 import torch
 from distributed_shampoo.preconditioner.matrix_functions_types import (
@@ -1235,7 +1236,11 @@ class HybridShardDistributedConfig(FullyShardDistributedConfig, DDPDistributedCo
     device_mesh: DeviceMesh
 
 
-_ShampooPT2CompileConfigImpl: type[object] = make_dataclass(
+# Any, not type[object]: the fields are synthesized at import time from
+# torch.compile's signature, so a checker cannot resolve them. Any keeps the
+# subclass's attribute access permissive; type[object] instead made the class
+# statically unusable as a base.
+_ShampooPT2CompileConfigImpl: Any = make_dataclass(
     "_ShampooPT2CompileConfigImpl",
     [
         (name, param.annotation, param.default)
@@ -1246,9 +1251,7 @@ _ShampooPT2CompileConfigImpl: type[object] = make_dataclass(
 )
 
 
-class ShampooPT2CompileConfig(
-    _ShampooPT2CompileConfigImpl  # type: ignore
-):
+class ShampooPT2CompileConfig(_ShampooPT2CompileConfigImpl):
     """Configuration for Shampoo PT2 compilation.
 
     Enables Shampoo pytorch compilation with configure to speed up model training.

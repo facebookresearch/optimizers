@@ -7,10 +7,14 @@ LICENSE file in the root directory of this source tree.
 
 """
 
+import logging
+import math
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from distributed_shampoo.utils.abstract_dataclass import AbstractDataclass
+
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 @dataclass(init=False)
@@ -211,6 +215,86 @@ class CoupledNewtonConfig(RootInvConfig):
 
     max_iterations: int = 100
     tolerance: float = 1e-6
+
+
+@dataclass(kw_only=True)
+class NewtonSchulzRootInvConfig(RootInvConfig):
+    """Configuration for matrix root inverse via the coupled Newton-Schulz iteration.
+
+    Unlike CoupledNewtonConfig and CoupledHigherOrderConfig, the iteration runs for a fixed number of
+    steps and never evaluates a residual-based stopping criterion, so it incurs no host-device
+    synchronization and is expressed entirely as matmuls. Only roots that are powers of two are
+    supported, i.e. blocks of order 1, 2, and 4.
+
+    WARNING: On rank-deficient input this regularizes more aggressively than the eigendecomposition
+        path does for the same epsilon, so the two do not agree there. See relative_epsilon.
+
+    Attributes:
+        relative_epsilon (float): Floors the ridge added before the iteration at
+            relative_epsilon * |A|_F. Unlike the eigendecomposition path, this iteration cannot
+            stabilize a rank-deficient or indefinite matrix, and Shampoo factor matrices are
+            rank-deficient early in training; without this floor the iteration diverges to NaN.
+            (Default: 1e-6)
+        coefficients (list[list[float]]): Per-iteration schedule of (a, b, c) coefficient triples
+            for the odd polynomial p(x) = a x + b x^3 + c x^5 driving the iteration. The number
+            of iterations is len(coefficients).
+            (Default: Polar Express 10-step schedule from ASGO.)
+        disable_tf32 (bool): Whether to disable tf32 matmuls or not internally. Highly recommend
+            keeping True. The iteration is built entirely out of matmuls and must resolve
+            eigenvalues down to relative_epsilon, which tf32's 10-bit mantissa cannot represent;
+            unlike the factor matrix accumulation, Z @ Y is not a Gram product, so tf32 error there
+            is unstructured and drives the iteration to NaN. (Default: True)
+
+    """
+
+    @staticmethod
+    def _get_default_coefficients() -> list[list[float]]:
+        return [
+            [8.28721201814563, -23.595886519098837, 17.300387312530933],
+            [4.107059111542203, -2.9478499167379106, 0.5448431082926601],
+            [3.9486908534822946, -2.9089021159629490, 0.5518191394370137],
+            [3.3184196573706015, -2.4884880243148740, 0.5100489401237200],
+            [2.300652019954817, -1.6689039845747493, 0.4188073119525673],
+            [1.891301407787398, -1.2679958271945868, 0.3768040894852483],
+            [1.8750014808534479, -1.2500016453999487, 0.3750001645474248],
+            [1.875, -1.25, 0.375],
+            [1.875, -1.25, 0.375],
+            [1.875, -1.25, 0.375],
+        ]
+
+    relative_epsilon: float = 1e-6
+    disable_tf32: bool = True
+    # TODO: Clean up coefficient definition -- consider using list[tuple[float, float, float]]
+    # to enforce 3-tuples, and define defaults from the training pipeline side.
+    coefficients: list[list[float]] = field(default_factory=_get_default_coefficients)
+
+    def __post_init__(self) -> None:
+        if len(self.coefficients) == 0:
+            raise ValueError("coefficients must be non-empty.")
+        for index, entry in enumerate(self.coefficients):
+            if len(entry) != 3:
+                raise ValueError(
+                    f"coefficients[{index}] must contain exactly three coefficients (a, b, c) for "
+                    f"p(x) = a x + b x^3 + c x^5, but {entry=} has {len(entry)}."
+                )
+            for coefficient in entry:
+                if isinstance(coefficient, bool) or not isinstance(
+                    coefficient, (int, float)
+                ):
+                    raise ValueError(
+                        f"coefficients[{index}] must contain real numbers, but {entry=} contains "
+                        f"{coefficient!r} of type {type(coefficient).__name__}."
+                    )
+                if not math.isfinite(coefficient):
+                    raise ValueError(
+                        f"coefficients[{index}] must be finite, but {entry=} contains {coefficient}."
+                    )
+        final_coefficients = self.coefficients[-1]
+        if not math.isclose(sum(final_coefficients), 1.0):
+            logger.warning(
+                f"{final_coefficients=} do not sum to 1, so the Newton-Schulz iteration has no fixed "
+                "point at 1 and will converge to a band around the inverse root rather than to it."
+            )
 
 
 @dataclass(kw_only=True)

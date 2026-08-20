@@ -29,6 +29,7 @@ from distributed_shampoo.preconditioner.matrix_functions import (
 from distributed_shampoo.preconditioner.matrix_functions_types import (
     EigendecompositionConfig,
     MatrixFunctionConfig,
+    NewtonSchulzRootInvConfig,
     RootInvConfig,
 )
 from distributed_shampoo.preconditioner.preconditioner_list import (
@@ -686,6 +687,26 @@ class RootInvShampooKroneckerFactorsUnwrapped(BaseShampooKroneckerFactorsUnwrapp
             == len(self.factor_matrices)
             == len(self.inv_factor_matrices)
         )
+        # Fail fast rather than at the first amortized computation: an input the amortized
+        # computation cannot handle would otherwise surface as a swallowed per-factor-matrix warning
+        # that silently reuses the stale preconditioner until
+        # num_tolerated_failed_amortized_computations is hit.
+        if isinstance(self.amortized_computation_config, NewtonSchulzRootInvConfig):
+            if unsupported_roots := sorted(
+                {
+                    root
+                    for root in self.roots
+                    if not float(root).is_integer()
+                    or int(root) < 2
+                    or int(root) & (int(root) - 1)
+                }
+            ):
+                raise ValueError(
+                    f"{type(self.amortized_computation_config).__name__} only supports inverse roots "
+                    f"that are powers of two, but {unsupported_roots=} were requested. Merge or block "
+                    "the offending parameters down to order 1, 2, or 4, or set inverse_exponent_override "
+                    "to the reciprocal of a power of two."
+                )
 
 
 @dataclass(kw_only=True)

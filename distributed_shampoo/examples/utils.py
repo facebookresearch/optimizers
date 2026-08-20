@@ -73,7 +73,6 @@ def get_distributed_env() -> tuple[int, int, int]:
 
 def set_seed(seed: int) -> None:
     torch.manual_seed(seed)
-    # pyrefly: ignore [bad-argument-type]
     np.random.seed(seed)
     random.seed(seed)
     torch.use_deterministic_algorithms(True)

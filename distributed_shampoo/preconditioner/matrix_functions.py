@@ -31,6 +31,7 @@ from distributed_shampoo.preconditioner.matrix_functions_types import (
     EigendecompositionConfig,
     EighEigendecompositionConfig,
     NewtonSchulzOrthogonalizationConfig,
+    NewtonSchulzRootInvConfig,
     OrthogonalizationConfig,
     PerturbationConfig,
     PseudoInverseConfig,
@@ -436,6 +437,128 @@ def matrix_inverse_root(  # noqa: C901
 
         return X, M, termination_flag, iteration, error
 
+    def matrix_inverse_root_newton_schulz(
+        A: Tensor,
+        root: int,
+        coefficients: list[list[float]],
+        epsilon: float = 0.0,
+        relative_epsilon: float = 1e-6,
+        disable_tf32: bool = True,
+    ) -> Tensor:
+        """Compute matrix inverse root using the coupled Newton-Schulz iteration.
+
+        A single pass implements SqrtInverseNewtonSchulz, which returns both A^{1/2} and A^{-1/2}:
+
+            alpha <- |A|_F
+            Y <- A / alpha, Z <- I
+            for each (a, b, c) in the coefficient schedule
+                T <- Z Y
+                B <- b T + c T^2
+                Y <- a Y + Y B
+                Z <- a Z + B Z
+            A^{1/2} ~= sqrt(alpha) Y, A^{-1/2} ~= Z / sqrt(alpha)
+
+        Y and Z are updated as a coupled pair rather than by recomputing a residual from A, which is
+        what makes the iteration numerically stable; the uncoupled form diverges within ~15 iterations
+        even in double precision.
+
+        Only roots that are powers of two are supported. Since a pass yields both the square root and
+        the inverse square root, A^{-1/2^m} is obtained by chaining m passes: each of the first m - 1
+        passes feeds its square root output forward, and the last pass returns its inverse square root
+        output.
+
+        NOTE: Coefficients summing to 1 give the scalar map a fixed point at 1, so the iteration
+            converges to the inverse square root. Coefficients that do not sum to 1 -- such as the Muon
+            coefficients (3.4445, -4.7750, 2.0315) used by newton_schulz for orthogonalization, where
+            only the sign of the singular values matters -- instead converge to a band around it.
+            NewtonSchulzRootInvConfig warns about this at construction time.
+
+        NOTE: Unlike the eigendecomposition path, this iteration cannot stabilize a rank-deficient or
+            indefinite input, because it never forms the spectrum it would need to shift. Shampoo
+            factor matrices are rank-deficient early in training and pick up small negative eigenvalues
+            from floating point error, on which Z diverges. relative_epsilon guards against this by
+            flooring the ridge at a fraction of |A|_F, which dominates those spurious eigenvalues and
+            bounds the condition number. The consequence is that on rank-deficient input this function
+            regularizes more aggressively than the eigendecomposition path does for the same epsilon,
+            and therefore does not agree with it there.
+
+        References:
+            - https://arxiv.org/abs/2505.16932 (Polar Express)
+            - https://docs.modula.systems/algorithms/newton-schulz/
+
+        Args:
+            A (Tensor): Matrix of interest.
+            root (int): Root of interest. Must be a power of two.
+            coefficients (list[list[float]]): Per-iteration schedule of (a, b, c) coefficient
+                triples for the odd polynomial p(x) = a x + b x^3 + c x^5 driving the iteration. The
+                number of iterations is len(coefficients). Validated by
+                NewtonSchulzRootInvConfig.__post_init__, which is the only supported way to reach
+                this function.
+            epsilon (float): Adds epsilon * I to matrix before taking matrix root. (Default: 0.0)
+            relative_epsilon (float): Adds relative_epsilon * |A|_F * I to the matrix before taking the
+                matrix root, taking the larger of this and epsilon. Required for rank-deficient input;
+                see the note above. (Default: 1e-6)
+            disable_tf32 (bool): Whether to disable tf32 matmuls or not internally. Highly recommend
+                keeping True; tf32 cannot represent the relative_epsilon-scale eigenvalues this
+                iteration must resolve, and Z @ Y is not a Gram product, so the resulting error is
+                unstructured and diverges. (Default: True)
+
+        Returns:
+            X (Tensor): Inverse root of matrix A.
+
+        Raises:
+            ValueError: If root is not a power of two.
+
+        """
+        # This should not be reachable: RootInvShampooPreconditionerList already rejects roots that
+        # are not powers of two at optimizer construction time. Kept as a defensive guard in case
+        # this function is ever called directly, bypassing that validation.
+        if root < 2 or root & (root - 1):
+            raise ValueError(
+                f"{root=} must be a power of two to use Newton-Schulz iteration!"
+            )
+
+        tf32_flag = torch.backends.cuda.matmul.allow_tf32
+        if disable_tf32:
+            torch.backends.cuda.matmul.allow_tf32 = False
+
+        try:
+            # Add regularization, floored relative to |A|_F so that the input is positive definite. The
+            # ridge is kept as a 0-d tensor rather than a float so that no host-device synchronization
+            # is introduced.
+            identity = torch.eye(A.shape[0], dtype=A.dtype, device=A.device)
+            A = torch.addcmul(
+                A,
+                identity,
+                torch.linalg.matrix_norm(A).mul_(relative_epsilon).clamp_min_(epsilon),
+            )
+
+            # A^{-1/root} = ((...(A^{1/2})^{1/2}...)^{1/2})^{-1/2} with log2(root) nested square roots.
+            for pass_index in range(root.bit_length() - 1, 0, -1):
+                # Normalize so that the spectrum of Y lies in (0, 1]; |A|_2 <= |A|_F.
+                alpha = torch.linalg.matrix_norm(A).clamp_min(1e-8)
+                Y = A / alpha
+                # Cloned because the final pass returns Z.div_(sqrt_alpha), which mutates in place,
+                # and identity is reused across passes. torch.addmm below is out-of-place and would
+                # rebind Z on its own, but that only holds while the schedule is non-empty.
+                Z = identity.clone()
+
+                for a, b, c in coefficients:
+                    T = Z @ Y
+                    B = torch.addmm(T, T, T, beta=b, alpha=c)
+                    Y = torch.addmm(Y, Y, B, beta=a, alpha=1)
+                    Z = torch.addmm(Z, B, Z, beta=a, alpha=1)
+
+                sqrt_alpha = alpha.sqrt()
+                # Feed A^{1/2} into the next pass; the final pass produces the inverse root.
+                A = Y.mul_(sqrt_alpha) if pass_index > 1 else Z.div_(sqrt_alpha)
+        finally:
+            # Always restore tf32 mode unconditionally, so we skip the disable_tf32 check. When
+            # disable_tf32=False, this is a no-op since tf32_flag already equals the current value.
+            torch.backends.cuda.matmul.allow_tf32 = tf32_flag
+
+        return A
+
     def matrix_inverse_root_higher_order(
         A: Tensor,
         root: Fraction,
@@ -679,6 +802,16 @@ def matrix_inverse_root(  # noqa: C901
                 logger.warning(
                     "Newton did not converge and reached maximum number of iterations!"
                 )
+        case NewtonSchulzRootInvConfig():
+            # NOTE: Use Fraction.is_integer() instead when downstream applications are Python 3.12+ available
+            if root.denominator != 1:
+                raise ValueError(
+                    f"{root.denominator=} must be equal to 1 to use Newton-Schulz iteration!"
+                )
+
+            X = _assign_function_args_from_config(
+                func=matrix_inverse_root_newton_schulz, config=root_inv_config
+            )(A=A, root=root.numerator, epsilon=epsilon)
         case CoupledHigherOrderConfig():
             X, _, termination_flag, _, _ = _assign_function_args_from_config(
                 func=matrix_inverse_root_higher_order, config=root_inv_config

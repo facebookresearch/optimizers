@@ -419,7 +419,7 @@ class RedistributeParamsContextTest(DTensorTestBase):
         # Every param should have a valid recv info entry (offset >= 0)
         for param_idx in range(num_params):
             offset, chunk_size = ctx._param_recv_info[param_idx]
-            self.assertGreaterEqual(  # type: ignore
+            self.assertGreaterEqual(
                 offset, 0, f"Param {param_idx} has invalid recv offset {offset}"
             )
             self.assertGreaterEqual(
@@ -545,7 +545,7 @@ class GatherGradientsContextTest(DTensorTestBase):
         # Verify correctness for assigned params
         for i in range(num_params):
             if i % self.world_size == rank:
-                self.assertIsNotNone(  # type: ignore
+                self.assertIsNotNone(
                     gathered_grads[i],
                     f"Assigned param {i} should have a gathered gradient",
                 )
@@ -556,7 +556,7 @@ class GatherGradientsContextTest(DTensorTestBase):
                 )
             else:
                 # Unassigned params should be None
-                self.assertIsNone(  # type: ignore
+                self.assertIsNone(
                     gathered_grads[i],
                     f"Unassigned param {i} should be None on rank {rank}",
                 )
@@ -589,9 +589,7 @@ class GatherGradientsContextTest(DTensorTestBase):
 
         # All should be None since no gradients were set
         for i, grad in enumerate(gathered_grads):
-            self.assertIsNone(  # type: ignore
-                grad, f"Param {i} has no grad, should be None"
-            )
+            self.assertIsNone(grad, f"Param {i} has no grad, should be None")
 
     @with_comms
     @skip_if_lt_x_gpu(4)
@@ -639,14 +637,14 @@ class GatherGradientsContextTest(DTensorTestBase):
         for i in range(len(shapes)):
             if i % self.world_size == rank:
                 if expected_full_grads[i] is not None:
-                    self.assertIsNotNone(gathered_grads[i])  # type: ignore
+                    self.assertIsNotNone(gathered_grads[i])
                     torch.testing.assert_close(
                         gathered_grads[i], expected_full_grads[i]
                     )
                 else:
-                    self.assertIsNone(gathered_grads[i])  # type: ignore
+                    self.assertIsNone(gathered_grads[i])
             else:
-                self.assertIsNone(gathered_grads[i])  # type: ignore
+                self.assertIsNone(gathered_grads[i])
 
     @with_comms
     @skip_if_lt_x_gpu(4)
@@ -673,7 +671,7 @@ class GatherGradientsContextTest(DTensorTestBase):
 
         for i in range(len(shapes)):
             if i % self.world_size == rank:
-                self.assertIsNotNone(gathered_grads[i])  # type: ignore
+                self.assertIsNotNone(gathered_grads[i])
                 self.assertEqual(
                     gathered_grads[i].shape,  # type: ignore
                     torch.Size(shapes[i]),
@@ -722,11 +720,11 @@ class GatherGradientsContextTest(DTensorTestBase):
         # Verify second call produces correct results (different from first)
         for i in range(len(shapes)):
             if i % self.world_size == rank:
-                self.assertIsNotNone(second_grads[i])  # type: ignore
+                self.assertIsNotNone(second_grads[i])
                 torch.testing.assert_close(second_grads[i], expected_second_grads[i])
                 # Verify second call differs from first
                 # (2x gradient vs 1x gradient for sum)
-                self.assertFalse(  # type: ignore
+                self.assertFalse(
                     torch.equal(first_grads[i], second_grads[i]),  # type: ignore
                     f"Second gather should differ from first for param {i}",
                 )
@@ -823,7 +821,7 @@ class GatherGradientsContextTest(DTensorTestBase):
         # Verify correctness for assigned params
         for i in range(num_params):
             if i % self.world_size == rank:
-                self.assertIsNotNone(  # type: ignore
+                self.assertIsNotNone(
                     gathered_params[i],
                     f"Assigned param {i} should have a gathered value",
                 )
@@ -833,7 +831,7 @@ class GatherGradientsContextTest(DTensorTestBase):
                     msg=f"Gathered param {i} does not match full_tensor()",
                 )
             else:
-                self.assertIsNone(  # type: ignore
+                self.assertIsNone(
                     gathered_params[i],
                     f"Unassigned param {i} should be None on rank {rank}",
                 )

@@ -981,7 +981,6 @@ class DistributedShampoo(torch.optim.Optimizer):
         # Use PT2 to compile the step function for each parameter group.
         self._per_group_step: Callable[..., None] = (
             torch.compile(
-                # pyrefly: ignore [bad-argument-type]
                 self._per_group_step_impl,
                 # pyrefly: ignore [bad-argument-type]
                 **asdict(shampoo_pt2_compile_config),
@@ -1370,7 +1369,7 @@ class DistributedShampoo(torch.optim.Optimizer):
         # This computes: - (1 - mu_x * mu_y) * lr * P.
         torch._foreach_mul_(
             masked_blocked_search_directions,
-            (1 - train_interp_coeff * eval_interp_coeff),  # type: ignore
+            (1 - train_interp_coeff * eval_interp_coeff),
         )
         # This computes: (1 - mu_x) * (Z_old - Y) - (1 - mu_x * mu_y) * lr * P.
         # pyrefly: ignore [no-matching-overload]

@@ -9,6 +9,8 @@ LICENSE file in the root directory of this source tree.
 
 import re
 import unittest
+from dataclasses import asdict, fields
+from inspect import signature
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -31,6 +33,7 @@ from distributed_shampoo.shampoo_types import (
     HybridShardDistributedConfig,
     IterateAveragingConfig,
     RMSpropPreconditionerConfig,
+    ShampooPT2CompileConfig,
     SignDescentPreconditionerConfig,
 )
 from distributed_shampoo.utils.commons import get_all_non_abstract_subclasses
@@ -421,3 +424,24 @@ class HybridShardDistributedConfigTest(unittest.TestCase):
             device_mesh=MagicMock(),
             num_sub_groups=num_sub_groups,
         )
+
+
+class ShampooPT2CompileConfigTest(unittest.TestCase):
+    # The fields are synthesized at import time from torch.compile's signature, so no
+    # static checker can see them and nothing else in the suite asserts they exist.
+    def test_fields_match_torch_compile_signature(self) -> None:
+        self.assertEqual(
+            {field.name for field in fields(ShampooPT2CompileConfig())},
+            {name for name in signature(torch.compile).parameters if name != "model"},
+        )
+
+    def test_asdict_binds_to_torch_compile(self) -> None:
+        config = ShampooPT2CompileConfig(backend="eager", fullgraph=True)
+        kwargs = asdict(config)
+        self.assertEqual(kwargs["backend"], "eager")
+        self.assertTrue(kwargs["fullgraph"])
+        # Mirrors how distributed_shampoo.py splats the config into torch.compile.
+        signature(torch.compile).bind(torch.nn.Identity(), **kwargs)
+
+    def test_unknown_keyword_rejected(self) -> None:
+        self.assertRaises(TypeError, ShampooPT2CompileConfig, not_a_torch_compile_arg=1)

@@ -14,6 +14,7 @@ import re
 import unittest
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
+from functools import partial
 from typing import Any, cast
 
 import torch
@@ -21,6 +22,7 @@ from distributed_shampoo.distributed_shampoo import DistributedShampoo
 from distributed_shampoo.preconditioner.matrix_functions_types import (
     DefaultNewtonSchulzOrthogonalizationConfig,
     EigenConfig,
+    NewtonSchulzRootInvConfig,
     OrthogonalizationConfig,
     PseudoInverseConfig,
 )
@@ -51,6 +53,11 @@ from distributed_shampoo.shampoo_types import (
     TRAIN_MODE,
     WeightDecayType,
 )
+from distributed_shampoo.tests.shampoo_test_utils import (
+    compare_two_optimizers_on_weight_and_loss,
+    construct_training_problem,
+    train_model,
+)
 from distributed_shampoo.utils.shampoo_utils import pack_upper_triangular
 from torch import nn, Tensor
 from torch.testing._internal.common_utils import (
@@ -69,6 +76,114 @@ def _pack_if_enabled(
         and config.use_symmetric_packing
         else matrix
     )
+
+
+@instantiate_parametrized_tests
+class DistributedShampooNewtonSchulzTest(unittest.TestCase):
+    """End-to-end training with the Newton-Schulz inverse root instead of an eigendecomposition."""
+
+    @staticmethod
+    def _optim_factory(
+        parameters: Any,
+        preconditioner_config: PreconditionerConfig,
+    ) -> torch.optim.Optimizer:
+        return DistributedShampoo(
+            parameters,
+            lr=0.01,
+            betas=(0.9, 0.999),
+            epsilon=1e-8,
+            max_preconditioner_dim=5,
+            precondition_frequency=1,
+            start_preconditioning_step=1,
+            preconditioner_config=preconditioner_config,
+        )
+
+    def _assert_trains(self, preconditioner_config: PreconditionerConfig) -> None:
+        model, loss, data, target, _ = train_model(
+            optim_factory=partial(
+                DistributedShampooNewtonSchulzTest._optim_factory,
+                preconditioner_config=preconditioner_config,
+            ),
+            model_factory=partial(
+                construct_training_problem,
+                model_linear_layers_dims=(10, 5, 3),
+                model_dead_layers_dims=None,
+                fill=0.1,
+            ),
+            num_steps=20,
+        )
+        for name, parameter in model.named_parameters():
+            self.assertTrue(
+                torch.isfinite(parameter).all(),
+                msg=f"Non-finite values in {name} after training.",
+            )
+        # The problem targets zero, so a working preconditioner must drive the loss below its
+        # value at initialization.
+        self.assertLess(loss(model(data), target).item(), 0.1)
+
+    def test_training_with_newton_schulz(self) -> None:
+        self._assert_trains(
+            RootInvShampooPreconditionerConfig(
+                amortized_computation_config=NewtonSchulzRootInvConfig()
+            )
+        )
+
+    def test_training_with_coefficient_schedule(self) -> None:
+        """A per-iteration coefficient schedule, the form Polar Express supplies, trains end to end."""
+        self._assert_trains(
+            RootInvShampooPreconditionerConfig(
+                amortized_computation_config=NewtonSchulzRootInvConfig(
+                    coefficients=[[3.4445, -4.7750, 2.0315]] * 6
+                    + [[3.0, -16.0 / 5.0, 6.0 / 5.0]] * 14
+                )
+            )
+        )
+
+    def test_matches_eigendecomposition_on_full_rank_factor_matrices(self) -> None:
+        """Newton-Schulz agrees with the eigendecomposition once the factor matrices are full rank.
+
+        It does NOT agree while they are rank deficient, because relative_epsilon regularizes more
+        aggressively there than epsilon does on the eigendecomposition path.
+        """
+        compare_two_optimizers_on_weight_and_loss(
+            control_optim_factory=partial(
+                DistributedShampooNewtonSchulzTest._optim_factory,
+                preconditioner_config=DefaultShampooConfig,
+            ),
+            experimental_optim_factory=partial(
+                DistributedShampooNewtonSchulzTest._optim_factory,
+                preconditioner_config=RootInvShampooPreconditionerConfig(
+                    # Match the eigendecomposition path's regularization so the two are comparable.
+                    amortized_computation_config=NewtonSchulzRootInvConfig(
+                        relative_epsilon=0.0
+                    )
+                ),
+            ),
+            model_linear_layers_dims=(10, 10),
+            model_dead_layers_dims=None,
+            fill=0.1,
+            total_steps=5,
+            rtol=1e-2,
+            atol=1e-3,
+        )
+
+    def test_unsupported_root_fails_fast(self) -> None:
+        """An order-3 block asks for root 6, which Newton-Schulz cannot compute. This must raise at
+        optimizer construction rather than be swallowed as a per-factor-matrix warning during
+        training that silently reuses a stale preconditioner."""
+        model = nn.ParameterList([nn.Parameter(torch.randn(4, 4, 4))])
+        self.assertRaisesRegex(
+            ValueError,
+            re.escape(
+                "NewtonSchulzRootInvConfig only supports inverse roots that are powers of two, but "
+                "unsupported_roots=[6.0] were requested."
+            ),
+            DistributedShampooNewtonSchulzTest._optim_factory,
+            model.parameters(),
+            preconditioner_config=RootInvShampooPreconditionerConfig(
+                amortized_computation_config=NewtonSchulzRootInvConfig()
+            ),
+        )
 
 
 @instantiate_parametrized_tests

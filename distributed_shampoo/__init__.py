@@ -23,6 +23,7 @@ from distributed_shampoo.preconditioner.matrix_functions_types import (
     EighEigendecompositionConfig,
     MatrixFunctionConfig,
     NewtonSchulzOrthogonalizationConfig,
+    NewtonSchulzRootInvConfig,
     OrthogonalizationConfig,
     PerturbationConfig,
     PseudoInverseConfig,
@@ -118,6 +119,7 @@ __all__ = [
     "DefaultEigenConfig",  # Default `RootInvConfig` using `EigenConfig`.
     "CoupledNewtonConfig",  # Based on `RootInvConfig`.
     "CoupledHigherOrderConfig",  # Based on `RootInvConfig`.
+    "NewtonSchulzRootInvConfig",  # Based on `RootInvConfig`.
     "OrthogonalizationConfig",  # Abstract base class (based on `MatrixFunctionConfig`).
     "SVDOrthogonalizationConfig",  # Based on `OrthogonalizationConfig`.
     "NewtonSchulzOrthogonalizationConfig",  # Based on `OrthogonalizationConfig`.
