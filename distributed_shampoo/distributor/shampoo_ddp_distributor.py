@@ -24,6 +24,7 @@ from distributed_shampoo.distributor.shampoo_distributor import DistributorInter
 from distributed_shampoo.shampoo_types import (
     DDPDistributedConfig,
     DISTRIBUTED_CONFIG,
+    PARAM_NAMES,
     PARAMS,
     ShampooRuntimeConfig,
 )
@@ -219,6 +220,47 @@ class DDPDistributor(DistributorInterface):
             communication_dtype=distributed_config.communication_dtype,
             group_rank=group_rank,
         )
+
+    def _resolve_head_split_sizes(self) -> tuple[int | None, ...] | None:
+        """Resolve per-parameter head-split sizes from the DDP config.
+
+        Returns None (head-split disabled) unless ``head_split_size > 0``. When
+        enabled, a parameter is head-split iff its name contains any substring in
+        ``head_split_param_names``; ``head_split_size`` (head_dim) is used for
+        those and None for the rest. Requires per-parameter names under
+        PARAM_NAMES in the param group. Works with any matrix preconditioner
+        (e.g. Shampoo or spectral descent / Muon).
+        """
+        distributed_config: DDPDistributedConfig = self._param_group[DISTRIBUTED_CONFIG]
+        head_split_size = distributed_config.head_split_size
+        if not head_split_size:
+            return None
+        if PARAM_NAMES not in self._param_group:
+            raise ValueError(
+                f"head_split_size requires per-parameter names under "
+                f"'{PARAM_NAMES}' in the param group."
+            )
+        param_names = self._param_group[PARAM_NAMES]
+        num_params = len(self._param_group[PARAMS])
+        if len(param_names) != num_params:
+            raise ValueError(
+                f"len({PARAM_NAMES})={len(param_names)} must equal "
+                f"len(params)={num_params}."
+            )
+        head_split_sizes = tuple(
+            head_split_size
+            if any(
+                pattern in name for pattern in distributed_config.head_split_param_names
+            )
+            else None
+            for name in param_names
+        )
+        if not any(size is not None for size in head_split_sizes):
+            logger.warning(
+                "head_split_size is set but no parameter name matched "
+                "head_split_param_names; head-split is a no-op."
+            )
+        return head_split_sizes
 
     @overload
     @torch.no_grad()

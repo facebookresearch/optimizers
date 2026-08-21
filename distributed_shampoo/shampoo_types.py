@@ -51,6 +51,7 @@ ITERATE_AVERAGING_CONFIG = "iterate_averaging_config"
 LR = "lr"
 MAX_PRECONDITIONER_DIM = "max_preconditioner_dim"
 PARAMS = "params"  # While this is stored in groups by default, we do not checkpoint this quantity.
+PARAM_NAMES = "param_names"
 PEAK_LR = "peak_lr"
 PRECONDITION_FREQUENCY = "precondition_frequency"
 PRECONDITIONER_CONFIG = "preconditioner_config"
@@ -1086,6 +1087,12 @@ class DDPDistributedConfig(DistributedConfig):
     communication_dtype: torch.dtype = torch.float32
     num_trainers_per_group: int = -1
     communicate_params: bool = False
+    # Per-head splitting of attention QKV weights for Muon / spectral descent.
+    # head_split_size = head_dim (0 disables). head_split_param_names lists the
+    # FQN substrings (e.g. "qkv_linear.") of the projections to split along
+    # dim 0 into one 2D [head_dim, in_features] block per attention head.
+    head_split_size: int = 0
+    head_split_param_names: list[str] = field(default_factory=list)
 
     @staticmethod
     def _get_default_load_balancing_config() -> LoadBalancingConfig:
@@ -1094,6 +1101,13 @@ class DDPDistributedConfig(DistributedConfig):
     load_balancing_config: LoadBalancingConfig = field(
         default_factory=_get_default_load_balancing_config
     )
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if self.head_split_size < 0:
+            raise ValueError(
+                f"Invalid {self.head_split_size=}. Must be >= 0 (0 disables head-split)."
+            )
 
 
 @dataclass(kw_only=True)

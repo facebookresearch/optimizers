@@ -7,8 +7,9 @@ LICENSE file in the root directory of this source tree.
 
 """
 
+import logging
 from abc import ABC, abstractmethod
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from functools import partial
 from operator import attrgetter
 from typing import Any, Literal, overload
@@ -28,6 +29,8 @@ from distributed_shampoo.utils.shampoo_utils import (
     multi_dim_split,
 )
 from torch import Tensor
+
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 ###### DISTRIBUTOR CLASSES ######
@@ -50,6 +53,13 @@ class DistributorInterface(ABC):
         self._param_group = param_group
         self._runtime_config: ShampooRuntimeConfig = (
             runtime_config if runtime_config is not None else ShampooRuntimeConfig()
+        )
+        # Per-parameter head-split sizes (None disables head-split for every
+        # param). Resolved via virtual dispatch so only distributors that
+        # support head-split (currently DDP) return a non-None spec. Must be set
+        # before _merge_and_block_parameters() so blocking can consult it.
+        self._head_split_sizes: tuple[int | None, ...] | None = (
+            self._resolve_head_split_sizes()
         )
         # Merge and block parameters creates self._global_blocked_params and self._global_num_blocks_per_param
         # Global blocked params are all the blocked parameters after merging and blocking.
@@ -74,6 +84,21 @@ class DistributorInterface(ABC):
         self._local_masked_blocked_params: tuple[Tensor, ...]
         # Local block info list contains information about each block masked by the distributor selector.
         self._local_block_info_list: tuple[BlockInfo, ...]
+
+    def _resolve_head_split_sizes(self) -> tuple[int | None, ...] | None:
+        """Return per-parameter head-split sizes, or None to disable head-split.
+
+        Base implementation disables head-split. Distributors that support it
+        (currently only ``DDPDistributor``) override this. A warning is emitted
+        if head-split was requested on an unsupported distributor so the config
+        is not silently ignored.
+        """
+        if getattr(self._param_group[DISTRIBUTED_CONFIG], "head_split_size", 0):
+            logger.warning(
+                "head_split_size is set but ignored: head-split is only "
+                f"supported by DDPDistributor, not {type(self).__name__}."
+            )
+        return None
 
     @abstractmethod
     @torch.no_grad()
@@ -170,6 +195,43 @@ class DistributorInterface(ABC):
             else self._param_group[PARAMS]
         )
 
+    def _blocks_within_tensor(
+        self,
+        tensor: Tensor,
+        param_index: int,
+        merge_dims: Callable[..., tuple[int, ...]],
+    ) -> tuple[Tensor, ...]:
+        """Split one param/grad tensor into preconditioner blocks.
+
+        Default path: merge small dims, then block by ``max_preconditioner_dim``.
+        When head-split is enabled for this param, instead split dim 0 into
+        ``head_dim``-sized 2D blocks (one per attention head) and skip merging /
+        blocking so the model (input) dimension is preserved. Both the parameter
+        and gradient paths call this so their block decomposition stays
+        identical.
+        """
+        head_dim = (
+            None
+            if self._head_split_sizes is None
+            else self._head_split_sizes[param_index]
+        )
+        if head_dim is not None:
+            if tensor.dim() != 2:
+                raise ValueError(
+                    "head-split requires a 2D parameter, got shape "
+                    f"{tuple(tensor.shape)} at param index {param_index}."
+                )
+            if tensor.shape[0] % head_dim != 0:
+                raise ValueError(
+                    f"head_split_size={head_dim} must divide out_features="
+                    f"{tensor.shape[0]} at param index {param_index}."
+                )
+            return torch.split(tensor, head_dim, dim=0)
+        return multi_dim_split(
+            tensor.view(merge_dims(tensor_shape=tensor.size())),
+            self._param_group[MAX_PRECONDITIONER_DIM],
+        )
+
     @torch.no_grad()
     def _merge_and_block_with_params(
         self, params: Iterable[Tensor]
@@ -199,11 +261,10 @@ class DistributorInterface(ABC):
             ].target_parameter_dimensionality,
         )
 
-        for param in params:
-            # Obtain blocks for each parameter after merging.
-            blocks_within_param = multi_dim_split(
-                param.view(merge_dims(tensor_shape=param.size())),
-                self._param_group[MAX_PRECONDITIONER_DIM],
+        for param_index, param in enumerate(params):
+            # Obtain blocks for each parameter after merging (or per-head split).
+            blocks_within_param = self._blocks_within_tensor(
+                param, param_index, merge_dims
             )
 
             # Generate and extend blocked parameters list.
@@ -256,11 +317,17 @@ class DistributorInterface(ABC):
             ].target_parameter_dimensionality,
         )
 
-        for grad, num_blocks, (block_index, next_block_index) in zip(
-            self._get_params_or_grads(get_grad=True),
-            self._global_num_blocks_per_param,
-            generate_pairwise_indices(self._global_num_blocks_per_param),
-            strict=True,
+        for param_index, (
+            grad,
+            num_blocks,
+            (block_index, next_block_index),
+        ) in enumerate(
+            zip(
+                self._get_params_or_grads(get_grad=True),
+                self._global_num_blocks_per_param,
+                generate_pairwise_indices(self._global_num_blocks_per_param),
+                strict=True,
+            )
         ):
             param_distributor_selector = self._distributor_selector[
                 block_index:next_block_index
@@ -283,10 +350,9 @@ class DistributorInterface(ABC):
                     f"Encountered gradient containing NaN/Inf in parameter with shape {attrgetter('shape')(grad)}. Check your model for numerical instability or consider gradient clipping."
                 )
 
-            # Obtain blocks for each gradient after merging.
-            blocks_within_grad = multi_dim_split(
-                grad.view(merge_dims(tensor_shape=grad.size())),
-                self._param_group[MAX_PRECONDITIONER_DIM],
+            # Obtain blocks for each gradient after merging (or per-head split).
+            blocks_within_grad = self._blocks_within_tensor(
+                grad, param_index, merge_dims
             )
             # Generate block-to-parameter metadata and extend blocked parameters list.
             local_masked_blocked_grads.extend(
