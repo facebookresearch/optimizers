@@ -1517,15 +1517,30 @@ class BaseShampooPreconditionerList(
         kronecker_factors: _ShampooKroneckerFactorsUnwrappedType,
     ) -> tuple[Tensor, ...]:
         # Construct outer product list for updating Kronecker factors.
-        return tuple(
-            torch.tensordot(
+        outer_product_list = []
+        for k in compress_list(range(order), preconditioned_dims_selector):
+            outer_product = torch.tensordot(
                 grad,
                 grad,
                 # Contracts across all dimensions except for k.
                 dims=[[*chain(range(k), range(k + 1, order))]] * 2,  # type: ignore[has-type]
             )
-            for k in compress_list(range(order), preconditioned_dims_selector)
-        )
+            if self._preconditioner_config.use_dimension_normalization:
+                self._apply_dimension_normalization(
+                    outer_product=outer_product,
+                    grad=grad,
+                    dim=k,
+                )
+            outer_product_list.append(outer_product)
+        return tuple(outer_product_list)
+
+    @staticmethod
+    def _apply_dimension_normalization(
+        outer_product: Tensor,
+        grad: Tensor,
+        dim: int,
+    ) -> None:
+        outer_product.div_(math.prod((*grad.shape[:dim], *grad.shape[dim + 1 :])))
 
     @profile_decorator
     def _update_factor_matrices(self, masked_grad_list: tuple[Tensor, ...]) -> None:
@@ -1996,14 +2011,19 @@ class RootInvKLShampooPreconditionerList(RootInvShampooPreconditionerList):
                     if idx != idx_of_k
                 ),
             )
-            outer_product_list.append(
-                torch.tensordot(
-                    preconditioned_grad,
-                    preconditioned_grad,
-                    # Contracts across all dimensions except for k.
-                    dims=[[*chain(range(k), range(k + 1, order))]] * 2,  # type: ignore[has-type]
-                )
+            outer_product = torch.tensordot(
+                preconditioned_grad,
+                preconditioned_grad,
+                # Contracts across all dimensions except for k.
+                dims=[[*chain(range(k), range(k + 1, order))]] * 2,  # type: ignore[has-type]
             )
+            if self._preconditioner_config.use_dimension_normalization:
+                self._apply_dimension_normalization(
+                    outer_product=outer_product,
+                    grad=grad,
+                    dim=k,
+                )
+            outer_product_list.append(outer_product)
         return tuple(outer_product_list)
 
 
@@ -2063,5 +2083,11 @@ class EigendecomposedKLShampooPreconditionerList(
                 # Contracts across all dimensions except for k.
                 dims=[[*chain(range(k), range(k + 1, order))]] * 2,  # type: ignore[has-type]
             )
+            if self._preconditioner_config.use_dimension_normalization:
+                self._apply_dimension_normalization(
+                    outer_product=outer_product,
+                    grad=grad,
+                    dim=k,
+                )
             outer_product_list.append(outer_product)
         return tuple(outer_product_list)

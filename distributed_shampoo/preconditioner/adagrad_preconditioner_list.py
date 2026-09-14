@@ -8,6 +8,7 @@ LICENSE file in the root directory of this source tree.
 """
 
 import logging
+import math
 from collections.abc import Hashable, Mapping
 from typing import TypeVar
 
@@ -93,7 +94,7 @@ class AdagradPreconditionerList(PreconditionerList):
             # Instantiate AdaGrad optimizer state for this block.
             preconditioner_index = str(param_index) + "." + str(block_index)
             block_state[ADAGRAD] = block_info.allocate_zeros_tensor(
-                size=block.size(),
+                size=self._preconditioner_state_size(block),
                 dtype=block.dtype,
                 device=block.device,
             )
@@ -119,6 +120,19 @@ class AdagradPreconditionerList(PreconditionerList):
             for preconditioner in self._local_preconditioner_list
         )
 
+    def _preconditioner_state_size(self, block: Tensor) -> torch.Size:
+        """Shape of the per-block second-moment state (full block shape for dense AdaGrad)."""
+        return block.size()
+
+    def _accumulate_second_moment(self, masked_grad_list: tuple[Tensor, ...]) -> None:
+        """Accumulate weighted squared gradients into the preconditioner state."""
+        torch._foreach_addcmul_(
+            self._masked_preconditioner_list,
+            masked_grad_list,
+            masked_grad_list,
+            value=self._weighting_factor,
+        )
+
     @profile_decorator
     def update_preconditioners(
         self,
@@ -129,12 +143,7 @@ class AdagradPreconditionerList(PreconditionerList):
         if self._beta2 != 1.0:
             torch._foreach_mul_(self._masked_preconditioner_list, self._beta2)
 
-        torch._foreach_addcmul_(
-            self._masked_preconditioner_list,
-            masked_grad_list,
-            masked_grad_list,
-            value=self._weighting_factor,
-        )
+        self._accumulate_second_moment(masked_grad_list)
 
         # Update bias correction term based on step list.
         if self._use_bias_correction and self._beta2 < 1.0:
@@ -168,3 +177,29 @@ class AdagradPreconditionerList(PreconditionerList):
         self._masked_preconditioner_list = compress_list(
             self._local_preconditioner_list, local_grad_selector
         )
+
+
+class ScalarAdagradPreconditionerList(AdagradPreconditionerList):
+    """AdaGrad / RMSprop / Adam preconditioners that accumulate the mean squared
+    gradient (RMS norm squared) for each block as a single scalar.
+
+    Each update computes a block's ``1 / sqrt(numel)`` factor so that
+    ``(||g|| / sqrt(numel))^2 = mean(g^2)`` can be accumulated with foreach ops.
+
+    See AdagradPreconditionerList for the shared arguments and semantics.
+    """
+
+    def _preconditioner_state_size(self, block: Tensor) -> torch.Size:
+        return torch.Size([])
+
+    def _accumulate_second_moment(self, masked_grad_list: tuple[Tensor, ...]) -> None:
+        """Accumulate weighted per-block mean squared gradients as scalar state."""
+        grad_rms_normalization_list = tuple(
+            1.0 / math.sqrt(grad.numel()) if grad.numel() > 0 else 0.0
+            for grad in masked_grad_list
+        )
+        grad_rms_list = torch._foreach_mul(
+            torch._foreach_norm(masked_grad_list),
+            grad_rms_normalization_list,
+        )
+        super()._accumulate_second_moment(grad_rms_list)

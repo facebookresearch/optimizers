@@ -14,6 +14,7 @@ import torch
 from distributed_shampoo.distributor.shampoo_block_info import BlockInfo
 from distributed_shampoo.preconditioner.adagrad_preconditioner_list import (
     AdagradPreconditionerList,
+    ScalarAdagradPreconditionerList,
 )
 from distributed_shampoo.preconditioner.preconditioner_list import PreconditionerList
 from distributed_shampoo.preconditioner.tests.preconditioner_list_test_utils import (
@@ -34,6 +35,16 @@ class AdagradPreconditionerListTest(AbstractPreconditionerListTest.Interface):
 
     def _instantiate_preconditioner_list(self, **kwargs: Any) -> PreconditionerList:
         return AdagradPreconditionerList(
+            block_list=self._block_list,
+            state=self._state,
+            block_info_list=self._block_info_list,
+            **kwargs,
+        )
+
+    def _instantiate_scalar_preconditioner_list(
+        self, **kwargs: Any
+    ) -> ScalarAdagradPreconditionerList:
+        return ScalarAdagradPreconditionerList(
             block_list=self._block_list,
             state=self._state,
             block_info_list=self._block_info_list,
@@ -111,6 +122,111 @@ class AdagradPreconditionerListTest(AbstractPreconditionerListTest.Interface):
                 torch._foreach_sign(grad_list), 10.0
             ),
         )
+
+    def test_scalar_gsquare_accumulation_state_size(self) -> None:
+        preconditioner_list = self._instantiate_scalar_preconditioner_list()
+
+        self.assertEqual(
+            tuple(
+                preconditioner.shape
+                for preconditioner in preconditioner_list._local_preconditioner_list
+            ),
+            (torch.Size([]),) * len(self._block_list),
+        )
+        self.assertEqual(
+            preconditioner_list.numel_list,
+            (1,) * len(self._block_list),
+        )
+        self.assertEqual(preconditioner_list.numel(), len(self._block_list))
+
+    def test_scalar_gsquare_accumulation_handles_masked_empty_block(self) -> None:
+        empty_block = torch.empty(0)
+        active_block = torch.tensor([1.0, 2.0])
+        state: dict[Tensor, dict[Hashable, object]] = {
+            empty_block: {"block_0": {}},
+            active_block: {"block_0": {}},
+        }
+        preconditioner_list = ScalarAdagradPreconditionerList(
+            block_list=(empty_block, active_block),
+            state=state,
+            block_info_list=(
+                BlockInfo(param=empty_block, composable_block_ids=(0, "block_0")),
+                BlockInfo(param=active_block, composable_block_ids=(1, "block_0")),
+            ),
+        )
+        preconditioner_list.compress_preconditioner_list((True, True))
+        grad = torch.tensor([3.0, 4.0])
+        masked_grad_list = (empty_block, grad)
+        preconditioner_list.update_preconditioners(
+            masked_grad_list, step=torch.tensor(1)
+        )
+        preconditioned_empty_block, preconditioned_grad = (
+            preconditioner_list.precondition(masked_grad_list)
+        )
+        self.assertEqual(preconditioned_empty_block.numel(), 0)
+        torch.testing.assert_close(
+            preconditioned_grad,
+            grad / torch.sqrt(torch.mean(grad.square())),
+        )
+
+    def test_scalar_gsquare_accumulation_update_and_precondition(self) -> None:
+        grad_lists: list[tuple[Tensor, ...]] = [
+            (
+                torch.tensor([1.0, 1.0]),
+                torch.tensor([[1.0, 2.0], [3.0, 4.0]]),
+                torch.tensor([[5.0, 6.0]]),
+                torch.tensor(1.0),
+            ),
+            (
+                torch.tensor([2.0, 4.0]),
+                torch.tensor([[2.0, 1.0], [0.0, 3.0]]),
+                torch.tensor([[4.0, 8.0]]),
+                torch.tensor(2.0),
+            ),
+        ]
+        settings = (
+            ("AdaGrad", 1.0, 1.0, False),
+            ("RMSprop", 0.9, 1.0 - 0.9, False),
+            ("Adam", 0.9, 1.0 - 0.9, True),
+            ("dropped weighting factor", 0.9, 1.0, False),
+        )
+
+        mean_gsquare_lists = [
+            tuple(torch.mean(grad.square()) for grad in grad_list)
+            for grad_list in grad_lists
+        ]
+        for name, beta2, weighting_factor, use_bias_correction in settings:
+            with self.subTest(name=name):
+                expected_preconditioner_list = tuple(
+                    weighting_factor * (beta2 * mean_gsquare_1 + mean_gsquare_2)
+                    for mean_gsquare_1, mean_gsquare_2 in zip(
+                        *mean_gsquare_lists, strict=True
+                    )
+                )
+                bias_correction2 = (
+                    1.0 - beta2 ** len(grad_lists) if use_bias_correction else 1.0
+                )
+                expected_preconditioned_grad_list = tuple(
+                    grad / (torch.sqrt(preconditioner / bias_correction2) + 1e-10)
+                    for grad, preconditioner in zip(
+                        grad_lists[-1], expected_preconditioner_list, strict=True
+                    )
+                )
+                preconditioner_list = self._instantiate_scalar_preconditioner_list(
+                    beta2=beta2,
+                    weighting_factor=weighting_factor,
+                    use_bias_correction=use_bias_correction,
+                )
+
+                self._verify_preconditioner_updates(
+                    preconditioner_list=preconditioner_list,
+                    masked_grad_lists=grad_lists,
+                    masked_expected_preconditioned_grad_list=expected_preconditioned_grad_list,
+                )
+                torch.testing.assert_close(
+                    preconditioner_list._local_preconditioner_list,
+                    expected_preconditioner_list,
+                )
 
     @property
     def _expected_numel_list(self) -> tuple[int, ...]:

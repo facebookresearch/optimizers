@@ -18,10 +18,11 @@ Developers:
 - Ke Sang (Meta Platforms, Inc.)
 - Wang Zhou (Meta Platforms, Inc.)
 - Iris Zhang (Meta Platforms, Inc.)
+- Shagun Gupta (Meta Platforms, Inc.)
 
 with contributions and support from:
 
-Ganesh Ajjanagadde (Meta), Rohan Anil (Google), Adnan Aziz (Meta), Pavan Balaji (Meta), Shuo Chang (Meta), Weiwei Chu (Meta), Assaf Eisenman (Meta), Will Feng (Meta), Zhuobo Feng (Meta), Jose Gallego-Posada (Mila / Meta Platforms, Inc.), Avirup Ghosh (Meta), Yizi Gu (Meta), Shagun Gupta (Meta), Vineet Gupta (Google), Yuchen Hao (Meta), Brian Hirsh (Meta), Yusuo Hu (Meta), Yuxi Hu (Meta), Minhui Huang (Meta), Guna Lakshminarayanan (Meta), Michael Lazos (Meta), Zhijing Li (Meta), Ming Liang (Meta), Wanchao Liang (Meta), Ying Liu (Meta), Wenguang Mao (Meta), Dheevatsa Mudigere (NVIDIA), Maxim Naumov (Meta), Jongsoo Park (Meta), Mike Rabbat (Meta), Kaushik Rangadurai (Meta), Dennis van der Staay (Meta), Fei Tian (Meta), Rohan Varma (Meta), Sanjay Vishwakarma (Meta), Xunnan (Shawn) Xu (Meta), Jiyan Yang (Meta), Chunxing Yin (Meta), Gavin Zhang (Meta), Haoran Zhang (Meta), Haoyu Zhang (Meta), Chuanhao Zhuge (Meta), and Will Zou (Meta).
+Ganesh Ajjanagadde (Meta), Rohan Anil (Google), Adnan Aziz (Meta), Pavan Balaji (Meta), Shuo Chang (Meta), Weiwei Chu (Meta), Assaf Eisenman (Meta), Will Feng (Meta), Zhuobo Feng (Meta), Jose Gallego-Posada (Mila / Meta Platforms, Inc.), Avirup Ghosh (Meta), Yizi Gu (Meta), Vineet Gupta (Google), Yuchen Hao (Meta), Brian Hirsh (Meta), Yusuo Hu (Meta), Yuxi Hu (Meta), Minhui Huang (Meta), Guna Lakshminarayanan (Meta), Michael Lazos (Meta), Zhijing Li (Meta), Ming Liang (Meta), Wanchao Liang (Meta), Ying Liu (Meta), Wenguang Mao (Meta), Dheevatsa Mudigere (NVIDIA), Maxim Naumov (Meta), Jongsoo Park (Meta), Mike Rabbat (Meta), Kaushik Rangadurai (Meta), Dennis van der Staay (Meta), Fei Tian (Meta), Rohan Varma (Meta), Sanjay Vishwakarma (Meta), Xunnan (Shawn) Xu (Meta), Jiyan Yang (Meta), Chunxing Yin (Meta), Gavin Zhang (Meta), Haoran Zhang (Meta), Haoyu Zhang (Meta), Chuanhao Zhuge (Meta), and Will Zou (Meta).
 
 ## 🏆 Competition Winner 🏆
 
@@ -793,6 +794,18 @@ dcp.load(
 model.load_state_dict(state_dict["model"])
 optimizer.load_state_dict(state_dict["optim"])
 ```
+
+`load_state_dict()` does not translate or validate differences between a checkpoint's
+`grafting_config` or `preconditioner_config` and the instantiated optimizer's config.
+Different configs can therefore cross-load when the existing tensor-copy behavior
+accepts their state shapes, but this is not a compatibility guarantee. For example,
+AdaGrad and RMSprop grafting states can cross-load when their tensor shapes match.
+Shampoo states using `RootInvShampooPreconditionerConfig` and
+`RootInvKLShampooPreconditionerConfig`, or different `use_trace_scaling` settings,
+can likewise cross-load only when their tensor state layouts permit it. A config
+mismatch emits a warning before tensor state loading begins, so the diagnostic is
+available even if loading later fails. As usual, parameter-group metadata is restored
+from the checkpoint; no config translation or preservation is performed.
 
 You can also refer to [`ddp_cifar10_example.py`](https://github.com/facebookresearch/optimizers/blob/main/distributed_shampoo/examples/ddp_cifar10_example.py) as an example.
 

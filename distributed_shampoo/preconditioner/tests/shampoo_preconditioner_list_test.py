@@ -14,6 +14,7 @@ import unittest
 from collections.abc import Callable, Hashable
 from dataclasses import dataclass, field, replace
 from functools import partial
+from typing import cast
 from unittest import mock
 
 import torch
@@ -31,6 +32,7 @@ from distributed_shampoo.preconditioner.shampoo_preconditioner_list import (
     EigendecomposedShampooPreconditionerList,
     EigenvalueCorrectedShampooPreconditionerList,
     RootInvKLShampooPreconditionerList,
+    RootInvShampooKroneckerFactorsState,
     RootInvShampooPreconditionerList,
 )
 from distributed_shampoo.preconditioner.tests.preconditioner_list_test_utils import (
@@ -1530,6 +1532,101 @@ class RootInvKLShampooPreconditionerListTest(RootInvShampooPreconditionerListTes
         "RootInvKLShampooPreconditionerList does not support adaptive computation frequency."
     )
     def test_adaptive_amortized_computation_frequency(self) -> None: ...
+
+
+class ShampooDimensionNormalizationTest(unittest.TestCase):
+    def test_dimension_normalization(self) -> None:
+        for preconditioner_config, preconditioner_list_factory in (
+            (
+                RootInvShampooPreconditionerConfig(),
+                RootInvShampooPreconditionerList,
+            ),
+            (
+                EigendecomposedShampooPreconditionerConfig(),
+                EigendecomposedShampooPreconditionerList,
+            ),
+            (
+                RootInvKLShampooPreconditionerConfig(),
+                RootInvKLShampooPreconditionerList,
+            ),
+            (
+                EigendecomposedKLShampooPreconditionerConfig(),
+                EigendecomposedKLShampooPreconditionerList,
+            ),
+        ):
+            for use_dimension_normalization, expected_scale in (
+                (False, 1.0),
+                (True, math.sqrt(2.0)),
+            ):
+                with self.subTest(
+                    preconditioner_list_factory=preconditioner_list_factory,
+                    use_dimension_normalization=use_dimension_normalization,
+                ):
+                    block = torch.eye(2)
+                    preconditioner_list = preconditioner_list_factory(
+                        block_list=(block,),
+                        state={block: {"block_0": {}}},
+                        block_info_list=(
+                            BlockInfo(
+                                param=block,
+                                composable_block_ids=(0, "block_0"),
+                            ),
+                        ),
+                        preconditioner_config=replace(
+                            preconditioner_config,
+                            use_dimension_normalization=use_dimension_normalization,
+                        ),
+                    )
+                    preconditioner_list.update_preconditioners(
+                        masked_grad_list=(block,),
+                        step=torch.tensor(1),
+                        perform_amortized_computation=True,
+                    )
+
+                    (preconditioned_grad,) = preconditioner_list.precondition(
+                        masked_grad_list=(block,)
+                    )
+
+                    torch.testing.assert_close(
+                        preconditioned_grad, expected_scale * block
+                    )
+
+    def test_dimension_normalization_uses_contracted_dimension_sizes(self) -> None:
+        block = torch.arange(1.0, 7.0).reshape(2, 3)
+        block_state: dict[Hashable, object] = {}
+        state: dict[Tensor, dict[Hashable, object]] = {block: {"block_0": block_state}}
+        preconditioner_list = RootInvShampooPreconditionerList(
+            block_list=(block,),
+            state=state,
+            block_info_list=(
+                BlockInfo(
+                    param=block,
+                    composable_block_ids=(0, "block_0"),
+                ),
+            ),
+            preconditioner_config=RootInvShampooPreconditionerConfig(
+                use_dimension_normalization=True,
+                use_symmetric_packing=False,
+            ),
+        )
+
+        preconditioner_list.update_preconditioners(
+            masked_grad_list=(block,),
+            step=torch.tensor(1),
+            perform_amortized_computation=False,
+        )
+
+        kronecker_factors = cast(
+            RootInvShampooKroneckerFactorsState,
+            block_state["shampoo"],
+        )
+        torch.testing.assert_close(
+            kronecker_factors.factor_matrices,
+            (
+                block @ block.T / block.shape[1],
+                block.T @ block / block.shape[0],
+            ),
+        )
 
 
 class EigendecomposedKLShampooPreconditionerListTest(

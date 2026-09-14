@@ -11,7 +11,7 @@ import re
 import unittest
 from dataclasses import asdict, fields
 from inspect import signature
-from typing import Any
+from typing import Any, cast
 from unittest.mock import MagicMock
 
 import torch
@@ -20,7 +20,9 @@ from distributed_shampoo.preconditioner.matrix_functions_types import (
     PseudoInverseConfig,
 )
 from distributed_shampoo.shampoo_types import (
+    _ScalarPreconditionerConfig,
     AdaGradPreconditionerConfig,
+    AdamPreconditionerConfig,
     BaseShampooPreconditionerConfig,
     ClassicMomentumConfig,
     ClassicShampooPreconditionerConfig,
@@ -33,6 +35,9 @@ from distributed_shampoo.shampoo_types import (
     HybridShardDistributedConfig,
     IterateAveragingConfig,
     RMSpropPreconditionerConfig,
+    ScalarAdaGradPreconditionerConfig,
+    ScalarAdamPreconditionerConfig,
+    ScalarRMSpropPreconditionerConfig,
     ShampooPT2CompileConfig,
     SignDescentPreconditionerConfig,
 )
@@ -60,6 +65,35 @@ class AdaGradPreconditionerConfigSubclassesTest(unittest.TestCase):
             cls,
             epsilon=epsilon,
         )
+
+    @parametrize(
+        "scalar_cls, dense_parent, expected_beta2",
+        (
+            (ScalarAdaGradPreconditionerConfig, AdaGradPreconditionerConfig, None),
+            (ScalarRMSpropPreconditionerConfig, RMSpropPreconditionerConfig, 0.99),
+            (ScalarAdamPreconditionerConfig, AdamPreconditionerConfig, 0.999),
+        ),
+    )
+    def test_scalar_configs(
+        self,
+        scalar_cls: type[AdaGradPreconditionerConfig],
+        dense_parent: type[AdaGradPreconditionerConfig],
+        expected_beta2: float | None,
+    ) -> None:
+        scalar_config = scalar_cls()
+        # A scalar config is detected via the marker mixin and is-a its dense parent.
+        self.assertIsInstance(scalar_config, _ScalarPreconditionerConfig)
+        self.assertIsInstance(scalar_config, dense_parent)
+        # A dense config is NOT flagged as scalar.
+        self.assertNotIsInstance(dense_parent(), _ScalarPreconditionerConfig)
+        # Field defaults are inherited unchanged from the dense parent.
+        self.assertEqual(scalar_config.epsilon, dense_parent().epsilon)
+        if expected_beta2 is not None:
+            # Only RMSprop/Adam-family configs define beta2; the assertIsInstance
+            # above narrows scalar_config to the base AdaGradPreconditionerConfig.
+            self.assertEqual(
+                cast(RMSpropPreconditionerConfig, scalar_config).beta2, expected_beta2
+            )
 
 
 @instantiate_parametrized_tests

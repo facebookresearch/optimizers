@@ -12,12 +12,14 @@ import gc
 import logging
 import re
 import unittest
+import warnings
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from typing import Any, cast
 
 import torch
 from distributed_shampoo.distributed_shampoo import DistributedShampoo
+from distributed_shampoo.preconditioner.adagrad_preconditioner_list import ADAGRAD
 from distributed_shampoo.preconditioner.matrix_functions_types import (
     DefaultNewtonSchulzOrthogonalizationConfig,
     EigenConfig,
@@ -27,6 +29,7 @@ from distributed_shampoo.preconditioner.matrix_functions_types import (
 )
 from distributed_shampoo.shampoo_types import (
     AdaGradPreconditionerConfig,
+    AdamPreconditionerConfig,
     BaseShampooPreconditionerConfig,
     DefaultEigenvalueCorrectedShampooConfig,
     DefaultShampooConfig,
@@ -41,8 +44,12 @@ from distributed_shampoo.shampoo_types import (
     IterateAveragingConfig,
     LR_SUM,
     PreconditionerConfig,
+    RMSpropPreconditionerConfig,
     RootInvKLShampooPreconditionerConfig,
     RootInvShampooPreconditionerConfig,
+    ScalarAdaGradPreconditionerConfig,
+    ScalarAdamPreconditionerConfig,
+    ScalarRMSpropPreconditionerConfig,
     ScheduleFreeConfig,
     ShampooPT2CompileConfig,
     SignDescentPreconditionerConfig,
@@ -69,6 +76,19 @@ def _pack_if_enabled(
         if isinstance(config, BaseShampooPreconditionerConfig)
         and config.use_symmetric_packing
         else matrix
+    )
+
+
+def _get_adagrad_states(state: object) -> tuple[Tensor, ...]:
+    if not isinstance(state, dict):
+        return ()
+    return (
+        *((state[ADAGRAD],) if ADAGRAD in state else ()),
+        *(
+            adagrad_state
+            for value in state.values()
+            for adagrad_state in _get_adagrad_states(value)
+        ),
     )
 
 
@@ -373,6 +393,274 @@ class DistributedShampooTest(unittest.TestCase):
             (t.data_ptr() for t in all_alive_tensors),
             msg="Found gradients space is still not freed, check Shampoo code for properly free gradients pointers.",
         )
+
+
+_SCALAR_DENSE_CONFIG_PAIRS: tuple[
+    tuple[type[AdaGradPreconditionerConfig], type[AdaGradPreconditionerConfig]], ...
+] = (
+    (ScalarAdaGradPreconditionerConfig, AdaGradPreconditionerConfig),
+    (ScalarRMSpropPreconditionerConfig, RMSpropPreconditionerConfig),
+    (ScalarAdamPreconditionerConfig, AdamPreconditionerConfig),
+)
+
+
+@instantiate_parametrized_tests
+class DistributedShampooConfigMismatchStateDictTest(unittest.TestCase):
+    @staticmethod
+    def _instantiate_optimizer(
+        config_field: str,
+        config: PreconditionerConfig,
+    ) -> DistributedShampoo:
+        model = nn.Sequential(nn.Linear(5, 10, bias=False))
+        if config_field == "preconditioner_config":
+            return DistributedShampoo(
+                model.parameters(),
+                max_preconditioner_dim=5,
+                preconditioner_config=config,
+            )
+        return DistributedShampoo(
+            model.parameters(),
+            max_preconditioner_dim=5,
+            grafting_config=config,
+        )
+
+    @parametrize(
+        "config_field",
+        ("preconditioner_config", "grafting_config"),
+    )
+    @parametrize("scalar_config_cls, dense_config_cls", _SCALAR_DENSE_CONFIG_PAIRS)
+    @parametrize("checkpoint_uses_scalar", (False, True))
+    def test_scalar_dense_gsquare_accumulation_checkpoint_mismatch(
+        self,
+        config_field: str,
+        scalar_config_cls: type[AdaGradPreconditionerConfig],
+        dense_config_cls: type[AdaGradPreconditionerConfig],
+        checkpoint_uses_scalar: bool,
+    ) -> None:
+        checkpoint_config = (
+            scalar_config_cls() if checkpoint_uses_scalar else dense_config_cls()
+        )
+        current_config = (
+            dense_config_cls() if checkpoint_uses_scalar else scalar_config_cls()
+        )
+        checkpoint_optimizer = self._instantiate_optimizer(
+            config_field, checkpoint_config
+        )
+        current_optimizer = self._instantiate_optimizer(config_field, current_config)
+        checkpoint_param = cast(
+            Tensor, checkpoint_optimizer.param_groups[0]["params"][0]
+        )
+        checkpoint_param.grad = torch.ones_like(checkpoint_param)
+        checkpoint_optimizer.step()
+
+        if checkpoint_uses_scalar:
+            with self.assertWarnsRegex(
+                UserWarning,
+                rf"parameter group 0 {config_field}: checkpoint has "
+                rf"{type(checkpoint_config).__name__}.*instantiated optimizer has "
+                rf"{type(current_config).__name__}",
+            ):
+                current_optimizer.load_state_dict(checkpoint_optimizer.state_dict())
+
+            checkpoint_states = _get_adagrad_states(
+                checkpoint_optimizer.state_dict()["state"]
+            )
+            current_states = _get_adagrad_states(
+                current_optimizer.state_dict()["state"]
+            )
+            self.assertEqual(len(current_states), len(checkpoint_states))
+            for current_state, checkpoint_state in zip(
+                current_states, checkpoint_states, strict=True
+            ):
+                self.assertEqual(current_state.shape, torch.Size([5, 5]))
+                torch.testing.assert_close(
+                    current_state,
+                    checkpoint_state.expand_as(current_state),
+                )
+            self.assertEqual(
+                current_optimizer.param_groups[0][config_field],
+                checkpoint_config,
+            )
+            return
+
+        with (
+            self.assertWarnsRegex(
+                UserWarning,
+                rf"parameter group 0 {config_field}: checkpoint has "
+                rf"{type(checkpoint_config).__name__}.*instantiated optimizer has "
+                rf"{type(current_config).__name__}",
+            ),
+            self.assertRaisesRegex(
+                RuntimeError,
+                r"output with shape \[\] doesn't match the broadcast shape \[5, 5\]",
+            ),
+        ):
+            current_optimizer.load_state_dict(checkpoint_optimizer.state_dict())
+
+    @parametrize(
+        "config_field, checkpoint_config, current_config",
+        (
+            (
+                "grafting_config",
+                AdaGradPreconditionerConfig(),
+                RMSpropPreconditionerConfig(),
+            ),
+            (
+                "grafting_config",
+                RMSpropPreconditionerConfig(),
+                AdaGradPreconditionerConfig(),
+            ),
+            (
+                "preconditioner_config",
+                RootInvShampooPreconditionerConfig(use_trace_scaling=False),
+                RootInvShampooPreconditionerConfig(use_trace_scaling=True),
+            ),
+            (
+                "preconditioner_config",
+                RootInvShampooPreconditionerConfig(),
+                RootInvKLShampooPreconditionerConfig(),
+            ),
+            (
+                "preconditioner_config",
+                RootInvKLShampooPreconditionerConfig(),
+                RootInvShampooPreconditionerConfig(),
+            ),
+        ),
+    )
+    def test_compatible_config_mismatch_warns(
+        self,
+        config_field: str,
+        checkpoint_config: PreconditionerConfig,
+        current_config: PreconditionerConfig,
+    ) -> None:
+        checkpoint_optimizer = self._instantiate_optimizer(
+            config_field, checkpoint_config
+        )
+        current_optimizer = self._instantiate_optimizer(config_field, current_config)
+        checkpoint_param = cast(
+            Tensor, checkpoint_optimizer.param_groups[0]["params"][0]
+        )
+        checkpoint_param.grad = torch.ones_like(checkpoint_param)
+        checkpoint_optimizer.step()
+
+        checkpoint = checkpoint_optimizer.state_dict()
+        with self.assertWarnsRegex(
+            UserWarning,
+            rf"parameter group 0 {config_field}: checkpoint has "
+            rf"{type(checkpoint_config).__name__}.*instantiated optimizer has "
+            rf"{type(current_config).__name__}",
+        ):
+            current_optimizer.load_state_dict(checkpoint)
+
+        torch.testing.assert_close(
+            current_optimizer.state_dict()["state"],
+            checkpoint_optimizer.state_dict()["state"],
+        )
+        self.assertEqual(
+            current_optimizer.param_groups[0][config_field],
+            checkpoint_config,
+        )
+        self.assertEqual(checkpoint["param_groups"][0][config_field], checkpoint_config)
+        current_param = cast(Tensor, current_optimizer.param_groups[0]["params"][0])
+        current_param.grad = torch.ones_like(current_param)
+        current_optimizer.step()
+        self.assertEqual(current_optimizer.state[current_param][STEP].item(), 2)
+
+    @parametrize(
+        "config_field",
+        ("preconditioner_config", "grafting_config"),
+    )
+    def test_missing_config_warns_without_injecting_key(
+        self,
+        config_field: str,
+    ) -> None:
+        checkpoint_optimizer = self._instantiate_optimizer(
+            config_field,
+            AdaGradPreconditionerConfig(),
+        )
+        current_optimizer = self._instantiate_optimizer(
+            config_field,
+            AdaGradPreconditionerConfig(),
+        )
+        checkpoint = checkpoint_optimizer.state_dict()
+        del checkpoint["param_groups"][0][config_field]
+
+        with self.assertWarnsRegex(
+            UserWarning,
+            rf"parameter group 0 {config_field}: checkpoint has <missing>.*"
+            rf"instantiated optimizer has AdaGradPreconditionerConfig",
+        ):
+            current_optimizer.load_state_dict(checkpoint)
+
+        torch.testing.assert_close(
+            current_optimizer.state_dict()["state"],
+            checkpoint_optimizer.state_dict()["state"],
+        )
+        self.assertNotIn(
+            config_field,
+            current_optimizer.param_groups[0],
+        )
+
+    def test_missing_grafting_config_matches_none(self) -> None:
+        model = nn.Sequential(nn.Linear(5, 10, bias=False))
+        checkpoint_optimizer = DistributedShampoo(
+            model.parameters(), max_preconditioner_dim=5
+        )
+        current_optimizer = DistributedShampoo(
+            model.parameters(), max_preconditioner_dim=5
+        )
+        checkpoint = checkpoint_optimizer.state_dict()
+        del checkpoint["param_groups"][0]["grafting_config"]
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            current_optimizer.load_state_dict(checkpoint)
+
+        self.assertNotIn("grafting_config", current_optimizer.param_groups[0])
+
+    @parametrize(
+        "config_field, config_cls",
+        (
+            ("grafting_config", AdaGradPreconditionerConfig),
+            ("preconditioner_config", RootInvShampooPreconditionerConfig),
+        ),
+    )
+    def test_matching_configs_do_not_warn(
+        self,
+        config_field: str,
+        config_cls: type[PreconditionerConfig],
+    ) -> None:
+        checkpoint_optimizer = self._instantiate_optimizer(config_field, config_cls())
+        current_optimizer = self._instantiate_optimizer(config_field, config_cls())
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            current_optimizer.load_state_dict(checkpoint_optimizer.state_dict())
+
+        torch.testing.assert_close(
+            current_optimizer.state_dict()["state"],
+            checkpoint_optimizer.state_dict()["state"],
+        )
+
+    def test_failed_tensor_load_warns_before_raising(self) -> None:
+        checkpoint_optimizer = self._instantiate_optimizer(
+            "grafting_config", AdaGradPreconditionerConfig()
+        )
+        current_optimizer = self._instantiate_optimizer(
+            "grafting_config", AdamPreconditionerConfig()
+        )
+        checkpoint = checkpoint_optimizer.state_dict()
+        checkpoint["state"][0]["block_0"]["adagrad"] = torch.zeros(3)
+
+        with (
+            self.assertWarnsRegex(
+                UserWarning,
+                "Detected optimizer checkpoint configuration mismatch for parameter "
+                "group 0 grafting_config",
+            ),
+            self.assertRaises(RuntimeError),
+        ):
+            current_optimizer.load_state_dict(checkpoint)
 
 
 class AbstractTest:

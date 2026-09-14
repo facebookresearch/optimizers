@@ -291,7 +291,14 @@ class LosslessDistributorCheckpointPreemptionTest(DTensorTestBase):
             lr=lr,
             betas=(0.9, 1.0),
             epsilon=1e-8,
-            weight_decay=0.0,
+            # Deliberately tiny but non-zero: _apply_weight_decay early-returns on
+            # weight_decay == 0.0, so the post-resume step would never reach its
+            # _foreach_add_ of the search directions against MASKED_BLOCKED_PARAMS --
+            # which is what catches a masked/unmasked length mismatch after a
+            # checkpoint load. That mismatch is a list-length error, so the magnitude
+            # is irrelevant; keep it small so the bitwise-equivalence assertions below
+            # compare essentially the same trajectory as before.
+            weight_decay=1e-8,
             max_preconditioner_dim=PRECONDITIONER_DIM,
             precondition_frequency=1,
             start_preconditioning_step=2,

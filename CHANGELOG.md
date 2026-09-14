@@ -2,6 +2,15 @@
 
 Release notes for the OSS mirror. Seeded by `scripts/oss_sync.sh` from the internal source tree and edited for release.
 
+## 2026-09-13
+
+- [shampoo] Add scalar AdaGrad, RMSprop, and Adam preconditioners that keep one RMS second-moment scalar per parameter block instead of a full-size tensor.
+- [shampoo] Add opt-in dimension normalization for vanilla and KL Shampoo factor updates via `BaseShampooPreconditionerConfig`; existing behavior remains the default.
+- [shampoo] Warn before checkpoint loading when the saved `preconditioner_config` or `grafting_config` differs from the instantiated optimizer. The warning is diagnostic only and does not alter tensor-state loading behavior.
+- [shampoo] Fix the first optimizer step after resuming a lossless-distributor checkpoint when the same parameters remain gradient-free, including configurations with weight decay enabled.
+- [shampoo] Remove three redundant Newton–Schulz end-to-end tests whose unavailable test-helper import broke the isolated open-source test suite; equivalent matrix-level coverage remains.
+- [shampoo] Document `NewtonSchulzRootInvConfig` as an opt-in, matrix-multiplication-only inverse-root algorithm supporting power-of-two roots.
+
 ## 2026-08-19
 
 - [shampoo] Add `NewtonSchulzRootInvConfig`: a matmul-only coupled Newton-Schulz iteration, usable as the `amortized_computation_config` of `RootInvShampooPreconditionerConfig` in place of the default eigendecomposition. Opt-in — `DefaultShampooConfig` is unchanged. The iteration runs a fixed number of steps with no residual-based stopping criterion, so it introduces no host-device synchronization. Only power-of-two inverse roots are supported; anything else raises at optimizer construction rather than degrading to a per-factor-matrix warning that reuses a stale preconditioner. `relative_epsilon` (default `1e-6`) floors the ridge at a fraction of `|A|_F` and is applied unconditionally, so on the rank-deficient factor matrices seen early in training this path regularizes more aggressively than eigendecomposition at the same epsilon and the two do not agree there. `coefficients` takes a per-iteration schedule of `(a, b, c)` triples for `p(x) = a x + b x^3 + c x^5`, defaulting to a 10-step Polar Express schedule; tf32 is disabled inside the iteration by default (`disable_tf32=True`).

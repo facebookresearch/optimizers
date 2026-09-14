@@ -157,6 +157,65 @@ class AdamPreconditionerConfig(RMSpropPreconditionerConfig):
     beta2: float = 0.999
 
 
+class _ScalarPreconditionerConfig:
+    """Marker mixin for preconditioner configs with scalar counterparts.
+
+    For ``g = [1, 2]``, full AdaGrad stores ``[1, 4]`` while scalar AdaGrad
+    stores ``mean(g^2) = 2.5``.
+
+    """
+
+
+@dataclass(kw_only=True)
+class ScalarAdaGradPreconditionerConfig(
+    _ScalarPreconditionerConfig, AdaGradPreconditionerConfig
+):
+    """AdaGrad preconditioner with scalar (per-block RMS) gradient accumulation.
+
+    Per block: ``v_t = v_{t-1} + mean(g_t^2)``; update ``g_t / (sqrt(v_t) + epsilon)``.
+
+    Attributes:
+        epsilon (float): Epsilon term for regularizing square-root of the aggregated second moment to ensure positive definiteness.
+            (Default: 1e-10)
+    """
+
+
+@dataclass(kw_only=True)
+class ScalarRMSpropPreconditionerConfig(
+    _ScalarPreconditionerConfig, RMSpropPreconditionerConfig
+):
+    """RMSprop preconditioner with scalar (per-block RMS) gradient accumulation.
+
+    Per block: ``v_t = beta2 * v_{t-1} + (1 - beta2) * mean(g_t^2)``; update
+    ``g_t / (sqrt(v_t) + epsilon)``.
+
+    Attributes:
+        beta2 (float): Exponential moving average factor for second moment. (Default: 0.99)
+        epsilon (float): Epsilon term for regularizing square-root of the second moment to ensure positive definiteness.
+            (Default: 1e-10)
+        drop_weighting_factor_on_gsquare (bool): Drop the (1 - beta2) weighting factor when computing the updates of the
+            preconditioners, i.e. V(t) = beta2 * V(t-1) + mean(G^2). This also disables bias correction. (Default: False)
+    """
+
+
+@dataclass(kw_only=True)
+class ScalarAdamPreconditionerConfig(
+    _ScalarPreconditionerConfig, AdamPreconditionerConfig
+):
+    """Adam preconditioner with scalar (per-block RMS) gradient accumulation.
+
+    Per block: ``v_t = beta2 * v_{t-1} + (1 - beta2) * mean(g_t^2)``, bias-corrected
+    ``v_hat_t = v_t / (1 - beta2^t)``; update ``g_t / (sqrt(v_hat_t) + epsilon)``.
+
+    Attributes:
+        beta2 (float): Exponential moving average factor for second moment. (Default: 0.999)
+        epsilon (float): Epsilon term for regularizing square-root of the second moment to ensure positive definiteness.
+            (Default: 1e-10)
+        drop_weighting_factor_on_gsquare (bool): Drop the (1 - beta2) weighting factor when computing the updates of the
+            preconditioners, i.e. V(t) = beta2 * V(t-1) + mean(G^2). This also disables bias correction. (Default: False)
+    """
+
+
 @dataclass(init=False)
 class BaseShampooPreconditionerConfig(PreconditionerConfig):
     """Configuration for amortized preconditioner computation in DistributedShampoo.
@@ -166,6 +225,7 @@ class BaseShampooPreconditionerConfig(PreconditionerConfig):
         drop_weighting_factor_on_gsquare (bool): If True, drop the (1 - beta2) weighting factor when computing
             the updates of the preconditioners, i.e., V(t) = beta2 * V(t-1) + G^2 instead of
             V(t) = beta2 * V(t-1) + (1 - beta2) * G^2. This keeps _bias_correction2 at 1.0 (no beta2 bias correction). (Default: False)
+        use_dimension_normalization (bool): Whether to divide each factor update by the product of its contracted dimensions. (Default: False)
         factor_matrix_dtype (torch.dtype): Data type for factor matrix. (Default: torch.float32)
         num_tolerated_failed_amortized_computations (int): Number of failed amortized computations to tolerate before raising an error. (Default: 3)
         use_symmetric_packing (bool): If True, stores symmetric Kronecker factor matrices
@@ -182,6 +242,7 @@ class BaseShampooPreconditionerConfig(PreconditionerConfig):
     # repr=False prevents __repr__() from accessing this field to avoid linter complaints
     amortized_computation_config: MatrixFunctionConfig = field(repr=False)
     drop_weighting_factor_on_gsquare: bool = False
+    use_dimension_normalization: bool = False
     factor_matrix_dtype: torch.dtype = torch.float32
     num_tolerated_failed_amortized_computations: int = 3
     use_symmetric_packing: bool = True
@@ -205,8 +266,20 @@ class ClassicShampooPreconditionerConfig(BaseShampooPreconditionerConfig):
 
     Attributes:
         amortized_computation_config (MatrixFunctionConfig): Configuration for the amortized computation, e.g., inverse-root computation or eigendecomposition.
-        num_tolerated_failed_amortized_computations (int): Number of failed amortized computations to tolerate before raising an error. (Default: 3)
+        drop_weighting_factor_on_gsquare (bool): If True, drop the (1 - beta2) weighting factor when computing
+            the updates of the preconditioners, i.e., V(t) = beta2 * V(t-1) + G^2 instead of
+            V(t) = beta2 * V(t-1) + (1 - beta2) * G^2. This keeps _bias_correction2 at 1.0 (no beta2 bias correction). (Default: False)
+        use_dimension_normalization (bool): Whether to divide each factor update by the product of its contracted dimensions. (Default: False)
         factor_matrix_dtype (torch.dtype): Data type for factor matrix. (Default: torch.float32)
+        num_tolerated_failed_amortized_computations (int): Number of failed amortized computations to tolerate before raising an error. (Default: 3)
+        use_symmetric_packing (bool): If True, stores symmetric Kronecker factor matrices
+            (factor_matrices and inv_factor_matrices) in packed upper triangular format
+            (d*(d+1)/2 elements instead of d*d), saving ~50% memory. This is lossless since
+            these matrices are symmetric PSD. (Default: True)
+        use_trace_scaling (bool): Flag for whether to normalize the factor matrix by its trace raised to trace_scaling_exponent before computing the inverse root.
+            Credit to https://arxiv.org/pdf/2506.03595. (Default: False)
+        trace_scaling_exponent (float): Exponent applied to the trace when use_trace_scaling is True; the factor matrix is multiplied by trace ** (-trace_scaling_exponent).
+            Must be in (0.0, 1.0]. The default 0.5 reproduces 1 / sqrt(trace). (Default: 0.5)
         inverse_exponent_override (dict[int, dict[int, float] | float]): The inverse_exponent_override attribute is a dictionary that allows for customizing the inverse exponent used in the Shampoo preconditioner computation.
             The keys of the dictionary represent the order of the tensor, and the values are either dictionaries with dimension indices as keys and override values as values, or a single float value for all dimensions. All unspecified dimensions use a default exponent of 1/(2*max(o,1)), where o is the order of the tensor. (Default: {})
 
@@ -299,8 +372,20 @@ class RootInvShampooPreconditionerConfig(ClassicShampooPreconditionerConfig):
 
     Attributes:
         amortized_computation_config (RootInvConfig): Configuration for the inverse-root computation. (Default: DefaultEigenConfig)
-        num_tolerated_failed_amortized_computations (int): Number of failed amortized computations to tolerate before raising an error. (Default: 3)
+        drop_weighting_factor_on_gsquare (bool): If True, drop the (1 - beta2) weighting factor when computing
+            the updates of the preconditioners, i.e., V(t) = beta2 * V(t-1) + G^2 instead of
+            V(t) = beta2 * V(t-1) + (1 - beta2) * G^2. This keeps _bias_correction2 at 1.0 (no beta2 bias correction). (Default: False)
+        use_dimension_normalization (bool): Whether to divide each factor update by the product of its contracted dimensions. (Default: False)
         factor_matrix_dtype (torch.dtype): Data type for factor matrix. (Default: torch.float32)
+        num_tolerated_failed_amortized_computations (int): Number of failed amortized computations to tolerate before raising an error. (Default: 3)
+        use_symmetric_packing (bool): If True, stores symmetric Kronecker factor matrices
+            (factor_matrices and inv_factor_matrices) in packed upper triangular format
+            (d*(d+1)/2 elements instead of d*d), saving ~50% memory. This is lossless since
+            these matrices are symmetric PSD. (Default: True)
+        use_trace_scaling (bool): Flag for whether to normalize the factor matrix by its trace raised to trace_scaling_exponent before computing the inverse root.
+            Credit to https://arxiv.org/pdf/2506.03595. (Default: False)
+        trace_scaling_exponent (float): Exponent applied to the trace when use_trace_scaling is True; the factor matrix is multiplied by trace ** (-trace_scaling_exponent).
+            Must be in (0.0, 1.0]. The default 0.5 reproduces 1 / sqrt(trace). (Default: 0.5)
         inverse_exponent_override (dict[int, dict[int, float] | float]): The inverse_exponent_override attribute is a dictionary that allows for customizing the inverse exponent used in the Shampoo preconditioner computation.
             The keys of the dictionary represent the order of the tensor, and the values are either dictionaries with dimension indices as keys and override values as values, or a single float value for all dimensions. All unspecified dimensions use a default exponent of 1/(2*max(o,1)), where o is the order of the tensor. (Default: {})
 
@@ -365,8 +450,20 @@ class EigendecomposedShampooPreconditionerConfig(ClassicShampooPreconditionerCon
 
     Attributes:
         amortized_computation_config (EigendecompositionConfig): Configuration for the eigendecomposition computation. (Default: DefaultEigendecompositionConfig)
-        num_tolerated_failed_amortized_computations (int): Number of failed amortized computations to tolerate before raising an error. (Default: 3)
+        drop_weighting_factor_on_gsquare (bool): If True, drop the (1 - beta2) weighting factor when computing
+            the updates of the preconditioners, i.e., V(t) = beta2 * V(t-1) + G^2 instead of
+            V(t) = beta2 * V(t-1) + (1 - beta2) * G^2. This keeps _bias_correction2 at 1.0 (no beta2 bias correction). (Default: False)
+        use_dimension_normalization (bool): Whether to divide each factor update by the product of its contracted dimensions. (Default: False)
         factor_matrix_dtype (torch.dtype): Data type for factor matrix. (Default: torch.float32)
+        num_tolerated_failed_amortized_computations (int): Number of failed amortized computations to tolerate before raising an error. (Default: 3)
+        use_symmetric_packing (bool): If True, stores symmetric Kronecker factor matrices
+            (factor_matrices and inv_factor_matrices) in packed upper triangular format
+            (d*(d+1)/2 elements instead of d*d), saving ~50% memory. This is lossless since
+            these matrices are symmetric PSD. (Default: True)
+        use_trace_scaling (bool): Flag for whether to normalize the factor matrix by its trace raised to trace_scaling_exponent before computing the inverse root.
+            Credit to https://arxiv.org/pdf/2506.03595. (Default: False)
+        trace_scaling_exponent (float): Exponent applied to the trace when use_trace_scaling is True; the factor matrix is multiplied by trace ** (-trace_scaling_exponent).
+            Must be in (0.0, 1.0]. The default 0.5 reproduces 1 / sqrt(trace). (Default: 0.5)
         inverse_exponent_override (dict[int, dict[int, float] | float]): The inverse_exponent_override attribute is a dictionary that allows for customizing the inverse exponent used in the Shampoo preconditioner computation.
             The keys of the dictionary represent the order of the tensor, and the values are either dictionaries with dimension indices as keys and override values as values, or a single float value for all dimensions. All unspecified dimensions use a default exponent of 1/(2*max(o,1)), where o is the order of the tensor. (Default: {})
 
@@ -434,8 +531,20 @@ class EigenvalueCorrectedShampooPreconditionerConfig(BaseShampooPreconditionerCo
     Attributes:
         amortized_computation_config (EigendecompositionConfig): Configuration for the eigenvector computation.
             (Default: DefaultEigendecompositionConfig)
-        num_tolerated_failed_amortized_computations (int): Number of failed amortized computations to tolerate before raising an error. (Default: 3)
+        drop_weighting_factor_on_gsquare (bool): If True, drop the (1 - beta2) weighting factor when computing
+            the updates of the preconditioners, i.e., V(t) = beta2 * V(t-1) + G^2 instead of
+            V(t) = beta2 * V(t-1) + (1 - beta2) * G^2. This keeps _bias_correction2 at 1.0 (no beta2 bias correction). (Default: False)
+        use_dimension_normalization (bool): Whether to divide each factor update by the product of its contracted dimensions. (Default: False)
         factor_matrix_dtype (torch.dtype): Data type for factor matrix. (Default: torch.float32)
+        num_tolerated_failed_amortized_computations (int): Number of failed amortized computations to tolerate before raising an error. (Default: 3)
+        use_symmetric_packing (bool): If True, stores symmetric Kronecker factor matrices
+            (factor_matrices and inv_factor_matrices) in packed upper triangular format
+            (d*(d+1)/2 elements instead of d*d), saving ~50% memory. This is lossless since
+            these matrices are symmetric PSD. (Default: True)
+        use_trace_scaling (bool): Flag for whether to normalize the factor matrix by its trace raised to trace_scaling_exponent before computing the inverse root.
+            Credit to https://arxiv.org/pdf/2506.03595. (Default: False)
+        trace_scaling_exponent (float): Exponent applied to the trace when use_trace_scaling is True; the factor matrix is multiplied by trace ** (-trace_scaling_exponent).
+            Must be in (0.0, 1.0]. The default 0.5 reproduces 1 / sqrt(trace). (Default: 0.5)
         ignored_basis_change_dims (dict[int, list[int]]): The ignored_basis_change_dims attribute is a dictionary that specifies the dimensions of the gradient to ignore when transforming the basis of the gradient using the corresponding factor matrix's eigenvectors.
             (This is analogous to turning off preconditioning for the specified dimensions in default Shampoo.)
             The keys of the dictionary represent the order of the tensor, and the values are lists of dimension indices to ignore. (Default: {})
@@ -556,8 +665,20 @@ class RootInvKLShampooPreconditionerConfig(RootInvShampooPreconditionerConfig):
 
     Attributes:
         amortized_computation_config (RootInvConfig): Configuration for the inverse-root computation. (Default: DefaultEigenConfig)
-        num_tolerated_failed_amortized_computations (int): Number of failed amortized computations to tolerate before raising an error. (Default: 3)
+        drop_weighting_factor_on_gsquare (bool): If True, drop the (1 - beta2) weighting factor when computing
+            the updates of the preconditioners, i.e., V(t) = beta2 * V(t-1) + G^2 instead of
+            V(t) = beta2 * V(t-1) + (1 - beta2) * G^2. This keeps _bias_correction2 at 1.0 (no beta2 bias correction). (Default: False)
+        use_dimension_normalization (bool): Whether to divide each factor update by the product of its contracted dimensions. (Default: False)
         factor_matrix_dtype (torch.dtype): Data type for factor matrix. (Default: torch.float32)
+        num_tolerated_failed_amortized_computations (int): Number of failed amortized computations to tolerate before raising an error. (Default: 3)
+        use_symmetric_packing (bool): If True, stores symmetric Kronecker factor matrices
+            (factor_matrices and inv_factor_matrices) in packed upper triangular format
+            (d*(d+1)/2 elements instead of d*d), saving ~50% memory. This is lossless since
+            these matrices are symmetric PSD. (Default: True)
+        use_trace_scaling (bool): Flag for whether to normalize the factor matrix by its trace raised to trace_scaling_exponent before computing the inverse root.
+            Credit to https://arxiv.org/pdf/2506.03595. (Default: False)
+        trace_scaling_exponent (float): Exponent applied to the trace when use_trace_scaling is True; the factor matrix is multiplied by trace ** (-trace_scaling_exponent).
+            Must be in (0.0, 1.0]. The default 0.5 reproduces 1 / sqrt(trace). (Default: 0.5)
         inverse_exponent_override (dict[int, dict[int, float] | float]): The inverse_exponent_override attribute is a dictionary that allows for customizing the inverse exponent used in the KL-Shampoo preconditioner computation.
             The keys of the dictionary represent the order of the tensor, and the values are either dictionaries with dimension indices as keys and override values as values, or a single float value for all dimensions. All unspecified dimensions use a default exponent of 1/(2*max(o,1)), where o is the order of the tensor. (Default: {})
 
@@ -593,6 +714,7 @@ class RootInvKLShampooPreconditionerConfig(RootInvShampooPreconditionerConfig):
                                     |          (^0.1667), the default inverse exponent 1/(2*3) since inverse_exponent_override[3][2] is not specified
                                     |
                             no preconditioning since inverse_exponent_override[3][0]=0.0
+        inv_factor_matrix_dtype (torch.dtype): Data type for inverse factor matrix. (Default: torch.float32)
 
 
     """
@@ -606,8 +728,20 @@ class EigendecomposedKLShampooPreconditionerConfig(
 
     Attributes:
         amortized_computation_config (EigendecompositionConfig): Configuration for the eigendecomposition computation. (Default: DefaultEigendecompositionConfig)
-        num_tolerated_failed_amortized_computations (int): Number of failed amortized computations to tolerate before raising an error. (Default: 3)
+        drop_weighting_factor_on_gsquare (bool): If True, drop the (1 - beta2) weighting factor when computing
+            the updates of the preconditioners, i.e., V(t) = beta2 * V(t-1) + G^2 instead of
+            V(t) = beta2 * V(t-1) + (1 - beta2) * G^2. This keeps _bias_correction2 at 1.0 (no beta2 bias correction). (Default: False)
+        use_dimension_normalization (bool): Whether to divide each factor update by the product of its contracted dimensions. (Default: False)
         factor_matrix_dtype (torch.dtype): Data type for factor matrix. (Default: torch.float32)
+        num_tolerated_failed_amortized_computations (int): Number of failed amortized computations to tolerate before raising an error. (Default: 3)
+        use_symmetric_packing (bool): If True, stores symmetric Kronecker factor matrices
+            (factor_matrices and inv_factor_matrices) in packed upper triangular format
+            (d*(d+1)/2 elements instead of d*d), saving ~50% memory. This is lossless since
+            these matrices are symmetric PSD. (Default: True)
+        use_trace_scaling (bool): Flag for whether to normalize the factor matrix by its trace raised to trace_scaling_exponent before computing the inverse root.
+            Credit to https://arxiv.org/pdf/2506.03595. (Default: False)
+        trace_scaling_exponent (float): Exponent applied to the trace when use_trace_scaling is True; the factor matrix is multiplied by trace ** (-trace_scaling_exponent).
+            Must be in (0.0, 1.0]. The default 0.5 reproduces 1 / sqrt(trace). (Default: 0.5)
         inverse_exponent_override (dict[int, dict[int, float] | float]): The inverse_exponent_override attribute is a dictionary that allows for customizing the inverse exponent used in the KL-Shampoo preconditioner computation.
             The keys of the dictionary represent the order of the tensor, and the values are either dictionaries with dimension indices as keys and override values as values, or a single float value for all dimensions. All unspecified dimensions use a default exponent of 1/(2*max(o,1)), where o is the order of the tensor. (Default: {})
 
@@ -643,6 +777,8 @@ class EigendecomposedKLShampooPreconditionerConfig(
                                     |          (^0.1667), the default inverse exponent 1/(2*3) since inverse_exponent_override[3][2] is not specified
                                     |
                             no preconditioning since inverse_exponent_override[3][0]=0.0
+        factor_matrix_eigenvectors_dtype (torch.dtype): Data type for factor matrix eigenvectors. (Default: torch.float32)
+        factor_matrix_eigenvalues_dtype (torch.dtype): Data type for factor matrix eigenvalues. (Default: torch.float32)
 
 
     """

@@ -10,6 +10,7 @@ LICENSE file in the root directory of this source tree.
 import logging
 import math
 import operator
+import warnings
 from collections.abc import Callable
 from contextlib import nullcontext
 from dataclasses import asdict, fields, is_dataclass
@@ -39,6 +40,7 @@ from distributed_shampoo.distributor.shampoo_hybrid_shard_lossless_distributor i
 )
 from distributed_shampoo.preconditioner.adagrad_preconditioner_list import (
     AdagradPreconditionerList,
+    ScalarAdagradPreconditionerList,
 )
 from distributed_shampoo.preconditioner.matrix_functions_types import (
     EigendecompositionConfig,
@@ -62,6 +64,7 @@ from distributed_shampoo.preconditioner.spectral_descent_preconditioner_list imp
     SpectralDescentPreconditionerList,
 )
 from distributed_shampoo.shampoo_types import (
+    _ScalarPreconditionerConfig,
     AdaGradPreconditionerConfig,
     AdamPreconditionerConfig,
     BaseShampooPreconditionerConfig,
@@ -703,7 +706,12 @@ class DistributedShampoo(torch.optim.Optimizer):
                         raise AssertionError(
                             f"Unexpected preconditioner config: {preconditioner_config}"
                         )
-                return AdagradPreconditionerList(
+                adagrad_list_cls = (
+                    ScalarAdagradPreconditionerList
+                    if isinstance(preconditioner_config, _ScalarPreconditionerConfig)
+                    else AdagradPreconditionerList
+                )
+                return adagrad_list_cls(
                     block_list=state_lists[DISTRIBUTOR].local_blocked_params,
                     state=self.state,
                     block_info_list=state_lists[DISTRIBUTOR].local_block_info_list,
@@ -1944,11 +1952,35 @@ class DistributedShampoo(torch.optim.Optimizer):
 
     @staticmethod
     def _pre_load_state_dict_hook(optimizer: Optimizer, state_dict: StateDict) -> None:
-        """Save the current train mode for each parameter group before loading state dict.
+        """Warn about config mismatches and save the current train modes."""
+        for group_index, (current_group, checkpoint_group) in enumerate(
+            zip(
+                optimizer.param_groups,
+                state_dict["param_groups"],
+                strict=True,
+            )
+        ):
+            for config_key in (PRECONDITIONER_CONFIG, GRAFTING_CONFIG):
+                current_config = current_group.get(config_key)
+                checkpoint_config = checkpoint_group.get(config_key)
 
-        This allows the post-load hook to restore the original mode after loading,
-        ensuring that the optimizer remains in the same mode the user had set.
-        """
+                if current_config != checkpoint_config:
+                    checkpoint_config_description = (
+                        repr(checkpoint_config)
+                        if config_key in checkpoint_group
+                        else "<missing>"
+                    )
+                    warnings.warn(
+                        "Detected optimizer checkpoint configuration mismatch for "
+                        f"parameter group {group_index} {config_key}: checkpoint has "
+                        f"{checkpoint_config_description}, but the instantiated "
+                        f"optimizer has {current_config!r}. Tensor state loading may "
+                        "still succeed or fail, and no configuration compatibility "
+                        "or translation is guaranteed.",
+                        UserWarning,
+                        stacklevel=3,
+                    )
+
         saved_train_modes: list[bool] = [
             bool(state_lists[TRAIN_MODE].item())
             for state_lists, group in zip(
@@ -1978,6 +2010,12 @@ class DistributedShampoo(torch.optim.Optimizer):
             ):
                 distributor.refresh_assigned_full_params()
                 state_lists[MASKED_BLOCKED_PARAMS] = distributor.local_blocked_params
+                # Mirrors the initial state in _instantiate_distributor: the line
+                # above leaves MASKED_BLOCKED_PARAMS unmasked, so _mask_state_lists
+                # must recompress it on the next step. Its early return is gated on
+                # the grad selector changing, which does not happen when the same
+                # param is grad-less before and after a checkpoint resume.
+                state_lists[PREVIOUS_GRAD_SELECTOR] = None
 
         # Restore the original train/eval mode after loading the checkpoint.
         saved_train_modes: list[bool] = getattr(optimizer, "_pre_load_train_modes", [])
