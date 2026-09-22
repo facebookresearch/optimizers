@@ -8,9 +8,11 @@ LICENSE file in the root directory of this source tree.
 """
 
 import re
+from unittest import mock
 from typing import Any
 
 import torch
+from distributed_shampoo.preconditioner.matrix_functions import matrix_orthogonalization
 from distributed_shampoo.preconditioner.matrix_functions_types import (
     DefaultNewtonSchulzOrthogonalizationConfig,
     OrthogonalizationConfig,
@@ -79,6 +81,32 @@ class SpectralDescentPreconditionerListTest(AbstractPreconditionerListTest.Inter
             ),
         )
         preconditioner_list.precondition(masked_grad_list=masked_grad_list)
+
+    def test_precondition_bfloat16_uses_foreach_map(self) -> None:
+        block_list = (
+            torch.randn(3, 2, dtype=torch.bfloat16),
+            torch.randn(2, 3, dtype=torch.bfloat16),
+        )
+        preconditioner_list = SpectralDescentPreconditionerList(
+            block_list=block_list,
+            preconditioner_config=DefaultSpectralDescentPreconditionerConfig,
+        )
+        expected = tuple(matrix_orthogonalization(block) for block in block_list)
+        with mock.patch(
+            "distributed_shampoo.preconditioner.spectral_descent_preconditioner_list.foreach_map",
+            wraps=torch._higher_order_ops.foreach_map,
+        ) as foreach_map_mock:
+            actual = preconditioner_list.precondition(masked_grad_list=block_list)
+        foreach_map_mock.assert_called_once()
+        for actual_block, expected_block in zip(actual, expected):
+            torch.testing.assert_close(actual_block, expected_block)
+
+    def test_precondition_empty_list(self) -> None:
+        preconditioner_list = SpectralDescentPreconditionerList(
+            block_list=(),
+            preconditioner_config=DefaultSpectralDescentPreconditionerConfig,
+        )
+        self.assertEqual(preconditioner_list.precondition(masked_grad_list=()), ())
 
     @parametrize(
         "block_list",
