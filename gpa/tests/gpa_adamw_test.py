@@ -885,5 +885,48 @@ class GPAAdamWStateDictTest(unittest.TestCase):
         self._assert_state_dicts_equal(loaded_state_dict, original_state_dict)
 
 
+class GPAAdamWForeachTest(unittest.TestCase):
+    """foreach step matches the per-parameter loop on the same gradients."""
+
+    def test_foreach_matches_single_tensor(self) -> None:
+        torch.manual_seed(0)
+        base = [torch.randn(32, 16) for _ in range(6)]
+        params_single = [torch.nn.Parameter(t.clone()) for t in base]
+        params_foreach = [torch.nn.Parameter(t.clone()) for t in base]
+        opt_single = GPAAdamW(
+            params_single, lr=1e-2, weight_decay=0.01, use_wd_on_y=True, foreach=False
+        )
+        opt_foreach = GPAAdamW(
+            params_foreach, lr=1e-2, weight_decay=0.01, use_wd_on_y=True, foreach=True
+        )
+        opt_single.train()
+        opt_foreach.train()
+        for _ in range(4):
+            for left, right in zip(params_single, params_foreach, strict=True):
+                grad = torch.randn_like(left)
+                left.grad = grad
+                right.grad = grad.clone()
+            opt_single.step()
+            opt_foreach.step()
+        for left, right in zip(params_single, params_foreach, strict=True):
+            self.assertTrue(torch.equal(left, right))
+            self.assertTrue(
+                torch.equal(
+                    opt_single.state[left][Z_BUFFER], opt_foreach.state[right][Z_BUFFER]
+                )
+            )
+            self.assertTrue(
+                torch.equal(
+                    opt_single.state[left][EXP_AVG], opt_foreach.state[right][EXP_AVG]
+                )
+            )
+            self.assertTrue(
+                torch.equal(
+                    opt_single.state[left][EXP_AVG_SQ],
+                    opt_foreach.state[right][EXP_AVG_SQ],
+                )
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -124,6 +124,12 @@ class GPAAdamW(torch.optim.Optimizer):
         weight_lr_power (float): During warmup, the weights in the average will
             be equal to lr raised to this power. Set to 0 for no weighting.
             Only used in Schedule-Free mode. (default: 2.0)
+        foreach (bool, optional): Apply the parameter update with multi-tensor
+            foreach ops. None and False both keep the per-parameter loop, so
+            existing runs do not change behavior. Set True to opt in where it
+            is faster (many small parameters on CPU). The flag is not stored
+            in the param group, so checkpoints stay compatible. Sparse grads
+            or mixed dtypes always fall back to the loop. (default: None)
     """
 
     def __init__(
@@ -140,6 +146,7 @@ class GPAAdamW(torch.optim.Optimizer):
         eval_interp_coeff: float = 0.9967,
         weight_pow_coeff: float = 0.0,
         weight_lr_power: float = 2,
+        foreach: Optional[bool] = None,
     ):
         # Hyper-parameter checks
         if not lr >= 0.0:
@@ -177,6 +184,14 @@ class GPAAdamW(torch.optim.Optimizer):
             raise ValueError(
                 "Invalid weight_lr_power value: {}".format(weight_lr_power)
             )
+        if foreach is not None and not isinstance(foreach, bool):
+            raise ValueError("Invalid foreach value: {}".format(foreach))
+
+        # Kept off the param-group dict so existing checkpoints keep the same keys.
+        # Default off: on large tensors the loop is faster, so foreach is opt-in.
+        if foreach is None:
+            foreach = False
+        self.foreach = foreach
 
         logger.debug(
             f"GPAAdamW.__init__(), lr={lr}, train_interp_coeff={train_interp_coeff}, weight_decay={weight_decay}, "
@@ -398,7 +413,7 @@ class GPAAdamW(torch.optim.Optimizer):
             exp_avg_sqs: list[torch.Tensor] = []
             z_buffer_list: list[torch.Tensor] = []
 
-            self._init_group(
+            has_sparse_grad = self._init_group(
                 group,
                 params_with_grad,
                 grads,
@@ -452,51 +467,152 @@ class GPAAdamW(torch.optim.Optimizer):
                 weight_sum_ref=self.state[group_first_param][WEIGHT_SUM],
             )
 
-            for y, grad, exp_avg, exp_avg_sq, z in zip(
-                params_with_grad,
-                grads,
-                exp_avgs,
-                exp_avg_sqs,
-                z_buffer_list,
-                strict=True,
-            ):
-                exp_avg.lerp_(grad, 1 - beta1)
-                exp_avg_sq.mul_(beta2).addcmul_(grad, grad, value=1 - beta2)
-                denom = exp_avg_sq.div(bias_correction2).sqrt_().add_(eps)
-
-                # Reuse grad buffer for memory efficiency
-                # grad_normalized = grad.div_(denom)
-                # grad_normalized = exp_avg.div_(denom)
-                grad_normalized = exp_avg.div(bias_correction1).div_(denom)
-
-                # Weight decay applied as multiplicative shrinkage.
-                if weight_decay != 0:
-                    if use_wd_on_y:
-                        y.mul_(1 - lr * weight_decay)
-                    else:
-                        z.mul_(1 - lr * weight_decay)
-
-                # Memory-efficient y-update without explicitly computing x:
-                # The standard updates are:
-                #   z_new = z - lr * grad_normalized
-                #   x_new = mu_x * x + (1 - mu_x) * z_new
-                #   y_new = mu_y * x_new + (1 - mu_y) * z_new
-                #
-                # We can show that (where avg_coeff = 1 - mu_x for GPA or
-                # the polynomial weight for Schedule-Free):
-                #   y_new = (1 - avg_coeff) * y + avg_coeff * z
-                #           + lr * (mu_y * (1 - avg_coeff) - 1) * grad_normalized
-                #
-                # This allows us to update y in-place without computing x.
-                y.lerp_(end=z, weight=avg_coeff)
-                y.add_(
-                    grad_normalized,
-                    alpha=lr * (train_interp_coeff * (1 - avg_coeff) - 1),
+            if params_with_grad:
+                update_kwargs = dict(
+                    bias_correction1=bias_correction1,
+                    bias_correction2=bias_correction2,
+                    beta1=beta1,
+                    beta2=beta2,
+                    eps=eps,
+                    lr=lr,
+                    weight_decay=weight_decay,
+                    use_wd_on_y=use_wd_on_y,
+                    train_interp_coeff=train_interp_coeff,
+                    avg_coeff=avg_coeff,
                 )
-
-                z.sub_(grad_normalized, alpha=lr)
+                if self._can_foreach(
+                    has_sparse_grad, params_with_grad, grads, exp_avgs
+                ):
+                    self._foreach_gpa_adamw(
+                        params_with_grad,
+                        grads,
+                        exp_avgs,
+                        exp_avg_sqs,
+                        z_buffer_list,
+                        **update_kwargs,
+                    )
+                else:
+                    self._single_tensor_gpa_adamw(
+                        params_with_grad,
+                        grads,
+                        exp_avgs,
+                        exp_avg_sqs,
+                        z_buffer_list,
+                        **update_kwargs,
+                    )
 
         return loss
+
+    def _can_foreach(
+        self,
+        has_sparse_grad: bool,
+        params_with_grad: list[torch.Tensor],
+        grads: list[torch.Tensor],
+        exp_avgs: list[torch.Tensor],
+    ) -> bool:
+        if not self.foreach or has_sparse_grad or not params_with_grad:
+            return False
+        device = params_with_grad[0].device
+        exp_dtype = exp_avgs[0].dtype
+        for p, grad, exp_avg in zip(params_with_grad, grads, exp_avgs, strict=True):
+            if p.device != device or grad.device != device:
+                return False
+            if grad.is_sparse or grad.dtype != exp_dtype or exp_avg.dtype != exp_dtype:
+                return False
+        return True
+
+    @staticmethod
+    def _single_tensor_gpa_adamw(
+        params_with_grad: list[torch.Tensor],
+        grads: list[torch.Tensor],
+        exp_avgs: list[torch.Tensor],
+        exp_avg_sqs: list[torch.Tensor],
+        z_buffer_list: list[torch.Tensor],
+        *,
+        bias_correction1: float,
+        bias_correction2: float,
+        beta1: float,
+        beta2: float,
+        eps: float,
+        lr: float,
+        weight_decay: float,
+        use_wd_on_y: bool,
+        train_interp_coeff: float,
+        avg_coeff: float,
+    ) -> None:
+        for y, grad, exp_avg, exp_avg_sq, z in zip(
+            params_with_grad,
+            grads,
+            exp_avgs,
+            exp_avg_sqs,
+            z_buffer_list,
+            strict=True,
+        ):
+            exp_avg.lerp_(grad, 1 - beta1)
+            exp_avg_sq.mul_(beta2).addcmul_(grad, grad, value=1 - beta2)
+            denom = exp_avg_sq.div(bias_correction2).sqrt_().add_(eps)
+            grad_normalized = exp_avg.div(bias_correction1).div_(denom)
+
+            # Weight decay applied as multiplicative shrinkage.
+            if weight_decay != 0:
+                if use_wd_on_y:
+                    y.mul_(1 - lr * weight_decay)
+                else:
+                    z.mul_(1 - lr * weight_decay)
+
+            # Memory-efficient y-update without explicitly computing x:
+            #   y_new = (1 - avg_coeff) * y + avg_coeff * z
+            #           + lr * (mu_y * (1 - avg_coeff) - 1) * grad_normalized
+            y.lerp_(end=z, weight=avg_coeff)
+            y.add_(
+                grad_normalized,
+                alpha=lr * (train_interp_coeff * (1 - avg_coeff) - 1),
+            )
+            z.sub_(grad_normalized, alpha=lr)
+
+    @staticmethod
+    def _foreach_gpa_adamw(
+        params_with_grad: list[torch.Tensor],
+        grads: list[torch.Tensor],
+        exp_avgs: list[torch.Tensor],
+        exp_avg_sqs: list[torch.Tensor],
+        z_buffer_list: list[torch.Tensor],
+        *,
+        bias_correction1: float,
+        bias_correction2: float,
+        beta1: float,
+        beta2: float,
+        eps: float,
+        lr: float,
+        weight_decay: float,
+        use_wd_on_y: bool,
+        train_interp_coeff: float,
+        avg_coeff: float,
+    ) -> None:
+        # Same arithmetic as _single_tensor_gpa_adamw, grouped by device.
+        torch._foreach_lerp_(exp_avgs, grads, 1 - beta1)
+        torch._foreach_mul_(exp_avg_sqs, beta2)
+        torch._foreach_addcmul_(exp_avg_sqs, grads, grads, value=1 - beta2)
+        denom = torch._foreach_div(exp_avg_sqs, bias_correction2)
+        torch._foreach_sqrt_(denom)
+        torch._foreach_add_(denom, eps)
+        grad_normalized = torch._foreach_div(exp_avgs, bias_correction1)
+        torch._foreach_div_(grad_normalized, denom)
+
+        if weight_decay != 0:
+            shrink = 1 - lr * weight_decay
+            if use_wd_on_y:
+                torch._foreach_mul_(params_with_grad, shrink)
+            else:
+                torch._foreach_mul_(z_buffer_list, shrink)
+
+        torch._foreach_lerp_(params_with_grad, z_buffer_list, weight=avg_coeff)
+        torch._foreach_add_(
+            params_with_grad,
+            grad_normalized,
+            alpha=lr * (train_interp_coeff * (1 - avg_coeff) - 1),
+        )
+        torch._foreach_sub_(z_buffer_list, grad_normalized, alpha=lr)
 
     @staticmethod
     def compute_avg_coeff(
