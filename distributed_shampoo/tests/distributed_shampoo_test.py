@@ -18,6 +18,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any, cast
 
 import torch
+import torch._dynamo
 from distributed_shampoo.distributed_shampoo import DistributedShampoo
 from distributed_shampoo.preconditioner.adagrad_preconditioner_list import ADAGRAD
 from distributed_shampoo.preconditioner.matrix_functions_types import (
@@ -67,18 +68,6 @@ from torch.testing._internal.common_utils import (
 )
 
 
-def _pack_if_enabled(
-    config: PreconditionerConfig, matrix: torch.Tensor
-) -> torch.Tensor:
-    """Pack matrix to upper triangular format if symmetric packing is enabled."""
-    return (
-        pack_upper_triangular(matrix)
-        if isinstance(config, BaseShampooPreconditionerConfig)
-        and config.use_symmetric_packing
-        else matrix
-    )
-
-
 def _get_adagrad_states(state: object) -> tuple[Tensor, ...]:
     if not isinstance(state, dict):
         return ()
@@ -89,6 +78,18 @@ def _get_adagrad_states(state: object) -> tuple[Tensor, ...]:
             for value in state.values()
             for adagrad_state in _get_adagrad_states(value)
         ),
+    )
+
+
+def _pack_if_enabled(
+    config: PreconditionerConfig, matrix: torch.Tensor
+) -> torch.Tensor:
+    """Pack matrix to upper triangular format if symmetric packing is enabled."""
+    return (
+        pack_upper_triangular(matrix)
+        if isinstance(config, BaseShampooPreconditionerConfig)
+        and config.use_symmetric_packing
+        else matrix
     )
 
 
@@ -1910,6 +1911,57 @@ class DistributedShampooNoneGradTest(unittest.TestCase):
         self.assertEqual(len(msgs), 1)
         self.assertIn(expected_msg, msgs[0])
         self.assertIn(ending_msg, msgs[0])
+
+    def test_eager_init_step_compiles_stable_gradient_selector(self) -> None:
+        model = nn.Sequential(
+            nn.Linear(5, 10, bias=False),
+            nn.Linear(10, 5, bias=False),
+        )
+        optimizer = DistributedShampoo(
+            model.parameters(),
+            lr=0.01,
+            betas=(0.9, 1.0),
+            epsilon=1e-12,
+            weight_decay=0.0,
+            max_preconditioner_dim=5,
+            precondition_frequency=10,
+            start_preconditioning_step=10,
+            shampoo_pt2_compile_config=ShampooPT2CompileConfig(backend="eager"),
+            use_eager_init_step=True,
+            distributed_config=DefaultSingleDeviceDistributedConfig,
+            grafting_config=None,
+        )
+        first_weight: torch.Tensor = cast(torch.Tensor, model[0].weight)
+        second_weight: torch.Tensor = cast(torch.Tensor, model[1].weight)
+
+        torch._dynamo.reset()
+        torch._dynamo.utils.counters.clear()
+        try:
+            # Simulate KeyedOptimizer.init_state(), which initializes all lazy state.
+            optimizer.zero_grad()
+            first_weight.grad = torch.rand_like(first_weight)
+            second_weight.grad = torch.rand_like(second_weight)
+            optimizer.step()
+            self.assertEqual(torch._dynamo.utils.counters["stats"]["unique_graphs"], 0)
+
+            # The first training step uses the stable selector and starts compilation.
+            optimizer.zero_grad()
+            first_weight.grad = torch.rand_like(first_weight)
+            with self.assertNoLogs(level="WARNING"):
+                optimizer.step()
+            compiled_graphs = torch._dynamo.utils.counters["stats"]["unique_graphs"]
+            self.assertGreater(compiled_graphs, 0)
+
+            optimizer.zero_grad()
+            first_weight.grad = torch.rand_like(first_weight)
+            optimizer.step()
+            self.assertEqual(
+                torch._dynamo.utils.counters["stats"]["unique_graphs"],
+                compiled_graphs,
+            )
+        finally:
+            torch._dynamo.reset()
+            torch._dynamo.utils.counters.clear()
 
 
 class CheckpointPerParamScalarStateTest(unittest.TestCase):

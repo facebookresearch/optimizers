@@ -172,10 +172,13 @@ class DDPDistributor(DistributorInterface):
         # Create flag for distributing parameters instead of search directions.
         self._communicate_params: bool = distributed_config.communicate_params
 
-        # Initialize _dist_group and _group_rank.
-        self._dist_group: dist.ProcessGroup = dist.new_subgroups(
-            group_size=self._group_size, group=dist_group
-        )[0]
+        # Reuse the parent process group when no further partitioning is needed.
+        # Creating an equivalent subgroup would initialize a redundant communicator.
+        self._dist_group: dist.ProcessGroup | None = (
+            dist_group
+            if self._group_size == self._global_size
+            else dist.new_subgroups(group_size=self._group_size, group=dist_group)[0]
+        )
         group_rank: int = dist.get_rank(group=self._dist_group)
 
         # blocked_params created on meta device with communication dtype (no actual data).
@@ -359,6 +362,9 @@ class DDPDistributor(DistributorInterface):
                     global_buffers,
                 )
 
+    def _dist_buffer_and_num_bytes(self) -> tuple[Tensor, int] | None:
+        return (self._global_dist_buffer, self._global_dist_buffer_num_bytes)
+
     @torch.no_grad()
     def _construct_local_block_info_list(
         self, group_source_ranks: tuple[int, ...], group_rank: int
@@ -512,6 +518,8 @@ class DDPDistributor(DistributorInterface):
         )
         self._global_masked_dist_blocked_buffers = self._global_dist_blocked_buffers
         self._local_masked_dist_blocked_buffers = self._local_dist_blocked_buffers
+
+        self._global_dist_buffer_num_bytes: int = total_buffer_size
 
     def merge_and_block_gradients(
         self,

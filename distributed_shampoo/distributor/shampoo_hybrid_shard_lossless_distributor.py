@@ -150,12 +150,16 @@ class HybridShardLosslessDistributor(HybridShardDistributor):
 
         # For ROUND_ROBIN, create the gradient gathering context that uses
         # all_to_all instead of per-param full_tensor() all-gathers.
+        # communication_dtype applies to the gradient leg only; the redistribute
+        # leg ships absolute param values and must stay at the param dtype (see
+        # RedistributeParamsContext).
         self._gather_grads_ctx: GatherGradientsContext | None = (
             GatherGradientsContext(
                 params=param_group[PARAMS],
                 assigned_params_mask=self._assigned_params_mask,
                 dist_group=self._shard_dist_group,
                 owner_ranks=self._owner_ranks,
+                communication_dtype=distributed_config.communication_dtype,
             )
             if self._owner_ranks is not None
             else None
@@ -164,6 +168,7 @@ class HybridShardLosslessDistributor(HybridShardDistributor):
         # Set _param_group early so _get_assigned_full_params can access it
         # (super().__init__ will set it again to the same value).
         self._param_group = param_group
+        self._needs_full_param_refresh: bool = False
         self._assigned_full_params: list[Tensor] = self._get_assigned_full_params()
 
         super().__init__(param_group, runtime_config)
@@ -323,6 +328,14 @@ class HybridShardLosslessDistributor(HybridShardDistributor):
             group_rank,
         )
 
+    @property
+    def needs_full_param_refresh(self) -> bool:
+        return self._needs_full_param_refresh
+
+    def mark_full_params_stale(self) -> None:
+        """Defer rebuilding gathered parameters until their next use."""
+        self._needs_full_param_refresh = True
+
     @torch.no_grad()
     def refresh_assigned_full_params(self) -> None:
         """Refresh the cached full parameter tensors from current model parameters.
@@ -358,3 +371,4 @@ class HybridShardLosslessDistributor(HybridShardDistributor):
         # happen when the same param is grad-less before and after a checkpoint
         # resume, leaving the masked params/buffers lists mismatched.
         self._previous_global_grad_selector = None
+        self._needs_full_param_refresh = False

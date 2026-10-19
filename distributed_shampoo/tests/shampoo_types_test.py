@@ -338,7 +338,7 @@ class IterateAveragingConfigSubclassesTest(unittest.TestCase):
     # Only test subclasses that have a train_interp_coeff field.
     subclasses_types: list[type[IterateAveragingConfig]] = [
         cls  # type: ignore[type-abstract]
-        for cls in get_all_non_abstract_subclasses(IterateAveragingConfig)
+        for cls in get_all_non_abstract_subclasses(IterateAveragingConfig)  # type: ignore[type-abstract]
         if hasattr(cls, "train_interp_coeff")
     ]
 

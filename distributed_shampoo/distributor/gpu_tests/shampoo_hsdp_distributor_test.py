@@ -28,16 +28,19 @@ from distributed_shampoo.distributor.shampoo_hsdp_distributor import HSDPDistrib
 from distributed_shampoo.shampoo_types import (
     AdaGradPreconditionerConfig,
     DefaultSingleDeviceDistributedConfig,
+    DISTRIBUTOR,
     GeneralizedPrimalAveragingConfig,
     HSDPDistributedConfig,
     SingleDeviceDistributedConfig,
     WeightDecayType,
 )
 from distributed_shampoo.tests.shampoo_test_utils import (
+    assert_dist_buffer_views_survive_free_and_realloc,
     compare_two_optimizers_models_devices_on_weight_and_loss,
     construct_training_problem,
     generate_global_train_data,
     train_model,
+    with_pipeline_managed_dist_buffer,
 )
 from torch import distributed as dist, nn
 from torch.distributed.device_mesh import init_device_mesh
@@ -179,6 +182,71 @@ class ShampooHSDPDistributorTest(FSDPTest):
             ),
             control_train_data=global_train_data,
             experimental_train_data=global_train_data[:, dist.get_rank()],
+        )
+
+    @skip_if_lt_x_gpu(4)
+    @parametrize("communicate_params", (False, True))
+    def test_externally_managed_dist_buffer_matches_resident_buffer(
+        self, communicate_params: bool
+    ) -> None:
+        hsdp_config = HSDPDistributedConfig(
+            param_to_metadata={},
+            device_mesh=init_device_mesh("cuda", (2, 2)),
+            communicate_params=communicate_params,
+        )
+
+        global_train_data = generate_global_train_data(
+            num_steps=5,
+            world_size=dist.get_world_size(),
+            data_shape=(4 * PRECONDITIONER_DIM * PRECONDITIONER_DIM,),
+            device=torch.device("cuda"),
+        )
+        compare_two_optimizers_models_devices_on_weight_and_loss(
+            control_optim_factory=ShampooHSDPDistributorTest._shampoo_optim_factory(
+                distributed_config=DefaultSingleDeviceDistributedConfig,
+            ),
+            control_model_factory=ShampooHSDPDistributorTest._construct_model,
+            experimental_optim_factory=with_pipeline_managed_dist_buffer(
+                ShampooHSDPDistributorTest._shampoo_optim_factory(
+                    distributed_config=hsdp_config,
+                )
+            ),
+            experimental_model_factory=partial(
+                ShampooHSDPDistributorTest._construct_model,
+                post_model_decoration=partial(
+                    FSDP1,
+                    device_mesh=hsdp_config.device_mesh,
+                    sharding_strategy=ShardingStrategy.HYBRID_SHARD,
+                    use_orig_params=True,
+                ),
+                distributed_config=hsdp_config,
+            ),
+            control_train_data=global_train_data,
+            experimental_train_data=global_train_data[:, dist.get_rank()],
+        )
+
+    @skip_if_lt_x_gpu(4)
+    def test_dist_buffer_views_survive_free_and_realloc(self) -> None:
+        hsdp_config = HSDPDistributedConfig(
+            param_to_metadata={},
+            device_mesh=init_device_mesh("cuda", (2, 2)),
+        )
+        model = ShampooHSDPDistributorTest._construct_model(
+            post_model_decoration=partial(
+                FSDP1,
+                device_mesh=hsdp_config.device_mesh,
+                sharding_strategy=ShardingStrategy.HYBRID_SHARD,
+                use_orig_params=True,
+            ),
+            distributed_config=hsdp_config,
+        )[0]
+        optimizer = ShampooHSDPDistributorTest._shampoo_optim_factory(hsdp_config)(
+            model.parameters()
+        )
+
+        assert isinstance(optimizer, DistributedShampoo)
+        assert_dist_buffer_views_survive_free_and_realloc(
+            self, optimizer._per_group_state_lists[0][DISTRIBUTOR]
         )
 
     @skip_if_lt_x_gpu(4)

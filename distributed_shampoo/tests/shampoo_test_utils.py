@@ -7,12 +7,14 @@ LICENSE file in the root directory of this source tree.
 
 """
 
+import unittest
 from collections.abc import Callable
 from functools import partial
 from itertools import pairwise, repeat
-from typing import overload
+from typing import Any, overload
 
 import torch
+from distributed_shampoo.distributed_shampoo import DistributedShampoo
 from torch import nn
 from torch.distributed.fsdp import FSDPModule, fully_shard, FullyShardedDataParallel
 from torch.distributed.tensor import DTensor
@@ -45,6 +47,68 @@ def generate_global_train_data(
     if device is not None:
         data = data.to(device=device)
     return data
+
+
+def assert_dist_buffer_views_survive_free_and_realloc(
+    test_case: unittest.TestCase,
+    distributor: Any,
+) -> None:
+    """Assert every view over the all-gather buffer stays usable after a free / reallocate."""
+    global_dist_buffer = distributor._global_dist_buffer
+    storage = global_dist_buffer.untyped_storage()
+    original_storage_size = storage.size()
+    original_storage_cdata = storage._cdata
+
+    cached_views: list[torch.Tensor] = [distributor._local_dist_buffer]
+    cached_views.extend(distributor._global_dist_blocked_buffers)
+    cached_views.extend(distributor._local_dist_blocked_buffers)
+    cached_views.extend(distributor._global_masked_dist_blocked_buffers)
+    cached_views.extend(distributor._local_masked_dist_blocked_buffers)
+    cached_view_metadata = tuple(
+        (view.shape, view.stride(), view.storage_offset()) for view in cached_views
+    )
+
+    test_case.assertGreater(original_storage_size, 0)
+    distributor.free_dist_buffer()
+    test_case.assertEqual(storage.size(), 0)
+    distributor.allocate_dist_buffer()
+
+    test_case.assertIs(distributor._global_dist_buffer, global_dist_buffer)
+    test_case.assertEqual(storage._cdata, original_storage_cdata)
+
+    actual_views: list[torch.Tensor] = [distributor._local_dist_buffer]
+    actual_views.extend(distributor._global_dist_blocked_buffers)
+    actual_views.extend(distributor._local_dist_blocked_buffers)
+    actual_views.extend(distributor._global_masked_dist_blocked_buffers)
+    actual_views.extend(distributor._local_masked_dist_blocked_buffers)
+    test_case.assertEqual(
+        tuple(
+            (view.shape, view.stride(), view.storage_offset()) for view in actual_views
+        ),
+        cached_view_metadata,
+    )
+    for actual_view, expected_view in zip(actual_views, cached_views, strict=True):
+        test_case.assertIs(actual_view, expected_view)
+
+    global_dist_buffer.zero_()
+    distributor._global_dist_blocked_buffers[0].fill_(1.0)
+    test_case.assertGreater(torch.count_nonzero(global_dist_buffer).item(), 0)
+
+
+def with_pipeline_managed_dist_buffer(
+    optim_factory: Callable[[ParamsT], torch.optim.Optimizer],
+) -> Callable[[ParamsT], torch.optim.Optimizer]:
+    """Wrap an optimizer factory so the buffer is freed after every step and reallocated before the next."""
+
+    def build(params: ParamsT) -> torch.optim.Optimizer:
+        optimizer = optim_factory(params)
+        assert isinstance(optimizer, DistributedShampoo)
+        optimizer.free_dist_buffer()
+        optimizer.register_step_pre_hook(lambda *_: optimizer.allocate_dist_buffer())
+        optimizer.register_step_post_hook(lambda *_: optimizer.free_dist_buffer())
+        return optimizer
+
+    return build
 
 
 class _ModelWithScalarAndLinearAndDeadLayers(nn.Module):
@@ -249,8 +313,10 @@ def train_model(
         train_mode()
 
     # Train for the specified number of steps
+    # pyrefly: ignore [missing-attribute]
     for step in range(train_data.shape[0]):
         optimizer.zero_grad()
+        # pyrefly: ignore [unsupported-operation]
         step_data = train_data[step]
 
         if step_data.ndim > validation_data.ndim:

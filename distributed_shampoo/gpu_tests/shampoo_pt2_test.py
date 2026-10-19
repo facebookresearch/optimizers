@@ -40,6 +40,7 @@ class DistributedShampooPytorchCompileTest(unittest.TestCase):
         weight_decay: float,
         betas: tuple[float, float],
         grafting_config: PreconditionerConfig | None,
+        use_eager_init_step: bool = False,
     ) -> Callable[[ParamsT], torch.optim.Optimizer]:
         return partial(
             DistributedShampoo,
@@ -52,6 +53,7 @@ class DistributedShampooPytorchCompileTest(unittest.TestCase):
             start_preconditioning_step=start_preconditioning_step,
             weight_decay_type=WeightDecayType.DECOUPLED,
             shampoo_pt2_compile_config=shampoo_pt2_compile_config,
+            use_eager_init_step=use_eager_init_step,
             grafting_config=grafting_config,
         )
 
@@ -89,6 +91,28 @@ class DistributedShampooPytorchCompileTest(unittest.TestCase):
             ),
             device=torch.device("cuda"),
             total_steps=total_steps,
+        )
+
+    def test_pt2_shampoo_with_eager_init_step_on_quadratic(self) -> None:
+        shampoo_optim_factory = partial(
+            DistributedShampooPytorchCompileTest._shampoo_optim_factory,
+            precondition_frequency=10,
+            start_preconditioning_step=10,
+            weight_decay=0.1,
+            betas=(0.9, 0.999),
+            grafting_config=AdaGradPreconditionerConfig(epsilon=1e-10),
+        )
+
+        compare_two_optimizers_on_weight_and_loss(
+            control_optim_factory=shampoo_optim_factory(
+                shampoo_pt2_compile_config=None,
+            ),
+            experimental_optim_factory=shampoo_optim_factory(
+                shampoo_pt2_compile_config=ShampooPT2CompileConfig(),
+                use_eager_init_step=True,
+            ),
+            device=torch.device("cuda"),
+            total_steps=5,
         )
 
     @parametrize(

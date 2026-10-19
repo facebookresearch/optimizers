@@ -126,6 +126,7 @@ class FullyShardLosslessDistributor(Distributor):
         # Set _param_group early so _get_assigned_full_params can access it
         # (super().__init__ will set it again to the same value).
         self._param_group = param_group
+        self._needs_full_param_refresh: bool = False
         self._assigned_full_params: list[Tensor] = self._get_assigned_full_params()
 
         super().__init__(param_group, runtime_config)
@@ -282,6 +283,14 @@ class FullyShardLosslessDistributor(Distributor):
             rank=None,
         )
 
+    @property
+    def needs_full_param_refresh(self) -> bool:
+        return self._needs_full_param_refresh
+
+    def mark_full_params_stale(self) -> None:
+        """Defer rebuilding gathered parameters until their next use."""
+        self._needs_full_param_refresh = True
+
     @torch.no_grad()
     def refresh_assigned_full_params(self) -> None:
         """Refresh the cached full parameter tensors from current model parameters.
@@ -308,3 +317,4 @@ class FullyShardLosslessDistributor(Distributor):
         # resume, leaving _local_masked_blocked_params at the full (unmasked) length and
         # mismatching the masked blocked_search_directions in update_params.
         self._previous_global_grad_selector = None
+        self._needs_full_param_refresh = False

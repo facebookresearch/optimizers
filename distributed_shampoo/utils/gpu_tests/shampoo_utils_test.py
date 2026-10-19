@@ -835,3 +835,169 @@ class GatherGradientsContextTest(DTensorTestBase):
                     gathered_params[i],
                     f"Unassigned param {i} should be None on rank {rank}",
                 )
+
+    @with_comms
+    @skip_if_lt_x_gpu(4)
+    def test_narrow_communication_dtype_narrows_grads_but_not_params(self) -> None:
+        """A narrowed communication_dtype must not quantize parameter values.
+
+        gather_params() feeds the optimizer's authoritative copy of the weights, which
+        is written back to the model, so it must round-trip bit-exactly even when the
+        gradient leg is narrowed. The dtype assertion guards the other direction: that
+        the gradient leg really is narrowed and the bandwidth saving is not silently lost.
+        """
+        device_mesh = init_device_mesh("cuda", (self.world_size,))
+        rank = dist.get_rank()
+        dist_group = dist.distributed_c10d._get_default_group()
+
+        num_params = 4
+        shapes = generate_param_shapes(num_params)
+        # Values that are not representable in bfloat16, so any round trip through it
+        # shows up as an exact-comparison failure.
+        params = [torch.randn(s, device="cuda") for s in shapes]
+        dtensor_params = tuple(
+            distribute_tensor(t, device_mesh, [Shard(0)]) for t in params
+        )
+        expected_full_params = [p.full_tensor() for p in dtensor_params]
+        for p in dtensor_params:
+            p.grad = torch.ones_like(p)
+
+        assigned_params_mask = tuple(
+            i % self.world_size == rank for i in range(num_params)
+        )
+        ctx = GatherGradientsContext(
+            params=dtensor_params,
+            assigned_params_mask=assigned_params_mask,
+            dist_group=dist_group,
+            communication_dtype=torch.bfloat16,
+        )
+
+        self.assertEqual(ctx._send_buffer.dtype, torch.bfloat16)
+        self.assertEqual(ctx._recv_buffer.dtype, torch.bfloat16)
+
+        gathered_params = ctx.gather_params()
+        for i in range(num_params):
+            if not assigned_params_mask[i]:
+                continue
+            gathered = gathered_params[i]
+            assert gathered is not None
+            self.assertEqual(gathered.dtype, expected_full_params[i].dtype)
+            torch.testing.assert_close(
+                gathered,
+                expected_full_params[i],
+                rtol=0,
+                atol=0,
+                msg=f"Param {i} was quantized by the narrowed communication_dtype",
+            )
+
+        # The gradient leg still works end-to-end with the narrowed buffers.
+        gathered_grads = ctx.gather_gradients()
+        for i in range(num_params):
+            if not assigned_params_mask[i]:
+                continue
+            self.assertIsNotNone(gathered_grads[i])
+            torch.testing.assert_close(
+                gathered_grads[i],
+                torch.ones_like(expected_full_params[i]),
+            )
+
+    @with_comms
+    @skip_if_lt_x_gpu(4)
+    def test_equal_width_communication_dtype_is_honored(self) -> None:
+        """bfloat16 for fp16 params must be applied, not silently dropped.
+
+        Both dtypes have itemsize == 2, so this buys no bandwidth, but the caller is
+        asking for bf16's wider exponent range and that request has to be honored.
+        """
+        device_mesh = init_device_mesh("cuda", (self.world_size,))
+        rank = dist.get_rank()
+        dist_group = dist.distributed_c10d._get_default_group()
+
+        num_params = 4
+        shapes = generate_param_shapes(num_params)
+        dtensor_params = tuple(
+            distribute_tensor(
+                torch.randn(s, device="cuda", dtype=torch.float16),
+                device_mesh,
+                [Shard(0)],
+            )
+            for s in shapes
+        )
+        expected_full_params = [p.full_tensor() for p in dtensor_params]
+        for p in dtensor_params:
+            p.grad = torch.ones_like(p)
+
+        assigned_params_mask = tuple(
+            i % self.world_size == rank for i in range(num_params)
+        )
+        ctx = GatherGradientsContext(
+            params=dtensor_params,
+            assigned_params_mask=assigned_params_mask,
+            dist_group=dist_group,
+            communication_dtype=torch.bfloat16,
+        )
+
+        self.assertEqual(ctx._send_buffer.dtype, torch.bfloat16)
+        self.assertEqual(ctx._recv_buffer.dtype, torch.bfloat16)
+
+        # gather_params() still bypasses the wire dtype, so params round-trip exactly.
+        gathered_params = ctx.gather_params()
+        for i in range(num_params):
+            if not assigned_params_mask[i]:
+                continue
+            gathered = gathered_params[i]
+            assert gathered is not None
+            self.assertEqual(gathered.dtype, torch.float16)
+            torch.testing.assert_close(
+                gathered,
+                expected_full_params[i],
+                rtol=0,
+                atol=0,
+                msg=f"Param {i} was quantized by the equal-width communication_dtype",
+            )
+
+        gathered_grads = ctx.gather_gradients()
+        for i in range(num_params):
+            if not assigned_params_mask[i]:
+                continue
+            self.assertIsNotNone(gathered_grads[i])
+            torch.testing.assert_close(
+                gathered_grads[i],
+                torch.ones_like(expected_full_params[i]),
+            )
+
+    @with_comms
+    @skip_if_lt_x_gpu(4)
+    def test_wider_communication_dtype_falls_back_to_param_dtype(self) -> None:
+        """A wider dtype would double the wire bytes, so it is ignored with a warning."""
+        device_mesh = init_device_mesh("cuda", (self.world_size,))
+        rank = dist.get_rank()
+        dist_group = dist.distributed_c10d._get_default_group()
+
+        num_params = 4
+        shapes = generate_param_shapes(num_params)
+        dtensor_params = tuple(
+            distribute_tensor(
+                torch.randn(s, device="cuda", dtype=torch.bfloat16),
+                device_mesh,
+                [Shard(0)],
+            )
+            for s in shapes
+        )
+        assigned_params_mask = tuple(
+            i % self.world_size == rank for i in range(num_params)
+        )
+
+        with self.assertLogs(
+            "distributed_shampoo.utils.shampoo_fully_shard_utils",
+            level="WARNING",
+        ):
+            ctx = GatherGradientsContext(
+                params=dtensor_params,
+                assigned_params_mask=assigned_params_mask,
+                dist_group=dist_group,
+                communication_dtype=torch.float32,
+            )
+
+        self.assertEqual(ctx._send_buffer.dtype, torch.bfloat16)
+        self.assertEqual(ctx._recv_buffer.dtype, torch.bfloat16)

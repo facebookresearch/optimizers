@@ -14,6 +14,7 @@ from operator import methodcaller
 from unittest.mock import MagicMock, patch
 
 import torch
+import torch._dynamo
 from distributed_shampoo.shampoo_types import (
     DISTRIBUTED_CONFIG,
     FSDPParamAssignmentStrategy,
@@ -33,7 +34,9 @@ from distributed_shampoo.utils.shampoo_fully_shard_utils import (
 )
 from distributed_shampoo.utils.shampoo_utils import (
     _device_key,
-    _get_triu_indices,
+    _get_symmetric_gather_indices,
+    _get_triu_flat_indices,
+    _index_dtype,
     compress_list,
     distribute_buffer_sizes,
     generate_pairwise_indices,
@@ -539,48 +542,149 @@ class UnpackUpperTriangularTest(unittest.TestCase):
             unpacked = unpack_upper_triangular(torch.zeros(6, dtype=dtype), dim=3)
             self.assertEqual(unpacked.dtype, dtype)
 
+    @parametrize("device", ("cpu", "cuda") if _HAS_CUDA else ("cpu",))
+    @parametrize("dtype", (torch.float32, torch.float64, torch.bfloat16))
+    def test_bitwise_equal_to_index_put_reference(
+        self, dtype: torch.dtype, device: str
+    ) -> None:
+        # Reference: fill the upper triangle, then mirror it with a second index_put.
+        # The gather must copy every element bit for bit, including signed zeros,
+        # NaN payloads, and infinities.
+        for dim in (*range(1, 34), 64, 127, 128):
+            a = torch.randn(dim, dim, device=device).to(dtype)
+            symmetric = a + a.T
+            symmetric.view(-1)[:: max(1, dim // 3)] = -0.0
+            if dim > 2:
+                symmetric[0, 1] = symmetric[1, 0] = float("nan")
+                symmetric[1, 2] = symmetric[2, 1] = float("inf")
+            rows, cols = torch.triu_indices(dim, dim, device=device)
+            reference_packed = symmetric[rows, cols]
+            reference_unpacked = torch.zeros(dim, dim, dtype=dtype, device=device)
+            reference_unpacked[rows, cols] = reference_packed
+            reference_unpacked[cols, rows] = reference_packed
 
-class TriuIndicesCacheTest(unittest.TestCase):
-    # The @cache on _get_triu_indices is process-wide; isolate every test
+            packed = pack_upper_triangular(symmetric)
+            unpacked = unpack_upper_triangular(reference_packed, dim=dim)
+            int_dtype = (
+                torch.int16
+                if dtype == torch.bfloat16
+                else torch.int32
+                if dtype == torch.float32
+                else torch.int64
+            )
+            self.assertTrue(
+                torch.equal(packed.view(int_dtype), reference_packed.view(int_dtype)),
+                msg=f"{dim=}",
+            )
+            self.assertTrue(
+                torch.equal(
+                    unpacked.view(int_dtype), reference_unpacked.view(int_dtype)
+                ),
+                msg=f"{dim=}",
+            )
+            self.assertTrue(packed.is_contiguous() and unpacked.is_contiguous())
+
+            # Non-contiguous inputs: a transposed view and a slice of a larger buffer,
+            # each compared against advanced indexing on the same view.
+            buffer = torch.zeros(dim + 3, dim + 5, dtype=dtype, device=device)
+            buffer[:dim, :dim] = symmetric
+            for view in (symmetric.T, buffer[:dim, :dim]):
+                self.assertTrue(
+                    torch.equal(
+                        pack_upper_triangular(view).view(int_dtype),
+                        view[rows, cols].view(int_dtype),
+                    ),
+                    msg=f"{dim=} {view.stride()=}",
+                )
+
+    def test_rejects_malformed_inputs(self) -> None:
+        with self.assertRaisesRegex(ValueError, "2D square matrix"):
+            pack_upper_triangular(torch.zeros(3, 4))
+        with self.assertRaisesRegex(ValueError, "2D square matrix"):
+            pack_upper_triangular(torch.zeros(6))
+        for bad_packed in (torch.zeros(5), torch.zeros(7), torch.zeros(2, 3)):
+            with self.assertRaisesRegex(ValueError, "1D packed tensor with 6 elements"):
+                unpack_upper_triangular(bad_packed, dim=3)
+
+    def test_pack_unpack_compile_on_cpu(self) -> None:
+        # The cached indices must live on the same device as the CPU inputs ("cpu", not
+        # "cpu:0"), or fake-tensor device propagation for index_select fails under
+        # torch.compile.
+        symmetric = torch.randn(7, 7)
+        symmetric = symmetric + symmetric.T
+        torch._dynamo.reset()
+        try:
+            compiled_pack = torch.compile(
+                pack_upper_triangular, backend="eager", fullgraph=True
+            )
+            compiled_unpack = torch.compile(
+                unpack_upper_triangular, backend="eager", fullgraph=True
+            )
+            packed = compiled_pack(symmetric)
+            self.assertTrue(torch.equal(packed, pack_upper_triangular(symmetric)))
+            self.assertTrue(torch.equal(compiled_unpack(packed, dim=7), symmetric))
+        finally:
+            torch._dynamo.reset()
+
+
+class SymmetricPackIndexCacheTest(unittest.TestCase):
+    # The @cache on the index helpers is process-wide; isolate every test
     # so assertions on cache_info are independent of test ordering.
     def setUp(self) -> None:
-        _get_triu_indices.cache_clear()
+        _get_triu_flat_indices.cache_clear()
+        _get_symmetric_gather_indices.cache_clear()
 
     def tearDown(self) -> None:
-        _get_triu_indices.cache_clear()
+        _get_triu_flat_indices.cache_clear()
+        _get_symmetric_gather_indices.cache_clear()
 
     def test_cache_reuse(self) -> None:
-        # First call populates the cache; subsequent same-dim calls hit it.
+        # First call populates each cache; subsequent same-dim calls hit it.
         symmetric = torch.randn(8, 8)
         symmetric = symmetric + symmetric.T
         pack_upper_triangular(symmetric)
-        info_after_first = _get_triu_indices.cache_info()
-        self.assertEqual(info_after_first.misses, 1)
-        self.assertEqual(info_after_first.hits, 0)
+        unpack_upper_triangular(torch.zeros(8 * 9 // 2), dim=8)
+        for cache_fn in (_get_triu_flat_indices, _get_symmetric_gather_indices):
+            self.assertEqual(cache_fn.cache_info().misses, 1)
+            self.assertEqual(cache_fn.cache_info().hits, 0)
 
         for _ in range(5):
             pack_upper_triangular(symmetric)
             unpack_upper_triangular(torch.zeros(8 * 9 // 2), dim=8)
-        info_after_repeat = _get_triu_indices.cache_info()
-        self.assertEqual(info_after_repeat.misses, 1)
-        # 5 iterations * (1 pack + 1 unpack) = 10 hits, exact.
-        self.assertEqual(info_after_repeat.hits, 10)
+        for cache_fn in (_get_triu_flat_indices, _get_symmetric_gather_indices):
+            self.assertEqual(cache_fn.cache_info().misses, 1)
+            self.assertEqual(cache_fn.cache_info().hits, 5)
 
         # A different dim should miss exactly once more.
         larger = torch.randn(16, 16)
         larger = larger + larger.T
         pack_upper_triangular(larger)
-        self.assertEqual(_get_triu_indices.cache_info().misses, 2)
+        unpack_upper_triangular(torch.zeros(16 * 17 // 2), dim=16)
+        for cache_fn in (_get_triu_flat_indices, _get_symmetric_gather_indices):
+            self.assertEqual(cache_fn.cache_info().misses, 2)
 
     def test_dtype_and_shape_and_values(self) -> None:
-        # int32 halves the cache footprint vs torch.triu_indices' int64 default.
-        # Lock dtype, shape, AND values against the reference torch.triu_indices.
-        indices = _get_triu_indices(32, "cpu", 0)
-        self.assertEqual(indices.dtype, torch.int32)
-        self.assertEqual(indices.shape, (2, 32 * 33 // 2))
-        torch.testing.assert_close(
-            indices, torch.triu_indices(32, 32, device="cpu").to(torch.int32)
-        )
+        # Lock dtype, shape, AND values against torch.triu_indices.
+        rows, cols = torch.triu_indices(32, 32)
+        flat = _get_triu_flat_indices(32, "cpu", 0)
+        self.assertEqual(flat.dtype, torch.int32)
+        self.assertEqual(flat.shape, (32 * 33 // 2,))
+        torch.testing.assert_close(flat, (rows * 32 + cols).to(torch.int32))
+
+        gather = _get_symmetric_gather_indices(32, "cpu", 0)
+        self.assertEqual(gather.dtype, torch.int32)
+        self.assertEqual(gather.shape, (32 * 32,))
+        positions = torch.empty(32, 32, dtype=torch.int32)
+        packed_positions = torch.arange(rows.numel(), dtype=torch.int32)
+        positions[rows, cols] = packed_positions
+        positions[cols, rows] = packed_positions
+        torch.testing.assert_close(gather, positions.flatten())
+
+    def test_index_dtype_widens_past_int32_range(self) -> None:
+        # Flat offsets reach d * d - 1: int32 holds them up to d = 46340.
+        self.assertEqual(_index_dtype(4096), torch.int32)
+        self.assertEqual(_index_dtype(46340), torch.int32)
+        self.assertEqual(_index_dtype(46341), torch.int64)
 
     def test_device_key_normalizes_cpu(self) -> None:
         # cpu always normalizes to ('cpu', 0).

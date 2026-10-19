@@ -352,6 +352,8 @@ class DistributedShampoo(torch.optim.Optimizer):
         use_pin_memory (bool): Whether to use pin memory to remove sync point in memory copy. (Default: False)
         shampoo_pt2_compile_config (ShampooPT2CompileConfig | None): Configuration for Shampoo PT2 compilation. If None,
             ignores compilation, and Shampoo will run in eager mode. (Default: None)
+        use_eager_init_step (bool): Whether to run the first optimizer step eagerly before using the compiled step. This is
+            intended for callers that use the first step to initialize lazy optimizer state. (Default: False)
         distributed_config (DistributedConfig): Configuration for applying Shampoo to different distributed training frameworks, such as distributed-data parallel (DDP) training.
             (Default: DefaultSingleDeviceDistributedConfig)
         preconditioner_config (PreconditionerConfig): Configuration for preconditioner computation.
@@ -378,6 +380,7 @@ class DistributedShampoo(torch.optim.Optimizer):
         grafting_config: PreconditionerConfig | None = None,
         use_pin_memory: bool = False,
         shampoo_pt2_compile_config: ShampooPT2CompileConfig | None = None,
+        use_eager_init_step: bool = False,
         distributed_config: DistributedConfig = DefaultSingleDeviceDistributedConfig,
         preconditioner_config: PreconditionerConfig = DefaultShampooConfig,
         shampoo_runtime_config: ShampooRuntimeConfig = DefaultShampooRuntimeConfig,
@@ -541,6 +544,7 @@ class DistributedShampoo(torch.optim.Optimizer):
         self._shampoo_pt2_compile_config: ShampooPT2CompileConfig | None = (
             shampoo_pt2_compile_config
         )
+        self._use_eager_init_step: bool = use_eager_init_step
         self._runtime_config: ShampooRuntimeConfig = shampoo_runtime_config
         self._concurrency_config: ConcurrencyConfig = concurrency_config
 
@@ -562,6 +566,42 @@ class DistributedShampoo(torch.optim.Optimizer):
         self._instantiate_per_group_step(
             shampoo_pt2_compile_config=shampoo_pt2_compile_config
         )
+
+    @property
+    def dist_buffer_allocated(self) -> bool:
+        """Whether the all-gather buffer is resident. Always True for configs without one."""
+        return all(
+            state_lists[DISTRIBUTOR].dist_buffer_allocated
+            for state_lists in self._per_group_state_lists
+        )
+
+    @torch.no_grad()
+    def allocate_dist_buffer(self) -> None:
+        """Reallocate the all-gather buffer freed by ``free_dist_buffer``. Idempotent.
+
+        Rank-local; no collective or rank synchronization. Each participating
+        rank must restore its required buffer before ``step()``, or ``train()`` /
+        ``eval()`` when they communicate. The freed-buffer guard only raises
+        locally, so peers may block in a collective until timeout or job abort.
+        """
+        for state_lists in self._per_group_state_lists:
+            state_lists[DISTRIBUTOR].allocate_dist_buffer()
+
+    @torch.no_grad()
+    def free_dist_buffer(self) -> None:
+        """Optionally free the all-gather buffer. Idempotent.
+
+        If this method is never called, the buffer allocated at construction
+        stays resident and no reallocation is needed.
+
+        This operation is rank-local and does not synchronize ranks. Call
+        ``allocate_dist_buffer()`` on each participating rank before the next
+        ``step()``, or ``train()`` / ``eval()`` when they communicate. The freed-
+        buffer guard raises locally; peers may block in a collective until
+        timeout or job abort.
+        """
+        for state_lists in self._per_group_state_lists:
+            state_lists[DISTRIBUTOR].free_dist_buffer()
 
     @torch.no_grad()
     def _instantiate_distributor(self) -> None:
@@ -1023,7 +1063,7 @@ class DistributedShampoo(torch.optim.Optimizer):
     def _mask_state_lists(
         state_lists: dict[str, Any],
         group: dict[str, Any],
-        shampoo_pt2_enabled: bool = False,
+        shampoo_pt2_has_compiled: bool = False,
     ) -> None:
         if (
             state_lists[DISTRIBUTOR].local_grad_selector
@@ -1031,9 +1071,8 @@ class DistributedShampoo(torch.optim.Optimizer):
         ):
             return
 
-        # Warning for potential PT2 recompile due to gradient selector change.
-        # This warning is expected in either training from scratch or reloading from a checkpoint, as state_lists[PREVIOUS_GRAD_SELECTOR] is initialized to `None`, triggering this warning.
-        if state_lists[PREVIOUS_GRAD_SELECTOR] is not None and shampoo_pt2_enabled:
+        # A selector change during eager state initialization cannot invalidate a compiled graph.
+        if state_lists[PREVIOUS_GRAD_SELECTOR] is not None and shampoo_pt2_has_compiled:
             grad_selector_different = [
                 a ^ b
                 for a, b in zip(
@@ -1574,6 +1613,25 @@ class DistributedShampoo(torch.optim.Optimizer):
     ) -> None:
         """Core per-group step logic; called from step() once per param group,
         wrapped in cuda_stream_context (or nullcontext) by the caller."""
+        completed_steps = state_lists[STEP].item()
+
+        distributor = state_lists[DISTRIBUTOR]
+        if (
+            isinstance(
+                distributor,
+                (FullyShardLosslessDistributor, HybridShardLosslessDistributor),
+            )
+            and distributor.needs_full_param_refresh
+        ):
+            logger.info(
+                "[SHAMPOO_CHECKPOINT] Refreshing %s gathered parameters at "
+                "their first optimizer-step use",
+                type(distributor).__qualname__,
+            )
+            distributor.refresh_assigned_full_params()
+            state_lists[MASKED_BLOCKED_PARAMS] = distributor.local_blocked_params
+            state_lists[PREVIOUS_GRAD_SELECTOR] = None
+
         # Construct blocked gradient list.
         state_lists[MASKED_BLOCKED_GRADS] = state_lists[
             DISTRIBUTOR
@@ -1583,12 +1641,23 @@ class DistributedShampoo(torch.optim.Optimizer):
         DistributedShampoo._mask_state_lists(
             state_lists=state_lists,
             group=group,
-            shampoo_pt2_enabled=self._shampoo_pt2_compile_config is not None,
+            shampoo_pt2_has_compiled=(
+                self._shampoo_pt2_compile_config is not None
+                and completed_steps > 0
+                and (not self._use_eager_init_step or completed_steps > 1)
+            ),
         )
+
+        if (
+            self._shampoo_pt2_compile_config is not None
+            and self._use_eager_init_step
+            and completed_steps == 0
+        ):
+            per_group_step = self._per_group_step_impl
 
         # Iterate group step counter and define Python scalar step.
         step = state_lists[STEP].add_(1)
-        step_val = step.item()
+        step_val = completed_steps + 1
         # NOTE: Reuse pre-allocated lr tensors to avoid per-step pinned
         # memory allocation (cudaHostAlloc). Fill the pinned CPU tensor and
         # copy to the persistent GPU tensor with non_blocking to overlap H2D.
@@ -1701,6 +1770,11 @@ class DistributedShampoo(torch.optim.Optimizer):
             with torch.enable_grad():
                 loss = closure()
 
+        # Validate all groups before group updates, so restoring the buffer
+        # after this error permits a retry. Host metadata only; stays eager.
+        for state_lists in self._per_group_state_lists:
+            state_lists[DISTRIBUTOR].check_dist_buffer_allocated()
+
         for state_lists, group in zip(
             self._per_group_state_lists, self.param_groups, strict=True
         ):
@@ -1758,6 +1832,7 @@ class DistributedShampoo(torch.optim.Optimizer):
                 state_lists[DISTRIBUTOR].local_blocked_params,
             )
             torch._foreach_mul_(parameter_updates, 1 - train_interp_coeff)
+            state_lists[DISTRIBUTOR].check_dist_buffer_allocated()
             state_lists[DISTRIBUTOR].update_params(
                 blocked_search_directions=tuple(parameter_updates),
                 use_masked_tensors=False,
@@ -1795,6 +1870,7 @@ class DistributedShampoo(torch.optim.Optimizer):
                 parameter_updates,
                 1 - torch.reciprocal(train_interp_coeff),
             )
+            state_lists[DISTRIBUTOR].check_dist_buffer_allocated()
             state_lists[DISTRIBUTOR].update_params(
                 blocked_search_directions=tuple(parameter_updates),
                 use_masked_tensors=False,
@@ -1998,27 +2074,63 @@ class DistributedShampoo(torch.optim.Optimizer):
         """Perform post-load operations after checkpoint loading.
 
         This hook performs two operations:
-        1. Refreshes assigned params in lossless distributors after checkpoint load.
+        1. Marks assigned params in lossless distributors for lazy refresh.
         2. Restores the train/eval mode that was active before loading the checkpoint.
         """
 
-        for state_lists in operator.attrgetter("_per_group_state_lists")(optimizer):
+        per_group_state_lists = operator.attrgetter("_per_group_state_lists")(optimizer)
+        saved_train_modes: list[bool] = getattr(optimizer, "_pre_load_train_modes", [])
+        mode_state_lists = [
+            state_lists
+            for state_lists, group in zip(
+                per_group_state_lists,
+                optimizer.param_groups,
+                strict=True,
+            )
+            if group[ITERATE_AVERAGING_CONFIG] is not None
+            and not isinstance(group[ITERATE_AVERAGING_CONFIG], ClassicMomentumConfig)
+        ]
+
+        # GPA and Schedule-Free mode switches transform live model parameters.
+        # A lazy refresh at optimizer-step time would be too late because the
+        # transition must happen after model restore and before the next forward.
+        # Fail closed only for the unsafe cross-mode lossless restore; same-mode
+        # restores are no-ops and remain supported.
+        if saved_train_modes and any(
+            isinstance(
+                state_lists[DISTRIBUTOR],
+                (FullyShardLosslessDistributor, HybridShardLosslessDistributor),
+            )
+            and saved_mode != bool(state_lists[TRAIN_MODE].item())
+            for state_lists, saved_mode in zip(
+                mode_state_lists, saved_train_modes, strict=True
+            )
+        ):
+            del optimizer._pre_load_train_modes  # type: ignore
+            raise RuntimeError(
+                "Checkpoint restore across Shampoo train/eval modes is not "
+                "supported with a lossless FSDP/HSDP distributor while full "
+                "parameters are refreshed lazily. Restore from the same mode "
+                "or use an explicit checkpoint-completion finalization path."
+            )
+
+        stale_distributors: list[str] = []
+        for state_lists in per_group_state_lists:
             distributor = state_lists[DISTRIBUTOR]
             if isinstance(
                 distributor,
                 (FullyShardLosslessDistributor, HybridShardLosslessDistributor),
             ):
-                distributor.refresh_assigned_full_params()
-                state_lists[MASKED_BLOCKED_PARAMS] = distributor.local_blocked_params
-                # Mirrors the initial state in _instantiate_distributor: the line
-                # above leaves MASKED_BLOCKED_PARAMS unmasked, so _mask_state_lists
-                # must recompress it on the next step. Its early return is gated on
-                # the grad selector changing, which does not happen when the same
-                # param is grad-less before and after a checkpoint resume.
-                state_lists[PREVIOUS_GRAD_SELECTOR] = None
+                distributor.mark_full_params_stale()
+                stale_distributors.append(type(distributor).__qualname__)
+        if stale_distributors:
+            logger.info(
+                "[SHAMPOO_CHECKPOINT] Marked gathered parameters stale after "
+                "optimizer state load for distributors=%s",
+                stale_distributors,
+            )
 
         # Restore the original train/eval mode after loading the checkpoint.
-        saved_train_modes: list[bool] = getattr(optimizer, "_pre_load_train_modes", [])
         if saved_train_modes:
             # Mixed train/eval modes across parameter groups is not supported
             # since train() and eval() always operate on all groups uniformly.

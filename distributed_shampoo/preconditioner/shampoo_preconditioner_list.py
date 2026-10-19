@@ -11,7 +11,7 @@ import logging
 import math
 from abc import abstractmethod
 from collections.abc import Callable, Hashable, Mapping
-from dataclasses import asdict, dataclass, field, fields
+from dataclasses import dataclass, field, fields
 from fractions import Fraction
 from functools import partial, reduce
 from itertools import chain
@@ -63,6 +63,17 @@ INVERSE_EXPONENT_OVERRIDE = "inverse_exponent_override"
 _SubStateValueType = TypeVar("_SubStateValueType")
 # NOTE: Use type _StateValueType instead when downstream applications are Python 3.12+ available
 _StateValueType: TypeAlias = dict[Hashable, _SubStateValueType]
+
+
+def _field_values(instance: Any) -> dict[str, Any]:
+    """Shallow read of a dataclass instance's fields.
+
+    ``dataclasses.asdict`` deepcopies every value, so splatting it re-allocates
+    each freshly created factor matrix and discards the original. The base state
+    is built inline and dropped on the same expression, so nothing else holds a
+    reference to those tensors and they can be handed over directly.
+    """
+    return {f.name: getattr(instance, f.name) for f in fields(instance)}
 
 
 def _allocate_packed_eye(
@@ -484,7 +495,7 @@ class RootInvShampooKroneckerFactorsState(BaseShampooKroneckerFactorsState):
         use_symmetric_packing: bool = preconditioner_config.use_symmetric_packing
 
         return cls(
-            **asdict(
+            **_field_values(
                 BaseShampooKroneckerFactorsState.from_block(
                     block_info=block_info,
                     factor_matrix_dtype=preconditioner_config.factor_matrix_dtype,
@@ -743,7 +754,7 @@ class EigendecomposedShampooKroneckerFactorsState(BaseShampooKroneckerFactorsSta
         preconditioned_dims: tuple[int, ...] = kwargs["preconditioned_dims"]
 
         return cls(
-            **asdict(
+            **_field_values(
                 BaseShampooKroneckerFactorsState.from_block(
                     block_info=block_info,
                     factor_matrix_dtype=preconditioner_config.factor_matrix_dtype,
@@ -998,7 +1009,7 @@ class EigenvalueCorrectedShampooKroneckerFactorsState(BaseShampooKroneckerFactor
         dims: tuple[int, ...] = kwargs["dims"]
 
         return EigenvalueCorrectedShampooKroneckerFactorsState(
-            **asdict(
+            **_field_values(
                 BaseShampooKroneckerFactorsState.from_block(
                     block_info=block_info,
                     factor_matrix_dtype=preconditioner_config.factor_matrix_dtype,

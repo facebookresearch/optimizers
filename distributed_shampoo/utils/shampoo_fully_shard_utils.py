@@ -274,6 +274,17 @@ class AllToAllContext(ABC):
             ``assigned_params_mask``. Must be consistent with ``assigned_params_mask`` (i.e.
             ``owner_ranks[i] == this_rank`` iff ``assigned_params_mask[i]``) and identical across all
             ranks in the group.
+        communication_dtype (torch.dtype | None): Dtype of the all_to_all send/recv buffers. ``None``
+            (default) keeps the parameter dtype, which is lossless. A narrower dtype halves the wire
+            bytes but quantizes the payload, so it is only admissible for payloads where a *relative*
+            error is acceptable -- gradients, whose magnitude is rescaled downstream anyway. It is NOT
+            admissible for absolute parameter values: a per-step update is typically far below one ULP
+            of a narrow float at the weight's own magnitude, so the round trip discards the update
+            entirely. ``RedistributeParamsContext`` therefore does not expose this argument, and
+            ``GatherGradientsContext.gather_params`` overrides it back to the parameter dtype.
+            An equal-width dtype (e.g. bfloat16 for fp16 params) is honored even though it saves
+            no bandwidth, since the requantization it asks for is the point. A *wider* dtype is
+            ignored with a warning rather than applied.
     """
 
     @torch.no_grad()
@@ -283,6 +294,7 @@ class AllToAllContext(ABC):
         assigned_params_mask: tuple[bool, ...],
         dist_group: torch.distributed.ProcessGroup,
         owner_ranks: list[int] | None = None,
+        communication_dtype: torch.dtype | None = None,
     ) -> None:
         self._params: tuple[DTensor, ...] = params
         self._assigned_params_mask: tuple[bool, ...] = assigned_params_mask
@@ -322,6 +334,23 @@ class AllToAllContext(ABC):
                 "Parameters of different dtypes are not currently supported."
             )
 
+        # Wire dtype for the all_to_all buffers; see the class docstring for why this
+        # is gradient-only. Buffer *sizes* are element counts, so swapping in a dtype
+        # of equal or smaller width changes only the byte width and leaves every
+        # precomputed view unchanged.
+        self._comm_dtype: torch.dtype = self._dtype
+        if communication_dtype is not None and communication_dtype != self._dtype:
+            if communication_dtype.itemsize > self._dtype.itemsize:
+                # Never widen: DDPDistributedConfig.communication_dtype defaults to
+                # float32, which must not upcast bf16 params and double the wire bytes.
+                logger.warning(
+                    f"Ignoring communication_dtype {communication_dtype}: it is wider "
+                    f"than the parameter dtype {self._dtype} and would double the "
+                    "bytes on the wire. Communicating at the parameter dtype instead."
+                )
+            else:
+                self._comm_dtype = communication_dtype
+
         self._precompute_metadata()
 
     def _precompute_metadata(self) -> None:
@@ -345,10 +374,10 @@ class AllToAllContext(ABC):
 
         # Pre-allocate persistent send and recv buffers for all_to_all.
         self._send_buffer = torch.empty(
-            self._total_send_size, dtype=self._dtype, device=self._device
+            self._total_send_size, dtype=self._comm_dtype, device=self._device
         )
         self._recv_buffer = torch.empty(
-            self._total_recv_size, dtype=self._dtype, device=self._device
+            self._total_recv_size, dtype=self._comm_dtype, device=self._device
         )
 
         # Pre-compute send_list and recv_list as contiguous views into buffers.
@@ -619,6 +648,7 @@ class GatherGradientsContext(AllToAllContext):
         assigned_params_mask: tuple[bool, ...],
         dist_group: torch.distributed.ProcessGroup,
         owner_ranks: list[int] | None = None,
+        communication_dtype: torch.dtype | None = None,
     ) -> None:
         # Forward-declare subclass-specific attributes for Pyre before
         # super().__init__() calls _precompute_subclass_metadata().
@@ -628,7 +658,13 @@ class GatherGradientsContext(AllToAllContext):
         self._full_grad_buffers: list[Tensor] = []
         self._send_plan = _GatherSendPlan()
         self._unpack_plan = _GatherUnpackPlan()
-        super().__init__(params, assigned_params_mask, dist_group, owner_ranks)
+        super().__init__(
+            params,
+            assigned_params_mask,
+            dist_group,
+            owner_ranks,
+            communication_dtype,
+        )
 
     def _compute_send_recv_sizes(self) -> tuple[list[int], list[int]]:
         """All-to-owner: send this rank's chunks to each owner, recv all peers' chunks for owned params."""
@@ -842,11 +878,28 @@ class GatherGradientsContext(AllToAllContext):
         of gradients. Every parameter always has a value, so no None handling
         is needed on the send side.
 
+        Always communicates at the parameter dtype. A narrowed ``communication_dtype``
+        is admissible for the gradient leg only: the result of this call becomes the
+        optimizer's authoritative copy of the weights and is written back to the model
+        on the next step, so rounding it discards every update below one ULP (see the
+        ``communication_dtype`` arg on AllToAllContext). When this context is narrowed
+        the gather is delegated to a transient param-dtype sibling; that happens only
+        at optimizer construction and checkpoint restore, never on the step path.
+
         Returns:
             full_params: List of full parameter tensors (same length as
                 self._params). Entries are None for params not assigned to this
                 rank. Only params assigned to this rank will have non-None values.
         """
+        if self._comm_dtype != self._dtype:
+            # Always communicates at the parameter dtype.
+            return GatherGradientsContext(
+                params=self._params,
+                assigned_params_mask=self._assigned_params_mask,
+                dist_group=self._dist_group,
+                owner_ranks=self._owner_ranks,
+            ).gather_params()
+
         self._pack_send_buffer(
             lambda param_idx: self._params[param_idx].to_local().flatten()
         )

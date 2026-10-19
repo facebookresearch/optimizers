@@ -45,6 +45,7 @@ dev/gpu_tests/shampoo_pt2_test.py; this file owns the orthogonal compile-count i
 import unittest
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from functools import partial
 
 import torch
@@ -55,6 +56,7 @@ from distributed_shampoo.shampoo_types import (
     DDPDistributedConfig,
     DefaultSingleDeviceDistributedConfig,
     DistributedConfig,
+    DISTRIBUTOR,
     FSDPParamAssignmentStrategy,
     FullyShardDistributedConfig,
     HybridShardDistributedConfig,
@@ -64,13 +66,20 @@ from distributed_shampoo.shampoo_types import (
 from distributed_shampoo.tests.shampoo_test_utils import (
     construct_training_problem,
     generate_global_train_data,
+    with_pipeline_managed_dist_buffer,
 )
 from torch import distributed as dist, nn
+from torch._inductor.cudagraph_trees import get_manager
 from torch.distributed.device_mesh import init_device_mesh
 from torch.distributed.fsdp import fully_shard
+from torch.distributed.tensor import DTensor
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim.optimizer import ParamsT
 from torch.testing._internal.common_distributed import skip_if_lt_x_gpu
+from torch.testing._internal.common_utils import (
+    instantiate_parametrized_tests,
+    parametrize,
+)
 from torch.testing._internal.distributed._tensor.common_dtensor import (
     DTensorTestBase,
     with_comms,
@@ -106,6 +115,8 @@ def _fresh_dynamo_state() -> Iterator[None]:
 
 def _shampoo_optim_factory(
     distributed_config: DistributedConfig,
+    compile_mode: str | None = None,
+    use_pt2: bool = True,
 ) -> Callable[[ParamsT], torch.optim.Optimizer]:
     return partial(
         DistributedShampoo,
@@ -119,7 +130,9 @@ def _shampoo_optim_factory(
         weight_decay_type=WeightDecayType.DECOUPLED,
         grafting_config=AdaGradPreconditionerConfig(epsilon=1e-8),
         distributed_config=distributed_config,
-        shampoo_pt2_compile_config=ShampooPT2CompileConfig(),
+        shampoo_pt2_compile_config=(
+            ShampooPT2CompileConfig(mode=compile_mode) if use_pt2 else None
+        ),
     )
 
 
@@ -210,6 +223,158 @@ def _run_distributed_recompilation_test(
         )
 
 
+def _count_unique_graphs(
+    test_case: DTensorTestBase,
+    distributed_config: DistributedConfig,
+    post_model_decoration: Callable[[nn.Module], nn.Module],
+    manage_dist_buffer_externally: bool = False,
+) -> int:
+    """Run NUM_STEPS and return the total number of dynamo graphs emitted."""
+    with _fresh_dynamo_state():
+        model, loss_fn, _, target = construct_training_problem(
+            model_linear_layers_dims=(
+                4 * PRECONDITIONER_DIM,
+                2 * PRECONDITIONER_DIM,
+                1,
+            ),
+            model_dead_layers_dims=None,
+            enable_learnable_scalar=False,
+            device=torch.device("cuda"),
+            fill=0.1,
+            post_model_decoration=post_model_decoration,
+        )
+        assert isinstance(model, nn.Module)
+        train_data = generate_global_train_data(
+            num_steps=NUM_STEPS,
+            world_size=test_case.world_size,
+            data_shape=(4 * PRECONDITIONER_DIM,),
+            device=torch.device("cuda"),
+        )[:, dist.get_rank()]
+
+        optim_factory = _shampoo_optim_factory(
+            distributed_config=distributed_config,
+        )
+        if manage_dist_buffer_externally:
+            optim_factory = with_pipeline_managed_dist_buffer(optim_factory)
+        optimizer = optim_factory(model.parameters())
+
+        for step in range(NUM_STEPS):
+            optimizer.zero_grad()
+            loss_fn(model(train_data[step]), target).backward()
+            optimizer.step()
+
+        return torch._dynamo.utils.counters["stats"]["unique_graphs"]
+
+
+@dataclass(frozen=True)
+class _CudagraphRun:
+    params: list[torch.Tensor]
+    dist_buffer_addresses: list[int]
+    cudagraph_skips: int
+    recorded_cudagraphs: int
+
+
+def _train_under_cudagraphs(
+    test_case: DTensorTestBase,
+    distributed_config: DistributedConfig,
+    post_model_decoration: Callable[[nn.Module], nn.Module],
+    move_dist_buffer: bool,
+    use_pt2: bool = True,
+) -> _CudagraphRun:
+    """Train for NUM_STEPS with mode="reduce-overhead", or eagerly with use_pt2=False."""
+    with _fresh_dynamo_state():
+        model, loss_fn, _, target = construct_training_problem(
+            model_linear_layers_dims=(
+                4 * PRECONDITIONER_DIM,
+                2 * PRECONDITIONER_DIM,
+                1,
+            ),
+            model_dead_layers_dims=(PRECONDITIONER_DIM, PRECONDITIONER_DIM),
+            enable_learnable_scalar=False,
+            device=torch.device("cuda"),
+            fill=0.1,
+            post_model_decoration=post_model_decoration,
+        )
+        assert isinstance(model, nn.Module)
+        train_data = generate_global_train_data(
+            num_steps=NUM_STEPS,
+            world_size=test_case.world_size,
+            data_shape=(4 * PRECONDITIONER_DIM,),
+            device=torch.device("cuda"),
+        )[:, dist.get_rank()]
+
+        optimizer = _shampoo_optim_factory(
+            distributed_config=distributed_config,
+            compile_mode="reduce-overhead",
+            use_pt2=use_pt2,
+        )(model.parameters())
+        assert isinstance(optimizer, DistributedShampoo)
+        distributor = optimizer._per_group_state_lists[0][DISTRIBUTOR]
+        num_bytes = distributor._global_dist_buffer_num_bytes
+
+        dist_buffer_addresses: list[int] = []
+        placeholders: list[torch.Tensor] = []
+        for step in range(NUM_STEPS):
+            optimizer.zero_grad()
+            loss_fn(model(train_data[step]), target).backward()
+            if move_dist_buffer and step > 0:
+                # Hold on to the freed block so the reallocation can't reuse it
+                placeholders.append(
+                    torch.empty(num_bytes, dtype=torch.int8, device="cuda")
+                )
+                optimizer.allocate_dist_buffer()
+            dist_buffer_addresses.append(distributor._global_dist_buffer.data_ptr())
+            optimizer.step()
+            if move_dist_buffer:
+                optimizer.free_dist_buffer()
+
+        # Read before _fresh_dynamo_state resets the cudagraph trees
+        manager = get_manager(torch.cuda.current_device(), create_if_none_exists=False)
+        return _CudagraphRun(
+            params=[
+                (param.full_tensor() if isinstance(param, DTensor) else param)
+                .detach()
+                .clone()
+                for param in model.parameters()
+            ],
+            dist_buffer_addresses=dist_buffer_addresses,
+            cudagraph_skips=torch._dynamo.utils.counters["inductor"]["cudagraph_skips"],
+            recorded_cudagraphs=(
+                0
+                if manager is None
+                else sum(len(nodes) for nodes in manager.roots.values())
+            ),
+        )
+
+
+def _assert_moved_dist_buffer_matches_under_cudagraphs(
+    test_case: DTensorTestBase,
+    distributed_config: DistributedConfig,
+    post_model_decoration: Callable[[nn.Module], nn.Module],
+) -> None:
+    """Check a buffer that moves every step matches a resident one under cudagraphs."""
+    train = partial(
+        _train_under_cudagraphs,
+        test_case,
+        distributed_config=distributed_config,
+        post_model_decoration=post_model_decoration,
+    )
+    resident = train(move_dist_buffer=False)
+    moved = train(move_dist_buffer=True)
+    eager = train(move_dist_buffer=False, use_pt2=False)
+
+    # Cudagraphs have to actually run, or the comparison proves nothing
+    test_case.assertGreater(resident.recorded_cudagraphs, 0)
+    test_case.assertEqual(moved.cudagraph_skips, resident.cudagraph_skips)
+    test_case.assertEqual(moved.recorded_cudagraphs, resident.recorded_cudagraphs)
+    test_case.assertEqual(len(set(resident.dist_buffer_addresses)), 1)
+    test_case.assertEqual(len(set(moved.dist_buffer_addresses)), NUM_STEPS)
+
+    torch.testing.assert_close(moved.params, resident.params, rtol=0.0, atol=0.0)
+    # Same tolerance as the compiled vs eager check in shampoo_pt2_test.py
+    torch.testing.assert_close(moved.params, eager.params, rtol=1.0e-3, atol=1.0e-5)
+
+
 @unittest.skipIf(not torch.cuda.is_available(), "Skip when CUDA is not available")
 class ShampooSingleDeviceRecompilationTest(unittest.TestCase):
     def test_recompilation_count(self) -> None:
@@ -243,6 +408,7 @@ class ShampooSingleDeviceRecompilationTest(unittest.TestCase):
 
 
 @unittest.skipIf(not torch.cuda.is_available(), "Skip when CUDA is not available")
+@instantiate_parametrized_tests
 class ShampooDDPRecompilationTest(DTensorTestBase):
     @property
     def world_size(self) -> int:
@@ -256,6 +422,53 @@ class ShampooDDPRecompilationTest(DTensorTestBase):
             distributed_config=DDPDistributedConfig(),
             post_model_decoration=partial(
                 DDP, device_ids=[self.rank], find_unused_parameters=False
+            ),
+        )
+
+    @with_comms
+    @skip_if_lt_x_gpu(2)
+    def test_managing_dist_buffer_externally_adds_no_graph_breaks(self) -> None:
+        # Freeing and reallocating every step must not add graph breaks
+        post_model_decoration: Callable[[nn.Module], nn.Module] = partial(
+            DDP, device_ids=[self.rank], find_unused_parameters=False
+        )
+        resident_graphs = _count_unique_graphs(
+            self,
+            distributed_config=DDPDistributedConfig(),
+            post_model_decoration=post_model_decoration,
+        )
+        externally_managed_graphs = _count_unique_graphs(
+            self,
+            distributed_config=DDPDistributedConfig(),
+            post_model_decoration=post_model_decoration,
+            manage_dist_buffer_externally=True,
+        )
+
+        self.assertGreater(resident_graphs, 0)
+        self.assertEqual(
+            externally_managed_graphs,
+            resident_graphs,
+            msg=(
+                "Freeing and reclaiming the all-gather buffer around each step "
+                f"changed the dynamo graph count ({resident_graphs} -> "
+                f"{externally_managed_graphs}). The buffer resize must stay in eager "
+                "caller code, not in the PT2-compiled update_params path."
+            ),
+        )
+
+    @with_comms
+    @skip_if_lt_x_gpu(2)
+    @parametrize("communicate_params", (False, True))
+    def test_moved_dist_buffer_matches_resident_buffer_under_cudagraphs(
+        self, communicate_params: bool
+    ) -> None:
+        _assert_moved_dist_buffer_matches_under_cudagraphs(
+            self,
+            distributed_config=DDPDistributedConfig(
+                communicate_params=communicate_params
+            ),
+            post_model_decoration=partial(
+                DDP, device_ids=[self.rank], find_unused_parameters=True
             ),
         )
 
@@ -309,6 +522,23 @@ class ShampooHybridShardRecompilationTest(DTensorTestBase):
             mesh_dim_names=("replicate", "shard"),
         )
         _run_distributed_recompilation_test(
+            self,
+            distributed_config=HybridShardDistributedConfig(device_mesh=mesh_2d),
+            post_model_decoration=partial(fully_shard, mesh=mesh_2d),  # type: ignore
+        )
+
+    @with_comms
+    @skip_if_lt_x_gpu(2)
+    def test_moved_dist_buffer_matches_resident_buffer_under_cudagraphs(
+        self,
+    ) -> None:
+        # Replicate across both ranks so the all-gather actually spans them
+        mesh_2d = init_device_mesh(
+            "cuda",
+            (self.world_size, 1),
+            mesh_dim_names=("replicate", "shard"),
+        )
+        _assert_moved_dist_buffer_matches_under_cudagraphs(
             self,
             distributed_config=HybridShardDistributedConfig(device_mesh=mesh_2d),
             post_model_decoration=partial(fully_shard, mesh=mesh_2d),  # type: ignore
