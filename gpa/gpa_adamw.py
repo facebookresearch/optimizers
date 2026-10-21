@@ -140,7 +140,7 @@ class GPAAdamW(torch.optim.Optimizer):
         eval_interp_coeff: float = 0.9967,
         weight_pow_coeff: float = 0.0,
         weight_lr_power: float = 2,
-    ):
+    ) -> None:
         # Hyper-parameter checks
         if not lr >= 0.0:
             raise ValueError("Invalid learning rate: {}".format(lr))
@@ -305,7 +305,7 @@ class GPAAdamW(torch.optim.Optimizer):
         return has_sparse_grad
 
     @torch.no_grad()
-    def eval(self):
+    def eval(self) -> None:
         """Switch optimizer to eval mode.
 
         Converts parameters from y-sequence (gradient computation) to x-sequence
@@ -331,7 +331,7 @@ class GPAAdamW(torch.optim.Optimizer):
                 self.state[first_param][TRAIN_MODE].fill_(False)
 
     @torch.no_grad()
-    def train(self):
+    def train(self) -> None:
         """Switch optimizer to train mode.
 
         Converts parameters from x-sequence (model evaluation) to y-sequence

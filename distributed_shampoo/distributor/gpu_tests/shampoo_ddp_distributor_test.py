@@ -11,6 +11,7 @@ import abc
 import os
 import unittest
 from collections.abc import Callable
+from copy import deepcopy
 from dataclasses import replace
 from functools import partial
 from typing import Any, cast, Dict
@@ -30,19 +31,23 @@ from distributed_shampoo.shampoo_types import (
     DefaultShampooConfig,
     DefaultSingleDeviceDistributedConfig,
     DefaultSOAPConfig,
+    DISTRIBUTOR,
     EigendecomposedShampooPreconditionerConfig,
     GeneralizedPrimalAveragingConfig,
     IterateAveragingConfig,
     PreconditionerConfig,
     ScheduleFreeConfig,
     SingleDeviceDistributedConfig,
+    STEP,
     WeightDecayType,
 )
 from distributed_shampoo.tests.shampoo_test_utils import (
+    assert_dist_buffer_views_survive_free_and_realloc,
     compare_two_optimizers_on_weight_and_loss,
     construct_training_problem,
     generate_global_train_data,
     train_model,
+    with_pipeline_managed_dist_buffer,
 )
 from distributed_shampoo.utils.shampoo_utils import pack_upper_triangular
 from torch import distributed as dist, nn, tensor
@@ -109,6 +114,47 @@ class AbstractTest:
         @property
         def world_size(self) -> int:
             return 2
+
+        def _assert_new_subgroups_call_count(
+            self,
+            num_trainers_per_group: int,
+            expected_new_subgroups_calls: int,
+        ) -> None:
+            self._init_distributed()
+            model = construct_training_problem(
+                model_linear_layers_dims=(PRECONDITIONER_DIM, 1),
+                model_dead_layers_dims=None,
+                device=self._device,
+            )[0]
+
+            with unittest.mock.patch.object(
+                dist, "new_subgroups", wraps=dist.new_subgroups
+            ) as mock_new_subgroups:
+                self._shampoo_optim_factory(
+                    distributed_config=DDPDistributedConfig(
+                        num_trainers_per_group=num_trainers_per_group
+                    )
+                )(model.parameters())
+
+            self.assertEqual(
+                mock_new_subgroups.call_count, expected_new_subgroups_calls
+            )
+
+        def test_reuses_parent_group_by_default(self) -> None:
+            self._assert_new_subgroups_call_count(
+                num_trainers_per_group=-1, expected_new_subgroups_calls=0
+            )
+
+        def test_reuses_parent_group_for_explicit_full_group_size(self) -> None:
+            self._assert_new_subgroups_call_count(
+                num_trainers_per_group=self.world_size,
+                expected_new_subgroups_calls=0,
+            )
+
+        def test_creates_subgroups_for_smaller_group_size(self) -> None:
+            self._assert_new_subgroups_call_count(
+                num_trainers_per_group=1, expected_new_subgroups_calls=1
+            )
 
         @staticmethod
         def _shampoo_optim_factory(
@@ -855,6 +901,308 @@ class AbstractTest:
                     "step"
                 ],
                 num_steps,
+            )
+
+        def _trained_optimizer(
+            self,
+            num_steps: int,
+            iterate_averaging_config: IterateAveragingConfig | None = None,
+        ) -> DistributedShampoo:
+            """Train a DDP Shampoo for num_steps and return it with a resident buffer."""
+            global_train_data = generate_global_train_data(
+                num_steps=num_steps,
+                world_size=self.world_size,
+                data_shape=(PRECONDITIONER_DIM * 4,),
+                device=self._device,
+            )
+            _, _, _, _, optimizer = train_model(
+                optim_factory=AbstractTest.ShampooDDPDistributorDeviceTest._shampoo_optim_factory(
+                    distributed_config=DDPDistributedConfig(),
+                    iterate_averaging_config=iterate_averaging_config,
+                ),
+                model_factory=partial(
+                    construct_training_problem,
+                    model_linear_layers_dims=(
+                        PRECONDITIONER_DIM * 4,
+                        PRECONDITIONER_DIM * 2,
+                    ),
+                    model_dead_layers_dims=None,
+                    device=self._device,
+                ),
+                num_steps=num_steps,
+                train_data=global_train_data[:, self.rank],
+            )
+            assert isinstance(optimizer, DistributedShampoo)
+            self.assertTrue(optimizer.dist_buffer_allocated)
+            return optimizer
+
+        @parametrize("communicate_params", (False, True))
+        def test_externally_managed_dist_buffer_matches_resident_buffer(
+            self, communicate_params: bool
+        ) -> None:
+            # Reallocated bytes are uninitialized, so any read before write diverges here
+            self._init_distributed()
+
+            compare_two_optimizers_on_weight_and_loss(
+                control_optim_factory=self._shampoo_optim_factory(
+                    distributed_config=DefaultSingleDeviceDistributedConfig,
+                ),
+                experimental_optim_factory=with_pipeline_managed_dist_buffer(
+                    self._shampoo_optim_factory(
+                        distributed_config=DDPDistributedConfig(
+                            communicate_params=communicate_params,
+                        ),
+                    )
+                ),
+                model_linear_layers_dims=(
+                    PRECONDITIONER_DIM * 4,
+                    PRECONDITIONER_DIM * 2,
+                    1,
+                ),
+                model_dead_layers_dims=(PRECONDITIONER_DIM, PRECONDITIONER_DIM),
+                device=self._device,
+                fill=0.01,
+                rtol=0.0,
+                atol=0.0,
+                rank=self.rank,
+                world_size=self.world_size,
+                experimental_post_model_decoration=partial(
+                    DDP,
+                    device_ids=[self.rank] if self._device.type == "cuda" else None,
+                    find_unused_parameters=True,
+                ),
+            )
+
+        @parametrize("communicate_params", (False, True))
+        def test_all_ranks_with_no_grads_with_externally_managed_dist_buffer(
+            self, communicate_params: bool
+        ) -> None:
+            # Nothing writes the buffer, but the all-gather still runs on it
+            self._init_distributed()
+
+            steps_without_gradients = 2
+            global_train_data = generate_global_train_data(
+                num_steps=steps_without_gradients,
+                world_size=self.world_size,
+                data_shape=(PRECONDITIONER_DIM * 4,),
+                device=self._device,
+            )
+            with unittest.mock.patch.object(torch.Tensor, "backward") as mock_backward:
+                train_model(
+                    optim_factory=with_pipeline_managed_dist_buffer(
+                        AbstractTest.ShampooDDPDistributorDeviceTest._shampoo_optim_factory(
+                            distributed_config=DDPDistributedConfig(
+                                communicate_params=communicate_params,
+                            ),
+                        )
+                    ),
+                    model_factory=partial(
+                        construct_training_problem,
+                        model_linear_layers_dims=(
+                            PRECONDITIONER_DIM * 4,
+                            PRECONDITIONER_DIM * 2,
+                        ),
+                        model_dead_layers_dims=None,
+                        device=self._device,
+                    ),
+                    num_steps=steps_without_gradients,
+                    train_data=global_train_data[:, self.rank],
+                )
+
+            self.assertEqual(mock_backward.call_count, steps_without_gradients)
+
+        def test_dist_buffer_stays_resident_without_a_caller(self) -> None:
+            self._init_distributed()
+
+            model_factory = partial(
+                construct_training_problem,
+                model_linear_layers_dims=(
+                    PRECONDITIONER_DIM * 4,
+                    PRECONDITIONER_DIM * 2,
+                ),
+                model_dead_layers_dims=None,
+                device=self._device,
+            )
+            optimizer = (
+                AbstractTest.ShampooDDPDistributorDeviceTest._shampoo_optim_factory(
+                    distributed_config=DDPDistributedConfig()
+                )(model_factory()[0].parameters())
+            )
+
+            assert isinstance(optimizer, DistributedShampoo)
+            distributor = optimizer._per_group_state_lists[0][DISTRIBUTOR]
+            self.assertTrue(optimizer.dist_buffer_allocated)
+            self.assertGreater(distributor._global_dist_buffer_num_bytes, 0)
+            self.assertEqual(
+                distributor._global_dist_buffer.untyped_storage().size(),
+                distributor._global_dist_buffer_num_bytes,
+            )
+
+            trained_optimizer = self._trained_optimizer(num_steps=3)
+            trained_distributor = trained_optimizer._per_group_state_lists[0][
+                DISTRIBUTOR
+            ]
+            self.assertEqual(
+                trained_distributor._global_dist_buffer.untyped_storage().size(),
+                trained_distributor._global_dist_buffer_num_bytes,
+            )
+
+        def test_allocate_dist_buffer_reclaims_freed_buffer(self) -> None:
+            self._init_distributed()
+
+            optimizer = self._trained_optimizer(num_steps=3)
+            distributor = optimizer._per_group_state_lists[0][DISTRIBUTOR]
+            storage = distributor._global_dist_buffer.untyped_storage()
+            num_bytes = distributor._global_dist_buffer_num_bytes
+            self.assertEqual(storage.size(), num_bytes)
+
+            optimizer.free_dist_buffer()
+            self.assertFalse(optimizer.dist_buffer_allocated)
+            self.assertEqual(storage.size(), 0)
+            optimizer.free_dist_buffer()
+            self.assertEqual(storage.size(), 0)
+
+            optimizer.allocate_dist_buffer()
+            self.assertTrue(optimizer.dist_buffer_allocated)
+            self.assertEqual(storage.size(), num_bytes)
+            optimizer.allocate_dist_buffer()
+            self.assertEqual(storage.size(), num_bytes)
+
+        @parametrize("num_groups", (1, 2))
+        @parametrize("iterate_averaging_config", (None, ScheduleFreeConfig()))
+        def test_step_after_free_preserves_state_and_retry_matches_resident(
+            self,
+            num_groups: int,
+            iterate_averaging_config: ScheduleFreeConfig | None,
+        ) -> None:
+            self._init_distributed()
+            control_params = [
+                nn.Parameter(
+                    torch.full(
+                        (PRECONDITIONER_DIM * 2, PRECONDITIONER_DIM),
+                        0.01,
+                        device=self._device,
+                    )
+                )
+                for _ in range(num_groups)
+            ]
+            retry_params = [
+                nn.Parameter(param.detach().clone()) for param in control_params
+            ]
+            optim_factory = self._shampoo_optim_factory(
+                distributed_config=DDPDistributedConfig(),
+                iterate_averaging_config=iterate_averaging_config,
+            )
+            control_optimizer = optim_factory(
+                [{"params": [param]} for param in control_params]
+            )
+            retry_optimizer = optim_factory(
+                [{"params": [param]} for param in retry_params]
+            )
+            assert isinstance(retry_optimizer, DistributedShampoo)
+            for params, optimizer in (
+                (control_params, control_optimizer),
+                (retry_params, retry_optimizer),
+            ):
+                for param in params:
+                    param.grad = torch.ones_like(param)
+                optimizer.step()
+
+            state_before = deepcopy(retry_optimizer.state_dict())
+            params_before = [param.detach().clone() for param in retry_params]
+            # A later group's failure must not partially step earlier groups.
+            distributor = retry_optimizer._per_group_state_lists[-1][DISTRIBUTOR]
+            self.assertGreater(distributor._global_dist_buffer_num_bytes, 0)
+            distributor.free_dist_buffer()
+            with self.assertRaisesRegex(
+                RuntimeError, "all-gather communication buffer has been freed"
+            ):
+                retry_optimizer.step()
+            self.assertEqual(
+                state_before, retry_optimizer.state_dict(), rtol=0.0, atol=0.0
+            )
+            self.assertEqual(params_before, retry_params, rtol=0.0, atol=0.0)
+
+            retry_optimizer.allocate_dist_buffer()
+            control_optimizer.step()
+            retry_optimizer.step()
+            self.assertEqual(control_params, retry_params, rtol=0.0, atol=0.0)
+            self.assertEqual(
+                control_optimizer.state_dict(),
+                retry_optimizer.state_dict(),
+                rtol=0.0,
+                atol=0.0,
+            )
+
+        def test_step_restores_dist_buffer_in_closure(self) -> None:
+            self._init_distributed()
+            optimizer = self._trained_optimizer(num_steps=1)
+            step_before = optimizer._per_group_state_lists[0][STEP].clone()
+            optimizer.free_dist_buffer()
+
+            def closure() -> float:
+                optimizer.allocate_dist_buffer()
+                return 1.0
+
+            self.assertEqual(optimizer.step(closure), 1.0)
+            self.assertTrue(optimizer.dist_buffer_allocated)
+            self.assertEqual(optimizer._per_group_state_lists[0][STEP], step_before + 1)
+
+        def test_step_after_free_without_allocate_raises(self) -> None:
+            self._init_distributed()
+
+            optimizer = self._trained_optimizer(num_steps=1)
+            optimizer.free_dist_buffer()
+
+            self.assertRaisesRegex(
+                RuntimeError,
+                r"all-gather communication buffer has been freed",
+                optimizer.step,
+            )
+
+        def test_train_and_eval_after_free_without_allocate_raise(self) -> None:
+            self._init_distributed()
+
+            optimizer = self._trained_optimizer(
+                num_steps=1,
+                iterate_averaging_config=GeneralizedPrimalAveragingConfig(),
+            )
+            optimizer.free_dist_buffer()
+
+            self.assertRaisesRegex(
+                RuntimeError,
+                r"all-gather communication buffer has been freed",
+                optimizer.eval,
+            )
+
+            optimizer.allocate_dist_buffer()
+            optimizer.eval()
+            optimizer.free_dist_buffer()
+
+            self.assertRaisesRegex(
+                RuntimeError,
+                r"all-gather communication buffer has been freed",
+                optimizer.train,
+            )
+
+        def test_dist_buffer_views_survive_free_and_realloc(self) -> None:
+            self._init_distributed()
+
+            model = construct_training_problem(
+                model_linear_layers_dims=(
+                    PRECONDITIONER_DIM * 4,
+                    PRECONDITIONER_DIM * 2,
+                ),
+                model_dead_layers_dims=None,
+                device=self._device,
+            )[0]
+            optimizer = self._shampoo_optim_factory(
+                distributed_config=DDPDistributedConfig()
+            )(model.parameters())
+
+            assert isinstance(optimizer, DistributedShampoo)
+            assert_dist_buffer_views_survive_free_and_realloc(
+                self, optimizer._per_group_state_lists[0][DISTRIBUTOR]
             )
 
     @instantiate_parametrized_tests

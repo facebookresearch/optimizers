@@ -37,6 +37,7 @@ from distributed_shampoo.tests.shampoo_test_utils import (
     construct_training_problem,
     generate_global_train_data,
     train_model,
+    with_pipeline_managed_dist_buffer,
 )
 from torch import distributed as dist, nn
 from torch.distributed.device_mesh import init_device_mesh
@@ -170,8 +171,10 @@ class ShampooHybridShardLosslessDistributorTest(DTensorTestBase):
                 model_linear_layers_dims=model_linear_layers_dims,
                 model_dead_layers_dims=model_dead_layers_dims,
             ),
-            experimental_optim_factory=shampoo_optim_factory(
-                distributed_config=hybrid_shard_config,
+            experimental_optim_factory=with_pipeline_managed_dist_buffer(
+                shampoo_optim_factory(
+                    distributed_config=hybrid_shard_config,
+                )
             ),
             experimental_model_factory=partial(
                 ShampooHybridShardLosslessDistributorTest._construct_model,
@@ -247,8 +250,8 @@ class ShampooHybridShardLosslessDistributorTest(DTensorTestBase):
                 model_dead_layers_dims=(),
                 post_model_decoration=partial(fully_shard),
             ),
-            experimental_optim_factory=shampoo_optim_factory(
-                distributed_config=hybrid_shard_config
+            experimental_optim_factory=with_pipeline_managed_dist_buffer(
+                shampoo_optim_factory(distributed_config=hybrid_shard_config)
             ),
             experimental_model_factory=partial(
                 ShampooHybridShardLosslessDistributorTest._construct_model,

@@ -83,6 +83,41 @@ class DistributorInterface(ABC):
         use_masked_tensors: bool = True,
     ) -> None: ...
 
+    def _dist_buffer_and_num_bytes(self) -> tuple[Tensor, int] | None:
+        """All-gather buffer and its size in bytes, or None if this distributor has none."""
+        return None
+
+    @property
+    def dist_buffer_allocated(self) -> bool:
+        if (dist_buffer_and_num_bytes := self._dist_buffer_and_num_bytes()) is None:
+            return True
+        dist_buffer, num_bytes = dist_buffer_and_num_bytes
+        # Ranks with no assigned blocks have a valid zero-byte buffer.
+        return num_bytes == 0 or dist_buffer.untyped_storage().size() > 0
+
+    def allocate_dist_buffer(self) -> None:
+        if (dist_buffer_and_num_bytes := self._dist_buffer_and_num_bytes()) is None:
+            return
+        dist_buffer, num_bytes = dist_buffer_and_num_bytes
+        storage = dist_buffer.untyped_storage()
+        # Resizing in place keeps every view over the buffer valid
+        if storage.size() == 0:
+            storage.resize_(num_bytes)
+
+    def free_dist_buffer(self) -> None:
+        if (dist_buffer_and_num_bytes := self._dist_buffer_and_num_bytes()) is None:
+            return
+        dist_buffer_and_num_bytes[0].untyped_storage().resize_(0)
+
+    def check_dist_buffer_allocated(self) -> None:
+        if not self.dist_buffer_allocated:
+            raise RuntimeError(
+                f"{type(self).__name__}'s all-gather communication buffer has been freed, "
+                "so it cannot all-gather. Call DistributedShampoo.allocate_dist_buffer() "
+                "after every DistributedShampoo.free_dist_buffer() and before the next "
+                "step(), train(), or eval()."
+            )
+
     @property
     def local_grad_selector(self) -> tuple[bool, ...]:
         return self._local_grad_selector

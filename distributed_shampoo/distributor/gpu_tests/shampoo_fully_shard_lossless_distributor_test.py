@@ -7,6 +7,7 @@ LICENSE file in the root directory of this source tree.
 
 """
 
+import copy
 import unittest
 from collections.abc import Callable
 from functools import partial
@@ -39,7 +40,7 @@ from distributed_shampoo.tests.shampoo_test_utils import (
 )
 from torch import distributed as dist, nn
 from torch.distributed.fsdp import FSDPModule, fully_shard
-from torch.distributed.tensor import distribute_tensor, init_device_mesh, Shard
+from torch.distributed.tensor import distribute_tensor, DTensor, init_device_mesh, Shard
 from torch.testing._internal.common_distributed import skip_if_lt_x_gpu
 from torch.testing._internal.common_utils import (
     instantiate_parametrized_tests,
@@ -519,3 +520,179 @@ class ShampooFullyShardParamGroupTest(DTensorTestBase):
                 post_model_decoration=partial(fully_shard),
             ),
         )
+
+    @with_comms
+    @skip_if_lt_x_gpu(2)
+    @parametrize(
+        "param_assignment_strategy",
+        (
+            FSDPParamAssignmentStrategy.REPLICATE,
+            FSDPParamAssignmentStrategy.ROUND_ROBIN,
+        ),
+    )
+    def test_resume_is_independent_of_load_order(
+        self, param_assignment_strategy: FSDPParamAssignmentStrategy
+    ) -> None:
+        """Require either model/optimizer restore order to match uninterrupted training."""
+        steps_before, steps_after = 6, 4
+        train_data = generate_global_train_data(
+            num_steps=steps_before + steps_after,
+            world_size=self.world_size,
+            data_shape=(TEST_MODEL_LAYER_DIMS[0][0],),
+            device=torch.device("cuda"),
+        )[:, dist.get_rank()]
+
+        def build() -> tuple[nn.Module, nn.Module, torch.Tensor, torch.optim.Optimizer]:
+            torch.manual_seed(1234)
+            fsdp_model, loss, _, target = (
+                ShampooFullyShardLosslessDistributorTest._construct_model(
+                    model_linear_layers_dims=TEST_MODEL_LAYER_DIMS[0],
+                    model_dead_layers_dims=(),
+                    post_model_decoration=partial(fully_shard),
+                )
+            )
+            model = cast(nn.Module, fsdp_model)
+            optimizer = shampoo_optim_factory(
+                distributed_config=FullyShardDistributedConfig(
+                    param_assignment_strategy=param_assignment_strategy
+                ),
+            )(model.parameters())
+            return model, loss, target, optimizer
+
+        def train(
+            model: nn.Module,
+            loss: nn.Module,
+            target: torch.Tensor,
+            optimizer: torch.optim.Optimizer,
+            data: torch.Tensor,
+        ) -> None:
+            for step_data in data:
+                optimizer.zero_grad()
+                loss(model(step_data), target).backward()
+                optimizer.step()
+
+        def local_params(model: nn.Module) -> dict[str, torch.Tensor]:
+            return {
+                name: (p.to_local() if isinstance(p, DTensor) else p).detach().clone()
+                for name, p in model.named_parameters()
+            }
+
+        model, loss, target, optimizer = build()
+        train(model, loss, target, optimizer, train_data[:steps_before])
+        model_checkpoint = {
+            key: (value.full_tensor() if isinstance(value, DTensor) else value)
+            .detach()
+            .clone()
+            for key, value in model.state_dict().items()
+        }
+        optimizer_checkpoint = copy.deepcopy(optimizer.state_dict())
+        train(model, loss, target, optimizer, train_data[steps_before:])
+        expected = local_params(model)
+
+        for optimizer_first in (True, False):
+            model, loss, target, optimizer = build()
+
+            def load_model(model: nn.Module = model) -> None:
+                model.load_state_dict(
+                    {
+                        key: (
+                            distribute_tensor(value, live.device_mesh, live.placements)
+                            if isinstance(live := model.state_dict()[key], DTensor)
+                            else value
+                        )
+                        for key, value in model_checkpoint.items()
+                    }
+                )
+
+            def load_optimizer(
+                optimizer: torch.optim.Optimizer = optimizer,
+            ) -> None:
+                optimizer.load_state_dict(copy.deepcopy(optimizer_checkpoint))
+
+            for load in (
+                (load_optimizer, load_model)
+                if optimizer_first
+                else (load_model, load_optimizer)
+            ):
+                load()
+
+            train(model, loss, target, optimizer, train_data[steps_before:])
+            actual = local_params(model)
+            for name, expected_param in expected.items():
+                torch.testing.assert_close(
+                    actual[name],
+                    expected_param,
+                    msg=f"optimizer_first={optimizer_first} diverged on {name}",
+                )
+
+    @with_comms
+    @skip_if_lt_x_gpu(2)
+    @parametrize(
+        "param_assignment_strategy",
+        (
+            FSDPParamAssignmentStrategy.REPLICATE,
+            FSDPParamAssignmentStrategy.ROUND_ROBIN,
+        ),
+    )
+    def test_cross_mode_gpa_resume_fails_closed(
+        self, param_assignment_strategy: FSDPParamAssignmentStrategy
+    ) -> None:
+        """Reject GPA mode conversion that cannot safely wait until step()."""
+        fsdp_model, _, _, _ = ShampooFullyShardLosslessDistributorTest._construct_model(
+            model_linear_layers_dims=TEST_MODEL_LAYER_DIMS[0],
+            model_dead_layers_dims=(),
+            post_model_decoration=partial(fully_shard),
+        )
+        optimizer = cast(
+            DistributedShampoo,
+            shampoo_optim_factory(
+                distributed_config=FullyShardDistributedConfig(
+                    param_assignment_strategy=param_assignment_strategy
+                )
+            )(cast(nn.Module, fsdp_model).parameters()),
+        )
+        optimizer.eval()
+        optimizer_checkpoint = copy.deepcopy(optimizer.state_dict())
+
+        resumed_model, _, _, _ = (
+            ShampooFullyShardLosslessDistributorTest._construct_model(
+                model_linear_layers_dims=TEST_MODEL_LAYER_DIMS[0],
+                model_dead_layers_dims=(),
+                post_model_decoration=partial(fully_shard),
+            )
+        )
+        resumed_optimizer = shampoo_optim_factory(
+            distributed_config=FullyShardDistributedConfig(
+                param_assignment_strategy=param_assignment_strategy
+            )
+        )(cast(nn.Module, resumed_model).parameters())
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "Checkpoint restore across Shampoo train/eval modes is not supported",
+        ):
+            resumed_optimizer.load_state_dict(optimizer_checkpoint)
+
+    @with_comms
+    @skip_if_lt_x_gpu(2)
+    def test_post_load_without_pre_load_hook_marks_params_stale(self) -> None:
+        """Support wrappers that invoke the Shampoo post-load hook directly."""
+        fsdp_model, _, _, _ = ShampooFullyShardLosslessDistributorTest._construct_model(
+            model_linear_layers_dims=TEST_MODEL_LAYER_DIMS[0],
+            model_dead_layers_dims=(),
+            post_model_decoration=partial(fully_shard),
+        )
+        optimizer = cast(
+            DistributedShampoo,
+            shampoo_optim_factory(
+                distributed_config=FullyShardDistributedConfig(
+                    param_assignment_strategy=FSDPParamAssignmentStrategy.REPLICATE
+                )
+            )(cast(nn.Module, fsdp_model).parameters()),
+        )
+
+        self.assertIsNone(getattr(optimizer, "_pre_load_train_modes", None))
+        DistributedShampoo._post_load_state_dict_hook(optimizer)
+
+        for state_lists in optimizer._per_group_state_lists:
+            self.assertTrue(state_lists["distributor"].needs_full_param_refresh)

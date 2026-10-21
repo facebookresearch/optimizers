@@ -8,7 +8,7 @@ LICENSE file in the root directory of this source tree.
 """
 
 import unittest
-from typing import cast
+from typing import Any, cast
 
 import torch
 from distributed_shampoo.distributed_shampoo import DistributedShampoo
@@ -19,6 +19,16 @@ from distributed_shampoo.tests.shampoo_test_utils import construct_training_prob
 from torch import nn
 
 PRECONDITIONER_DIM = 5
+
+
+class _BufferedDistributor(Distributor):
+    def __init__(self, param_group: dict[str, Any], num_bytes: int) -> None:
+        super().__init__(param_group)
+        self._dist_buffer = torch.empty(num_bytes, dtype=torch.uint8, device="cpu")
+        self._dist_buffer_num_bytes = num_bytes
+
+    def _dist_buffer_and_num_bytes(self) -> tuple[torch.Tensor, int]:
+        return self._dist_buffer, self._dist_buffer_num_bytes
 
 
 class DistributorTest(unittest.TestCase):
@@ -35,6 +45,37 @@ class DistributorTest(unittest.TestCase):
                 max_preconditioner_dim=PRECONDITIONER_DIM,
             ).param_groups[0]
         )
+
+    def test_zero_byte_dist_buffer_lifecycle(self) -> None:
+        distributor = _BufferedDistributor(self._distributor._param_group, num_bytes=0)
+        self.assertTrue(distributor.dist_buffer_allocated)
+        distributor.check_dist_buffer_allocated()
+
+        for _ in range(2):
+            distributor.free_dist_buffer()
+            self.assertTrue(distributor.dist_buffer_allocated)
+            distributor.check_dist_buffer_allocated()
+            distributor.allocate_dist_buffer()
+            self.assertTrue(distributor.dist_buffer_allocated)
+            distributor.check_dist_buffer_allocated()
+            self.assertEqual(distributor._dist_buffer.untyped_storage().size(), 0)
+
+    def test_nonempty_dist_buffer_lifecycle(self) -> None:
+        distributor = _BufferedDistributor(self._distributor._param_group, num_bytes=16)
+        self.assertTrue(distributor.dist_buffer_allocated)
+        distributor.check_dist_buffer_allocated()
+
+        distributor.free_dist_buffer()
+        self.assertFalse(distributor.dist_buffer_allocated)
+        with self.assertRaisesRegex(
+            RuntimeError, "communication buffer has been freed"
+        ):
+            distributor.check_dist_buffer_allocated()
+
+        distributor.allocate_dist_buffer()
+        self.assertTrue(distributor.dist_buffer_allocated)
+        distributor.check_dist_buffer_allocated()
+        self.assertEqual(distributor._dist_buffer.untyped_storage().size(), 16)
 
     def test_update_params(self) -> None:
         # Explicitly disable the gradient of the scalar parameter and call merge_and_block_gradients()

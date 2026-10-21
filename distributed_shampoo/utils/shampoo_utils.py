@@ -1180,16 +1180,38 @@ def _device_key(device: torch.device) -> tuple[str, int]:
 
     Resolves cuda devices without an explicit index to the current device, so
     torch.device('cuda') and torch.device('cuda:0') normalize to the same key
-    and don't produce duplicate cache entries in `_get_triu_indices`.
+    and don't produce duplicate entries in the index caches below.
     """
     if device.type == "cuda" and device.index is None:
         return ("cuda", torch.cuda.current_device())
     return (device.type, device.index or 0)
 
 
+def _device_from_key(device_type: str, device_index: int) -> torch.device:
+    """Returns the device to allocate cached index tensors on for a `_device_key` key.
+
+    CPU tensors report their device as "cpu" without an index, while `_device_key`
+    normalizes CPU to ("cpu", 0). Allocate on plain "cpu" so the cached indices sit on
+    exactly the device of the tensors they index: torch.compile's fake-tensor device
+    propagation for index_select treats "cpu" and "cpu:0" as different devices.
+    """
+    if device_type == "cpu":
+        return torch.device("cpu")
+    return torch.device(device_type, device_index)
+
+
+def _index_dtype(d: int) -> torch.dtype:
+    """Returns the smallest integer dtype that holds every flat offset of a (d, d) matrix.
+
+    Flat offsets reach d * d - 1, so int32 suffices for d <= 46340 (every block size
+    allowed by realistic max_preconditioner_dim settings) and int64 is used beyond.
+    """
+    return torch.int32 if d * d <= torch.iinfo(torch.int32).max else torch.int64
+
+
 @cache
-def _get_triu_indices(d: int, device_type: str, device_index: int) -> Tensor:
-    """Returns cached upper-triangular index pairs as a (2, d*(d+1)/2) int32 tensor.
+def _get_triu_flat_indices(d: int, device_type: str, device_index: int) -> Tensor:
+    """Returns cached flat offsets of the upper triangle as a (d*(d+1)/2,) tensor.
 
     Args:
         d (int): Dimension of the square matrix.
@@ -1198,20 +1220,57 @@ def _get_triu_indices(d: int, device_type: str, device_index: int) -> Tensor:
             normalize from a torch.device.
 
     Returns:
-        indices (Tensor): A (2, d*(d+1)/2) int32 tensor of (row, col) index
-            pairs for the upper triangle in row-major order. The returned
-            tensor is cached by reference and MUST NOT be mutated by callers.
+        indices (Tensor): A (d*(d+1)/2,) tensor of dtype `_index_dtype(d)` (int32
+            for every realistic block size) holding row * d + col for each
+            upper-triangular (row, col) in row-major order. The returned tensor is
+            cached by reference and MUST NOT be mutated by callers.
 
     Notes:
-        Cached process-wide via functools.cache. int32 is sufficient since
-        matrix dim d is bounded by max_preconditioner_dim (default 1024, up
-        to 4096 in known production workloads), well under int32's 2**31
-        range; using int32 instead of torch.triu_indices' int64 default
-        halves the cache footprint.
+        Cached process-wide via functools.cache in eager mode. Under torch.compile,
+        Dynamo traces through the cache wrapper, so the offsets are computed inside
+        the compiled graph instead of being read from the cache.
     """
-    return torch.triu_indices(d, d, device=torch.device(device_type, device_index)).to(
-        torch.int32
+    dtype = _index_dtype(d)
+    rows, cols = torch.triu_indices(
+        d, d, dtype=dtype, device=_device_from_key(device_type, device_index)
     )
+    return rows * d + cols
+
+
+@cache
+def _get_symmetric_gather_indices(
+    d: int, device_type: str, device_index: int
+) -> Tensor:
+    """Returns a cached (d*d,) map from each full-matrix entry to its packed position.
+
+    Entry (i, j) maps to the position of (min(i, j), max(i, j)) in the
+    row-major packed upper triangle, so gathering a packed vector with this map
+    produces the full symmetric matrix.
+
+    Args:
+        d (int): Dimension of the square matrix.
+        device_type (str): Device type, e.g. "cpu" or "cuda".
+        device_index (int): Resolved device index. Use `_device_key` to
+            normalize from a torch.device.
+
+    Returns:
+        indices (Tensor): A (d*d,) tensor of dtype `_index_dtype(d)` (int32 for
+            every realistic block size) in row-major order. The returned tensor is
+            cached by reference and MUST NOT be mutated by callers.
+
+    Notes:
+        Cached process-wide via functools.cache in eager mode. Under torch.compile,
+        Dynamo traces through the cache wrapper, so the map is computed inside the
+        compiled graph instead of being read from the cache.
+    """
+    dtype = _index_dtype(d)
+    device = _device_from_key(device_type, device_index)
+    i = torch.arange(d, dtype=dtype, device=device).unsqueeze(1)
+    j = torch.arange(d, dtype=dtype, device=device).unsqueeze(0)
+    row, col = torch.minimum(i, j), torch.maximum(i, j)
+    # Packed row r starts at offset r * d - r * (r - 1) / 2; every intermediate is
+    # at most d * d, so it fits in dtype.
+    return (row * d - row * (row - 1) // 2 + col - row).flatten()
 
 
 def pack_upper_triangular(matrix: Tensor) -> Tensor:
@@ -1226,9 +1285,17 @@ def pack_upper_triangular(matrix: Tensor) -> Tensor:
     Returns:
         packed (Tensor): A 1D tensor of size d*(d+1)/2 containing the upper
             triangular elements in row-major order.
+
+    Raises:
+        ValueError: If matrix is not a 2D square matrix.
     """
-    rows, cols = _get_triu_indices(matrix.shape[0], *_device_key(matrix.device))
-    return matrix[rows, cols].contiguous()
+    if matrix.ndim != 2 or matrix.shape[0] != matrix.shape[1]:
+        raise ValueError(
+            f"Expected a 2D square matrix, but got shape {tuple(matrix.shape)}."
+        )
+    return matrix.reshape(-1).index_select(
+        0, _get_triu_flat_indices(matrix.shape[0], *_device_key(matrix.device))
+    )
 
 
 def unpack_upper_triangular(packed: Tensor, dim: int) -> Tensor:
@@ -1241,12 +1308,22 @@ def unpack_upper_triangular(packed: Tensor, dim: int) -> Tensor:
 
     Returns:
         matrix (Tensor): A 2D symmetric matrix of shape (dim, dim).
+
+    Raises:
+        ValueError: If packed is not 1D with exactly dim*(dim+1)/2 elements.
+
+    Notes:
+        Every output element is an exact copy of one packed element (no
+        arithmetic), so signed zeros, NaN payloads and infinities are preserved.
     """
-    matrix = torch.zeros(dim, dim, dtype=packed.dtype, device=packed.device)
-    rows, cols = _get_triu_indices(dim, *_device_key(packed.device))
-    matrix[rows, cols] = packed  # Fill upper triangle.
-    matrix[cols, rows] = packed  # Mirror to lower triangle (swap row/col indices).
-    return matrix
+    if packed.ndim != 1 or packed.numel() != dim * (dim + 1) // 2:
+        raise ValueError(
+            f"Expected a 1D packed tensor with {dim * (dim + 1) // 2} elements for "
+            f"{dim=}, but got shape {tuple(packed.shape)}."
+        )
+    return packed.index_select(
+        0, _get_symmetric_gather_indices(dim, *_device_key(packed.device))
+    ).view(dim, dim)
 
 
 _T = TypeVar("_T")

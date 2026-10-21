@@ -312,6 +312,9 @@ class HSDPDistributor(DistributorInterface):
                     global_buffers,
                 )
 
+    def _dist_buffer_and_num_bytes(self) -> tuple[Tensor, int] | None:
+        return (self._global_dist_buffer, self._global_dist_buffer_num_bytes)
+
     @torch.no_grad()
     def _construct_local_block_info_list(
         self, group_source_ranks: tuple[int, ...], group_rank: int
@@ -514,6 +517,8 @@ class HSDPDistributor(DistributorInterface):
         )
         self._global_masked_dist_blocked_buffers = self._global_dist_blocked_buffers
         self._local_masked_dist_blocked_buffers = self._local_dist_blocked_buffers
+
+        self._global_dist_buffer_num_bytes: int = total_buffer_size
 
     def _merge_and_block_gradients(
         self,

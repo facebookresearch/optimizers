@@ -17,7 +17,6 @@ import torch
 from distributed_shampoo.distributor.shampoo_block_info import DTensorBlockInfo
 from distributed_shampoo.distributor.shampoo_dist_utils import (
     create_hybrid_shard_process_groups,
-    get_device_mesh,
     shampoo_comm_profiler,
 )
 from distributed_shampoo.distributor.shampoo_distributor import DistributorInterface
@@ -27,7 +26,6 @@ from distributed_shampoo.shampoo_types import (
     PARAMS,
     ShampooRuntimeConfig,
 )
-from distributed_shampoo.utils.commons import batched
 from distributed_shampoo.utils.shampoo_utils import (
     compress_list,
     distribute_buffer_sizes,
@@ -36,6 +34,7 @@ from distributed_shampoo.utils.shampoo_utils import (
 )
 from torch import distributed as dist, Tensor
 from torch.distributed import tensor as dtensor
+from torch.distributed.device_mesh import DeviceMesh
 from torch.distributed.tensor import DTensor, zeros as dtensor_zeros
 
 logger: logging.Logger = logging.getLogger(__name__)
@@ -146,9 +145,20 @@ class HybridShardDistributor(DistributorInterface):
         self._communicate_params: bool = distributed_config.communicate_params
 
         # Create comms process group for distributing computation across ranks.
-        self._comms_dist_group: dist.ProcessGroup = create_hybrid_shard_process_groups(
+        self._comms_dist_group: dist.ProcessGroup
+        (
+            self._comms_dist_group,
+            optimizer_state_mesh,
+        ) = create_hybrid_shard_process_groups(
             device_mesh=self._hybrid_shard_device_mesh,
             dist_group_size=self._dist_group_size,
+        )
+
+        # The helper creates this canonical mesh collectively and caches it
+        # across optimizer instances. Deriving its submeshes creates no process
+        # groups, so the owner-only allocation path below remains local.
+        self._replicate_submeshes: list[DeviceMesh] = (
+            optimizer_state_mesh._get_all_submeshes(mesh_dim_name="replicate")
         )
 
         comms_group_rank: int = dist.get_rank(self._comms_dist_group)
@@ -315,6 +325,9 @@ class HybridShardDistributor(DistributorInterface):
                     global_params,
                     global_buffers,
                 )
+
+    def _dist_buffer_and_num_bytes(self) -> tuple[Tensor, int] | None:
+        return (self._global_dist_buffer, self._global_dist_buffer_num_bytes)
 
     def _get_composable_block_id_rank(self) -> int | None:
         """Return the rank to use for composable block IDs.
@@ -511,6 +524,8 @@ class HybridShardDistributor(DistributorInterface):
         self._global_masked_dist_blocked_buffers = self._global_dist_blocked_buffers
         self._local_masked_dist_blocked_buffers = self._local_dist_blocked_buffers
 
+        self._global_dist_buffer_num_bytes: int = total_buffer_size
+
     def merge_and_block_gradients(
         self,
     ) -> tuple[Tensor, ...]:
@@ -570,23 +585,14 @@ class HybridShardDistributor(DistributorInterface):
             out (Tensor): Desired Tensor.
 
         """
-        ranks_in_replicated_group = dist.get_process_group_ranks(
-            self._hybrid_shard_device_mesh.get_group(0)
-        )
-        device_mesh_2d = get_device_mesh(
-            device_type=device.type,
-            mesh=tuple(batched(ranks_in_replicated_group, self._dist_group_size)),  # noqa: B911
-            mesh_dim_names=("replicate", "shard"),
-        )
-        # NOTE: We get all submeshes along the "replicate" dimension, then pick out
-        # the sub-mesh that the optimizer state is assigned to.
+        # The submeshes were derived from the DeviceMesh already created by
+        # create_hybrid_shard_process_groups. Indexing this list is local and
+        # cannot introduce a process-group collective on this owner-only path.
         #
-        # For the example above, this would give me submeshes [[3, 27], [11, 35], [19, 43]].
+        # For the example above, they are [[3, 27], [11, 35], [19, 43]].
         # Note that the group source rank must belong to {0, 1, 2} in this case.
         # Suppose the group_source_rank = 1, then this would get the submesh [11, 35].
-        replicate_submesh = device_mesh_2d._get_all_submeshes(
-            mesh_dim_name="replicate"
-        )[group_source_rank]
+        replicate_submesh = self._replicate_submeshes[group_source_rank]
 
         return dtensor_zeros(
             size,
