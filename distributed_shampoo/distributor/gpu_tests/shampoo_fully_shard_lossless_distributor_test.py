@@ -634,6 +634,101 @@ class ShampooFullyShardParamGroupTest(DTensorTestBase):
             FSDPParamAssignmentStrategy.ROUND_ROBIN,
         ),
     )
+    def test_model_only_load_after_construction_is_kept(
+        self, param_assignment_strategy: FSDPParamAssignmentStrategy
+    ) -> None:
+        """A model-only load after the optimizer exists (e.g. a MaaS warm start)
+        must survive the first step instead of being overwritten by the
+        construction-time gathered params."""
+        steps_before, steps_after = 3, 3
+        train_data = generate_global_train_data(
+            num_steps=steps_before + steps_after,
+            world_size=self.world_size,
+            data_shape=(TEST_MODEL_LAYER_DIMS[0][0],),
+            device=torch.device("cuda"),
+        )[:, dist.get_rank()]
+
+        def build_model() -> tuple[nn.Module, nn.Module, torch.Tensor]:
+            torch.manual_seed(1234)
+            fsdp_model, loss, _, target = (
+                ShampooFullyShardLosslessDistributorTest._construct_model(
+                    model_linear_layers_dims=TEST_MODEL_LAYER_DIMS[0],
+                    model_dead_layers_dims=(),
+                    post_model_decoration=partial(fully_shard),
+                )
+            )
+            return cast(nn.Module, fsdp_model), loss, target
+
+        def build_optimizer(model: nn.Module) -> torch.optim.Optimizer:
+            return shampoo_optim_factory(
+                distributed_config=FullyShardDistributedConfig(
+                    param_assignment_strategy=param_assignment_strategy
+                ),
+            )(model.parameters())
+
+        def train(
+            model: nn.Module,
+            loss: nn.Module,
+            target: torch.Tensor,
+            optimizer: torch.optim.Optimizer,
+            data: torch.Tensor,
+        ) -> None:
+            for step_data in data:
+                optimizer.zero_grad()
+                loss(model(step_data), target).backward()
+                optimizer.step()
+
+        def load_model(model: nn.Module, checkpoint: dict[str, torch.Tensor]) -> None:
+            model.load_state_dict(
+                {
+                    key: (
+                        distribute_tensor(value, live.device_mesh, live.placements)
+                        if isinstance(live := model.state_dict()[key], DTensor)
+                        else value
+                    )
+                    for key, value in checkpoint.items()
+                }
+            )
+
+        def local_params(model: nn.Module) -> dict[str, torch.Tensor]:
+            return {
+                name: (p.to_local() if isinstance(p, DTensor) else p).detach().clone()
+                for name, p in model.named_parameters()
+            }
+
+        model, loss, target = build_model()
+        train(model, loss, target, build_optimizer(model), train_data[:steps_before])
+        checkpoint = {
+            key: (value.full_tensor() if isinstance(value, DTensor) else value)
+            .detach()
+            .clone()
+            for key, value in model.state_dict().items()
+        }
+
+        model, loss, target = build_model()
+        load_model(model, checkpoint)
+        train(model, loss, target, build_optimizer(model), train_data[steps_before:])
+        expected = local_params(model)
+
+        model, loss, target = build_model()
+        optimizer = build_optimizer(model)
+        load_model(model, checkpoint)
+        train(model, loss, target, optimizer, train_data[steps_before:])
+        actual = local_params(model)
+        for name, expected_param in expected.items():
+            torch.testing.assert_close(
+                actual[name], expected_param, msg=f"model-only load lost on {name}"
+            )
+
+    @with_comms
+    @skip_if_lt_x_gpu(2)
+    @parametrize(
+        "param_assignment_strategy",
+        (
+            FSDPParamAssignmentStrategy.REPLICATE,
+            FSDPParamAssignmentStrategy.ROUND_ROBIN,
+        ),
+    )
     def test_cross_mode_gpa_resume_fails_closed(
         self, param_assignment_strategy: FSDPParamAssignmentStrategy
     ) -> None:

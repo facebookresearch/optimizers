@@ -126,7 +126,10 @@ class FullyShardLosslessDistributor(Distributor):
         # Set _param_group early so _get_assigned_full_params can access it
         # (super().__init__ will set it again to the same value).
         self._param_group = param_group
-        self._needs_full_param_refresh: bool = False
+        # Rebuild from the live model at the first step: callers may load model
+        # weights after construction without loading optimizer state (e.g. a
+        # MaaS warm start), and update_params would write this snapshot back.
+        self._needs_full_param_refresh: bool = True
         self._assigned_full_params: list[Tensor] = self._get_assigned_full_params()
 
         super().__init__(param_group, runtime_config)

@@ -2,6 +2,11 @@
 
 Release notes for the OSS mirror. Seeded by `scripts/oss_sync.sh` from the internal source tree and edited for release.
 
+## 2026-10-23
+
+- [shampoo] Fix the lossless FSDP2/HSDP2 distributors silently discarding model weights loaded after the optimizer was constructed. These distributors keep a gathered copy of the full parameters and write it back on every step; that copy was taken at construction, so loading weights into the model afterwards (without also loading optimizer state) reset every FSDP2-wrapped layer to its initial values at the first step. The copy is now marked stale at construction and rebuilt from the live model at the first optimizer step, at the cost of one extra all-gather per run. Loading weights before or after constructing the optimizer now trains identically.
+- [shampoo] Remove an unused type-checker suppression comment in `distributed_shampoo.py` (no behavior change).
+
 ## 2026-10-19
 
 - [shampoo] `pack_upper_triangular` and `unpack_upper_triangular`, used when inverse factor matrices are stored packed, now use a single index gather instead of zero-filling a `d×d` matrix and doing two scatters. Results are bit-identical, and the per-step cost of packing drops. Both functions now raise `ValueError` on malformed input: a non-square matrix passed to pack, or a packed tensor whose length is not `d*(d+1)/2` passed to unpack. In eager mode, the cached index maps grow from `d*(d+1)` to `d*d + d*(d+1)/2` int32 elements per distinct block dimension per device. Under `torch.compile` nothing is cached.
