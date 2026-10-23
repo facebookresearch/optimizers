@@ -1030,7 +1030,6 @@ class DistributedShampoo(torch.optim.Optimizer):
         self._per_group_step: Callable[..., None] = (
             torch.compile(
                 self._per_group_step_impl,
-                # pyrefly: ignore [bad-argument-type]
                 **asdict(shampoo_pt2_compile_config),
             )
             if shampoo_pt2_compile_config is not None
