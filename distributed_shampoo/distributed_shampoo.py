@@ -1369,7 +1369,11 @@ class DistributedShampoo(torch.optim.Optimizer):
                     lr_sum += lr_power
                     # Keep as tensor — avoids .item() which creates a Python float
                     # that Dynamo would specialize on, causing recompilation every step.
-                    eval_interp_coeff.copy_(1.0 - lr_power / lr_sum)
+                    # Keep the average unchanged until its total weight is positive.
+                    # Initial zero learning rates must not introduce a 0 / 0.
+                    eval_interp_coeff.copy_(
+                        torch.where(lr_sum > 0, 1.0 - lr_power / lr_sum, 1.0)
+                    )
                 else:
                     logger.warning(
                         "lr or lr_sum not provided to _get_train_and_eval_interp_coeffs; returning eval_interp_coeff = 0.0!"
