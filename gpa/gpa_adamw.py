@@ -94,7 +94,7 @@ class GPAAdamW(torch.optim.Optimizer):
     Args:
         params (iterable): Iterable of parameters to optimize or dicts defining
             parameter groups.
-        lr (float): Learning rate parameter. (default: 1.0)
+        lr (float): Learning rate parameter. Must be positive. (default: 1.0)
         eps (float): Term added to the denominator outside of the root operation
             to improve numerical stability. (default: 1e-8)
         beta1 (float): Coefficient used for computing running average of the
@@ -142,7 +142,11 @@ class GPAAdamW(torch.optim.Optimizer):
         weight_lr_power: float = 2,
     ) -> None:
         # Hyper-parameter checks
-        if not lr >= 0.0:
+        # lr must be strictly positive: step() asserts lr_max > 0 (and the
+        # SCHEDULE_FREE averaging weight divides by lr_max), so accepting
+        # lr == 0 here only defers the failure to an opaque AssertionError
+        # on the first step.
+        if not lr > 0.0:
             raise ValueError("Invalid learning rate: {}".format(lr))
         if not eps >= 0.0:
             raise ValueError("Invalid epsilon value: {}".format(eps))

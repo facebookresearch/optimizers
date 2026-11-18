@@ -102,6 +102,11 @@ class GPAAdamWInitializationTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Invalid learning rate: -0.01"):
             GPAAdamW(self.model.parameters(), lr=-0.01)
 
+        # lr must be strictly positive: lr == 0 passes the old >= 0 check but
+        # crashes with an AssertionError on the first step().
+        with self.assertRaisesRegex(ValueError, "Invalid learning rate: 0.0"):
+            GPAAdamW(self.model.parameters(), lr=0.0)
+
         with self.assertRaisesRegex(ValueError, "Invalid epsilon value: -1e-08"):
             GPAAdamW(self.model.parameters(), eps=-1e-8)
 
